@@ -157,7 +157,7 @@ Three mechanisms carry it. A batch keeps its archived `base_offset`. A batch tha
 
 The third case looks like waste, and it is not optional.
 
-The target log accepts an append only at its current end offset. Both `Log::append_at` and `Log::append_verbatim_at` require the offset passed in to equal `log_end_offset()`, which is how the log guarantees a contiguous partition. A batch that is skipped entirely leaves the target's end offset behind the archive's, and every batch archived after it in that partition is then unappendable. The restore would fail, or it would renumber, and renumbering is the failure this design exists to prevent.
+The target log refuses an append below its current end offset and takes one above it, as Kafka's `UnifiedLog.appendAsFollower` does: both `Log::append_at` and `Log::append_verbatim_at` compare the offset passed in with `log_end_offset()`. A batch that is skipped entirely leaves a hole in the offsets, and if it is the last batch of a partition it leaves the target's end offset behind the archive's. The restore would then end at an offset the archive never held, or it would renumber, and renumbering is the failure this design exists to prevent. The materializer also treats a segment that starts past the end of what it wrote as a missing segment, not as a hole.
 
 So an emptied batch becomes a bare header with zero records, carrying the archived `base_offset` and `last_offset_delta` unchanged. krabka's log cleaner already does this on its `RETAIN_EMPTY` path, for the same reason. The report counts these separately from the batches it rewrote, because "records dropped" alone does not tell an operator who ran `--exclude-key` whether the pattern matched anything.
 

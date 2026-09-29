@@ -75,20 +75,25 @@ async fn writer_replicate_offset_mismatch_surfaces_error() {
         None,
     ));
 
-    // Wrong offset — log_end_offset is 0 but we claim 7.
-    let mut batch = sample_batch(1);
-    batch.base_offset = 7;
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Replicate { batch, ack })
-        .await
-        .expect("send replicate");
-    let err = ack_rx
-        .await
-        .expect("ack recv")
-        .expect_err("expected offset mismatch");
-    assert!(matches!(err, crate::error::BrokerError::Log(_)));
-    // Local log must not have advanced.
-    assert!(log.lock().unwrap().log_end_offset() == 0);
+    // Kafka's `appendAsFollower` takes a first offset at or past the log end
+    // offset and refuses one below it. Offset 7 leaves a hole, the way a
+    // compacted leader's log does, and is taken.
+    for (base_offset, expect_ok, expected_end) in [(7, true, 8), (5, false, 8)] {
+        let mut batch = sample_batch(1);
+        batch.base_offset = base_offset;
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Replicate { batch, ack })
+            .await
+            .expect("send replicate");
+        let result = ack_rx.await.expect("ack recv");
+        if expect_ok {
+            result.expect("replicate ok");
+        } else {
+            let err = result.expect_err("expected offset mismatch");
+            assert!(matches!(err, crate::error::BrokerError::Log(_)));
+        }
+        assert!(log.lock().unwrap().log_end_offset() == expected_end);
+    }
 
     drop(tx);
     writer.await.expect("writer join");

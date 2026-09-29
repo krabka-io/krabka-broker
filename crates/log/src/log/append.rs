@@ -214,16 +214,35 @@ impl Log {
         self.log_end_offset().max(self.reconciled_frontier)
     }
 
+    /// Kafka's `UnifiedLog.append` check for an append that takes its offsets
+    /// as given (`appendAsFollower`): the first offset must not be below the
+    /// log end offset, so a batch that starts below it is a duplicate or a
+    /// divergence. A batch that starts above it is fine. Compaction leaves
+    /// holes in the leader's offsets, and a follower has to take the batches
+    /// on either side of one.
+    pub(super) fn admit_append_at(&self, offset: Offset) -> Result<(), LogError> {
+        let expected = self.append_at_expected_offset();
+        if offset < expected {
+            return Err(LogError::OffsetMismatch {
+                expected,
+                actual: offset,
+            });
+        }
+        Ok(())
+    }
+
     /// Append a `RecordBatch` whose `base_offset` the caller sets.
     ///
     /// Unlike [`Log::append`], this method does NOT overwrite
     /// `batch.base_offset`. The broker's replicator uses it to keep the
     /// leader-assigned offset on the follower's local log.
     ///
-    /// `offset` must equal the log's current [`Log::log_end_offset`]. If it
-    /// does not, this method returns [`LogError::OffsetMismatch`]. On success
-    /// the log sets `batch.base_offset` to `offset`, which should already
-    /// match, before it writes the batch.
+    /// `offset` must not be below the log's current [`Log::log_end_offset`]
+    /// (or its reconciled frontier). If it is, this method returns
+    /// [`LogError::OffsetMismatch`]. An `offset` above the end is a hole in
+    /// the offsets, as a compacted leader's log has, and is appended as it
+    /// is. On success the log sets `batch.base_offset` to `offset`, which
+    /// should already match, before it writes the batch.
     #[instrument(
         level = "debug",
         skip(self, batch),
@@ -233,13 +252,7 @@ impl Log {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append_at(&mut self, batch: &mut RecordBatch, offset: Offset) -> Result<(), LogError> {
-        let expected = self.append_at_expected_offset();
-        if offset != expected {
-            return Err(LogError::OffsetMismatch {
-                expected,
-                actual: offset,
-            });
-        }
+        self.admit_append_at(offset)?;
         // `partition_leader_epoch` is the raw KIP-320 wire `int32`; wrap it here.
         let leader_epoch = LeaderEpoch(batch.partition_leader_epoch);
         batch.base_offset = offset.0;
@@ -262,13 +275,7 @@ impl Log {
         offset: Offset,
         stamp: u64,
     ) -> Result<(), LogError> {
-        let expected = self.append_at_expected_offset();
-        if offset != expected {
-            return Err(LogError::OffsetMismatch {
-                expected,
-                actual: offset,
-            });
-        }
+        self.admit_append_at(offset)?;
         self.validate_commit_stamp_batch(batch)?;
         batch.base_offset = offset.0;
         self.append_preserving_offset(batch, Some(stamp))?;
@@ -446,11 +453,16 @@ impl Log {
         // boundary snapshot.
         self.active_segment_flush()?;
         producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
-        let mut old = self
+        // Sealing writes the segment's last time-index entry, which can fail,
+        // so it runs before the segment leaves `self.active`.
+        self.active
+            .as_mut()
+            .expect("active segment must exist before rolling")
+            .seal()?;
+        let old = self
             .active
             .take()
             .expect("active segment must exist before rolling");
-        old.seal();
         let old_base = old.base_offset();
         self.segments.push(old);
         let mut new_seg = Segment::create(&self.dir, new_base)?;

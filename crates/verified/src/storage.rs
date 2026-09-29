@@ -13,18 +13,20 @@ pub struct LocalTruncationPlan {
     pub keep_active: bool,
 }
 
-/// Admit one batch only at the expected logical frontier and compute its
-/// inclusive last offset and exclusive successor without signed overflow.
+/// Admit one batch at the expected logical frontier or beyond it, and compute its
+/// inclusive last offset and exclusive successor without signed overflow. A base
+/// past the frontier is a hole in the offsets, which a compacted log has and a
+/// follower of one replicates; a base below it is a duplicate.
 #[ensures(match result {
     Some((last, next)) => expected_base@ >= 0
-        && supplied_base@ == expected_base@
+        && supplied_base@ >= expected_base@
         && last_offset_delta@ >= 0
         && last@ == supplied_base@ + last_offset_delta@
         && next@ == last@ + 1
         && supplied_base@ <= last@
         && last@ < next@,
     None => expected_base@ < 0
-        || supplied_base@ != expected_base@
+        || supplied_base@ < expected_base@
         || last_offset_delta@ < 0
         || supplied_base@ + last_offset_delta@ > i64::MAX@
         || supplied_base@ + last_offset_delta@ + 1 > i64::MAX@,
@@ -35,7 +37,7 @@ pub fn local_append_coordinates(
     supplied_base: i64,
     last_offset_delta: i32,
 ) -> Option<(i64, i64)> {
-    if expected_base < 0 || supplied_base != expected_base || last_offset_delta < 0 {
+    if expected_base < 0 || supplied_base < expected_base || last_offset_delta < 0 {
         return None;
     }
     let last = supplied_base.checked_add(i64::from(last_offset_delta))?;
@@ -373,9 +375,11 @@ mod tests {
     }
 
     #[test]
-    fn local_append_coordinates_are_exact_and_fail_closed() {
+    fn local_append_coordinates_admit_the_frontier_or_beyond_and_fail_closed() {
         assert2::check!(local_append_coordinates(0, 0, 0) == Some((0, 1)));
         assert2::check!(local_append_coordinates(10, 10, 2) == Some((12, 13)));
+        // A base past the frontier is a hole in the offsets, not a refusal.
+        assert2::check!(local_append_coordinates(10, 12, 2) == Some((14, 15)));
         assert2::check!(local_append_coordinates(10, 9, 0).is_none());
         assert2::check!(local_append_coordinates(-1, -1, 0).is_none());
         assert2::check!(local_append_coordinates(10, 10, -1).is_none());

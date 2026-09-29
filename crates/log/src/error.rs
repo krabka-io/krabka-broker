@@ -71,12 +71,12 @@ pub enum LogError {
     BadSegmentName(String),
 
     /// A caller supplied an explicit offset to [`Log::append_at`](crate::Log::append_at)
-    /// that did not match the log's current end offset. Replication paths use
-    /// this to detect divergence between leader-assigned offsets and the local
+    /// that was below the log's current end offset. Replication paths use
+    /// this to detect a duplicate or a divergence between leader-assigned offsets and the local
     /// log's expected next offset.
     #[error("offset mismatch: expected {expected}, got {actual}")]
     OffsetMismatch {
-        /// The offset the log expected, that is, its current end offset.
+        /// The lowest offset the log takes, that is, its current end offset.
         expected: Offset,
         /// The offset the caller actually supplied.
         actual: Offset,

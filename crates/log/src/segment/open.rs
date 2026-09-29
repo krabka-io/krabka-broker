@@ -149,6 +149,9 @@ impl Segment {
         self.last_offset = recovered.last_offset;
         self.max_timestamp = recovered.max_timestamp;
         self.max_timestamp_offset = recovered.max_timestamp_offset;
+        // Kafka's `LogSegment.recover` ends the same way: a segment that
+        // closed normally always had its newest timestamp in the index.
+        self.append_running_max_time_entry()?;
         tracing::Span::current().record("recovered_last_offset", self.last_offset.0);
         Ok(())
     }
@@ -270,6 +273,7 @@ impl Segment {
 mod tests {
     use std::io::Write;
 
+    use krabka_units::prelude::kibibytes;
     use tempfile::tempdir;
 
     use super::*;
@@ -349,6 +353,27 @@ mod tests {
         assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
         assert2::assert!(retry.offset_index.entry_count() == 1);
         assert2::assert!(retry.time_index.entry_count() == 1);
+    }
+
+    /// Recovery ends with Kafka's final time-index entry, `(maxTimestampSoFar,
+    /// shallowOffsetOfMaxTimestampSoFar)`: the sparse index holds no point for
+    /// these small batches, so without it the index would not know any of
+    /// their timestamps.
+    #[test]
+    fn recover_active_tail_appends_the_final_time_index_entry() {
+        let dir = tempdir().unwrap();
+        {
+            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+            for (base, timestamp) in [(0, 100), (1, 300), (2, 200)] {
+                seg.append(&sample_batch(base, 1, timestamp), kibibytes(4))
+                    .unwrap();
+            }
+        }
+
+        let seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
+
+        assert2::assert!(seg.time_index.entry_count() == 1);
+        assert2::assert!(seg.time_index.last_entry() == Some((300, 1)));
     }
 
     #[test]

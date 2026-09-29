@@ -163,16 +163,18 @@ impl Log {
 
     /// Append a producer batch **verbatim** at a caller-supplied base offset.
     ///
-    /// `base_offset` must equal the log's current [`Log::log_end_offset`]. If
-    /// it does not, this method returns [`LogError::OffsetMismatch`] and
-    /// appends nothing. On success the log stamps the stored batch with
+    /// `base_offset` must not be below the log's current
+    /// [`Log::log_end_offset`]. If it is, this method returns
+    /// [`LogError::OffsetMismatch`] and appends nothing. A `base_offset` above
+    /// the end is a hole in the offsets, as a compacted leader's log has, and
+    /// is appended as it is. On success the log stamps the stored batch with
     /// `base_offset` and the batch's leader epoch. It does not decode or
     /// re-encode the CRC-covered bytes.
     ///
     /// # Errors
-    /// Returns [`LogError::OffsetMismatch`] when `base_offset` is not the log
-    /// end offset. It also propagates segment and checkpoint I/O errors and
-    /// validation errors.
+    /// Returns [`LogError::OffsetMismatch`] when `base_offset` is below the
+    /// log end offset. It also propagates segment and checkpoint I/O errors
+    /// and validation errors.
     #[instrument(
         level = "debug",
         skip_all,
@@ -188,13 +190,7 @@ impl Log {
         batch: &VerbatimBatch,
         base_offset: Offset,
     ) -> Result<Offset, LogError> {
-        let expected = self.append_at_expected_offset();
-        if base_offset != expected {
-            return Err(LogError::OffsetMismatch {
-                expected,
-                actual: base_offset,
-            });
-        }
+        self.admit_append_at(base_offset)?;
 
         let leader_epoch = batch.leader_epoch;
         self.append_verbatim_preserving_offset(batch, base_offset)?;

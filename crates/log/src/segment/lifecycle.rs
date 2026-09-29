@@ -22,8 +22,37 @@ pub(super) struct WriteSnapshot {
 
 impl Segment {
     /// Mark this segment as sealed. No more appends.
-    pub fn seal(&mut self) {
+    ///
+    /// Sealing first writes the segment's final time-index entry, Kafka's
+    /// `LogSegment.onBecomeInactiveSegment`: the sparse index lags the writes,
+    /// so without it a reopened segment would not learn the timestamp of the
+    /// batches after its last index point from the index.
+    ///
+    /// # Errors
+    /// Returns an error when the time-index entry cannot be written or its
+    /// offset overflows the index range. The segment stays open then.
+    pub fn seal(&mut self) -> Result<(), LogError> {
+        self.append_running_max_time_entry()?;
         self.sealed = true;
+        Ok(())
+    }
+
+    /// Kafka's `timeIndex().maybeAppend(maxTimestampSoFar(),
+    /// shallowOffsetOfMaxTimestampSoFar())`: the running maximum timestamp
+    /// with the last offset of the batch that set it. The index keeps only an
+    /// entry whose timestamp is newer than its last, so it stays strictly
+    /// increasing, and a segment without a timestamp (`i64::MIN`, or
+    /// `NO_TIMESTAMP`) adds nothing.
+    pub(super) fn append_running_max_time_entry(&mut self) -> Result<(), LogError> {
+        if self.max_timestamp < 0 {
+            return Ok(());
+        }
+        let relative = krabka_verified::truncation_relative_offset(
+            self.base_offset.0,
+            self.max_timestamp_offset.0,
+        )
+        .ok_or_else(|| LogError::BadSegmentName("offset overflow in segment".into()))?;
+        self.time_index.maybe_append(self.max_timestamp, relative)
     }
 
     /// Seal a segment loaded through the no-scan [`Segment::open`] path and
@@ -247,8 +276,53 @@ mod tests {
         let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
         seg.append(&sample_batch(0, 2, 100), DENSE_INDEX).unwrap();
         check!(!seg.is_sealed(), "a fresh segment is open");
-        seg.seal();
+        seg.seal().unwrap();
         check!(seg.is_sealed(), "a sealed segment reports it");
+    }
+
+    /// Sealing writes Kafka's final time-index entry, the running maximum
+    /// timestamp with the last offset of the batch that set it, when the
+    /// sparse index has not already recorded it. A reopened segment restores
+    /// its `max_timestamp` from that entry, and the entries stay strictly
+    /// increasing. Each case is `(label, batches as (base offset, timestamp,
+    /// index interval), the entry count and last entry after sealing)`.
+    #[test]
+    fn seal_appends_the_final_time_index_entry() {
+        let sparse = kibibytes(4);
+        let cases = [
+            (
+                "no index point yet, and the newest timestamp came first",
+                vec![(0, 100, sparse), (1, 300, sparse), (2, 200, sparse)],
+                (1, Some((300, 1))),
+            ),
+            (
+                "the index already holds the newest timestamp",
+                vec![(0, 100, DENSE_INDEX), (1, 200, DENSE_INDEX)],
+                (1, Some((200, 1))),
+            ),
+            (
+                "an index point lags the newest batch",
+                vec![
+                    (0, 100, DENSE_INDEX),
+                    (1, 200, DENSE_INDEX),
+                    (2, 300, sparse),
+                ],
+                (2, Some((300, 2))),
+            ),
+        ];
+        for (label, batches, expected) in cases {
+            let dir = tempdir().unwrap();
+            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+            for (base, timestamp, interval) in batches {
+                seg.append(&sample_batch(base, 1, timestamp), interval)
+                    .unwrap();
+            }
+            seg.seal().unwrap();
+            check!(
+                (seg.time_index.entry_count(), seg.time_index.last_entry()) == expected,
+                "{label}"
+            );
+        }
     }
 
     /// `truncate_to_relative` decides which batches to drop by each batch's

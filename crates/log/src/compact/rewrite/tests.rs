@@ -3,8 +3,9 @@
 
 use std::fs;
 
+use krabka_compression::CompressionType;
 use krabka_ids::Offset;
-use krabka_protocol::records::{Attributes, Record};
+use krabka_protocol::records::{Attributes, Record, TimestampType};
 use krabka_units::prelude::millis;
 
 use super::*;
@@ -133,13 +134,15 @@ fn rewrite_preserves_absolute_offsets() {
     let out = rewrite_simple(dir.path(), &segment_refs);
     let bytes = std::fs::read(&out.log_swap).unwrap();
     let batches = decode_all(&bytes);
+    // The batch keeps its original last offset, 103, although the record at
+    // 103 is gone: Kafka's `overrideLastOffset(originalBatch.lastOffset())`.
     assert2::assert!(out.new_base_offset == Offset(100));
-    assert2::assert!(out.new_last_offset == Offset(102));
+    assert2::assert!(out.new_last_offset == Offset(103));
     assert2::assert!(
         batches
             == vec![RecordBatch {
                 base_offset: 100,
-                last_offset_delta: 2,
+                last_offset_delta: 3,
                 records: vec![
                     make_record(1, Some(b"k2"), Some(b"v2")),
                     make_record(2, Some(b"k1"), Some(b"v3")),
@@ -147,6 +150,68 @@ fn rewrite_preserves_absolute_offsets() {
                 ..RecordBatch::default()
             }]
     );
+}
+
+/// A record `delta` milliseconds after its batch's base timestamp.
+fn record_at(offset_delta: i32, key: Option<&[u8]>, delta: i64) -> Record {
+    Record {
+        timestamp_delta: delta,
+        ..make_record(offset_delta, key, Some(b"v"))
+    }
+}
+
+/// A batch that loses the record carrying its maximum timestamp gets the
+/// retained records' maximum under `CreateTime`, as Kafka's
+/// `MemoryRecordsBuilder.recordWritten` computes it, and keeps its own under
+/// `LogAppendTime`, where `writeDefaultBatchHeader` writes the append time.
+#[test]
+fn a_batch_that_loses_its_newest_record_recomputes_its_max_timestamp() {
+    let cases = [
+        (
+            "CreateTime",
+            Attributes::default(),
+            1_002, // the newest of the kept records
+        ),
+        (
+            "LogAppendTime",
+            Attributes::default().with_timestamp_type(TimestampType::LogAppendTime),
+            1_050, // the append time
+        ),
+    ];
+    for (label, attributes, expected_max_timestamp) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let batch = RecordBatch {
+            base_offset: 0,
+            last_offset_delta: 3,
+            base_timestamp: 1_000,
+            max_timestamp: 1_050,
+            attributes,
+            records: vec![
+                record_at(0, Some(b"k1"), 0),
+                record_at(1, Some(b"k2"), 1),
+                record_at(2, Some(b"k1"), 2),
+                record_at(3, None, 50), // dropped: it carries the max timestamp
+            ],
+            ..RecordBatch::default()
+        };
+        let seg = write_sealed_batches(dir.path(), &[batch]);
+        let segment_refs = vec![&seg];
+        let out = rewrite_simple(dir.path(), &segment_refs);
+
+        assert2::assert!(
+            decode_all(&fs::read(&out.log_swap).unwrap())
+                == vec![RecordBatch {
+                    base_offset: 0,
+                    last_offset_delta: 3,
+                    base_timestamp: 1_000,
+                    max_timestamp: expected_max_timestamp,
+                    attributes,
+                    records: vec![record_at(1, Some(b"k2"), 1), record_at(2, Some(b"k1"), 2)],
+                    ..RecordBatch::default()
+                }],
+            "{label}"
+        );
+    }
 }
 
 /// (a) End-to-end control-batch bug fix. Two commit markers at different
@@ -364,6 +429,7 @@ fn rewrite_retain_empty_for_active_producer() {
                     producer_id: 1000,
                     producer_epoch: 7,
                     base_sequence: 3,
+                    base_timestamp: -1,
                     ..RecordBatch::default()
                 },
                 RecordBatch {
@@ -429,6 +495,7 @@ fn rewrite_retain_empty_extends_last_offset() {
                 RecordBatch {
                     base_offset: 100,
                     last_offset_delta: 5,
+                    base_timestamp: -1,
                     producer_id: -1,
                     ..RecordBatch::default()
                 },
@@ -542,6 +609,67 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
     }
 }
 
+/// The bare header a `RETAIN_EMPTY` batch leaves is Kafka's
+/// `DefaultRecordBatch.writeEmptyHeader`: no compression, no delete horizon
+/// and no base timestamp, whatever the emptied batch had. The transactional
+/// and timestamp-type bits, the max timestamp and the producer state carry
+/// over.
+#[test]
+fn a_retained_empty_batch_has_no_compression_horizon_or_base_timestamp() {
+    let transactional_append_time = Attributes::default()
+        .with_transactional(true)
+        .with_timestamp_type(TimestampType::LogAppendTime);
+    let cases = [
+        (
+            "compressed",
+            Attributes::default().with_compression(CompressionType::Gzip),
+            Attributes::default(),
+        ),
+        (
+            "delete horizon",
+            Attributes::default().with_delete_horizon(true),
+            Attributes::default(),
+        ),
+        (
+            "transactional LogAppendTime, compressed, with a horizon",
+            transactional_append_time
+                .with_compression(CompressionType::Gzip)
+                .with_delete_horizon(true),
+            transactional_append_time,
+        ),
+    ];
+    for (label, attributes, expected_attributes) in cases {
+        let emptied = RecordBatch {
+            base_offset: 10,
+            partition_leader_epoch: 4,
+            attributes,
+            last_offset_delta: 1,
+            base_timestamp: 500,
+            max_timestamp: 700,
+            producer_id: 1000,
+            producer_epoch: 7,
+            base_sequence: 3,
+            records: vec![make_record(0, None, Some(b"n1"))],
+        };
+        assert2::assert!(
+            bare_header(&emptied)
+                == RecordBatch {
+                    base_offset: 10,
+                    partition_leader_epoch: 4,
+                    attributes: expected_attributes,
+                    last_offset_delta: 1,
+                    base_timestamp: -1,
+                    max_timestamp: 700,
+                    producer_id: 1000,
+                    producer_epoch: 7,
+                    base_sequence: 3,
+                    records: vec![],
+                },
+            "{label}"
+        );
+    }
+}
+
 /// A round that rewrites several size-bounded groups keeps only the last
 /// batch of the round when it is empty, not the last batch of every group:
 /// Kafka's `batch.nextOffset() == upperBoundOffsetOfCleaningRound`.
@@ -581,6 +709,7 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
                 vec![],
                 vec![RecordBatch {
                     base_offset: 1,
+                    base_timestamp: -1,
                     last_offset_delta: 0,
                     ..RecordBatch::default()
                 }]

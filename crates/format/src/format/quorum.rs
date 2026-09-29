@@ -32,25 +32,24 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
         if requested.replace(*level).is_some() {
             return Err("feature kraft.version specified more than once".into());
         }
-        if !(0..=1).contains(level) {
-            return Err(format!(
-                "No feature:kraft.version with feature level {level}"
-            ));
-        }
     }
 
+    // As in `Formatter.effectiveKRaftFeatureLevel`, the level is reconciled
+    // with the quorum flags before `Feature.fromFeatureLevel` checks that the
+    // feature defines it, so a level above 1 without a quorum flag is a mode
+    // conflict and not a `No feature` error.
     match (dynamic, requested) {
-        (true, None | Some(1)) => Ok(true),
         (true, Some(0)) => Err(
             "--standalone, --initial-controllers, and --no-initial-controllers require kraft.version=1"
                 .into(),
         ),
-        (false, None | Some(0)) => Ok(false),
-        (false, Some(1)) => Err(
-            "kraft.version=1 requires --standalone, --initial-controllers, or --no-initial-controllers"
-                .into(),
-        ),
-        _ => unreachable!("kraft.version range was validated above"),
+        (false, Some(level)) if level != 0 => Err(format!(
+            "kraft.version={level} requires --standalone, --initial-controllers, or --no-initial-controllers"
+        )),
+        (_, Some(level)) if !(0..=1).contains(&level) => Err(format!(
+            "No feature:kraft.version with feature level {level}"
+        )),
+        (dynamic, _) => Ok(dynamic),
     }
 }
 
@@ -214,6 +213,7 @@ mod tests {
                 "krabka-format",
                 "--log-dir",
                 "/data",
+                "--no-initial-controllers",
                 "--feature",
                 &format!("kraft.version={level}"),
             ])

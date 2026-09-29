@@ -470,7 +470,7 @@ impl Log {
                 index_interval,
             )?;
             new_seg.set_io(self.io.clone());
-            new_seg.seal();
+            new_seg.seal()?;
             let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
             for base in group_bases {
                 self.sealed_txn_indexes.remove(base);
@@ -489,6 +489,8 @@ impl Log {
     }
 }
 
+#[cfg(test)]
+mod replication_tests;
 #[cfg(test)]
 mod transaction_tests;
 

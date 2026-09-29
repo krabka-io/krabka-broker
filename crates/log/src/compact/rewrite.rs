@@ -10,8 +10,9 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use krabka_compression::CompressionType;
 use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::records::{RecordBatch, TimestampType};
 use krabka_units::prelude::{Time, TimeExt};
 use tracing::instrument;
 
@@ -25,6 +26,10 @@ use crate::{error::LogError, segment::Segment, txn_index::TxnIndex};
 mod tests;
 #[cfg(test)]
 mod transaction_tests;
+
+/// Kafka's `RecordBatch.NO_TIMESTAMP`: the base timestamp of a batch that has
+/// no records.
+const NO_TIMESTAMP: i64 = -1;
 
 /// Result of [`rewrite_segments`]: paths to the `.cleaned` files that
 /// [`atomic_swap`] should promote through `.swap` to their final names.
@@ -280,18 +285,7 @@ pub fn rewrite_segments(
             if !(keeps_producer_state || round.is_last_batch_of_round(batch)) {
                 continue;
             }
-            let out_batch = RecordBatch {
-                base_offset: batch.base_offset,
-                last_offset_delta: batch.last_offset_delta,
-                max_timestamp: batch.max_timestamp,
-                base_timestamp: batch.base_timestamp,
-                attributes: batch.attributes,
-                producer_id: batch.producer_id,
-                producer_epoch: batch.producer_epoch,
-                base_sequence: batch.base_sequence,
-                partition_leader_epoch: batch.partition_leader_epoch,
-                records: vec![],
-            };
+            let out_batch = bare_header(batch);
             let mut buf = BytesMut::with_capacity(out_batch.encoded_len());
             out_batch.encode(&mut buf)?;
             crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, &log_file, &buf)?;
@@ -302,16 +296,25 @@ pub fn rewrite_segments(
             continue;
         }
 
-        // Compute new last_offset_delta covering the kept range (relative to
-        // the batch's original base_offset). Kafka preserves base_offset and
-        // only updates last_offset_delta when records are removed mid-batch.
-        let last_delta = kept
-            .iter()
-            .map(|r| r.offset_delta)
-            .max()
-            .expect("kept non-empty");
+        // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
+        // batch's base offset and last offset (`overrideLastOffset`), so the
+        // producer's last sequence (`base_sequence + last_offset_delta`) and
+        // the `RETAIN_EMPTY` comparisons of the next pass survive a batch that
+        // loses its tail records. The max timestamp is the retained records'
+        // under CreateTime (`MemoryRecordsBuilder.recordWritten`), and the
+        // batch's own under LogAppendTime (`writeDefaultBatchHeader`). The
+        // timestamps are absolute here, whether or not a delete horizon
+        // already re-based the batch.
+        let max_timestamp = match batch.attributes.timestamp_type() {
+            TimestampType::LogAppendTime => batch.max_timestamp,
+            TimestampType::CreateTime => kept
+                .iter()
+                .map(|r| batch.base_timestamp.saturating_add(r.timestamp_delta))
+                .max()
+                .expect("kept non-empty"),
+        };
         let mut out_batch = RecordBatch {
-            last_offset_delta: last_delta,
+            max_timestamp,
             records: kept,
             ..batch.clone()
         };
@@ -373,6 +376,29 @@ pub fn rewrite_segments(
         new_last_offset: last_kept_offset,
         txnindex_swap,
     })
+}
+
+/// The bare header a `RETAIN_EMPTY` batch leaves in the output, Kafka's
+/// `DefaultRecordBatch.writeEmptyHeader`: it has no base timestamp, no
+/// compression and no delete horizon, whatever the emptied batch had. The
+/// batch's offsets, max timestamp, producer state, leader epoch and its
+/// transactional, control and timestamp-type bits carry over.
+fn bare_header(batch: &RecordBatch) -> RecordBatch {
+    RecordBatch {
+        base_offset: batch.base_offset,
+        last_offset_delta: batch.last_offset_delta,
+        max_timestamp: batch.max_timestamp,
+        base_timestamp: NO_TIMESTAMP,
+        attributes: batch
+            .attributes
+            .with_compression(CompressionType::None)
+            .with_delete_horizon(false),
+        producer_id: batch.producer_id,
+        producer_epoch: batch.producer_epoch,
+        base_sequence: batch.base_sequence,
+        partition_leader_epoch: batch.partition_leader_epoch,
+        records: vec![],
+    }
 }
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {

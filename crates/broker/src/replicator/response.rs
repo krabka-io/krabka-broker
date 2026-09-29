@@ -898,32 +898,72 @@ mod tests {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
         let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
-
-        let bad = fetch_response(
-            TOPIC,
-            WIRE_TOPIC_ID,
-            PartitionData {
-                partition_index: PARTITION,
-                error_code: codes::NONE,
-                records: Some(RecordsPayload::V2(vec![one_record_batch(2)])),
-                ..PartitionData::default()
-            },
-        );
-        assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
-        assert!(part.log_end_offset() == Offset(0));
-
-        let retry = fetch_response(
-            TOPIC,
-            WIRE_TOPIC_ID,
-            PartitionData {
-                partition_index: PARTITION,
-                error_code: codes::NONE,
-                records: Some(RecordsPayload::V2(vec![one_record_batch(0)])),
-                ..PartitionData::default()
-            },
-        );
-        assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        let respond = |base_offset| {
+            fetch_response(
+                TOPIC,
+                WIRE_TOPIC_ID,
+                PartitionData {
+                    partition_index: PARTITION,
+                    error_code: codes::NONE,
+                    records: Some(RecordsPayload::V2(vec![one_record_batch(base_offset)])),
+                    ..PartitionData::default()
+                },
+            )
+        };
+        assert!(handle_response(respond(0), &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         assert!(part.log_end_offset() == Offset(1));
+
+        // A batch that starts below the log end offset is a duplicate. The
+        // append is refused and leaves the log as it was.
+        let bad = respond(0);
+        assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        assert!(part.log_end_offset() == Offset(1));
+
+        let retry = respond(1);
+        assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        assert!(part.log_end_offset() == Offset(2));
+    }
+
+    /// A compacted leader's log has holes, so the batch after one starts past
+    /// the follower's log end offset. Kafka's `appendAsFollower` takes it, and
+    /// the follower's log end offset moves to the end of that batch, whether
+    /// the records arrive as decoded batches or as raw bytes.
+    #[tokio::test]
+    async fn a_batch_past_the_log_end_offset_is_replicated_across_the_hole() {
+        for raw in [false, true] {
+            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+            ensure_local_partition(&cfg).unwrap();
+            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+
+            // Offsets 1 to 4 were compacted away on the leader.
+            for base_offset in [0, 5] {
+                let mut batch = one_record_batch(base_offset);
+                batch.partition_leader_epoch = cfg.leader_epoch.0;
+                let records = if raw {
+                    let mut encoded = BytesMut::new();
+                    batch.encode(&mut encoded).unwrap();
+                    RecordsPayload::Raw(encoded.freeze())
+                } else {
+                    RecordsPayload::V2(vec![batch])
+                };
+                let response = fetch_response(
+                    TOPIC,
+                    WIRE_TOPIC_ID,
+                    PartitionData {
+                        partition_index: PARTITION,
+                        error_code: codes::NONE,
+                        records: Some(records),
+                        ..PartitionData::default()
+                    },
+                );
+                assert!(
+                    handle_response(response, &cfg, cfg.leader_epoch.0).await
+                        == RowAction::Continue
+                );
+            }
+
+            assert!(part.log_end_offset() == Offset(6), "raw: {raw}");
+        }
     }
 
     #[tokio::test]

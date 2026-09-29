@@ -235,13 +235,7 @@ impl Segment {
     /// `timeIndex().maybeAppend(maxTimestampSoFar(), shallowOffsetOfMaxTimestampSoFar())`.
     fn append_index_entries(&mut self, (rel, pos): (u32, u32)) -> Result<(), LogError> {
         self.offset_index.append(rel, pos)?;
-        let max_timestamp_rel = krabka_verified::truncation_relative_offset(
-            self.base_offset.0,
-            self.max_timestamp_offset.0,
-        )
-        .ok_or_else(|| LogError::BadSegmentName("offset overflow in segment".into()))?;
-        self.time_index
-            .maybe_append(self.max_timestamp, max_timestamp_rel)
+        self.append_running_max_time_entry()
     }
 }
 
@@ -307,7 +301,7 @@ mod tests {
     fn append_to_sealed_segment_errors() {
         let dir = tempdir().unwrap();
         let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.seal();
+        seg.seal().unwrap();
         assert2::assert!(seg.is_sealed());
         let err = seg
             .append(&sample_batch(0, 1, 0), kibibytes(4))
@@ -382,7 +376,7 @@ mod tests {
     #[test]
     fn append_verbatim_to_sealed_segment_errors() {
         let (dir, mut seg) = test_segment();
-        seg.seal();
+        seg.seal().unwrap();
         let mut wire = bytes::BytesMut::new();
         test_batch_at(0).encode(&mut wire).unwrap();
         let err = seg
