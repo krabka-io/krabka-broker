@@ -116,6 +116,7 @@ fn following_leader_for_role_reports_followed_leader_only() {
             Role::Follower {
                 leader_id: NodeId(7),
                 fetch_deadline: SimInstant(10),
+                has_fetched_from_leader: false,
             },
             Some(NodeId(7)),
         ),
@@ -255,55 +256,54 @@ async fn sleep_until_opt_completes_for_past_deadline() {
     sleep_until_opt(Some(Instant::now())).await;
 }
 
+/// Kafka keys a replica that is not a voter by `(id, directory id)`, so the same
+/// id fetching under two directories is two observers, and one that names no
+/// directory is a third.
 #[test]
-fn inbound_fetch_records_non_nil_directory_id() {
+fn inbound_fetch_keys_observers_by_directory_id() {
     use crate::kraft::{
         controller::test_support::{build_engine_only, elect_single_voter_engine},
         transport::wire::PeerRequest,
     };
 
-    // Only the leader records a fetcher (Kafka's `updateReplicaState`).
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     elect_single_voter_engine(&mut engine);
+    // A fetch at the engine's very first millisecond would read as "never".
+    engine.clock_base = Instant::now() - Duration::from_millis(50);
     let current_leader_epoch = i32::try_from(engine.core.quorum_state().leader_epoch).unwrap();
     let dir_id = uuid::Uuid::from_u128(999);
-    let req = PeerRequest::Fetch {
-        cluster_id: None,
-        max_wait_ms: 0,
-        high_watermark: -1,
-        from: NodeId(2),
-        current_leader_epoch,
-        fetch_epoch: 0,
-        fetch_offset: 0,
-        replica_directory_id: dir_id,
-    };
-    let (reply, _rx) = oneshot::channel();
-    engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
-        req: req.encode(),
-        reply,
-    });
+    let other_dir_id = uuid::Uuid::from_u128(1_000);
+    for directory in [dir_id, other_dir_id, uuid::Uuid::nil(), dir_id] {
+        let req = PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
+            from: NodeId(2),
+            current_leader_epoch,
+            fetch_epoch: 0,
+            fetch_offset: 0,
+            replica_directory_id: directory,
+        };
+        let (reply, _rx) = oneshot::channel();
+        engine.on_inbound(Inbound::Fetch {
+            version: crate::kraft::transport::wire::FETCH_VERSION,
+            req: req.encode(),
+            reply,
+        });
+    }
 
-    let qs = engine.quorum_state_snapshot();
-    assert2::assert!(qs.observer_directory_ids.get(&NodeId(2)) == Some(&dir_id));
-
-    // A fetch with nil directory ID does not overwrite the recorded ID
-    let nil_req = PeerRequest::Fetch {
-        cluster_id: None,
-        max_wait_ms: 0,
-        high_watermark: -1,
-        from: NodeId(2),
-        current_leader_epoch,
-        fetch_epoch: 0,
-        fetch_offset: 0,
-        replica_directory_id: uuid::Uuid::nil(),
-    };
-    let (reply2, _rx2) = oneshot::channel();
-    engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
-        req: nil_req.encode(),
-        reply: reply2,
-    });
-    let qs2 = engine.quorum_state_snapshot();
-    assert2::assert!(qs2.observer_directory_ids.get(&NodeId(2)) == Some(&dir_id));
+    let observers: Vec<(NodeId, uuid::Uuid)> = engine
+        .quorum_state_snapshot()
+        .observers
+        .iter()
+        .map(|observer| (observer.id, observer.directory_id))
+        .collect();
+    assert2::assert!(
+        observers
+            == vec![
+                (NodeId(2), uuid::Uuid::nil()),
+                (NodeId(2), dir_id),
+                (NodeId(2), other_dir_id),
+            ]
+    );
 }

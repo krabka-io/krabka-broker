@@ -31,6 +31,7 @@ pub(crate) fn observer_config(cluster_id: uuid::Uuid, data_dir: PathBuf) -> Obse
         cluster_id,
         // Fixtures put the controller at node 1, so the observer is node 2.
         node_id: krabka_raft::NodeId(2),
+        directory_id: uuid::Uuid::from_u128(2),
         data_dir,
         // Off by default: a fixture that is about resuming from disk turns it
         // on, and every other one is spared the image serialization.

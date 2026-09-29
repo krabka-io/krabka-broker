@@ -175,7 +175,17 @@ pub(super) async fn dispatch_metadata_fetch(
     // The decoded `int32` enters the domain here; the codec itself stays raw so
     // the request stays byte-exact. A negative budget clamps to zero, as before.
     let max_size = ByteSize::from_bytes_i64(i64::from(req.max_bytes.max(0)));
-    let slice = engine.metadata_fetch(fetch_offset, max_size).await?;
+    // A negative replica id is a fetcher that is not a replica, as in Kafka's
+    // `FetchRequest`, and the leader tracks nothing for it.
+    let replica = u64::try_from(req.replica_id)
+        .ok()
+        .map(|id| crate::kraft::ReplicaKey {
+            id: crate::NodeId(id),
+            directory_id: req.replica_directory_id,
+        });
+    let slice = engine
+        .metadata_fetch(fetch_offset, max_size, replica)
+        .await?;
     let quorum = engine.quorum_state().await.ok();
     let (leader_hint, leader_epoch) =
         quorum_metadata_leader(quorum.as_ref().map(|qs| (qs.leader_id, qs.leader_epoch)));
@@ -239,6 +249,8 @@ mod tests {
         let req = KrabkaMetadataFetchRequest {
             fetch_offset,
             max_bytes,
+            replica_id: -1,
+            replica_directory_id: Uuid::nil(),
         };
         let mut out = Vec::new();
         req.encode_v0(&mut out);

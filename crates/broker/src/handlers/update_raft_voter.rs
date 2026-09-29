@@ -104,6 +104,7 @@ pub(crate) async fn handle(
         };
         voter_requests::reconfiguration_refusal(
             broker.controller.update_voter(UpdateVoter { voter }).await,
+            voter_requests::VoterOperation::Update,
             voter_id,
             directory_id,
         )

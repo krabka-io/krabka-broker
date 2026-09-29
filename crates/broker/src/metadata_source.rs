@@ -81,15 +81,33 @@ pub trait MetadataSource: Send + Sync {
     /// controller and combined nodes. Broker-only observers have no
     /// controller listener and report an unspecified address.
     fn controller_bound_addr(&self) -> SocketAddr;
-    /// Read a byte window of the latest metadata snapshot to serve
-    /// `FetchSnapshot`. Controller and combined nodes back this with their
-    /// on-disk checkpoint. Broker-only observers have none to serve.
+    /// Read a byte window of the latest metadata snapshot. Controller and
+    /// combined nodes back this with their on-disk checkpoint. Broker-only
+    /// observers have none to read.
     fn read_snapshot_range(&self, position: i64, max_bytes: i32) -> SnapshotRange;
+    /// Answer a `FetchSnapshot` request body at `version` as the controller
+    /// listener does, with the response body. `None` means this node keeps no
+    /// metadata log of its own to serve, as a broker-only observer.
+    async fn fetch_snapshot(
+        &self,
+        _version: i16,
+        _body: bytes::Bytes,
+    ) -> Option<Result<bytes::Bytes, RaftError>> {
+        None
+    }
     /// Schedule a metadata snapshot. It is meaningful only on controller and
     /// combined nodes. Broker-only observers have no log of their own to
     /// snapshot.
     async fn trigger_snapshot(&self) -> Result<(), RaftError>;
     async fn add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError>;
+    /// Run the leader-local checks of `AddVoterHandler` (pending change, high
+    /// watermark, `kraft.version`, uncommitted voters record, duplicate id)
+    /// for `req` without contacting the candidate or appending anything.
+    /// Only a controller can evaluate them; every other source is not the
+    /// leader.
+    async fn check_add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
+        Ok(ReconfigOutcome::NotLeader { leader: None })
+    }
     async fn remove_voter(&self, req: RemoveVoter) -> Result<ReconfigOutcome, RaftError>;
     async fn update_voter(&self, req: UpdateVoter) -> Result<ReconfigOutcome, RaftError>;
     async fn finalize_kraft_version(&self, _version: u16) -> Result<ReconfigOutcome, RaftError> {

@@ -24,7 +24,7 @@ impl SimInstant {
 pub type Epoch = u32;
 
 /// Identifies a voter by node id and directory id, as Kafka's `ReplicaKey` does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReplicaKey {
     pub id: NodeId,
     pub directory_id: Uuid,

@@ -10,9 +10,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
 
-use super::{ControllerHandle, checkpoint::load_latest_checkpoint};
+use super::{
+    ControllerHandle, checkpoint::load_latest_checkpoint, feature_check::unsupported_feature_level,
+};
 use crate::{
-    config::{BootstrapMode, ControllerConfig},
+    config::{BootstrapMode, ControllerConfig, UnstableFeatureVersions},
     error::RaftError,
     kraft::KraftController,
     network::{OutboundDialer, PlaintextDialer, RealPeerSender},
@@ -130,6 +132,7 @@ impl Controller {
             data_dir.clone(),
             config.node_id,
             cluster_id,
+            config.directory_id,
             voters.clone(),
             config.election_timeout,
             config.heartbeat_interval,
@@ -142,6 +145,18 @@ impl Controller {
             config.max_snapshot_interval,
             metadata_snapshot_fetch_max,
         )?;
+
+        // Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws
+        // when a record's level is outside what this controller supports, so
+        // a log finalized at an unstable level does not start under a node that
+        // cannot serve it. The engine has replayed the log and the checkpoint
+        // by now, and `open` has published the image that replay left.
+        if let Some(refusal) =
+            unsupported_feature_level(&engine.current_image(), config.unstable_feature_versions)
+        {
+            engine.shutdown().await;
+            return Err(RaftError::Startup(refusal));
+        }
 
         // Controller listener.
         let listener = match prebound {
@@ -166,6 +181,11 @@ impl Controller {
                 feature_versions: config.unstable_feature_versions,
             },
         ));
+        tokio::spawn(stop_on_unsupported_feature_level(
+            engine.clone(),
+            shutdown.clone(),
+            config.unstable_feature_versions,
+        ));
         info!(
             node_id = config.node_id.0,
             addr = %actual_addr,
@@ -187,6 +207,36 @@ impl Controller {
             dialer,
             controller_bound_addr: actual_addr,
         })
+    }
+}
+
+/// Stops the controller when it replays a feature level that it does not
+/// support, as Kafka's fatal fault on a `FeatureControlManager` replay
+/// exception does. The engine publishes each image it applies, so a node that
+/// follows a leader which finalized a level above its own range sees it here
+/// and stops serving, and never runs at a level it did not advertise.
+async fn stop_on_unsupported_feature_level(
+    engine: KraftController,
+    shutdown: CancellationToken,
+    unstable: UnstableFeatureVersions,
+) {
+    let mut images = engine.watch_image();
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            changed = images.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+        }
+        let refusal = unsupported_feature_level(&images.borrow_and_update(), unstable);
+        if let Some(refusal) = refusal {
+            tracing::error!(%refusal, "controller stopping: it replayed an unsupported feature level");
+            shutdown.cancel();
+            engine.shutdown().await;
+            return;
+        }
     }
 }
 

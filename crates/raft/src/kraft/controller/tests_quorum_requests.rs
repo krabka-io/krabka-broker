@@ -141,6 +141,33 @@ fn vote_answer(error_code: i16) -> VoteResponse {
     }
 }
 
+/// `vote_answer`, but for a vote the follower of node 2 granted.
+fn vote_answer_granted() -> VoteResponse {
+    let mut answer = vote_answer(0);
+    answer.topics[0].partitions[0].vote_granted = true;
+    answer
+}
+
+/// The refusal of a request from epoch 6: the follower has stepped down to that
+/// epoch before it looked at the request's voter key, so it names no leader.
+fn vote_answer_after_stepping_down_to_epoch_6(error_code: i16) -> VoteResponse {
+    VoteResponse {
+        topics: vec![vote_resp::TopicData {
+            topic_name: METADATA_TOPIC.into(),
+            partitions: vec![vote_resp::PartitionData {
+                partition_index: 0,
+                error_code,
+                leader_id: -1,
+                leader_epoch: 6,
+                vote_granted: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn vote_runs_kafka_request_checks() {
     let top_level = |error_code| VoteResponse {
@@ -221,13 +248,22 @@ async fn vote_runs_kafka_request_checks() {
             vote_answer(42),
         ),
         (
-            "voter key names another replica",
+            "voter key names another replica, from a higher epoch",
             vote_request(|r| r.voter_id = 2),
-            vote_answer(125),
+            vote_answer_after_stepping_down_to_epoch_6(125),
         ),
         (
-            "voter key names replica 0 which is not local",
+            "voter key names replica 0 which is not local, from a higher epoch",
             vote_request(|r| r.voter_id = 0),
+            vote_answer_after_stepping_down_to_epoch_6(125),
+        ),
+        (
+            "voter key names another replica, at the local epoch",
+            vote_request(|r| {
+                r.voter_id = 2;
+                vote_partition(r).pre_vote = true;
+                vote_partition(r).replica_epoch = 5;
+            }),
             vote_answer(125),
         ),
         (
@@ -240,12 +276,12 @@ async fn vote_runs_kafka_request_checks() {
             vote_answer(0),
         ),
         (
-            "pre-vote while a leader is known",
+            "pre-vote to a follower that has not fetched from its leader",
             vote_request(|r| {
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).replica_epoch = 5;
             }),
-            vote_answer(0),
+            vote_answer_granted(),
         ),
         (
             "pre-vote with no voter key",
@@ -254,6 +290,11 @@ async fn vote_runs_kafka_request_checks() {
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).replica_epoch = 5;
             }),
+            vote_answer_granted(),
+        ),
+        (
+            "standard vote at the local epoch while a leader is known",
+            vote_request(|r| vote_partition(r).replica_epoch = 5),
             vote_answer(0),
         ),
     ];

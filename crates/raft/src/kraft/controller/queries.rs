@@ -19,15 +19,26 @@ use crate::{
     error::RaftError,
     kraft::{
         core::QuorumStateMachine,
-        role::Role,
-        transport::{MetadataFetchSlice, QuorumStateSnapshot},
-        types::NodeId,
+        role::{ReplicaProgress, Role},
+        transport::{MetadataFetchSlice, ObserverReplica, QuorumStateSnapshot},
+        types::{NodeId, SimInstant},
     },
 };
 
 /// Floor on an observer's metadata-fetch budget: at least the first committed
 /// batch is always emitted so a zero-budget fetch still makes progress.
 const MIN_FETCH_BUDGET: ByteSize = krabka_units::bytes(1);
+
+/// How long an observer may stay silent before the leader stops reporting it:
+/// Kafka's `LeaderState.OBSERVER_SESSION_TIMEOUT_MS`.
+const OBSERVER_SESSION_TIMEOUT_MS: u64 = 300_000;
+
+/// Kafka's `clearInactiveObservers` test: the observer has not fetched for
+/// [`OBSERVER_SESSION_TIMEOUT_MS`], or the leader never saw it fetch.
+pub(super) fn observer_session_expired(progress: &ReplicaProgress, now: SimInstant) -> bool {
+    progress.last_fetch.0 == 0
+        || now.0.saturating_sub(progress.last_fetch.0) >= OBSERVER_SESSION_TIMEOUT_MS
+}
 
 /// Voter ids from the core's current quorum state (for the initial published
 /// snapshot, before the loop runs).
@@ -49,10 +60,26 @@ impl Engine {
         self.log.hwm().0.max(self.leader_reported_hwm)
     }
 
+    /// Wall-clock milliseconds of `at`, or -1 when the clock base cannot be
+    /// mapped to the Unix epoch.
+    fn unix_ms(&self, at: SimInstant) -> i64 {
+        self.wall_clock_base
+            .checked_add(std::time::Duration::from_millis(at.0))
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    }
+
+    /// Wall-clock milliseconds of a progress timestamp the leader tracks, or -1
+    /// while it has not recorded that event (a zero instant), as Kafka reports
+    /// it.
+    fn tracked_ms(&self, at: SimInstant) -> i64 {
+        if at.0 == 0 { -1 } else { self.unix_ms(at) }
+    }
+
     /// Snapshot the consensus state for `DescribeQuorum`.
     pub fn quorum_state_snapshot(&self) -> QuorumStateSnapshot {
         let qs = self.core.quorum_state();
-        let mut per_replica_fetch_offset = self.replica_fetch_offsets.clone();
+        let mut per_replica_fetch_offset = std::collections::BTreeMap::new();
         let mut per_replica_last_fetch_ms = std::collections::BTreeMap::new();
         let mut per_replica_last_caught_up_ms = std::collections::BTreeMap::new();
         let is_leader = self.core.role().is_leader();
@@ -68,11 +95,7 @@ impl Engine {
             | Role::Voted { .. } => "candidate",
             Role::Observer { .. } => "observer",
         };
-        let now_ms = self
-            .wall_clock_base
-            .checked_add(std::time::Duration::from_millis(self.now().0))
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let now = self.now();
 
         if let Role::Leader { replicas, .. } = self.core.role() {
             // The leader's own matched index is its log end offset — its local
@@ -83,40 +106,31 @@ impl Engine {
             // the JVM "unknown" sentinel -1 for the leader).
             // `per_voter_fetch_offset` is a wire-facing DescribeQuorum DTO of raw
             // `i64`s; the peer entries already come from the core as `i64`.
+            let now_ms = self.unix_ms(now);
             per_replica_fetch_offset.insert(self.core.me(), self.log.log_end_offset().0);
             per_replica_last_fetch_ms.insert(self.core.me(), now_ms);
             per_replica_last_caught_up_ms.insert(self.core.me(), now_ms);
             for (id, progress) in replicas {
                 per_replica_fetch_offset.insert(*id, progress.fetch_offset);
-                let fetch_ms = if progress.last_fetch.0 == 0 {
-                    -1
-                } else {
-                    self.wall_clock_base
-                        .checked_add(std::time::Duration::from_millis(progress.last_fetch.0))
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-                };
-                let caught_up_ms = if progress.last_caught_up.0 == 0 {
-                    -1
-                } else {
-                    self.wall_clock_base
-                        .checked_add(std::time::Duration::from_millis(progress.last_caught_up.0))
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-                };
-                per_replica_last_fetch_ms.insert(*id, fetch_ms);
-                per_replica_last_caught_up_ms.insert(*id, caught_up_ms);
+                per_replica_last_fetch_ms.insert(*id, self.tracked_ms(progress.last_fetch));
+                per_replica_last_caught_up_ms.insert(*id, self.tracked_ms(progress.last_caught_up));
             }
         }
-        let observers: Vec<NodeId> = per_replica_fetch_offset
-            .keys()
-            .filter(|id| !qs.voters.contains(**id))
-            .copied()
-            .collect();
-        let observer_directory_ids: std::collections::BTreeMap<NodeId, uuid::Uuid> = observers
-            .iter()
-            .filter_map(|id| self.replica_directory_ids.get(id).map(|dir| (*id, *dir)))
-            .collect();
+        let observers = if is_leader {
+            self.observers
+                .iter()
+                .filter(|(_, progress)| !observer_session_expired(progress, now))
+                .map(|(key, progress)| ObserverReplica {
+                    id: key.id,
+                    directory_id: key.directory_id,
+                    log_end_offset: progress.fetch_offset,
+                    last_fetch_ms: self.tracked_ms(progress.last_fetch),
+                    last_caught_up_ms: self.tracked_ms(progress.last_caught_up),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         QuorumStateSnapshot {
             leader_id: qs.leader_id,
             leader_epoch: qs.leader_epoch,
@@ -130,7 +144,6 @@ impl Engine {
             per_replica_fetch_offset,
             per_replica_last_fetch_ms,
             per_replica_last_caught_up_ms,
-            observer_directory_ids,
             is_leader,
             current_state,
         }

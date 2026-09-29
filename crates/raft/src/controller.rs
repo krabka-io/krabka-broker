@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod checkpoint;
+mod feature_check;
 mod membership;
 mod metadata_fetch;
 mod startup;
@@ -59,8 +60,8 @@ pub struct QuorumState {
     /// keyed by node id. Mirrors `voters`; carries the KIP-853 voter metadata
     /// the `DescribeQuorum` path needs.
     pub voter_nodes: BTreeMap<NodeId, Node>,
-    /// Per-replica fetch offset (matched index), including observers known to
-    /// the leader. Empty on a follower; callers use Kafka's unknown sentinel.
+    /// Per-voter fetch offset (matched index). Empty on a follower; callers use
+    /// Kafka's unknown sentinel.
     pub per_voter_matched_index: BTreeMap<NodeId, u64>,
     /// Per-replica last fetch timestamp in wall-clock milliseconds.
     pub per_replica_last_fetch_ms: BTreeMap<NodeId, i64>,
@@ -164,7 +165,11 @@ impl ControllerHandle {
             per_voter_matched_index,
             per_replica_last_fetch_ms: snap.per_replica_last_fetch_ms,
             per_replica_last_caught_up_ms: snap.per_replica_last_caught_up_ms,
-            observer_directory_ids: snap.observer_directory_ids,
+            observer_directory_ids: snap
+                .observers
+                .iter()
+                .map(|observer| (observer.id, observer.directory_id))
+                .collect(),
             is_leader: snap.is_leader,
         }
     }

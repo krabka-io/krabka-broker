@@ -6,28 +6,33 @@
 //! advances `position`. Each response carries the requested byte range
 //! verbatim, plus the snapshot's `(end_offset, epoch)` id and total `size`.
 //!
+//! The broker listener does not answer the request itself. It hands the body to
+//! the controller's engine, which is what the controller listener does too, so
+//! both listeners give one answer to one request: Kafka's
+//! `KafkaRaftClient.handleFetchSnapshotRequest`. The engine serves exactly the
+//! snapshot the request names and answers `SNAPSHOT_NOT_FOUND` for any other,
+//! `UNKNOWN_TOPIC_OR_PARTITION` for another topic or partition,
+//! `FENCED_LEADER_EPOCH`, `UNKNOWN_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER`
+//! for a `CurrentLeaderEpoch` that this node cannot serve, and
+//! `POSITION_OUT_OF_RANGE` for a position outside the snapshot. It accepts the
+//! cluster id in Kafka's base64 `Uuid` form as well as the hyphenated one, and
+//! fills `CurrentLeader` and the leader's endpoint into the response.
+//!
 //! The returned bytes are *unaligned*. A snapshot is many concatenated
 //! record batches, and a paged byte range is by design not batch-aligned.
-//! The handler therefore ships the range as `RecordsPayload::Legacy`, written
-//! verbatim, and does not decode it into a single `RecordBatch`.
 //!
-//! Any topic other than `__cluster_metadata` partition 0 gets
-//! `INVALID_TOPIC_EXCEPTION` (17). A request whose `cluster_id` does not
-//! match this cluster gets a top-level `INCONSISTENT_CLUSTER_ID` (104).
+//! A broker-only observer runs no engine and keeps no metadata log to serve.
+//! It answers `SNAPSHOT_NOT_FOUND` for the metadata partition and
+//! `UNKNOWN_TOPIC_OR_PARTITION` for any other.
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use krabka_protocol::{
     Decode,
     owned::{
         fetch_snapshot_request::FetchSnapshotRequest,
-        fetch_snapshot_response::{
-            FetchSnapshotResponse, LeaderIdAndEpoch, PartitionSnapshot, SnapshotId, TopicSnapshot,
-        },
+        fetch_snapshot_response::{FetchSnapshotResponse, PartitionSnapshot, TopicSnapshot},
     },
-    records::RecordsPayload,
 };
-use krabka_raft::SnapshotRange;
 
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -35,21 +40,6 @@ use crate::{broker::Broker, codes, error::BrokerError};
 /// log. It mirrors
 /// `org.apache.kafka.common.Topic.CLUSTER_METADATA_TOPIC_NAME`.
 const CLUSTER_METADATA_TOPIC: &str = "__cluster_metadata";
-
-/// An error-carrying partition entry. Every field is zeroed except `index`
-/// and `error_code`.
-fn err_partition(index: i32, error_code: i16) -> PartitionSnapshot {
-    PartitionSnapshot {
-        index,
-        error_code,
-        snapshot_id: SnapshotId::default(),
-        size: 0,
-        position: 0,
-        unaligned_records: RecordsPayload::default(),
-        current_leader: LeaderIdAndEpoch::default(),
-        ..Default::default()
-    }
-}
 
 /// Checks `ClusterAction` on the cluster, then serves the byte range.
 ///
@@ -62,17 +52,17 @@ fn err_partition(index: i32, error_code: i16) -> PartitionSnapshot {
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    correlation_id: i32,
+    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
+    let mut cur: &[u8] = req_bytes;
+    let req = FetchSnapshotRequest::decode(&mut cur, version)?;
     if crate::handlers::cluster_action_denied(
         broker.config.authorizer.as_ref(),
         &broker.controller.current_image(),
         ctx,
     ) {
-        let mut cur: &[u8] = req_bytes;
-        FetchSnapshotRequest::decode(&mut cur, version)?;
         return crate::handlers::encode_response(
             &FetchSnapshotResponse {
                 error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
@@ -81,104 +71,121 @@ pub(crate) async fn handle(
             version,
         );
     }
-    serve(broker, version, correlation_id, req_bytes).await
-}
-
-fn serve(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
-    let req_bytes = req_bytes.to_vec();
-    let controller = broker.controller.clone();
-    Box::pin(async move {
-        let mut cur: &[u8] = &req_bytes;
-        let req = FetchSnapshotRequest::decode(&mut cur, version)?;
-        let max_bytes = req.max_bytes;
-        let resolve =
-            |position: i64, _max: i32| controller.read_snapshot_range(position, max_bytes);
-        let local_cluster_id = controller.current_image().cluster_id();
-        let resp = build_response(local_cluster_id, &req, &resolve);
-        crate::handlers::encode_response(&resp, version)
-    })
-}
-
-/// Build the response from a decoded request. The function is pure, so a test
-/// can call it without a live `Broker` and pass a `resolve` closure that stands
-/// in for [`krabka_raft::ControllerHandle::read_snapshot_range`].
-fn build_response(
-    local_cluster_id: uuid::Uuid,
-    req: &FetchSnapshotRequest,
-    resolve: &dyn Fn(i64, i32) -> SnapshotRange,
-) -> FetchSnapshotResponse {
-    if let Some(s) = req.cluster_id.as_deref()
-        && s != local_cluster_id.to_string()
+    match broker
+        .controller
+        .fetch_snapshot(version, Bytes::copy_from_slice(req_bytes))
+        .await
     {
-        return FetchSnapshotResponse {
-            throttle_time_ms: 0,
-            error_code: codes::INCONSISTENT_CLUSTER_ID,
-            topics: Vec::new(),
-            node_endpoints: Vec::new(),
-            ..Default::default()
-        };
+        Some(answer) => Ok(answer?),
+        None => crate::handlers::encode_response(&without_metadata_log(&req), version),
     }
+}
 
+/// The answer of a node that keeps no metadata log: no snapshot of the
+/// metadata partition to serve, and no such partition for anything else.
+fn without_metadata_log(req: &FetchSnapshotRequest) -> FetchSnapshotResponse {
     let topics = req
         .topics
         .iter()
-        .map(|topic| {
-            let is_metadata = topic.name == CLUSTER_METADATA_TOPIC;
-            let partitions = topic
+        .map(|topic| TopicSnapshot {
+            name: topic.name.clone(),
+            partitions: topic
                 .partitions
                 .iter()
-                .map(|part| {
-                    if !is_metadata || part.partition != 0 {
-                        return err_partition(part.partition, codes::INVALID_TOPIC_EXCEPTION);
-                    }
-                    match resolve(part.position, req.max_bytes) {
-                        SnapshotRange::NoSnapshot => err_partition(0, codes::SNAPSHOT_NOT_FOUND),
-                        SnapshotRange::OutOfRange => err_partition(0, codes::POSITION_OUT_OF_RANGE),
-                        SnapshotRange::Slice(slice) => PartitionSnapshot {
-                            index: 0,
-                            error_code: codes::NONE,
-                            snapshot_id: SnapshotId {
-                                end_offset: slice.end_offset,
-                                epoch: slice.epoch,
-                                ..Default::default()
-                            },
-                            size: slice.total_size,
-                            position: part.position,
-                            unaligned_records: RecordsPayload::Legacy(slice.bytes),
-                            current_leader: LeaderIdAndEpoch::default(),
-                            ..Default::default()
-                        },
-                    }
+                .map(|part| PartitionSnapshot {
+                    index: part.partition,
+                    error_code: if topic.name == CLUSTER_METADATA_TOPIC && part.partition == 0 {
+                        codes::SNAPSHOT_NOT_FOUND
+                    } else {
+                        codes::UNKNOWN_TOPIC_OR_PARTITION
+                    },
+                    ..Default::default()
                 })
-                .collect();
-            TopicSnapshot {
-                name: topic.name.clone(),
-                partitions,
-                ..Default::default()
-            }
+                .collect(),
+            ..Default::default()
         })
         .collect();
-
     FetchSnapshotResponse {
-        throttle_time_ms: 0,
-        error_code: codes::NONE,
         topics,
-        node_endpoints: Vec::new(),
         ..Default::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use assert2::{assert, check};
-    use krabka_raft::SnapshotSlice;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use krabka_protocol::owned::{
+        fetch_snapshot_request::{
+            self, PartitionSnapshot as ReqPartition, SnapshotId as ReqSnapshotId,
+            TopicSnapshot as ReqTopic,
+        },
+        fetch_snapshot_response::{self, LeaderIdAndEpoch},
+    };
+    use krabka_raft::SnapshotRange;
 
     use super::*;
+
+    /// A request for partition 0 of the metadata topic, at the given id,
+    /// leader epoch and position.
+    fn request(
+        snapshot_id: (i64, i32),
+        current_leader_epoch: i32,
+        position: i64,
+    ) -> FetchSnapshotRequest {
+        FetchSnapshotRequest {
+            replica_id: -1,
+            max_bytes: 16,
+            topics: vec![ReqTopic {
+                name: CLUSTER_METADATA_TOPIC.into(),
+                partitions: vec![ReqPartition {
+                    partition: 0,
+                    current_leader_epoch,
+                    snapshot_id: ReqSnapshotId {
+                        end_offset: snapshot_id.0,
+                        epoch: snapshot_id.1,
+                        ..Default::default()
+                    },
+                    position,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// One request that differs from the one naming the served snapshot, and
+    /// what Kafka's raft client answers to it.
+    struct Case {
+        what: &'static str,
+        /// Edits the request that names the served snapshot at the leader's
+        /// epoch, from its first byte.
+        edit: Box<dyn Fn(&mut FetchSnapshotRequest)>,
+        top_level: i16,
+        partition_code: i16,
+        /// Whether the partition answer names the leader. Kafka's
+        /// `addQuorumLeader` fills `CurrentLeader` in every one but the
+        /// unknown-topic answer.
+        names_leader: bool,
+    }
+
+    fn case(
+        what: &'static str,
+        partition_code: i16,
+        names_leader: bool,
+        edit: impl Fn(&mut FetchSnapshotRequest) + 'static,
+    ) -> Case {
+        Case {
+            what,
+            edit: Box::new(edit),
+            top_level: codes::NONE,
+            partition_code,
+            names_leader,
+        }
+    }
 
     /// A broker listener serves `FetchSnapshot` only to a principal with
     /// `ClusterAction` on the cluster (#682). Kafka's
@@ -187,193 +194,275 @@ mod tests {
     /// `CLUSTER_AUTHORIZATION_FAILED` and no snapshot bytes.
     #[tokio::test]
     async fn fetch_snapshot_needs_cluster_action() {
-        use krabka_protocol::owned::{
-            fetch_snapshot_request::{
-                self, PartitionSnapshot as ReqPartition, TopicSnapshot as ReqTopic,
-            },
-            fetch_snapshot_response,
-        };
-
         let (handle, _dir) = crate::test_support::start_broker_with(|config| {
             config.audit_enabled = false;
-            config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
+            config.authorizer = Arc::new(crate::test_support::GrantsInPrincipalName);
         })
         .await;
         let broker = handle.broker_arc_for_test();
-        let request = FetchSnapshotRequest {
-            replica_id: -1,
-            max_bytes: 1024,
-            topics: vec![ReqTopic {
-                name: CLUSTER_METADATA_TOPIC.into(),
-                partitions: vec![ReqPartition {
-                    partition: 0,
-                    position: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        // With ClusterAction the handler reads the controller checkpoint,
-        // exactly as the unauthorized handler did.
-        let served = build_response(
-            broker.controller.current_image().cluster_id(),
-            &request,
-            &|position, max_bytes| broker.controller.read_snapshot_range(position, max_bytes),
-        );
         let refused = FetchSnapshotResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             ..Default::default()
         };
-        let cases = [
-            ("none", refused.clone()),
-            ("Cluster:Describe+Cluster:Alter+Topic:Read", refused),
-            ("Cluster:ClusterAction", served),
-        ];
 
         let address = crate::test_support::peer();
         for version in [
             fetch_snapshot_response::MIN_VERSION,
             fetch_snapshot_response::MAX_VERSION,
         ] {
-            for (grants, expected) in &cases {
+            for grants in ["none", "Cluster:Describe+Cluster:Alter+Topic:Read"] {
                 let user = crate::test_support::principal(grants);
                 let ctx = crate::test_support::request_context(&user, &address, "snapshot-test");
                 let bytes = crate::test_support::dispatch_context(
                     &broker,
                     fetch_snapshot_request::API_KEY,
                     version,
-                    &crate::test_support::encode_request(&request, version),
+                    &crate::test_support::encode_request(&request((0, 0), 0, 0), version),
                     &ctx,
                 )
                 .await;
-                // The records decode to their wire form, so the expected
-                // response goes through the same encode and decode.
-                let expected = crate::test_support::decode_response::<FetchSnapshotResponse>(
-                    &crate::handlers::encode_response(expected, version).expect("encode"),
-                    version,
-                );
                 check!(
                     crate::test_support::decode_response::<FetchSnapshotResponse>(&bytes, version)
-                        == expected,
+                        == refused,
                     "v{version} {grants}"
                 );
+            }
+            // With ClusterAction the request reaches the engine, which answers
+            // a partition of its own.
+            let user = crate::test_support::principal("Cluster:ClusterAction");
+            let ctx = crate::test_support::request_context(&user, &address, "snapshot-test");
+            let bytes = crate::test_support::dispatch_context(
+                &broker,
+                fetch_snapshot_request::API_KEY,
+                version,
+                &crate::test_support::encode_request(&request((0, 0), 0, 0), version),
+                &ctx,
+            )
+            .await;
+            let served =
+                crate::test_support::decode_response::<FetchSnapshotResponse>(&bytes, version);
+            check!(served.error_code == codes::NONE, "v{version}");
+            check!(served.topics.len() == 1, "v{version}");
+        }
+        handle.shutdown().await;
+    }
+
+    /// The broker listener answers as Kafka's `handleFetchSnapshotRequest`
+    /// does: exactly the named snapshot, and the refusals of its order.
+    #[tokio::test]
+    async fn the_broker_listener_answers_as_kafkas_raft_client_does() {
+        let version = fetch_snapshot_response::MAX_VERSION;
+        let (handle, _dir) = crate::test_support::start_broker_with(|config| {
+            config.audit_enabled = false;
+            config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+        handle
+            .trigger_snapshot_for_test()
+            .await
+            .expect("trigger metadata snapshot");
+        // The trigger only schedules the snapshot, so wait for its file.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let (snapshot, size, first_page) = loop {
+            if let SnapshotRange::Slice(slice) = broker.controller.read_snapshot_range(0, 16) {
+                break (
+                    (slice.end_offset, slice.epoch),
+                    slice.total_size,
+                    slice.bytes,
+                );
+            }
+            assert!(
+                std::time::Instant::now() <= deadline,
+                "no metadata snapshot within 30s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        };
+        let leader_epoch = i32::try_from(broker.controller.quorum_state().current_term)
+            .expect("the leader epoch is on the wire as an int32");
+        let leader = LeaderIdAndEpoch {
+            leader_id: i32::try_from(broker.config.node_id.0).unwrap(),
+            leader_epoch,
+            ..Default::default()
+        };
+        let cluster_id = broker.controller.current_image().cluster_id();
+
+        let cases = [
+            case("the named snapshot", codes::NONE, true, |_| {}),
+            case(
+                "another end offset",
+                codes::SNAPSHOT_NOT_FOUND,
+                true,
+                |req| {
+                    req.topics[0].partitions[0].snapshot_id.end_offset += 1;
+                },
+            ),
+            case("another epoch", codes::SNAPSHOT_NOT_FOUND, true, |req| {
+                req.topics[0].partitions[0].snapshot_id.epoch += 1;
+            }),
+            case(
+                "another topic",
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                false,
+                |req| {
+                    req.topics[0].name = "not-metadata".into();
+                },
+            ),
+            case(
+                "another partition",
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                false,
+                |req| {
+                    req.topics[0].partitions[0].partition = 1;
+                },
+            ),
+            case(
+                "the end of the snapshot",
+                codes::POSITION_OUT_OF_RANGE,
+                true,
+                move |req| {
+                    req.topics[0].partitions[0].position = size;
+                },
+            ),
+            case(
+                "a negative position",
+                codes::POSITION_OUT_OF_RANGE,
+                true,
+                |req| {
+                    req.topics[0].partitions[0].position = -1;
+                },
+            ),
+            case(
+                "a stale leader epoch",
+                codes::FENCED_LEADER_EPOCH,
+                true,
+                |req| {
+                    req.topics[0].partitions[0].current_leader_epoch -= 1;
+                },
+            ),
+            case(
+                "a leader epoch this node has not reached",
+                codes::UNKNOWN_LEADER_EPOCH,
+                true,
+                |req| req.topics[0].partitions[0].current_leader_epoch += 1,
+            ),
+            case("the cluster id in base64", codes::NONE, true, move |req| {
+                req.cluster_id = Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
+            }),
+            case("the cluster id hyphenated", codes::NONE, true, move |req| {
+                req.cluster_id = Some(cluster_id.to_string());
+            }),
+            Case {
+                top_level: codes::INCONSISTENT_CLUSTER_ID,
+                ..case("another cluster id", codes::NONE, false, |req| {
+                    req.cluster_id = Some("another-cluster".into());
+                })
+            },
+        ];
+
+        let principal = crate::test_support::principal("admin");
+        let address = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &address, "snapshot-test");
+        for Case {
+            what,
+            edit,
+            top_level,
+            partition_code,
+            names_leader,
+        } in cases
+        {
+            let mut req = request(snapshot, leader_epoch, 0);
+            edit(&mut req);
+            let bytes = super::handle(
+                &broker,
+                version,
+                1,
+                &crate::test_support::encode_request(&req, version),
+                &ctx,
+            )
+            .await
+            .expect("handle");
+            let resp =
+                crate::test_support::decode_response::<FetchSnapshotResponse>(&bytes, version);
+
+            check!(resp.error_code == top_level, "{what}: top-level code");
+            if top_level != codes::NONE {
+                check!(resp.topics.is_empty(), "{what}: no topic rows");
+                continue;
+            }
+            let [topic] = resp.topics.as_slice() else {
+                panic!("{what}: one topic row, got {resp:?}");
+            };
+            let [part] = topic.partitions.as_slice() else {
+                panic!("{what}: one partition row, got {resp:?}");
+            };
+            check!(topic.name == req.topics[0].name, "{what}: topic");
+            check!(
+                part.index == req.topics[0].partitions[0].partition,
+                "{what}"
+            );
+            check!(part.error_code == partition_code, "{what}: partition code");
+            check!(
+                part.current_leader
+                    == if names_leader {
+                        leader.clone()
+                    } else {
+                        LeaderIdAndEpoch::default()
+                    },
+                "{what}: current leader"
+            );
+            if partition_code == codes::NONE {
+                let mut page = bytes::BytesMut::new();
+                part.unaligned_records.encode_to(&mut page).unwrap();
+                check!(part.snapshot_id.end_offset == snapshot.0, "{what}");
+                check!(part.snapshot_id.epoch == snapshot.1, "{what}");
+                check!(part.size == size, "{what}");
+                check!(part.position == 0, "{what}");
+                check!(page.freeze() == first_page, "{what}: the first page");
             }
         }
         handle.shutdown().await;
     }
 
+    /// A broker-only observer keeps no metadata log, so it answers without
+    /// asking an engine.
     #[test]
-    fn build_response_serves_requested_range() {
-        use krabka_protocol::owned::fetch_snapshot_request::{
-            FetchSnapshotRequest, PartitionSnapshot as ReqPartition, SnapshotId as ReqSnapshotId,
-            TopicSnapshot as ReqTopic,
-        };
-        use uuid::Uuid;
-        let cid = Uuid::from_u128(7);
-        let req = FetchSnapshotRequest {
-            replica_id: -1,
-            max_bytes: 1024,
-            topics: vec![ReqTopic {
-                name: CLUSTER_METADATA_TOPIC.into(),
-                partitions: vec![ReqPartition {
-                    partition: 0,
-                    current_leader_epoch: 0,
-                    snapshot_id: ReqSnapshotId {
-                        end_offset: 6,
-                        epoch: 1,
-                        ..Default::default()
-                    },
-                    position: 0,
-                    ..Default::default()
-                }],
+    fn a_node_without_a_metadata_log_has_no_snapshot_and_no_other_partition() {
+        let mut req = request((7, 1), 1, 0);
+        req.topics.push(ReqTopic {
+            name: "not-metadata".into(),
+            partitions: vec![ReqPartition {
+                partition: 0,
                 ..Default::default()
             }],
-            cluster_id: None,
             ..Default::default()
-        };
-        let resolve = |_pos: i64, _max: i32| {
-            SnapshotRange::Slice(SnapshotSlice {
-                end_offset: 6,
-                epoch: 1,
-                total_size: 100,
-                bytes: bytes::Bytes::from_static(b"abc"),
-            })
-        };
-        let resp = build_response(cid, &req, &resolve);
-        let part = &resp.topics[0].partitions[0];
-        check!(resp.error_code == 0);
-        check!(part.error_code == 0);
-        check!(part.snapshot_id.end_offset == 6);
-        check!(part.snapshot_id.epoch == 1);
-        check!(part.size == 100);
-        check!(part.position == 0);
-        let mut buf = bytes::BytesMut::new();
-        part.unaligned_records.encode_to(&mut buf).unwrap();
-        assert!(&buf[..] == b"abc");
-    }
+        });
 
-    #[test]
-    fn build_response_rejects_cluster_id_mismatch() {
-        use krabka_protocol::owned::fetch_snapshot_request::{
-            FetchSnapshotRequest, PartitionSnapshot as ReqPartition, SnapshotId as ReqSnapshotId,
-            TopicSnapshot as ReqTopic,
-        };
-        use uuid::Uuid;
-        let cid = Uuid::from_u128(7);
-        let req = FetchSnapshotRequest {
-            replica_id: -1,
-            max_bytes: 1024,
-            topics: vec![ReqTopic {
-                name: CLUSTER_METADATA_TOPIC.into(),
-                partitions: vec![ReqPartition {
-                    partition: 0,
-                    current_leader_epoch: 0,
-                    snapshot_id: ReqSnapshotId {
-                        end_offset: 6,
-                        epoch: 1,
-                        ..Default::default()
-                    },
-                    position: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            cluster_id: Some("different".into()),
-            ..Default::default()
-        };
-        let resolve = |_pos: i64, _max: i32| SnapshotRange::NoSnapshot;
-        let resp = build_response(cid, &req, &resolve);
-        assert!(resp.error_code == codes::INCONSISTENT_CLUSTER_ID);
-        assert!(resp.topics.is_empty());
-    }
+        let resp = without_metadata_log(&req);
 
-    #[test]
-    fn build_response_position_past_end_returns_out_of_range() {
-        use krabka_protocol::owned::fetch_snapshot_request::{
-            FetchSnapshotRequest, PartitionSnapshot as ReqPartition, TopicSnapshot as ReqTopic,
-        };
-        use uuid::Uuid;
-        let cid = Uuid::from_u128(7);
-        let req = FetchSnapshotRequest {
-            replica_id: -1,
-            max_bytes: 1024,
-            topics: vec![ReqTopic {
-                name: CLUSTER_METADATA_TOPIC.into(),
-                partitions: vec![ReqPartition {
-                    partition: 0,
-                    position: 9_999,
+        let expected = FetchSnapshotResponse {
+            topics: vec![
+                TopicSnapshot {
+                    name: CLUSTER_METADATA_TOPIC.into(),
+                    partitions: vec![PartitionSnapshot {
+                        index: 0,
+                        error_code: codes::SNAPSHOT_NOT_FOUND,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            cluster_id: None,
+                },
+                TopicSnapshot {
+                    name: "not-metadata".into(),
+                    partitions: vec![PartitionSnapshot {
+                        index: 0,
+                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         };
-        let resolve = |_pos: i64, _max: i32| SnapshotRange::OutOfRange;
-        let resp = build_response(cid, &req, &resolve);
-        let part = &resp.topics[0].partitions[0];
-        assert!(resp.error_code == codes::NONE);
-        assert!(part.error_code == codes::POSITION_OUT_OF_RANGE);
+        assert!(resp == expected);
     }
 }

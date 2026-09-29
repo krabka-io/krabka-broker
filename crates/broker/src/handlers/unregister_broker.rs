@@ -30,8 +30,19 @@
 //! record, so the approval and the transition it authorized commit together.
 //! The gate is active only when `[break_glass]` names an approver set.
 //!
+//! ## Leaving the ISRs first
+//!
+//! Kafka's `ReplicationControlManager.unregisterBroker` does not only drop the
+//! registration. `handleBrokerUnregistered` first removes the broker from every
+//! ISR it is in and elects new leaders for the partitions it leads, and writes
+//! the `UnregisterBrokerRecord` after them, all in one record list. The same
+//! `submit_change` here carries those partition changes ahead of the unregister
+//! record, so no partition names an unregistered broker as its leader while the
+//! liveness ticker waits for a heartbeat timeout.
+//!
 //! This file holds the request flow. The two-person gate and the records it
-//! builds live in `gate`, and the response shape in `wire`.
+//! builds live in `gate`, the ISR departures in `leave`, and the response shape
+//! in `wire`.
 
 use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
@@ -39,7 +50,7 @@ use krabka_metadata::{BreakGlassAction, NodeId};
 use krabka_protocol::{Decode, owned::unregister_broker_request::UnregisterBrokerRequest};
 
 use self::{
-    gate::{broker_target, consumed_proposal_id, unregister_records},
+    gate::{broker_target, consumed_proposal_id, unregister_records, with_leaves},
     wire::{encode_resp, response},
 };
 use crate::{
@@ -55,6 +66,7 @@ use crate::{
 };
 
 mod gate;
+mod leave;
 mod wire;
 
 #[cfg(test)]
@@ -159,8 +171,15 @@ pub(crate) async fn handle(
         return encode_resp(version, &resp);
     }
 
-    // Submit the unregister record through Raft. The image apply is
-    // idempotent (the `apply` arm calls `brokers.remove`).
+    // The broker leaves every ISR and every leadership in the same append that
+    // drops its registration, as `ReplicationControlManager.unregisterBroker`
+    // writes them: the partitions never name a broker that is no longer
+    // registered.
+    let leaves = leave::leave_isrs(broker, &image, node_id).await;
+    let records = with_leaves(records, leaves);
+
+    // Submit the change through Raft. The image apply of the unregister record
+    // is idempotent (the `apply` arm calls `brokers.remove`).
     if let Err(e) = broker.controller.submit_change(records).await {
         let resp = response(
             crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR),

@@ -15,7 +15,7 @@ use krabka_protocol::ProtocolError;
 
 const I32_LEN: usize = 4;
 const SUBMIT_CHANGE_RESPONSE_FIXED_LEN: usize = 10;
-const METADATA_FETCH_REQUEST_LEN: usize = 12;
+const METADATA_FETCH_REQUEST_LEN: usize = 32;
 const METADATA_FETCH_RESPONSE_FIXED_LEN: usize = 54;
 /// `snapshot_id.end_offset` sentinel meaning "no snapshot": the observer's
 /// fetch offset is still inside the responder's retained log.
@@ -151,21 +151,37 @@ pub struct KrabkaMetadataFetchRequest {
     pub fetch_offset: i64,
     /// Soft cap on the encoded record-batch payload.
     pub max_bytes: i32,
+    /// The observer's node id, as Kafka's `FetchRequest.ReplicaId`. The leader
+    /// tracks the observer's progress under it for `DescribeQuorum`. A
+    /// negative id is a fetcher that is not a replica and is not tracked.
+    pub replica_id: i32,
+    /// The observer's directory id, as `FetchRequest.ReplicaDirectoryId`. Nil
+    /// when the observer has none.
+    pub replica_directory_id: uuid::Uuid,
 }
 
 impl KrabkaMetadataFetchRequest {
     pub fn encode_v0(&self, out: &mut Vec<u8>) {
         out.put_i64(self.fetch_offset);
         out.put_i32(self.max_bytes);
+        out.put_i32(self.replica_id);
+        out.put_slice(self.replica_directory_id.as_bytes());
     }
 
     /// # Errors
     /// Returns an error if the request payload is truncated.
     pub fn decode_v0(buf: &mut &[u8]) -> Result<Self, ProtocolError> {
         require_remaining(buf, METADATA_FETCH_REQUEST_LEN)?;
+        let fetch_offset = buf.get_i64();
+        let max_bytes = buf.get_i32();
+        let replica_id = buf.get_i32();
+        let mut directory = [0u8; 16];
+        buf.copy_to_slice(&mut directory);
         Ok(Self {
-            fetch_offset: buf.get_i64(),
-            max_bytes: buf.get_i32(),
+            fetch_offset,
+            max_bytes,
+            replica_id,
+            replica_directory_id: uuid::Uuid::from_bytes(directory),
         })
     }
 }
@@ -323,6 +339,8 @@ mod tests {
         let req = KrabkaMetadataFetchRequest {
             fetch_offset: 42,
             max_bytes: 1_048_576,
+            replica_id: 7,
+            replica_directory_id: uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
         };
         let mut out = Vec::new();
         req.encode_v0(&mut out);
@@ -353,23 +371,20 @@ mod tests {
     #[test]
     fn metadata_fetch_request_decode_checks_fixed_length() {
         let mut short: &[u8] = &[0, 1, 2, 3, 4];
-        assert_unexpected_eof(KrabkaMetadataFetchRequest::decode_v0(&mut short), 7);
+        assert_unexpected_eof(KrabkaMetadataFetchRequest::decode_v0(&mut short), 27);
 
-        let mut exact = Vec::new();
-        KrabkaMetadataFetchRequest {
+        let request = KrabkaMetadataFetchRequest {
             fetch_offset: 9,
             max_bytes: 512,
-        }
-        .encode_v0(&mut exact);
+            replica_id: -1,
+            replica_directory_id: uuid::Uuid::nil(),
+        };
+        let mut exact = Vec::new();
+        request.encode_v0(&mut exact);
+        assert2::assert!(exact.len() == METADATA_FETCH_REQUEST_LEN);
         let mut cur: &[u8] = &exact;
         let decoded = KrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap();
-        assert2::assert!(
-            decoded
-                == KrabkaMetadataFetchRequest {
-                    fetch_offset: 9,
-                    max_bytes: 512,
-                }
-        );
+        assert2::assert!(decoded == request);
         assert2::assert!(cur.is_empty());
     }
 

@@ -53,9 +53,13 @@ pub struct ObserverConfig {
     pub client_id: String,
     /// Cluster UUID for the initial empty image.
     pub cluster_id: uuid::Uuid,
-    /// This node's id, sent as the `replica_id` of the `FetchSnapshot`
-    /// requests that install a pruned-past metadata snapshot.
+    /// This node's id, sent as the `replica_id` of every `MetadataFetch` and of
+    /// the `FetchSnapshot` requests that install a pruned-past metadata
+    /// snapshot, so the leader lists this node in `DescribeQuorum`.
     pub node_id: NodeId,
+    /// This node's directory id, sent beside `node_id` as Kafka's
+    /// `ReplicaDirectoryId`: the leader tracks an observer by the pair.
+    pub directory_id: uuid::Uuid,
     /// The node's `__cluster_metadata` directory. The observer keeps its
     /// KIP-630 checkpoints in a subdirectory of their own under it, beside a
     /// controller's rather than in it — the `store` module says why.

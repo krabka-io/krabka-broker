@@ -72,7 +72,7 @@ use crate::{
         core::QuorumStateMachine,
         event::{Event, LogEnd},
         log::KraftLog,
-        role::Role,
+        role::{ReplicaProgress, Role},
         snapshot_fetch::{MetadataSnapshotFetchMax, SnapshotFetchState, SnapshotFetchStep},
         transport::{
             Command, Inbound, MetadataFetchSlice, PeerSender, QuorumStateSnapshot, TimerTick,
@@ -254,11 +254,17 @@ struct Engine {
     /// newest set drives consensus immediately; the committed projection is
     /// mirrored into `MetadataImage` for broker/admin readers.
     controls: KraftControlState,
-    /// Fetch progress for every replica, including observers not yet present
-    /// in the voter set.
-    replica_fetch_offsets: BTreeMap<NodeId, i64>,
-    /// Discovered directory identities for replicas (including observers).
-    replica_directory_ids: BTreeMap<NodeId, uuid::Uuid>,
+    /// This replica's directory id, sent as `ReplicaDirectoryId` in its Fetch
+    /// while it is not yet in the voter set, so the leader can tell which
+    /// `(id, directory)` observer is asking to be added.
+    directory_id: uuid::Uuid,
+    /// Fetch progress of every replica that fetches from this leader without a
+    /// matching voter key, keyed by `(id, directory id)`: Kafka's
+    /// `LeaderState.observerStates`. Only a valid fetch moves an entry, an
+    /// observer silent for five minutes is dropped from what
+    /// `DescribeQuorum` reports, and the map is emptied whenever this node is
+    /// not the leader, as a fresh `LeaderState` starts with none.
+    observers: BTreeMap<ReplicaKey, ReplicaProgress>,
     /// Base system time for mapping `SimInstant` to wall-clock time.
     wall_clock_base: std::time::SystemTime,
     /// Highest high watermark any leader has reported to this node in a Fetch
@@ -330,6 +336,8 @@ pub struct KraftController {
 pub struct KraftConfig {
     pub me: NodeId,
     pub cluster_id: Uuid,
+    /// This replica's directory id, from its `meta.properties`.
+    pub directory_id: Uuid,
     pub initial_state: QuorumState,
     pub election_timeout: Time,
     pub heartbeat_interval: Option<Time>,

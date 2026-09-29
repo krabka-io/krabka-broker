@@ -15,7 +15,7 @@ use crate::{
     kraft::{
         event::Event,
         transport::{Command, Inbound, MetadataFetchSlice, QuorumStateSnapshot},
-        types::NodeId,
+        types::{NodeId, ReplicaKey},
     },
 };
 
@@ -143,7 +143,8 @@ impl KraftController {
     }
 
     /// Read a committed `__cluster_metadata` slice for an observer's
-    /// `API_KEY_METADATA_FETCH` (1004).
+    /// `API_KEY_METADATA_FETCH` (1004). `replica` names the observer that asked,
+    /// when it is a replica, so a leader can track its progress.
     ///
     /// # Errors
     /// Returns [`RaftError::Shutdown`] if the engine task is gone.
@@ -151,12 +152,14 @@ impl KraftController {
         &self,
         fetch_offset: i64,
         max_size: ByteSize,
+        replica: Option<ReplicaKey>,
     ) -> Result<MetadataFetchSlice, RaftError> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx
             .send(Command::MetadataFetch {
                 fetch_offset,
                 max_size,
+                replica,
                 reply,
             })
             .await

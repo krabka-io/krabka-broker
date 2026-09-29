@@ -56,6 +56,7 @@ impl QuorumStateMachine {
             Role::Follower {
                 leader_id,
                 fetch_deadline,
+                has_fetched_from_leader: false,
             }
         } else {
             Role::Observer {

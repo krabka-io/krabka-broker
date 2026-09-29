@@ -305,11 +305,31 @@ pub fn update_voter_current_leader(quorum: &QuorumStateSnapshot) -> CurrentLeade
     }
 }
 
+/// The voter operation a request asked for, which its refusal names as Kafka's
+/// `AddVoterHandler` and `RemoveVoterHandler` do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoterOperation {
+    Add,
+    Remove,
+    Update,
+}
+
+impl VoterOperation {
+    fn gerund(self) -> &'static str {
+        match self {
+            Self::Add => "adding",
+            Self::Remove => "removing",
+            Self::Update => "updating",
+        }
+    }
+}
+
 /// The code and message of a reconfiguration's outcome, for the voter
 /// `(voter_id, directory_id)` the request named.
 #[must_use]
 pub fn reconfiguration_refusal(
     result: Result<ReconfigOutcome, RaftError>,
+    operation: VoterOperation,
     voter_id: i32,
     directory_id: WireUuid,
 ) -> Refusal {
@@ -348,12 +368,12 @@ pub fn reconfiguration_refusal(
                 replica_key(voter_id, directory_id)
             )),
         ),
-        Err(RaftError::UnsupportedKraftVersion(_)) => (
+        Err(RaftError::UnsupportedKraftVersion(version)) => (
             UNSUPPORTED_VERSION,
-            Some(
-                "Cluster doesn't support changing voters because the kraft.version feature is 0"
-                    .into(),
-            ),
+            Some(format!(
+                "Cluster doesn't support {} voter because the kraft.version feature is {version}",
+                operation.gerund()
+            )),
         ),
         // Kafka has no "invalid voter update" code, so a rejected change and a
         // malformed one land on the same `INVALID_REQUEST` that
@@ -414,7 +434,6 @@ mod tests {
             per_replica_fetch_offset: BTreeMap::new(),
             per_replica_last_fetch_ms: BTreeMap::new(),
             per_replica_last_caught_up_ms: BTreeMap::new(),
-            observer_directory_ids: BTreeMap::new(),
             is_leader,
             current_state: if is_leader { "leader" } else { "follower" },
         }
@@ -746,18 +765,6 @@ mod tests {
                 ),
             ),
             (
-                "kraft.version 0",
-                Err(RaftError::UnsupportedKraftVersion(0)),
-                (
-                    UNSUPPORTED_VERSION,
-                    Some(
-                        "Cluster doesn't support changing voters because the kraft.version \
-                         feature is 0"
-                            .into(),
-                    ),
-                ),
-            ),
-            (
                 "a rejected change",
                 Err(RaftError::ReconfigRejected("empty voter set".into())),
                 (INVALID_REQUEST, Some("empty voter set".into())),
@@ -765,8 +772,36 @@ mod tests {
         ];
         for (label, result, expected) in rows {
             check!(
-                reconfiguration_refusal(result, 3, DIRECTORY) == expected,
+                reconfiguration_refusal(result, VoterOperation::Add, 3, DIRECTORY) == expected,
                 "{label}"
+            );
+        }
+    }
+
+    /// `AddVoterHandler` and `RemoveVoterHandler` name their own operation in
+    /// the `UNSUPPORTED_VERSION` message, and the level is the finalized one.
+    #[test]
+    fn unsupported_kraft_version_names_the_operation() {
+        let rows = [
+            (VoterOperation::Add, 0, "adding"),
+            (VoterOperation::Remove, 0, "removing"),
+            (VoterOperation::Add, 2, "adding"),
+        ];
+        for (operation, level, verb) in rows {
+            check!(
+                reconfiguration_refusal(
+                    Err(RaftError::UnsupportedKraftVersion(level)),
+                    operation,
+                    3,
+                    DIRECTORY
+                ) == (
+                    UNSUPPORTED_VERSION,
+                    Some(format!(
+                        "Cluster doesn't support {verb} voter because the kraft.version feature \
+                         is {level}"
+                    ))
+                ),
+                "{operation:?} at {level}"
             );
         }
     }
