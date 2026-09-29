@@ -31,11 +31,11 @@ pub trait AclSource {
     /// Whether a stored host containing `/` is a CIDR range (KIP-1276) rather
     /// than plain text. Kafka 4.3.1 compares every host as text, and trunk
     /// reads a range only once the cluster's `metadata.version` reaches
-    /// 4.4-IV1, so a source that knows the version says so here. The default
-    /// is `true`, for a source that holds only entries.
-    fn cidr_hosts_supported(&self) -> bool {
-        true
-    }
+    /// 4.4-IV1, so a source says here whether the cluster it reads from has
+    /// reached it. There is no default: a source that holds only entries, such
+    /// as [`crate::AclCache`], must carry the answer of the broker it fetched
+    /// them from, or it would read a range where that broker compares text.
+    fn cidr_hosts_supported(&self) -> bool;
 }
 
 // The broker's MetadataImage already implements the exact matching semantics;
