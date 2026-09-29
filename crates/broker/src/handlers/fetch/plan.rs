@@ -645,21 +645,30 @@ pub(super) async fn plan_partition_read(
     }
     if partition.is_none() || topic_name.is_empty() {
         // Kafka refuses a partition its metadata does not hold before the
-        // read. One the metadata holds but this broker does not host is the
-        // read's own refusal, so it keeps its place among the rows read.
-        let (slot, read) = refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
+        // read, with `UNKNOWN_TOPIC_OR_PARTITION`.
         let in_metadata = !topic_name.is_empty()
             && context
                 .image
                 .partition(topic_name, request.partition)
                 .is_some();
+        if !in_metadata {
+            return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
+        }
+        // One the metadata holds but this broker does not host, after a
+        // reassignment removed the local replica for example, is the read's
+        // own refusal: `ReplicaManager.getPartitionOrError` answers
+        // `HostedPartition.None` with `NOT_LEADER_OR_FOLLOWER` when
+        // `metadataCache.contains` the partition, to make the client refresh
+        // its metadata. The row keeps its place among the rows read, and
+        // carries the KIP-951 leader hint the way every other
+        // `NOT_LEADER_OR_FOLLOWER` row of this fetch does.
+        let output = PartitionData {
+            current_leader: image_leader(context.image, topic_name, request.partition),
+            ..refused_read(request.partition, codes::NOT_LEADER_OR_FOLLOWER)
+        };
         return (
-            if in_metadata {
-                ResponseSlot::Read
-            } else {
-                slot
-            },
-            read,
+            ResponseSlot::Read,
+            PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
         );
     }
     // Kafka's `ReplicaManager.findPreferredReadReplica` names a read replica

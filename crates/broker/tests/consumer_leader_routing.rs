@@ -5,7 +5,7 @@
 //! connection, both `Fetch` and `OffsetForLeaderEpoch`. On a multi-broker
 //! cluster that behavior misroutes `Fetch`. At rf=1, a partition whose leader
 //! is *not* the bootstrap broker holds **no replica at all**, so a bootstrap-routed
-//! `Fetch` gets `UNKNOWN_TOPIC_OR_PARTITION` and delivers nothing. The consumer
+//! `Fetch` gets `NOT_LEADER_OR_FOLLOWER` and delivers nothing. The consumer
 //! now groups fetchable partitions by leader with `Client::broker(id)`, so
 //! records flow from every leader whatever broker the consumer bootstrapped at.
 //!
