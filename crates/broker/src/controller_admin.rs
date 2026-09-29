@@ -180,7 +180,7 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                     api_version: request.api_version,
                     correlation_id: request.correlation_id,
                     body: &request.body,
-                    client_id: request.client_id.as_deref().unwrap_or(""),
+                    client_id: request.client_id.as_deref(),
                     peer: &request.peer,
                     principal: &principal,
                     authenticated_via_token: request.authenticated_via_token,
@@ -220,7 +220,7 @@ struct Invocation<'a> {
     api_version: ApiVersion,
     correlation_id: CorrelationId,
     body: &'a [u8],
-    client_id: &'a str,
+    client_id: Option<&'a str>,
     /// The address the handler authorizes and audits against. For a forwarded
     /// request this is the *client's* address, out of
     /// `EnvelopeRequest.client_host_address`, not the forwarding hop's.
@@ -319,7 +319,7 @@ async fn serve_envelope(
                     api_version: forwarded.api_version,
                     correlation_id: forwarded.correlation_id,
                     body: &forwarded.body,
-                    client_id: forwarded.client_id.as_deref().unwrap_or(""),
+                    client_id: forwarded.client_id.as_deref(),
                     // The *client's* address, not this connection's: the peer
                     // here is the forwarding broker, and authorizing or
                     // auditing the embedded request against that address both

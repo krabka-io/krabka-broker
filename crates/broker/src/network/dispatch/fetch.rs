@@ -121,7 +121,7 @@ async fn handle_fetch_frame_from_parsed(
     let ctx = crate::handlers::RequestContext::new(
         principal,
         peer,
-        parsed.client_id.unwrap_or(""),
+        parsed.client_id,
         "",
         sendfile_capable && parsed.api_version >= 4,
         listener_name,

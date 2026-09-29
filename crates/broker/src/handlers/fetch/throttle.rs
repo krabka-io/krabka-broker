@@ -251,7 +251,7 @@ fn consume_consumer_quota(
     image: &krabka_metadata::MetadataImage,
     buckets: &crate::quota::QuotaBuckets,
     principal: &str,
-    client_id: &str,
+    client_id: Option<&str>,
     bytes: u64,
 ) -> (crate::quota::QuotaDelay, ConsumerCharge) {
     let Some((entity_key, rate)) =
@@ -319,14 +319,14 @@ mod tests {
         // 3072 bytes over at 1024 B/s is three seconds, reported whole: Kafka
         // does not bound a byte-rate throttle (#709).
         let (delay_match, _) =
-            super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096);
+            super::consume_consumer_quota(&img, &buckets, "alice", Some("app-x"), 4096);
         assert!(
             delay_match > millis(2_900) && delay_match <= secs(3),
             "tuple quota match should throttle for the whole overage; got {delay_match:?}"
         );
         let buckets2 = crate::quota::QuotaBuckets::with_window(secs(1));
         let (delay_other, _) =
-            super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096);
+            super::consume_consumer_quota(&img, &buckets2, "alice", Some("other"), 4096);
         assert!(
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"
@@ -350,7 +350,7 @@ mod tests {
             config_value: Some(1_000.0),
         }));
         let consume = |buckets: &crate::quota::QuotaBuckets, bytes| {
-            super::consume_consumer_quota(&img, buckets, "alice", "app", bytes)
+            super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
         };
 
         let refunded = crate::quota::QuotaBuckets::with_window(secs(1));
@@ -399,7 +399,7 @@ mod tests {
             }));
             let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
             let (throttle, _) =
-                super::consume_consumer_quota(&img, &buckets, "alice", "app", bytes);
+                super::consume_consumer_quota(&img, &buckets, "alice", Some("app"), bytes);
             actual.push((rate.to_string(), bytes, throttle.delay));
             expected.push((rate.to_string(), bytes, delay));
         }

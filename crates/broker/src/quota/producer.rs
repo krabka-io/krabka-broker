@@ -17,7 +17,7 @@ pub fn consume_producer_quota(
     image: &MetadataImage,
     buckets: &QuotaBuckets,
     principal: &str,
-    client_id: &str,
+    client_id: Option<&str>,
     bytes: u64,
 ) -> super::QuotaDelay {
     consume_configured_quota(
@@ -61,8 +61,8 @@ mod tests {
         // these amounts are about the overage and not about the window.
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let first = consume_producer_quota(&img, &buckets, "alice", "app", 1024);
-        let second = consume_producer_quota(&img, &buckets, "alice", "app", 64);
+        let first = consume_producer_quota(&img, &buckets, "alice", Some("app"), 1024);
+        let second = consume_producer_quota(&img, &buckets, "alice", Some("app"), 64);
 
         check!(first > <Time as TimeExt>::ZERO);
         check!(second > <Time as TimeExt>::ZERO);
@@ -82,8 +82,8 @@ mod tests {
 
         // 500 bytes over the one-second burst, then 1000 more on the same
         // entity from another client: the debt is 1500 bytes.
-        let first = consume_producer_quota(&img, &buckets, "alice", "app", 1_500);
-        let second = consume_producer_quota(&img, &buckets, "alice", "other-app", 1_000);
+        let first = consume_producer_quota(&img, &buckets, "alice", Some("app"), 1_500);
+        let second = consume_producer_quota(&img, &buckets, "alice", Some("other-app"), 1_000);
 
         check!(first > millis(490) && first <= millis(500), "{first:?}");
         check!(
@@ -100,8 +100,8 @@ mod tests {
         );
         let buckets = QuotaBuckets::new();
 
-        let matching = consume_producer_quota(&img, &buckets, "alice", "app", 4096);
-        let other_client = consume_producer_quota(&img, &buckets, "alice", "other", 4096);
+        let matching = consume_producer_quota(&img, &buckets, "alice", Some("app"), 4096);
+        let other_client = consume_producer_quota(&img, &buckets, "alice", Some("other"), 4096);
 
         assert!(matching > <Time as TimeExt>::ZERO);
         assert!(other_client == <Time as TimeExt>::ZERO);
@@ -112,7 +112,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 1_000.0);
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let delay = consume_producer_quota(&img, &buckets, "alice", "app", 1_250);
+        let delay = consume_producer_quota(&img, &buckets, "alice", Some("app"), 1_250);
 
         assert!(delay == millis(250));
     }
@@ -127,7 +127,7 @@ mod tests {
         // is 20 seconds of debt at 1 KiB/s.
         let buckets = QuotaBuckets::new();
 
-        let delay = consume_producer_quota(&img, &buckets, "alice", "app", 1024 * (11 + 20));
+        let delay = consume_producer_quota(&img, &buckets, "alice", Some("app"), 1024 * (11 + 20));
 
         assert!(delay > secs(19) && delay <= secs(20), "{delay:?}");
     }
@@ -154,7 +154,7 @@ mod tests {
         for (rate, bytes, delay) in cases {
             let img = img_with_quota(vec![("user", Some("alice"))], rate);
             let buckets = QuotaBuckets::with_window(secs(1));
-            let throttle = consume_producer_quota(&img, &buckets, "alice", "app", bytes);
+            let throttle = consume_producer_quota(&img, &buckets, "alice", Some("app"), bytes);
             actual.push((rate.to_string(), bytes, throttle.delay));
             expected.push((rate.to_string(), bytes, delay));
         }

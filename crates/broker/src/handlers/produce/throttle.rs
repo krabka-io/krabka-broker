@@ -125,7 +125,7 @@ mod tests {
         let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
         // Tuple match → 3072 bytes overage at 1024 B/s → throttle > 0.
         let delay_match =
-            crate::quota::consume_producer_quota(&img, &buckets, "alice", "app-x", 4096);
+            crate::quota::consume_producer_quota(&img, &buckets, "alice", Some("app-x"), 4096);
         assert!(
             delay_match.delay > <Time as TimeExt>::ZERO,
             "tuple quota match should throttle on overage; got {delay_match:?}"
@@ -133,7 +133,7 @@ mod tests {
         // No tuple match for client_id="other"; no (user=alice)-only quota exists.
         let buckets2 = crate::quota::QuotaBuckets::with_window(secs(1));
         let delay_other =
-            crate::quota::consume_producer_quota(&img, &buckets2, "alice", "other", 4096);
+            crate::quota::consume_producer_quota(&img, &buckets2, "alice", Some("other"), 4096);
         assert!(
             delay_other.delay == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"

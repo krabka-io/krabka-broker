@@ -115,7 +115,7 @@ pub(super) fn apply_request_quota(
                     &image,
                     &broker.quota_buckets,
                     &principal.name,
-                    parsed.client_id.unwrap_or(""),
+                    parsed.client_id,
                     elapsed_micros,
                     broker.config.quota_throttle_max,
                 )

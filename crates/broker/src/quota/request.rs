@@ -28,7 +28,7 @@ pub fn consume_request_quota(
     image: &MetadataImage,
     buckets: &QuotaBuckets,
     principal: &str,
-    client_id: &str,
+    client_id: Option<&str>,
     elapsed_micros: u64,
     maximum_delay: Time,
 ) -> super::QuotaDelay {
@@ -75,7 +75,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
         let buckets = QuotaBuckets::new();
         assert!(
-            consume_request_quota(&img, &buckets, "alice", "", 0, secs(1))
+            consume_request_quota(&img, &buckets, "alice", Some(""), 0, secs(1))
                 == <Time as TimeExt>::ZERO
         );
     }
@@ -85,7 +85,7 @@ mod tests {
         let img = MetadataImage::new(uuid::Uuid::nil());
         let buckets = QuotaBuckets::new();
         assert!(
-            consume_request_quota(&img, &buckets, "alice", "", 5_000, secs(1))
+            consume_request_quota(&img, &buckets, "alice", Some(""), 5_000, secs(1))
                 == <Time as TimeExt>::ZERO
         );
     }
@@ -97,7 +97,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
         let buckets = QuotaBuckets::new();
         assert!(
-            consume_request_quota(&img, &buckets, "alice", "", 5_000, secs(1))
+            consume_request_quota(&img, &buckets, "alice", Some(""), 5_000, secs(1))
                 == <Time as TimeExt>::ZERO
         );
     }
@@ -108,7 +108,7 @@ mod tests {
         // overage → multi-day delay → capped at 1s.
         let img = img_with_quota(vec![("user", Some("alice"))], 0.001);
         let buckets = QuotaBuckets::new();
-        let delay = consume_request_quota(&img, &buckets, "alice", "", 1_000_000, secs(1));
+        let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000_000, secs(1));
         assert!(delay == secs(1));
     }
 
@@ -117,7 +117,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 0.001);
         let buckets = QuotaBuckets::new();
 
-        let delay = consume_request_quota(&img, &buckets, "alice", "", 1_000_000, millis(25));
+        let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000_000, millis(25));
 
         assert!(delay == millis(25));
     }
@@ -134,11 +134,44 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let first = consume_request_quota(&img, &buckets, "alice", "", 1_500_000, secs(10));
-        let second = consume_request_quota(&img, &buckets, "alice", "", 500_000, secs(10));
+        let first = consume_request_quota(&img, &buckets, "alice", Some(""), 1_500_000, secs(10));
+        let second = consume_request_quota(&img, &buckets, "alice", Some(""), 500_000, secs(10));
 
         assert!(first > millis(490) && first <= millis(500), "{first:?}");
         assert!(second > millis(990) && second <= secs(1), "{second:?}");
+    }
+
+    /// Kafka's `DefaultQuotaCallback` gives a request with a null client id the
+    /// quota of the first level in `(user, <default>)`, `user`, ... that is
+    /// configured, and only a user level throttles. With a `(user, <default>)`
+    /// quota beside the user quota, a null client id is not throttled, and an
+    /// empty one skips the pair level and pays the user quota (#1241).
+    #[test]
+    fn a_null_client_id_is_shadowed_by_a_user_default_client_quota() {
+        let img = crate::quota::test_support::image_with_quotas(
+            [
+                vec![("user", Some("alice"))],
+                vec![("user", Some("alice")), ("client-id", None)],
+            ]
+            .map(|entity| {
+                crate::quota::test_support::quota_record(entity, "request_percentage", 0.001)
+            })
+            .to_vec(),
+        );
+
+        let [null_client, empty_client] = [None, Some("")].map(|client_id| {
+            consume_request_quota(
+                &img,
+                &QuotaBuckets::new(),
+                "alice",
+                client_id,
+                1_000_000,
+                secs(1),
+            )
+        });
+
+        assert!(null_client == <Time as TimeExt>::ZERO);
+        assert!(empty_client == secs(1));
     }
 
     #[test]
@@ -149,7 +182,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let delay = consume_request_quota(&img, &buckets, "alice", "", 1_500_000, secs(1));
+        let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 1_500_000, secs(1));
 
         assert!(delay == millis(500));
     }
