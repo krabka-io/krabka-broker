@@ -49,7 +49,7 @@ pub fn lookup_quota(
 /// client that sends no `client.id` (#1241). With neither, nothing matches.
 ///
 /// `client_id` is `None` when the request header's client id is null, which is
-/// not an empty client id: see [`lookup_null_client_quota`].
+/// not an empty client id: see `lookup_null_client_quota`.
 #[must_use]
 pub fn lookup_quota_with_key(
     image: &MetadataImage,

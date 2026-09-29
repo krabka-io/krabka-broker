@@ -115,7 +115,7 @@ const LATEST_PRODUCTION_LEVELS: [(&str, i16); 2] = [
 
 /// The supported range of `feature` under `unstable`: the `krabka_metadata`
 /// registry's range, which lists the levels of Kafka trunk, capped at the
-/// feature's latest production level (see [`LATEST_PRODUCTION_LEVELS`])
+/// feature's latest production level (see `LATEST_PRODUCTION_LEVELS`)
 /// unless unstable feature versions are enabled. A default node therefore
 /// advertises the ranges of Kafka 4.3.1.
 #[must_use]

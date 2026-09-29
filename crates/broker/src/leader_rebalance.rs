@@ -12,7 +12,7 @@
 //! by count instead: at most `MAX_ELECTIONS_PER_TICK` elections in one pass,
 //! so a cluster that restarts a broker holding a hundred thousand partitions
 //! does not put them all into one metadata batch. A pass that stops at the cap
-//! reports it, and [`run`] repeats the pass after `IMMEDIATE_RERUN_DELAY`, as
+//! reports it, and `run` repeats the pass after `IMMEDIATE_RERUN_DELAY`, as
 //! Kafka's `PeriodicTask` does with a `ControllerResult<Boolean>` of `true`,
 //! so the remainder does not wait for the next check interval.
 
