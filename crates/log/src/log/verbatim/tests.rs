@@ -98,32 +98,38 @@ fn append_verbatim_at_stamps_base_byte_exact() {
     drop(dir);
 }
 
+/// Kafka's `appendAsFollower` refuses a first offset below the log end
+/// offset, and takes one above it: the hole a compacted leader's log has.
 #[test]
-fn append_verbatim_at_rejects_non_leo_base() {
+fn append_verbatim_at_refuses_a_base_below_the_log_end_offset_and_takes_one_above() {
     let (dir, mut log) = test_log();
+    let (_wire, vb) = verbatim_from(&test_batch_at(0), LeaderEpoch(4));
+    log.append_verbatim_at(&vb, Offset(0)).unwrap();
 
-    let producer = test_batch_at(0);
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
-
-    let err = log.append_verbatim_at(&vb, Offset(1)).unwrap_err();
+    let err = log.append_verbatim_at(&vb, Offset(0)).unwrap_err();
 
     assert!(
         matches!(
             err,
             LogError::OffsetMismatch {
-                expected: Offset(0),
-                actual: Offset(1)
+                expected: Offset(1),
+                actual: Offset(0)
             }
         ),
-        "non-LEO append_verbatim_at must report OffsetMismatch"
+        "a base below the log end offset must report OffsetMismatch"
     );
-    assert!(log.log_end_offset() == Offset(0));
-    assert!(
-        log.read_raw(Offset(0), Offset(0), kibibytes(1))
-            .unwrap()
-            .bytes
-            .is_empty()
-    );
+    assert!(log.log_end_offset() == Offset(1));
+
+    let appended = log.append_verbatim_at(&vb, Offset(4)).unwrap();
+
+    assert!(appended == Offset(4));
+    assert!(log.log_end_offset() == Offset(5));
+    let read = log
+        .read_raw(Offset(1), log.log_end_offset(), kibibytes(1))
+        .unwrap();
+    let mut cursor = &read.bytes[..];
+    let stored = RecordBatch::decode(&mut cursor).unwrap();
+    assert!(stored.base_offset == 4 && cursor.is_empty());
     drop(dir);
 }
 

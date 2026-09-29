@@ -161,9 +161,9 @@ fn record_at(offset_delta: i32, key: Option<&[u8]>, delta: i64) -> Record {
 }
 
 /// A batch that loses the record carrying its maximum timestamp gets the
-/// retained records' maximum under CreateTime, as Kafka's
+/// retained records' maximum under `CreateTime`, as Kafka's
 /// `MemoryRecordsBuilder.recordWritten` computes it, and keeps its own under
-/// LogAppendTime, where `writeDefaultBatchHeader` writes the append time.
+/// `LogAppendTime`, where `writeDefaultBatchHeader` writes the append time.
 #[test]
 fn a_batch_that_loses_its_newest_record_recomputes_its_max_timestamp() {
     let cases = [

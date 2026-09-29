@@ -490,6 +490,8 @@ impl Log {
 }
 
 #[cfg(test)]
+mod replication_tests;
+#[cfg(test)]
 mod transaction_tests;
 
 #[cfg(test)]

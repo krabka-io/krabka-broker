@@ -463,21 +463,47 @@ fn append_at_matching_offset_preserves_caller_offset() {
     assert2::assert!(log.log_end_offset() == Offset(5));
 }
 
+/// Kafka's `appendAsFollower` refuses a first offset below the log end
+/// offset, the duplicate or divergence a replicator has to notice.
 #[test]
-fn append_at_with_mismatched_offset_errors() {
+fn append_at_below_the_log_end_offset_errors() {
     let dir = tempdir().unwrap();
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    log.append(&mut sample_batch(3)).unwrap();
     let mut b = sample_batch(2);
-    let err = log.append_at(&mut b, Offset(7)).unwrap_err();
+    let err = log.append_at(&mut b, Offset(2)).unwrap_err();
     assert2::assert!(matches!(
         err,
         LogError::OffsetMismatch {
-            expected: Offset(0),
-            actual: Offset(7)
+            expected: Offset(3),
+            actual: Offset(2)
         }
     ));
     // Failure must not advance the log.
-    assert2::assert!(log.log_end_offset() == 0);
+    assert2::assert!(log.log_end_offset() == 3);
+}
+
+/// ...and it takes a first offset above the log end offset, the hole a
+/// compacted leader's log has between two batches.
+#[test]
+fn append_at_past_the_log_end_offset_leaves_a_hole() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    log.append_at(&mut sample_batch(2), Offset(0)).unwrap();
+    let mut b = sample_batch(2);
+
+    log.append_at(&mut b, Offset(7)).unwrap();
+
+    assert2::assert!(b.base_offset == 7);
+    assert2::assert!(log.log_end_offset() == Offset(9));
+    // The floor moves with the append.
+    assert2::assert!(matches!(
+        log.append_at(&mut sample_batch(1), Offset(8)),
+        Err(LogError::OffsetMismatch {
+            expected: Offset(9),
+            actual: Offset(8)
+        })
+    ));
 }
 
 #[test]

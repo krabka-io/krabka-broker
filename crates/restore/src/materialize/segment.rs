@@ -168,7 +168,7 @@ pub async fn write_segment(
 
 /// Align `log`'s end offset to `segment`'s declared base offset before any of its batches are appended.
 ///
-/// `Log::append_at`/`Log::append_verbatim_at` both require the offset passed in to equal `log.log_end_offset()`. Segments arrive in base-offset order within a partition, so the common case is already aligned. The one legitimate exception is the very first segment written into a brand-new, still-empty target log, when the archive's first surviving base offset is not zero: `Log::open` always starts a fresh directory's active segment at offset zero, so that case needs one `reset_to` to slide the empty log's base up to match. Anything else — a log that already holds data whose end offset does not match this segment's base offset — is a sequencing bug upstream, not a case this function may paper over by resetting: `reset_to` is destructive, and calling it here would discard whatever an earlier call already wrote for this partition.
+/// `Log::append_at`/`Log::append_verbatim_at` take an offset at or above `log.log_end_offset()`, as Kafka's `appendAsFollower` does for a compacted leader's holes, but a restore has no hole to explain: a segment that starts past the end of what was written means an earlier segment is missing, so this function insists on an aligned log. Segments arrive in base-offset order within a partition, so the common case is already aligned. The one legitimate exception is the very first segment written into a brand-new, still-empty target log, when the archive's first surviving base offset is not zero: `Log::open` always starts a fresh directory's active segment at offset zero, so that case needs one `reset_to` to slide the empty log's base up to match. Anything else — a log that already holds data whose end offset does not match this segment's base offset — is a sequencing bug upstream, not a case this function may paper over by resetting: `reset_to` is destructive, and calling it here would discard whatever an earlier call already wrote for this partition.
 ///
 /// # Errors
 ///
@@ -335,9 +335,9 @@ mod tests {
         // ends. If `write_segment` used `filter_batch`'s recomputed
         // `last_offset_delta` (which shrinks to the highest SURVIVING
         // delta -- 1, once offset 2 is excluded) instead of the archived
-        // value, `log.log_end_offset()` after `batch_a` would be 2, not 3,
-        // and appending `batch_b` at its true archived offset 3 would fail
-        // with `LogError::OffsetMismatch`. This is the regression a Filter
+        // value, `batch_a` would claim only offsets 0..=1 and
+        // `log.log_end_offset()` after it would be 2, not 3, so the offset
+        // space of the archive would shrink. This is the regression a Filter
         // decision that happens to exclude a batch's LAST record must not
         // reintroduce.
         let target = tempfile::tempdir().expect("tempdir");
