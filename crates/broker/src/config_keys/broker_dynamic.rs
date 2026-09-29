@@ -25,9 +25,10 @@ use super::{
     parse::{check_range, parse_long},
     recovery::UNCLEAN_RECOVERY_STRATEGY,
     registry::{self, ConfigScope},
+    serves_topic_key,
     validation::canonical_value,
 };
-use crate::codes;
+use crate::{api_catalog::UnstableApiVersions, codes};
 
 /// Kafka's `ServerTopicConfigSynonyms.TOPIC_CONFIG_SYNONYMS`: the broker key
 /// that sets the cluster-wide default of each topic key, for the topic keys
@@ -82,6 +83,29 @@ pub(crate) const TOPIC_DEFAULT_SYNONYMS: &[(&str, &str)] = &[
     ("log.remote.copy.lag.bytes", "remote.copy.lag.bytes"),
 ];
 
+/// The topic key whose default the broker key `name` sets, when a broker
+/// serving `unstable` defines `name`. Under Kafka 4.3.1 the broker keys of
+/// Kafka trunk's topic keys are not `KafkaConfig` keys, so they are unknown
+/// broker keys like any other.
+fn served_topic_default(name: &str, unstable: UnstableApiVersions) -> Option<&'static str> {
+    TOPIC_DEFAULT_SYNONYMS
+        .iter()
+        .find(|(broker, _)| *broker == name)
+        .map(|(_, topic)| *topic)
+        .filter(|topic| serves_topic_key(topic, unstable))
+}
+
+/// The broker keys that set a topic key's default on a broker serving
+/// `unstable`.
+pub(crate) fn served_topic_default_synonyms(
+    unstable: UnstableApiVersions,
+) -> impl Iterator<Item = &'static str> {
+    TOPIC_DEFAULT_SYNONYMS
+        .iter()
+        .filter(move |(_, topic)| serves_topic_key(topic, unstable))
+        .map(|(broker, _)| *broker)
+}
+
 /// One broker synonym of a topic key, with Kafka's broker default for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BrokerSynonym {
@@ -135,13 +159,14 @@ pub(crate) fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
 }
 
 /// The registry row that types a broker key: its own broker row, or the row
-/// of the topic key it sets the default of.
-pub(crate) fn broker_key_row(name: &str) -> Option<&'static registry::ConfigKey> {
+/// of the topic key it sets the default of on a broker serving `unstable`.
+pub(crate) fn broker_key_row(
+    name: &str,
+    unstable: UnstableApiVersions,
+) -> Option<&'static registry::ConfigKey> {
     registry::lookup(ConfigScope::Broker, name).or_else(|| {
-        TOPIC_DEFAULT_SYNONYMS
-            .iter()
-            .find(|(broker, _)| *broker == name)
-            .and_then(|(_, topic)| registry::lookup(ConfigScope::Topic, topic))
+        served_topic_default(name, unstable)
+            .and_then(|topic| registry::lookup(ConfigScope::Topic, topic))
     })
 }
 
@@ -237,17 +262,15 @@ pub(crate) enum BrokerKeyKind {
     Unknown,
 }
 
-/// The kind of a broker key, for the APPEND and SUBTRACT checks.
-pub(crate) fn broker_key_kind(name: &str) -> BrokerKeyKind {
+/// The kind of a broker key on a broker serving `unstable`, for the APPEND
+/// and SUBTRACT checks.
+pub(crate) fn broker_key_kind(name: &str, unstable: UnstableApiVersions) -> BrokerKeyKind {
     if let Some(row) = registry::lookup(ConfigScope::Broker, name)
         && row.config_type == registry::ConfigType::List
     {
         return BrokerKeyKind::List;
     }
-    let topic_key = TOPIC_DEFAULT_SYNONYMS
-        .iter()
-        .find(|(broker, _)| *broker == name)
-        .map(|(_, topic)| *topic);
+    let topic_key = served_topic_default(name, unstable);
     if let Some(row) = topic_key.and_then(|key| registry::lookup(ConfigScope::Topic, key)) {
         return if row.config_type == registry::ConfigType::List {
             BrokerKeyKind::List
@@ -311,9 +334,14 @@ fn invalid_props(message: &str, names: &[&str]) -> (i16, String) {
 }
 
 /// Validate one value of a dynamic broker key krabka knows, and return it in
-/// its canonical form. A key krabka does not know passes unchanged, as Kafka's
-/// `DynamicConfig.Broker.validate` passes a key it does not define.
-fn canonical_broker_value(name: &str, value: &str) -> Result<String, String> {
+/// its canonical form. A key krabka does not know, or does not serve under
+/// `unstable`, passes unchanged, as Kafka's `DynamicConfig.Broker.validate`
+/// passes a key it does not define.
+fn canonical_broker_value(
+    name: &str,
+    value: &str,
+    unstable: UnstableApiVersions,
+) -> Result<String, String> {
     if THROTTLE_RATES.contains(&name) {
         return check_range(name, parse_long(name, value)?, Some(0), None).map(|v| v.to_string());
     }
@@ -327,10 +355,7 @@ fn canonical_broker_value(name: &str, value: &str) -> Result<String, String> {
         return registry::lookup(ConfigScope::Broker, name)
             .map_or_else(|| Ok(value.to_owned()), |row| canonical_value(row, value));
     }
-    let topic_key = TOPIC_DEFAULT_SYNONYMS
-        .iter()
-        .find(|(broker, _)| *broker == name)
-        .map(|(_, topic)| *topic);
+    let topic_key = served_topic_default(name, unstable);
     match topic_key.and_then(|key| registry::lookup(ConfigScope::Topic, key)) {
         // The topic key's validator, under the broker key's name.
         Some(row) => {
@@ -342,7 +367,8 @@ fn canonical_broker_value(name: &str, value: &str) -> Result<String, String> {
 
 /// Kafka's `DynamicBrokerConfig.validateConfigs`, over the whole set of
 /// dynamic configs the resource ends up with, returning that set with each
-/// value in its canonical form. `per_broker` is `true` for a named broker.
+/// value in its canonical form. `per_broker` is `true` for a named broker, and
+/// `unstable` decides which topic keys' broker synonyms the broker defines.
 ///
 /// # Errors
 /// Returns `INVALID_REQUEST` with Kafka's message, in Kafka's order: a
@@ -351,6 +377,7 @@ fn canonical_broker_value(name: &str, value: &str) -> Result<String, String> {
 pub(crate) fn canonical_dynamic_broker_configs(
     props: &BTreeMap<String, String>,
     per_broker: bool,
+    unstable: UnstableApiVersions,
 ) -> Result<BTreeMap<String, String>, (i16, String)> {
     let names = |test: &dyn Fn(&str) -> bool| -> Vec<&str> {
         props
@@ -377,7 +404,7 @@ pub(crate) fn canonical_dynamic_broker_configs(
     let canonical = props
         .iter()
         .map(|(name, value)| {
-            canonical_broker_value(name, value)
+            canonical_broker_value(name, value, unstable)
                 .map(|value| (name.clone(), value))
                 .map_err(|message| (codes::INVALID_REQUEST, message))
         })
@@ -583,8 +610,49 @@ mod tests {
         for (props, per_broker, want) in cases {
             let want = want.map_err(|message| (codes::INVALID_REQUEST, message.to_owned()));
             check!(
-                canonical_dynamic_broker_configs(&props, per_broker) == want,
+                canonical_dynamic_broker_configs(&props, per_broker, UnstableApiVersions::Enabled)
+                    == want,
                 "{props:?} per_broker={per_broker}"
+            );
+        }
+    }
+
+    /// #907: the broker keys of Kafka trunk's topic keys are `KafkaConfig`
+    /// keys only on trunk. Under Kafka 4.3.1 they are unknown broker keys,
+    /// which `DynamicConfig.Broker.validate` stores unchecked; under
+    /// `unstable.api.versions.enable` they carry their topic key's validator.
+    #[test]
+    fn trunk_topic_keys_broker_synonyms_need_unstable_api_versions() {
+        let props = map(&[("log.remote.copy.lag.ms", "-2")]);
+        check!(
+            canonical_dynamic_broker_configs(&props, false, UnstableApiVersions::Disabled)
+                == Ok(props.clone())
+        );
+        check!(
+            canonical_dynamic_broker_configs(&props, false, UnstableApiVersions::Enabled)
+                == Err((
+                    codes::INVALID_REQUEST,
+                    "Invalid value -2 for configuration log.remote.copy.lag.ms: Value must be at \
+                     least -1"
+                        .to_owned()
+                ))
+        );
+        let strict: Vec<&str> =
+            served_topic_default_synonyms(UnstableApiVersions::Disabled).collect();
+        for broker in [
+            "log.remote.copy.lag.ms",
+            "log.remote.copy.lag.bytes",
+            "max.decompressed.message.bytes",
+        ] {
+            check!(!strict.contains(&broker), "{broker}");
+            check!(
+                served_topic_default_synonyms(UnstableApiVersions::Enabled)
+                    .any(|name| name == broker),
+                "{broker}"
+            );
+            check!(
+                broker_key_kind(broker, UnstableApiVersions::Disabled) == BrokerKeyKind::Unknown,
+                "{broker}"
             );
         }
     }
@@ -600,7 +668,10 @@ mod tests {
             ),
             ("not.a.kafka.key", BrokerKeyKind::Unknown),
         ] {
-            check!(broker_key_kind(name) == kind, "{name}");
+            check!(
+                broker_key_kind(name, UnstableApiVersions::Disabled) == kind,
+                "{name}"
+            );
         }
     }
 }

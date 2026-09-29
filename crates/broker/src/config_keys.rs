@@ -240,17 +240,42 @@ pub(crate) const LOCAL_RETENTION_MS: &str = "local.retention.ms";
 /// KIP-405: per-topic local-retention size budget for tiered partitions.
 pub(crate) const LOCAL_RETENTION_BYTES: &str = "local.retention.bytes";
 /// Kafka trunk's `remote.copy.lag.ms`: how old a sealed segment may get before
-/// it is copied to the remote tier. Stored and reported only.
+/// it is copied to the remote tier. Stored and reported only, and served
+/// only under `unstable.api.versions.enable`.
 pub(crate) const REMOTE_COPY_LAG_MS: &str = "remote.copy.lag.ms";
 /// Kafka trunk's `remote.copy.lag.bytes`: how many newer local bytes a sealed
-/// segment may sit behind before it is copied. Stored and reported only.
+/// segment may sit behind before it is copied. Stored and reported only, and
+/// served only under `unstable.api.versions.enable`.
 pub(crate) const REMOTE_COPY_LAG_BYTES: &str = "remote.copy.lag.bytes";
 /// Kafka trunk's `max.decompressed.message.bytes`: the cap on one record's
-/// decompressed size. Stored and reported only.
+/// decompressed size. Stored and reported only, and served only under
+/// `unstable.api.versions.enable`.
 pub(crate) const MAX_DECOMPRESSED_MESSAGE_BYTES: &str = "max.decompressed.message.bytes";
 /// Kafka trunk's `errors.deadletterqueue.group.enable`: whether share groups
-/// may write undeliverable records to this topic. Stored and reported only.
+/// may write undeliverable records to this topic. Stored and reported only,
+/// and served only under `unstable.api.versions.enable`.
 pub(crate) const ERRORS_DEADLETTERQUEUE_GROUP_ENABLE: &str = "errors.deadletterqueue.group.enable";
+/// The topic keys Kafka trunk's `LogConfig` defines and Kafka 4.3.1's does
+/// not. A broker serves them only under `unstable.api.versions.enable`;
+/// otherwise its topic resource is 4.3.1's, and an alter or create that names
+/// one is refused as `LogConfig.validateNames` refuses an unknown key.
+pub(crate) const KAFKA_TRUNK_TOPIC_KEYS: &[&str] = &[
+    ERRORS_DEADLETTERQUEUE_GROUP_ENABLE,
+    MAX_DECOMPRESSED_MESSAGE_BYTES,
+    REMOTE_COPY_LAG_BYTES,
+    REMOTE_COPY_LAG_MS,
+];
+
+/// Whether a broker serving `unstable` has the topic key `name`: every key
+/// under trunk, and every key but [`KAFKA_TRUNK_TOPIC_KEYS`] otherwise.
+pub(crate) fn serves_topic_key(
+    name: &str,
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> bool {
+    unstable == crate::api_catalog::UnstableApiVersions::Enabled
+        || !KAFKA_TRUNK_TOPIC_KEYS.contains(&name)
+}
+
 /// Kafka's `Records.SOFT_MAX_ARRAY_LENGTH`, `Integer.MAX_VALUE - 8`: the
 /// default and the ceiling of `max.decompressed.message.bytes`.
 pub(crate) const SOFT_MAX_ARRAY_LENGTH: i32 = i32::MAX - 8;

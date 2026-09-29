@@ -262,6 +262,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
                 phases: &crate::metrics::RequestPhases::default(),
+                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
                 schema_validator: None,
             },
         )

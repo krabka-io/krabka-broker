@@ -249,17 +249,33 @@ pub(super) fn produce_verification_code(code: i16, version: i16) -> (i16, Option
     (code, None)
 }
 
+/// The idempotent-producer dedup gate: Kafka's
+/// `UnifiedLog.analyzeAndValidateProducerState` for a client append.
+///
+/// The partition is empty in Kafka's sense (`ProducerStateManager.mapEndOffset()
+/// == 0`) while its log end offset is 0. Kafka advances `mapEndOffset` with
+/// every append and to the log start offset when the log start moves, so it
+/// is 0 only when no record has ever been appended or the whole log was
+/// truncated away, and so is this log's end offset. Under `unstable`, a producer with no state on such
+/// a partition must start at sequence 0 (Kafka trunk's KAFKA-15591); Kafka
+/// 4.3.1 lets it start anywhere. Either refusal is a plain
+/// `OutOfOrderSequenceException`, so the row carries no error message, as
+/// `LogAppendResult.errorMessage` gives none for it.
 pub(super) async fn handle_duplicate(
     batch: &PreparedBatch,
     producer_state: &crate::producer_state::ProducerState,
     partition: &crate::partition::Partition,
-    topic_name: &str,
-    partition_index: i32,
+    (topic_name, partition_index): (&str, i32),
     acks: i16,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> DedupOutcome {
     if batch.producer_id < 0 {
         return DedupOutcome::Append;
     }
+    let context = crate::producer_state::SequenceContext {
+        log_empty: partition.log_end_offset() == Offset(0),
+        unstable,
+    };
     let crate::producer_state::Checked {
         decision,
         duplicate,
@@ -267,6 +283,7 @@ pub(super) async fn handle_duplicate(
         .check_batch(
             topic_name,
             krabka_ids::PartitionIndex(partition_index),
+            context,
             (batch.producer_id, batch.producer_epoch),
             (batch.base_sequence, batch.last_offset_delta),
         )
@@ -638,6 +655,7 @@ mod tests {
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
                 phases: &crate::metrics::RequestPhases::default(),
+                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
             },
         )
         .await
@@ -781,6 +799,7 @@ mod tests {
                         record_decompression_policy: RecordDecompressionPolicy::default(),
                         metrics,
                         phases: &crate::metrics::RequestPhases::default(),
+                        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
                     },
                 )
                 .await
@@ -857,5 +876,196 @@ mod tests {
         );
         let fenced = produce_at(0, 6).await;
         assert!(fenced == refused(crate::codes::INVALID_PRODUCER_EPOCH));
+    }
+
+    /// How a partition got to the state the first batch meets.
+    #[derive(Debug, Clone, Copy)]
+    enum History {
+        /// No record has ever been appended.
+        NeverAppended,
+        /// A non-idempotent batch holds offsets 0..=2.
+        HasRecords,
+        /// Producer `PRODUCER_ID` appended at sequence 0 and its entry then
+        /// expired.
+        EntryExpired,
+    }
+
+    /// #907: Kafka trunk's `ProducerAppendInfo.checkSequence` (KAFKA-15591)
+    /// refuses a non-zero first sequence from a producer with no state on a
+    /// partition that has never held a record, with `OUT_OF_ORDER_SEQUENCE_NUMBER`
+    /// and no append. Kafka 4.3.1 does not have the rule, so a broker without
+    /// `unstable.api.versions.enable` accepts the batch.
+    #[tokio::test]
+    async fn a_producer_with_no_state_on_a_never_appended_partition_starts_at_zero_under_trunk() {
+        use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+
+        use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
+
+        const PRODUCER_ID: i64 = 907;
+
+        let appended_at = |base_offset: i64| PartitionProduceResponse {
+            index: 0,
+            base_offset,
+            log_append_time_ms: -1,
+            log_start_offset: 0,
+            ..Default::default()
+        };
+        let out_of_order = PartitionProduceResponse {
+            index: 0,
+            error_code: codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
+            base_offset: -1,
+            log_append_time_ms: -1,
+            log_start_offset: 0,
+            ..Default::default()
+        };
+        // (history, first sequence, unstable api versions, row, log end after)
+        let cases = [
+            (History::NeverAppended, 0, Enabled, appended_at(0), 1),
+            (History::NeverAppended, 7, Enabled, out_of_order.clone(), 0),
+            (History::HasRecords, 7, Enabled, appended_at(3), 4),
+            (History::EntryExpired, 0, Enabled, appended_at(1), 2),
+            (History::NeverAppended, 0, Disabled, appended_at(0), 1),
+            (History::NeverAppended, 7, Disabled, appended_at(0), 1),
+            (History::HasRecords, 7, Disabled, appended_at(3), 4),
+            (History::EntryExpired, 0, Disabled, appended_at(1), 2),
+        ];
+        for (history, base_sequence, unstable, want, log_end) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let image = Arc::new(image_with_topic("orders", &[1]));
+            let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+            let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
+                krabka_audit::NodeId(1),
+                Arc::clone(&partitions),
+                Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+                50,
+                krabka_units::mebibytes(1),
+            ));
+            let producer_state = Arc::new(crate::producer_state::ProducerState::new());
+            let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+            let metrics = crate::metrics::BrokerMetrics::new();
+            let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
+            std::fs::create_dir_all(&part_dir).unwrap();
+            let part = crate::broker::spawn_partition(
+                "orders".to_string(),
+                krabka_ids::PartitionIndex(0),
+                dir.path().to_path_buf(),
+                krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap(),
+                log_dir_status.clone(),
+                Arc::clone(&producer_state),
+                false,
+            );
+            let record = image.partition("orders", 0).expect("partition");
+            part.install_replication_target(
+                Some(Uuid::nil()),
+                record.leader.0,
+                record.leader_epoch.0,
+            )
+            .await;
+            part.install_isr(&record.isr, &record.replicas, record.leader)
+                .await;
+            let part_handle = Arc::clone(&part);
+            partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
+
+            let produce = |base_sequence: i32| {
+                let payload = encode_batch(&RecordBatch {
+                    producer_id: PRODUCER_ID,
+                    producer_epoch: 0,
+                    base_sequence,
+                    records: vec![Record {
+                        value: Some(Bytes::from_static(b"v")),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                let (partitions, txn_coordinator, producer_state) =
+                    (&partitions, &txn_coordinator, &producer_state);
+                let (log_dir_status, image, metrics) = (&log_dir_status, &image, &metrics);
+                async move {
+                    process_partition(
+                        PartitionInput {
+                            schema: None,
+                            part_data: FramedPartition {
+                                index: 0,
+                                payload: PartitionPayload::Slice(payload),
+                            },
+                            topic_compression: None,
+                            timestamps: TimestampPolicy::default(),
+                            compacted_topic: false,
+                            max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
+                            delivery: None,
+                            topic_name: "orders".into(),
+                            freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
+                            internal_topic_denied: false,
+                            transaction: super::TransactionRequest {
+                                transactional_id: None,
+                                version: 9,
+                                producer_id_expiration_ms: 86_400_000,
+                            },
+                            acks: 1,
+                            timeout: Duration::from_secs(5),
+                        },
+                        PartitionServices {
+                            schema_validator: None,
+                            partitions,
+                            txn_coordinator,
+                            producer_state,
+                            log_dir_status,
+                            image,
+                            broker_policy: BrokerProducePolicy {
+                                node_id: krabka_audit::NodeId(1),
+                                default_min_insync_replicas: 1,
+                                is_witness: false,
+                            },
+                            record_decompression_policy: RecordDecompressionPolicy::default(),
+                            metrics,
+                            phases: &crate::metrics::RequestPhases::default(),
+                            unstable_api_versions: unstable,
+                        },
+                    )
+                    .await
+                    .expect("process partition")
+                    .expect_done()
+                }
+            };
+
+            match history {
+                History::NeverAppended => {}
+                History::HasRecords => {
+                    let mut batch = RecordBatch {
+                        last_offset_delta: 2,
+                        records: (0..3)
+                            .map(|offset_delta| Record {
+                                offset_delta,
+                                value: Some(Bytes::from_static(b"v")),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    };
+                    part_handle
+                        .log
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .append(&mut batch)
+                        .expect("seed records");
+                }
+                History::EntryExpired => {
+                    assert!(produce(0).await == appended_at(0));
+                    check!(
+                        producer_state
+                            .expire_older_than(i64::MAX, krabka_units::millis(0))
+                            .await
+                            == 1
+                    );
+                }
+            }
+
+            let label = format!("{history:?}, sequence {base_sequence}, {unstable:?}");
+            check!(produce(base_sequence).await == want, "{label}");
+            check!(
+                part_handle.log_end_offset() == krabka_log::Offset(log_end),
+                "{label}"
+            );
+        }
     }
 }

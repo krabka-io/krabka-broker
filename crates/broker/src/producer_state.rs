@@ -29,7 +29,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use self::decision::check_pure;
 pub use self::{
-    decision::{Checked, Decision},
+    decision::{Checked, Decision, SequenceContext},
     entry::{NO_EARLIER_BATCHES, PartitionProducerState, ProducerEntry, RetainedBatch},
 };
 

@@ -43,6 +43,16 @@
 //! not. A key added to the registry without a row here fails
 //! [`the_topic_key_sets_differ_only_by_the_rosters_below`], which is the point:
 //! a krabka-private key is a deliberate divergence and has to be named as one.
+//!
+//! # Kafka trunk
+//!
+//! [`KAFKA_TRUNK_TOPIC_CONFIGS`] is the four topic keys Kafka trunk's
+//! `LogConfig` defines beyond 4.3.1. A broker without
+//! `unstable.api.versions.enable` serves Kafka 4.3.1's topic resource, so it
+//! refuses each of them as 4.3.1 does (`Unknown topic config name`) and does
+//! not describe them. A `MirrorMaker` 2 replay from a trunk cluster that sets
+//! one of them therefore fails against krabka exactly as it fails against a
+//! stock 4.3.1 broker, until the target opts in to trunk behaviour.
 
 use std::collections::BTreeMap;
 
@@ -56,8 +66,12 @@ use super::{
     registry::{self, ConfigScope, ConfigType},
     schema::{SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_VALUE},
     topic_scope::WRITE_FREEZE,
-    validation::{validate_topic_config, validate_topic_config_map},
+    validation::{
+        TopicDefaults, canonical_topic_config, canonical_topic_config_map, validate_topic_config,
+        validate_topic_config_map,
+    },
 };
+use crate::api_catalog::UnstableApiVersions;
 
 /// One row of Kafka 4.3.1's `LogConfig.configKeys()`.
 struct KafkaTopicConfig {
@@ -243,8 +257,9 @@ const KAFKA_TOPIC_CONFIGS: &[KafkaTopicConfig] = &[
 /// The topic configs Apache Kafka trunk defines beyond 4.3.1, from
 /// `storage/src/main/java/org/apache/kafka/storage/internals/log/LogConfig.java`
 /// at commit `4338e13ea3864a51d9ead14db23a3e0b76ca9fb7`. They arrive with the
-/// next Kafka release, and a `MirrorMaker` 2 replay from a cluster that sets
-/// one of them must not fail.
+/// next Kafka release. krabka serves them only under
+/// `unstable.api.versions.enable`; without it, as on Kafka 4.3.1, each is an
+/// unknown topic config.
 const KAFKA_TRUNK_TOPIC_CONFIGS: &[KafkaTopicConfig] = &[
     kafka(
         "errors.deadletterqueue.group.enable",
@@ -313,7 +328,7 @@ fn krabka_topic_keys() -> Vec<&'static str> {
 /// key`.
 #[test]
 fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
-    for row in kafka_rosters() {
+    for row in KAFKA_TOPIC_CONFIGS {
         check!(
             validate_topic_config(row.name, row.sample) == Ok(()),
             "{}={}",
@@ -323,16 +338,54 @@ fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
     }
 }
 
+/// Kafka trunk's topic keys follow `unstable.api.versions.enable`: refused
+/// with Kafka 4.3.1's `LogConfig.validateNames` text without it, accepted with
+/// it.
+#[test]
+fn kafka_trunk_topic_configs_are_accepted_only_under_unstable_api_versions() {
+    for row in KAFKA_TRUNK_TOPIC_CONFIGS {
+        check!(
+            canonical_topic_config(row.name, row.sample, UnstableApiVersions::Disabled)
+                == Err(format!("Unknown topic config name: {}", row.name)),
+            "{}",
+            row.name
+        );
+        check!(
+            canonical_topic_config(row.name, row.sample, UnstableApiVersions::Enabled)
+                == Ok(row.sample.to_owned()),
+            "{}",
+            row.name
+        );
+    }
+}
+
 /// `MirrorMaker` sends the source topic's whole config set as one
 /// `IncrementalAlterConfigs`, so one unknown key loses every other key with
-/// it. The whole-map validator is the surface that call lands on.
+/// it. The whole-map validator is the surface that call lands on: a 4.3.1
+/// set replays onto a default broker, and a trunk set only onto one with
+/// `unstable.api.versions.enable`.
 #[test]
 fn a_whole_kafka_config_set_replays_in_one_alter() {
-    let replay: BTreeMap<String, String> = kafka_rosters()
+    let released: BTreeMap<String, String> = KAFKA_TOPIC_CONFIGS
+        .iter()
         .map(|row| (row.name.to_owned(), row.sample.to_owned()))
         .collect();
+    assert!(validate_topic_config_map(&released) == Ok(()));
 
-    assert!(validate_topic_config_map(&replay) == Ok(()));
+    let trunk: BTreeMap<String, String> = kafka_rosters()
+        .map(|row| (row.name.to_owned(), row.sample.to_owned()))
+        .collect();
+    assert!(
+        canonical_topic_config_map(
+            &trunk,
+            &TopicDefaults::default(),
+            true,
+            UnstableApiVersions::Enabled
+        )
+        .map(drop)
+            == Ok(())
+    );
+    assert!(validate_topic_config_map(&trunk).is_err());
 }
 
 /// Both directions of the diff at once. A Kafka key krabka lacks fails on the

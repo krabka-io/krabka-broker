@@ -17,7 +17,7 @@
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
-use crate::{codes, config_keys, topic_policy::TopicPolicy};
+use crate::{api_catalog::UnstableApiVersions, codes, config_keys, topic_policy::TopicPolicy};
 
 /// Build the authoritative `V1TopicConfig` record for a topic resource. The
 /// request carries the *complete* set of non-default values, so the map this
@@ -27,6 +27,7 @@ pub(super) fn topic_config_record(
     image: &krabka_metadata::MetadataImage,
     policy: &TopicPolicy,
     remote_storage_system_enabled: bool,
+    unstable: UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
     // `ControllerConfigurationValidator.validateTopicName` runs before the
     // configs are checked, and the existence check runs after them.
@@ -55,13 +56,14 @@ pub(super) fn topic_config_record(
         let value = config_keys::canonical_topic_config(
             &cfg.name,
             cfg.value.as_deref().unwrap_or_default(),
+            unstable,
         )
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
         overrides.insert(cfg.name.clone(), value);
     }
     config_keys::validate_config_combination(
         &overrides,
-        &config_keys::TopicDefaults::from_image(image),
+        &config_keys::TopicDefaults::from_image(image, unstable),
         remote_storage_system_enabled,
     )
     .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
@@ -107,7 +109,13 @@ mod tests {
         resource: &AlterConfigsResource,
         image: &krabka_metadata::MetadataImage,
     ) -> Result<MetadataRecord, (i16, String)> {
-        super::topic_config_record(resource, image, &TopicPolicy::default(), true)
+        super::topic_config_record(
+            resource,
+            image,
+            &TopicPolicy::default(),
+            true,
+            UnstableApiVersions::Disabled,
+        )
     }
 
     #[test]
@@ -352,6 +360,7 @@ mod tests {
             &image,
             &policy,
             true,
+            UnstableApiVersions::Disabled,
         )
         .expect_err("a forbidden value must be refused");
 
@@ -383,6 +392,7 @@ mod tests {
             &image,
             &policy,
             true,
+            UnstableApiVersions::Disabled,
         )
         .expect("the other value of a forbidden key is accepted");
 

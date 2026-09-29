@@ -19,6 +19,7 @@ use krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResou
 
 use super::{OP_APPEND, OP_DELETE, OP_SET};
 use crate::{
+    api_catalog::UnstableApiVersions,
     codes,
     config_keys::{
         self,
@@ -73,6 +74,7 @@ pub(super) fn topic_config_record(
     image: &MetadataImage,
     policy: &TopicPolicy,
     remote_storage_system_enabled: bool,
+    unstable: UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
     let topic = resource.resource_name.as_str();
     let current = image.topic_config(topic);
@@ -123,8 +125,9 @@ pub(super) fn topic_config_record(
     }
     let merged = config_keys::canonical_topic_config_map(
         &merged,
-        &config_keys::TopicDefaults::from_image(image),
+        &config_keys::TopicDefaults::from_image(image, unstable),
         remote_storage_system_enabled,
+        unstable,
     )
     .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &merged)
@@ -170,7 +173,13 @@ mod tests {
         resource: &AlterConfigsResource,
         image: &MetadataImage,
     ) -> Result<MetadataRecord, (i16, String)> {
-        super::topic_config_record(resource, image, &TopicPolicy::default(), true)
+        super::topic_config_record(
+            resource,
+            image,
+            &TopicPolicy::default(),
+            true,
+            UnstableApiVersions::Disabled,
+        )
     }
 
     #[test]
@@ -433,6 +442,7 @@ mod tests {
             &img,
             &policy,
             true,
+            UnstableApiVersions::Disabled,
         )
         .expect_err("a merged map below the policy floor must be refused");
 
@@ -459,6 +469,7 @@ mod tests {
             &img,
             &policy,
             true,
+            UnstableApiVersions::Disabled,
         )
         .expect("a merge that lifts the topic to the floor is accepted");
 

@@ -28,7 +28,7 @@ use stateright::{Checker, Model, Property};
 
 use super::{
     Decision, NO_EARLIER_BATCHES, ProducerEntry, RetainedBatch,
-    decision::{Checked, check_retained},
+    decision::{Checked, SequenceContext, check_retained},
     entry::{EarlierBatches, NUM_BATCHES_TO_RETAIN},
 };
 use crate::partition::LogOffset;
@@ -254,6 +254,7 @@ impl Model for ProducerModel {
         let entry = last.host.as_ref().map(HostEntry::entry);
         let host = Answer::of(check_retained(
             entry.as_ref(),
+            SequenceContext::RELEASED,
             epoch,
             batch.base,
             batch.last - batch.base,

@@ -111,6 +111,7 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
             record_decompression_policy: RecordDecompressionPolicy::default(),
             metrics: &metrics,
             phases: &crate::metrics::RequestPhases::default(),
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         },
     )
     .await
@@ -215,6 +216,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
             record_decompression_policy: RecordDecompressionPolicy::default(),
             metrics: &metrics,
             phases: &crate::metrics::RequestPhases::default(),
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         },
     )
     .await

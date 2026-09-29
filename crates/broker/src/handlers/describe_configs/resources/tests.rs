@@ -1337,6 +1337,77 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
     );
 }
 
+/// #907's companion: with `unstable.api.versions.enable` off a topic
+/// resource carries none of Kafka trunk's four newest topic keys, and a named
+/// broker none of their broker synonyms, as Kafka 4.3.1's `LogConfig` and
+/// `KafkaConfig` define neither. With it on, both carry every one.
+#[test]
+fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
+    use crate::api_catalog::UnstableApiVersions;
+
+    let image = with_topic(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_TOPIC,
+        "orders",
+    );
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
+    let names = |resource_type: i8, resource_name: &str, unstable| -> Vec<String> {
+        describe_one(
+            &image,
+            &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+                resource_type,
+                resource_name: resource_name.to_owned(),
+                ..Default::default()
+            },
+            ServingBroker {
+                node: krabka_metadata::NodeId(1),
+                static_broker: untuned(),
+                loggers: BrokerLoggers {
+                    node_id: 1,
+                    levels: &levels,
+                },
+                static_min_insync_replicas: 1,
+                unstable_api_versions: unstable,
+            },
+            300_000,
+            &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+            EVERYTHING,
+        )
+        .configs
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect()
+    };
+    let trunk_topic_keys = crate::config_keys::KAFKA_TRUNK_TOPIC_KEYS;
+    let trunk_broker_keys = [
+        "log.remote.copy.lag.bytes",
+        "log.remote.copy.lag.ms",
+        "max.decompressed.message.bytes",
+    ];
+    for (unstable, served) in [
+        (UnstableApiVersions::Disabled, false),
+        (UnstableApiVersions::Enabled, true),
+    ] {
+        let topic = names(RESOURCE_TYPE_TOPIC, "orders", unstable);
+        for key in trunk_topic_keys {
+            check!(
+                topic.iter().any(|name| name == key) == served,
+                "{key} {unstable:?}"
+            );
+        }
+        let broker = names(RESOURCE_TYPE_BROKER, "1", unstable);
+        for key in trunk_broker_keys {
+            check!(
+                broker.iter().any(|name| name == key) == served,
+                "{key} {unstable:?}"
+            );
+        }
+    }
+    let strict = names(RESOURCE_TYPE_TOPIC, "orders", UnstableApiVersions::Disabled);
+    let trunk = names(RESOURCE_TYPE_TOPIC, "orders", UnstableApiVersions::Enabled);
+    check!(trunk.len() == strict.len() + trunk_topic_keys.len());
+}
+
 #[test]
 fn an_unhandled_resource_type_reports_nothing_and_no_error() {
     let image = MetadataImage::new(Uuid::nil());
