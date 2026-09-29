@@ -31,6 +31,10 @@ mod tests;
 use self::matching::{matches_host, matches_operation, matches_principal, matches_resource};
 use crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer, jdk_host_address};
 
+/// The resource name Kafka's default `authorizeByResourceType` probes first,
+/// a name that no real resource is expected to carry.
+const HARDCODED_RESOURCE_NAME: &str = "hardcode";
+
 /// Authorizer that consults the cluster's persisted ACLs.
 ///
 /// The caller supplies the [`AclSource`] per call: a `MetadataImage` for the
@@ -93,13 +97,14 @@ impl Authorizer for SimpleAclAuthorizer {
         if !super_user {
             let user_pattern = format!("User:{}", req.principal.name);
             let host_str = jdk_host_address(req.host.ip());
+            let cidr_hosts_supported = source.cidr_hosts_supported();
             for entry in source.matching_acls(req.resource_type, req.resource_name) {
                 if !matches_resource(entry, req.resource_type, req.resource_name) {
                     continue;
                 }
                 has_resource_acls = true;
                 if !matches_principal(entry, &user_pattern)
-                    || !matches_host(entry, &host_str, req.host.ip())
+                    || !matches_host(entry, &host_str, req.host.ip(), cidr_hosts_supported)
                     || !matches_operation(entry.operation, req.operation, entry.permission_type)
                 {
                     continue;
@@ -136,7 +141,9 @@ impl Authorizer for SimpleAclAuthorizer {
         result
     }
 
-    /// Scans every stored entry of `resource_type` for an ALLOW ACL, matching
+    /// Allows first when the ordinary [`Self::authorize`] decision allows the
+    /// hard-coded name `hardcode`, as Kafka's default implementation does.
+    /// Otherwise it scans every stored entry of `resource_type` for an ALLOW ACL, matching
     /// `principal`, `host`, and `operation`, that no DENY covers.
     ///
     /// For each such ALLOW entry, the resource name its own pattern names is
@@ -173,12 +180,30 @@ impl Authorizer for SimpleAclAuthorizer {
             span.record("decision", "allow-superuser");
             return AuthorizationResult::Allow;
         }
+        // Kafka's `Authorizer.authorizeByResourceType` first authorizes a
+        // hard-coded resource name, and StandardAuthorizer inherits it. The
+        // probe is allowed when a wildcard ALLOW covers the type or, under
+        // `allow.everyone.if.no.acl.found`, when no ACL of the type covers
+        // the name, so a cluster that runs the flag admits a principal that
+        // has no topic ACL at all.
+        let hardcode = AuthorizationRequest {
+            principal,
+            host,
+            resource_type,
+            resource_name: HARDCODED_RESOURCE_NAME,
+            operation,
+        };
+        if self.authorize(source, &hardcode) == AuthorizationResult::Allow {
+            span.record("decision", "allow-hardcode");
+            return AuthorizationResult::Allow;
+        }
         let user_pattern = format!("User:{}", principal.name);
         let host_str = jdk_host_address(host.ip());
+        let cidr_hosts_supported = source.cidr_hosts_supported();
         for entry in source.acls_of_type(resource_type) {
             if entry.permission_type != PermissionType::Allow
                 || !matches_principal(entry, &user_pattern)
-                || !matches_host(entry, &host_str, host.ip())
+                || !matches_host(entry, &host_str, host.ip(), cidr_hosts_supported)
                 || !matches_operation(entry.operation, operation, entry.permission_type)
             {
                 continue;
