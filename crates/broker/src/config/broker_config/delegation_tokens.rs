@@ -8,7 +8,7 @@ macro_rules! delegation_tokens_fields {
     ($($collected:tt)*) => {
         remote_storage_fields! {
             $($collected)*
-            /// KIP-48: HMAC-SHA-256 master key that mints and verifies delegation
+            /// KIP-48: HMAC-SHA-512 master key that mints and verifies delegation
             /// tokens. When `None`, the broker rejects all four delegation-token RPCs
             /// with `DELEGATION_TOKEN_AUTH_DISABLED`, and SCRAM cannot fall back to
             /// token lookup. The broker reads the key from

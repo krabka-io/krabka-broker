@@ -26,15 +26,24 @@ pub(super) fn matches_principal(entry: &AclEntry, user_pattern: &str) -> bool {
 /// derives it) whose original address is `peer_ip`.
 ///
 /// A stored host is the wildcard, a literal address compared as text, or --
-/// KIP-1276 -- a CIDR range compared against `peer_ip` numerically. An entry
-/// host that fails to parse as a CIDR (no `/`, or `/` in ordinary text that is
-/// not one) falls back to the literal comparison, exactly as `CreateAcls`,
-/// `DescribeAcls` and `DeleteAcls` filters treat it.
-pub(super) fn matches_host(entry: &AclEntry, host: &str, peer_ip: IpAddr) -> bool {
+/// KIP-1276, when `cidr_hosts_supported` -- a CIDR range compared against
+/// `peer_ip` numerically. An entry host that fails to parse as a CIDR (no `/`,
+/// or `/` in ordinary text that is not one) falls back to the literal
+/// comparison, exactly as `CreateAcls`, `DescribeAcls` and `DeleteAcls`
+/// filters treat it. Where CIDR hosts are not supported, as in Kafka 4.3.1,
+/// a host containing `/` is only ever compared as text.
+pub(super) fn matches_host(
+    entry: &AclEntry,
+    host: &str,
+    peer_ip: IpAddr,
+    cidr_hosts_supported: bool,
+) -> bool {
     if acl_identity_match(entry.host == "*", entry.host == host) {
         return true;
     }
-    entry.host.contains('/') && Cidr::parse(&entry.host).is_ok_and(|cidr| cidr.contains(peer_ip))
+    cidr_hosts_supported
+        && entry.host.contains('/')
+        && Cidr::parse(&entry.host).is_ok_and(|cidr| cidr.contains(peer_ip))
 }
 
 pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, name: &str) -> bool {
@@ -118,7 +127,7 @@ mod tests {
     use crate::{
         AuthorizationResult, Authorizer, SimpleAclAuthorizer,
         simple::test_support::{
-            acl_op_on, addr, alice, img, no_super, req, req_on, topic_acl, topic_acl_op,
+            acl_op_on, addr, alice, cidr_img, img, no_super, req, req_on, topic_acl, topic_acl_op,
         },
     };
 
@@ -565,7 +574,7 @@ mod tests {
         let a = alice();
         let auth = SimpleAclAuthorizer::new(no_super());
         for (peer, acl_host, expected) in cases {
-            let mut img = img();
+            let mut img = cidr_img();
             img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
                 PermissionType::Allow,
                 AclOperation::Read,
@@ -582,12 +591,54 @@ mod tests {
         }
     }
 
+    /// Kafka 4.3.1 compares every ACL host as text, and trunk reads a range
+    /// only from `metadata.version` 4.4-IV1. Below it a host containing `/`
+    /// applies to no peer, so a range ALLOW grants nothing and a range DENY
+    /// denies nothing.
+    #[test]
+    fn a_host_with_a_slash_is_plain_text_below_the_cidr_metadata_version() {
+        let a = alice();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        let h: SocketAddr = "10.1.2.3:5000".parse().unwrap();
+        // (stored entries, expected)
+        let cases = [
+            (
+                vec![(PermissionType::Allow, "10.0.0.0/8")],
+                AuthorizationResult::Deny,
+            ),
+            (
+                vec![
+                    (PermissionType::Allow, "*"),
+                    (PermissionType::Deny, "10.0.0.0/8"),
+                ],
+                AuthorizationResult::Allow,
+            ),
+        ];
+        for (entries, expected) in cases {
+            let mut img = img();
+            for (permission, host) in &entries {
+                img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                    *permission,
+                    AclOperation::Read,
+                    "User:alice",
+                    host,
+                    PatternType::Literal,
+                    "foo",
+                )));
+            }
+            assert2::assert!(
+                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == expected,
+                "{entries:?}"
+            );
+        }
+    }
+
     /// A CIDR DENY still wins over a wildcard ALLOW for a peer inside the
     /// range, and the wildcard ALLOW still covers a peer outside it -- the
     /// same deny-wins-over-allow rule as a literal host ACL.
     #[test]
     fn cidr_deny_overrides_wildcard_allow_inside_range() {
-        let mut img = img();
+        let mut img = cidr_img();
         img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
             PermissionType::Allow,
             AclOperation::Read,

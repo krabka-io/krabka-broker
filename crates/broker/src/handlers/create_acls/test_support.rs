@@ -68,7 +68,12 @@ pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> 
 /// Validates `c` with CIDR ACL hosts supported, which is what every test not
 /// about the CIDR gate wants.
 pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, (i16, String)> {
-    super::validate::validate(c, true)
+    super::validate::validate(
+        c,
+        super::validate::HostCheck::Trunk {
+            cidr_hosts_supported: true,
+        },
+    )
 }
 
 /// An authorizer an operator actually configured, which lets the `admin` test

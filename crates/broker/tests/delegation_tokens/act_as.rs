@@ -73,7 +73,7 @@ async fn act_as_super_user_mints_token_owned_by_target() {
         check!(create_resp.token_requester_principal_type == "User");
         check!(create_resp.token_requester_principal_name == "admin");
         check!(!create_resp.token_id.is_empty(), "token_id must be set");
-        check!(create_resp.hmac.len() == 32, "HMAC length must be 32 bytes");
+        check!(create_resp.hmac.len() == 64, "HMAC length must be 64 bytes");
 
         let token_id = create_resp.token_id.clone();
         let hmac_bytes = create_resp.hmac.clone();

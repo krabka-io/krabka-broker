@@ -27,6 +27,15 @@ pub trait AclSource {
     /// this set for an ALLOW grant that no DENY covers, so unlike
     /// `matching_acls` it is not scoped to one candidate resource name.
     fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
+
+    /// Whether a stored host containing `/` is a CIDR range (KIP-1276) rather
+    /// than plain text. Kafka 4.3.1 compares every host as text, and trunk
+    /// reads a range only once the cluster's `metadata.version` reaches
+    /// 4.4-IV1, so a source that knows the version says so here. The default
+    /// is `true`, for a source that holds only entries.
+    fn cidr_hosts_supported(&self) -> bool {
+        true
+    }
 }
 
 // The broker's MetadataImage already implements the exact matching semantics;
@@ -47,5 +56,12 @@ impl AclSource for krabka_metadata::MetadataImage {
         Box::new(
             krabka_metadata::MetadataImage::all_acls(self).filter(move |e| e.resource_type == rt),
         )
+    }
+
+    /// An unfinalized `metadata.version` is the bootstrap level, `4.3-IV0`,
+    /// which is below the CIDR floor.
+    fn cidr_hosts_supported(&self) -> bool {
+        self.finalized_metadata_version()
+            .is_some_and(|level| level >= krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL)
     }
 }

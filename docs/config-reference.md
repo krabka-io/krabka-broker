@@ -24,7 +24,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `audit` | table | broker default |  | `[audit]` section of `broker.toml` (`FedRAMP` 20x MLA). See `[audit]` below. |
-| `authorization` | table | broker default |  | TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. Omitting the whole block leaves the cluster with no authorizer, which is what Kafka has when `authorizer.class.name` is unset: every principal is allowed everything, and the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with "No Authorizer is configured on the broker" rather than an empty listing or a stored binding nothing would consult. `kafka-acls` reports that refusal. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer. See `[authorization]` below. |
+| `authorization` | table | broker default |  | TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. Omitting the whole block leaves the cluster with no authorizer, which is what Kafka has when `authorizer.class.name` is unset: every principal is allowed everything, and the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) rather than an empty listing or a stored binding nothing would consult. `kafka-acls` reports that refusal. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer. See `[authorization]` below. |
 | `auto_join` | boolean | broker default |  | Enable automatic dynamic controller enrollment. |
 | `bootstrap_servers` | array of string | `[]` |  | KIP-853 controller discovery endpoints. Hosts remain unresolved so DNS names can be refreshed on each retry. |
 | `break_glass` | table | broker default |  | TOML shape of `[break_glass]`. Maps to [`crate::config::BreakGlassConfig`]. Every field is `Option`, so `approvers = []` and `signed_actions = []` are each a written choice and are distinct from omitting the key. `deny_unknown_fields` so a misspelled key is rejected at parse time. See `[break_glass]` below. |
@@ -39,7 +39,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `delegation_token` | table | broker default |  | TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*` fields on [`crate::BrokerConfig`]. See `[delegation_token]` below. |
 | `extra_log_dirs` | array of string | `[]` |  | Additional JBOD data directories (KIP-113). Maps to [`crate::BrokerConfig::extra_log_dirs`]. |
 | `freeze` | table | broker default |  | TOML shape of `[freeze]`. Maps to [`crate::config::FreezeConfig`]. Every field is `Option`: a present value replaces the current broker value, an absent one retains it. `deny_unknown_fields` so a misspelled `require_signature` is rejected at parse time rather than leaving the broker on the opposite policy to the one the operator wrote. See `[freeze]` below. |
-| `gssapi` | table | broker default |  | TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `principal_to_local_rules` are parsed into `name::Rule` at `apply_to` time. See `[gssapi]` below. |
+| `gssapi` | table | broker default |  | TOML shape of `[gssapi]`. Maps to [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules` are parsed into `KerberosRule` at `apply_to` time. See `[gssapi]` below. |
 | `heartbeat_interval` | string | broker default | duration | How often this broker sends `BrokerHeartbeat` to the controller leader. Absent leaves the `BrokerConfig` default intact. |
 | `heartbeat_timeout` | string | broker default | duration | Controller-side session timeout for broker heartbeats. Absent leaves the `BrokerConfig` default intact. |
 | `inter_broker_credentials` | table | broker default |  | TOML shape of `[inter_broker_credentials]`. A `type` discriminator selects the variant. PLAIN/SCRAM inter-broker over TOML remain intentionally unexposed. See the `[inter_broker_credentials]` sections below. |
@@ -108,14 +108,14 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 
 ### `[authorization]`
 
-TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. Omitting the whole block leaves the cluster with no authorizer, which is what Kafka has when `authorizer.class.name` is unset: every principal is allowed everything, and the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with "No Authorizer is configured on the broker" rather than an empty listing or a stored binding nothing would consult. `kafka-acls` reports that refusal. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer.
+TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. Omitting the whole block leaves the cluster with no authorizer, which is what Kafka has when `authorizer.class.name` is unset: every principal is allowed everything, and the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) rather than an empty listing or a stored binding nothing would consult. `kafka-acls` reports that refusal. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `allow_everyone_if_no_acl_found` | boolean | `false` |  | Kafka's `allow.everyone.if.no.acl.found`. Only consulted by `type = "simple"`. When `true`, a request is allowed if NO ACL at all applies to the resource -- by type, name, and LITERAL/PREFIXED/wildcard pattern, regardless of principal, host, operation, or permission type. If at least one ACL applies to the resource and none of them matches, the request is still denied. Default `false`, matching Kafka's `StandardAuthorizer`. |
 | `opa` | table | broker default |  | TOML shape of `[authorization.opa]`. Mirrors the constructor arguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults are picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU entries, 1 h TTL, fail-closed on OPA error). See `[authorization.opa]` below. |
 | `super_users` | array of string | `[]` |  | Principals that bypass every ACL check, Kafka's `super.users`. The active authorizer and the delegation-token `act-as` gate both read it. An entry may use Kafka's `User:<name>` form. `User:ANONYMOUS` is accepted, as in Kafka. Empty is the default and grants no bypass. |
-| `type` | one of `allow_all`, `simple`, `opa` | broker default |  | Which [`crate::authorizer::Authorizer`] impl to instantiate. `snake_case` to match the spec's `type = "allow_all" \| "simple" \| "opa"` wire shape. `allow_all` is the default and is not an authorizer: it allows every principal every operation, and the ACL administration RPCs answer `SECURITY_DISABLED` (54) with "No Authorizer is configured on the broker", as Kafka does with no `authorizer.class.name`. `simple` and `opa` are decision points, and under either the ACL RPCs serve requests normally. |
+| `type` | one of `allow_all`, `simple`, `opa` | broker default |  | Which [`crate::authorizer::Authorizer`] impl to instantiate. `snake_case` to match the spec's `type = "allow_all" \| "simple" \| "opa"` wire shape. `allow_all` is the default and is not an authorizer: it allows every principal every operation, and the ACL administration RPCs answer `SECURITY_DISABLED` (54), as Kafka does with no `authorizer.class.name`. `simple` and `opa` are decision points, and under either the ACL RPCs serve requests normally. |
 
 #### `[authorization.opa]`
 
@@ -163,7 +163,7 @@ TOML shape of `[freeze]`. Maps to [`crate::config::FreezeConfig`]. Every field i
 
 ### `[gssapi]`
 
-TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `principal_to_local_rules` are parsed into `name::Rule` at `apply_to` time.
+TOML shape of `[gssapi]`. Maps to [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules` are parsed into `KerberosRule` at `apply_to` time.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
@@ -171,7 +171,7 @@ TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `pr
 | `keytab_path` | string | required |  | Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI accept path reads it to answer a client's ticket. |
 | `max_time_skew` | string | broker default | duration | Maximum tolerated difference between client and broker clocks. |
 | `principal_to_local_rules` | array of string | `[]` |  | `auth_to_local` rule specs, applied in order (first match wins). |
-| `realm` | string | broker default |  | Default Kerberos realm, used for principals that omit their realm. |
+| `realm` | string | broker default |  | Default Kerberos realm, the only realm the `DEFAULT` rule accepts. Kafka reads it from `krb5.conf`; when it is omitted `DEFAULT` matches no principal and the rules have to name the realm. |
 | `service_name` | string | broker default |  | `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted. |
 
 ### `[inter_broker_credentials]` with `type = "gssapi"`

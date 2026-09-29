@@ -256,14 +256,14 @@ fn gssapi_config(
         .principal_to_local_rules
         .iter()
         .map(|spec| {
-            krabka_security::gssapi::name::Rule::parse(spec).map_err(|error| {
+            crate::network::auth::KerberosRule::parse(spec).map_err(|error| {
                 FileConfigError::InvalidConfig(format!(
                     "invalid GSSAPI principal rule {spec:?}: {error}"
                 ))
             })
         })
         .collect::<Result<_, _>>()?;
-    Ok(krabka_security::gssapi::GssapiConfig {
+    Ok(crate::network::auth::GssapiConfig {
         keytab_path: gssapi.keytab_path,
         service_name: gssapi
             .service_name

@@ -195,14 +195,29 @@ fn peer_cert_principal<S>(
     peer: SocketAddr,
 ) -> Result<Option<krabka_security::Principal>, ()> {
     let (_, server_conn) = stream.get_ref();
-    let Some(distinguished_name) = server_conn
+    let distinguished_name = server_conn
         .peer_certificates()
         .and_then(<[_]>::first)
-        .and_then(|cert| crate::network::auth::subject_dn_rfc2253(cert.as_ref()))
+        .and_then(|cert| crate::network::auth::subject_dn_rfc2253(cert.as_ref()));
+    mtls_principal(spec, peer, distinguished_name.as_deref())
+}
+
+/// The principal a peer certificate's Subject DN gives on `spec`'s listener.
+///
+/// Kafka's `DefaultKafkaPrincipalBuilder` applies `SslPrincipalMapper` to an
+/// SSL authentication context only. On `SASL_SSL` the principal comes from
+/// the SASL exchange and the client certificate is never mapped, so a DN that
+/// no rule matches is no reason to close the connection there.
+fn mtls_principal(
+    spec: &crate::config::ListenerSpec,
+    peer: SocketAddr,
+    distinguished_name: Option<&str>,
+) -> Result<Option<krabka_security::Principal>, ()> {
+    let Some(distinguished_name) = distinguished_name.filter(|_| !spec.protocol.requires_sasl())
     else {
         return Ok(None);
     };
-    let Some(name) = spec.principal_mapper.apply(&distinguished_name) else {
+    let Some(name) = spec.principal_mapper.apply(distinguished_name) else {
         tracing::warn!(
             listener = %spec.name,
             peer = %peer,
@@ -229,4 +244,53 @@ async fn serve_connection_plaintext(
     peer: SocketAddr,
 ) {
     serve_connection_stream(broker, stream, spec, peer, None).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use krabka_security::ListenerProtocol;
+
+    use super::*;
+    use crate::{config::ListenerSpec, network::auth::SslPrincipalMapper};
+
+    fn spec(protocol: ListenerProtocol, rules: &[&str]) -> ListenerSpec {
+        ListenerSpec {
+            name: "L".to_owned(),
+            bind_addr: "127.0.0.1:0".parse().expect("static addr"),
+            advertised: "127.0.0.1:0".to_owned(),
+            protocol,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: SslPrincipalMapper::parse(rules).expect("rules parse"),
+        }
+    }
+
+    /// The Subject DN is mapped on an SSL listener, where a DN that no rule
+    /// matches closes the connection, and never on a `SASL_SSL` listener, whose
+    /// principal comes from the SASL exchange.
+    #[test]
+    fn the_subject_dn_is_mapped_on_ssl_listeners_only() {
+        let peer: SocketAddr = "127.0.0.1:9".parse().expect("static addr");
+        let dn = Some("CN=alice,OU=integration");
+        let match_rule = &["RULE:^CN=(.*?),OU=integration$/$1/"][..];
+        let no_match_rule = &["RULE:^CN=(.*?),OU=ServiceUsers$/$1/"][..];
+        // (protocol, rules, distinguished name, outcome: `Err` closes the
+        // connection, `Ok(None)` is no principal from the certificate)
+        let cases = [
+            (ListenerProtocol::Ssl, match_rule, dn, Ok(Some("alice"))),
+            (ListenerProtocol::Ssl, no_match_rule, dn, Err(())),
+            (ListenerProtocol::Ssl, no_match_rule, None, Ok(None)),
+            (ListenerProtocol::SaslSsl, no_match_rule, dn, Ok(None)),
+            (ListenerProtocol::SaslSsl, match_rule, dn, Ok(None)),
+        ];
+        for (protocol, rules, distinguished_name, expected) in cases {
+            let outcome = mtls_principal(&spec(protocol, rules), peer, distinguished_name)
+                .map(|principal| principal.map(|principal| principal.name));
+            check!(
+                outcome == expected.map(|name| name.map(str::to_owned)),
+                "{protocol:?} {rules:?} {distinguished_name:?}"
+            );
+        }
+    }
 }

@@ -13,8 +13,8 @@ use serde::Deserialize;
 pub(super) const DEFAULT_KERBEROS_SERVICE_NAME: &str = "kafka";
 
 /// TOML shape of `[gssapi]`. Maps to
-/// [`krabka_security::gssapi::GssapiConfig`]. `principal_to_local_rules`
-/// are parsed into `name::Rule` at `apply_to` time.
+/// [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules`
+/// are parsed into `KerberosRule` at `apply_to` time.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileGssapiConfig {
@@ -26,7 +26,9 @@ pub struct FileGssapiConfig {
     /// `auth_to_local` rule specs, applied in order (first match wins).
     #[serde(default)]
     pub principal_to_local_rules: Vec<String>,
-    /// Default Kerberos realm, used for principals that omit their realm.
+    /// Default Kerberos realm, the only realm the `DEFAULT` rule accepts.
+    /// Kafka reads it from `krb5.conf`; when it is omitted `DEFAULT` matches
+    /// no principal and the rules have to name the realm.
     pub realm: Option<String>,
     /// KDC endpoint (e.g. `tcp://kdc:88`) that bypasses krb5.conf discovery;
     /// falls back to krb5.conf when omitted.
@@ -93,7 +95,7 @@ max_time_skew = "17s"
         // Second rule in the fixture is the bare DEFAULT rule.
         check!(matches!(
             g.principal_to_local_rules[1],
-            krabka_security::gssapi::name::Rule::Default
+            crate::network::auth::KerberosRule::Default
         ));
         check!(g.realm.as_deref() == Some("EXAMPLE.COM"));
         check!(g.kdc.as_deref() == Some("tcp://kdc:88"));

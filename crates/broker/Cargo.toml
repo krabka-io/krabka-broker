@@ -116,6 +116,8 @@ crc32c = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
+# HMAC-SHA-512 of a delegation token id, Kafka's `DelegationTokenManager.createHmac`.
+hmac = { workspace = true }
 # SHA-256 fingerprint of the configured break-glass approver set
 # (`operator_keys::approver_set_fingerprint`), recorded on every break-glass
 # audit event so a per-broker divergence in the set is visible afterwards.

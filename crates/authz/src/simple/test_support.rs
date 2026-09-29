@@ -8,7 +8,9 @@
 use std::{collections::HashSet, net::SocketAddr};
 
 use krabka_metadata::{
-    AclEntry, AclOperation, MetadataImage, PatternType, PermissionType, ResourceType,
+    AclEntry, AclOperation, FeatureLevelRecord, MetadataImage, MetadataRecord, PatternType,
+    PermissionType, ResourceType,
+    metadata_version::{CIDR_ACL_MIN_LEVEL, METADATA_VERSION_FEATURE},
 };
 use krabka_security::Principal;
 use uuid::Uuid;
@@ -38,6 +40,17 @@ pub(super) fn addr() -> SocketAddr {
 
 pub(super) fn img() -> MetadataImage {
     MetadataImage::new(Uuid::nil())
+}
+
+/// An image whose `metadata.version` is high enough (4.4-IV1) for a host
+/// containing `/` to be a CIDR range (KIP-1276).
+pub(super) fn cidr_img() -> MetadataImage {
+    let mut image = img();
+    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: METADATA_VERSION_FEATURE.into(),
+        level: CIDR_ACL_MIN_LEVEL,
+    }));
+    image
 }
 
 pub(super) fn topic_acl(

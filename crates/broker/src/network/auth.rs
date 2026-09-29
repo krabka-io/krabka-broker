@@ -17,6 +17,11 @@
 #[cfg_attr(target_family = "wasm", path = "auth/gssapi/wasm.rs")]
 mod gssapi;
 mod handshake;
+mod java_regex;
+// The Kerberos `auth_to_local` rules belong to the GSSAPI stack, so the
+// wasm stand-in has no use for them.
+#[cfg(not(target_family = "wasm"))]
+mod kerberos_name;
 mod oauthbearer;
 mod plain;
 mod response;
@@ -27,6 +32,8 @@ mod subject_dn;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(not(target_family = "wasm"))]
+pub use self::kerberos_name::{KerberosNameError, KerberosRule};
 // Only test code -- dispatch::session's tests and oauthbearer's -- builds an
 // AuthenticatedSnapshot through this path, so the re-export is test-gated:
 // in a normal build it is dead and -D warnings rejects it.

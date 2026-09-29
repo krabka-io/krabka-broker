@@ -5,10 +5,11 @@
 //! `AclApis.handleCreateAcls` refuses a `CLUSTER` binding not named
 //! `kafka-cluster` and an empty resource name, then the controller's
 //! `AclControlManager.validateNewAcl` refuses a non-concrete resource type,
-//! pattern type, operation or permission type, a principal with no `:`, and a
-//! malformed host. Every refusal is a per-binding `INVALID_REQUEST` (or
-//! `UNSUPPORTED_VERSION` for a CIDR host below its metadata version) carrying
-//! Kafka's message text, which `kafka-acls` prints.
+//! pattern type, operation or permission type, and a principal with no `:`.
+//! Kafka trunk, and so `unstable.feature.versions.enable`, also refuses a
+//! malformed host ([`HostCheck`]). Every refusal is a per-binding
+//! `INVALID_REQUEST` (or `UNSUPPORTED_VERSION` for a CIDR host below its
+//! metadata version) carrying Kafka's message text, which `kafka-acls` prints.
 //!
 //! Two whole-request refusals sit in front of this, in the handler. A wire
 //! `UNKNOWN` (0) element fails Kafka's `CreateAclsRequest.validate` while the
@@ -139,10 +140,20 @@ fn invalid(message: String) -> (i16, String) {
     (codes::INVALID_REQUEST, message)
 }
 
-pub(super) fn validate(
-    c: &AclCreation,
-    cidr_hosts_supported: bool,
-) -> Result<AclEntry, (i16, String)> {
+/// What `CreateAcls` checks about the host of a binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HostCheck {
+    /// Kafka 4.3.1, whose `AclControlManager.validateNewAcl` has no host check
+    /// and whose `AccessControlEntry` only refuses a null host. Any host,
+    /// empty or containing `/`, is stored as text.
+    Unchecked,
+    /// Kafka trunk's `AclControlManager.validateHostPattern`, which
+    /// `unstable.feature.versions.enable` turns on. A host with a `/` is a
+    /// CIDR range when `cidr_hosts_supported`, and is refused otherwise.
+    Trunk { cidr_hosts_supported: bool },
+}
+
+pub(super) fn validate(c: &AclCreation, host_check: HostCheck) -> Result<AclEntry, (i16, String)> {
     // `AclApis.handleCreateAcls`, before the binding reaches the controller.
     // The authorizer only ever asks about `kafka-cluster`, so a CLUSTER ACL
     // under any other name would be stored and never match.
@@ -186,7 +197,12 @@ pub(super) fn validate(
             c.principal
         )));
     }
-    validate_host(&c.host, cidr_hosts_supported)?;
+    if let HostCheck::Trunk {
+        cidr_hosts_supported,
+    } = host_check
+    {
+        validate_host(&c.host, cidr_hosts_supported)?;
+    }
     Ok(AclEntry {
         resource_type,
         resource_name: c.resource_name.clone(),
@@ -229,7 +245,7 @@ mod tests {
     use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
     use krabka_protocol::owned::create_acls_request::AclCreation;
 
-    use super::{has_filter_only_element, has_unknown_element};
+    use super::{HostCheck, has_filter_only_element, has_unknown_element};
     use crate::{
         codes,
         handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
@@ -439,11 +455,33 @@ mod tests {
         for (host, cidr_hosts_supported, expected_err) in cases {
             let mut c = creation("topic-a", "User:alice", OPERATION_READ);
             c.host = (*host).into();
-            let got = super::validate(&c, *cidr_hosts_supported).err();
+            let got = super::validate(
+                &c,
+                HostCheck::Trunk {
+                    cidr_hosts_supported: *cidr_hosts_supported,
+                },
+            )
+            .err();
             let expected = expected_err.map(|(code, msg)| (code, msg.to_owned()));
             assert!(
                 got == expected,
                 "host {host:?} cidr_hosts_supported {cidr_hosts_supported}"
+            );
+        }
+    }
+
+    /// Kafka 4.3.1 has no host check, so every host is stored as the text it
+    /// arrived as: the wildcard, an address, a range, a malformed range and
+    /// the empty string.
+    #[test]
+    fn validate_accepts_any_host_without_the_trunk_check() {
+        for host in ["*", "10.0.0.1", "10.0.0.0/8", "10.0.0.0/33", "a/b", ""] {
+            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
+            c.host = host.into();
+            assert!(
+                super::validate(&c, HostCheck::Unchecked).map(|entry| entry.host)
+                    == Ok(host.to_owned()),
+                "host {host:?}"
             );
         }
     }
