@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use krabka_metadata::MetadataImage;
 
-use crate::coordinator::unified::share::config::ShareGroupConfig;
+use crate::coordinator::unified::{config::clamp_to_range, share::config::ShareGroupConfig};
 
 /// Kafka's `GroupConfig.SHARE_RECORD_LOCK_DURATION_MS_CONFIG`.
 const KEY_RECORD_LOCK_DURATION_MS: &str = "share.record.lock.duration.ms";
@@ -54,6 +54,12 @@ impl GroupShareSettings {
     /// Resolves the settings of `group`: each override in the group config
     /// of `image`, or the broker setting of `defaults`.
     ///
+    /// An override is capped to the broker's `group.share.min.*` and
+    /// `group.share.max.*` bounds of `defaults`, as Kafka's
+    /// `GroupConfig.evaluate` caps a stored group config. The config RPCs
+    /// refuse a value outside them when they store it, so one is outside only
+    /// when the bounds moved since.
+    ///
     /// Kafka has no broker-level share isolation key. A group without a
     /// `share.isolation.level` reads `read_uncommitted`, Kafka's
     /// `GroupConfig.SHARE_ISOLATION_LEVEL_DEFAULT`.
@@ -61,16 +67,42 @@ impl GroupShareSettings {
     pub(crate) fn resolve(image: &MetadataImage, group: &str, defaults: &ShareGroupConfig) -> Self {
         let overrides = image.group_config(group);
         let value = |key: &str| overrides.and_then(|configs| configs.get(key));
+        // Kafka parses each of the three as an `INT`, and a value that does not
+        // parse is ignored.
+        let int = |key: &str| value(key).and_then(|text| text.trim().parse::<i32>().ok());
         Self {
-            record_lock_duration: value(KEY_RECORD_LOCK_DURATION_MS)
-                .and_then(|ms| ms.trim().parse::<u64>().ok())
-                .map_or(defaults.record_lock_duration, Duration::from_millis),
-            delivery_count_limit: value(KEY_DELIVERY_COUNT_LIMIT)
-                .and_then(|limit| limit.trim().parse().ok())
-                .unwrap_or(defaults.max_delivery_attempts),
-            max_record_locks: value(KEY_PARTITION_MAX_RECORD_LOCKS)
-                .and_then(|locks| locks.trim().parse().ok())
-                .unwrap_or(defaults.max_inflight_records),
+            record_lock_duration: int(KEY_RECORD_LOCK_DURATION_MS).map_or(
+                defaults.record_lock_duration,
+                |millis| {
+                    clamp_to_range(
+                        Duration::from_millis(u64::try_from(millis).unwrap_or(0)),
+                        defaults.min_record_lock_duration,
+                        defaults.max_record_lock_duration,
+                    )
+                },
+            ),
+            delivery_count_limit: int(KEY_DELIVERY_COUNT_LIMIT).map_or(
+                defaults.max_delivery_attempts,
+                |limit| {
+                    clamp_to_range(
+                        limit,
+                        i32::from(defaults.min_delivery_count_limit),
+                        i32::from(defaults.max_delivery_count_limit),
+                    )
+                    .try_into()
+                    .unwrap_or(defaults.max_delivery_count_limit)
+                },
+            ),
+            max_record_locks: int(KEY_PARTITION_MAX_RECORD_LOCKS).map_or(
+                defaults.max_inflight_records,
+                |locks| {
+                    clamp_to_range(
+                        locks,
+                        defaults.min_partition_max_record_locks,
+                        defaults.max_partition_max_record_locks,
+                    )
+                },
+            ),
             read_committed: value(KEY_ISOLATION_LEVEL)
                 .is_some_and(|level| level.trim().eq_ignore_ascii_case("read_committed")),
             renew_acknowledge_enabled: value(KEY_RENEW_ACKNOWLEDGE_ENABLE)
@@ -135,9 +167,9 @@ mod tests {
                 },
             ),
             (
-                &[(KEY_PARTITION_MAX_RECORD_LOCKS, "10")],
+                &[(KEY_PARTITION_MAX_RECORD_LOCKS, "500")],
                 GroupShareSettings {
-                    max_record_locks: 10,
+                    max_record_locks: 500,
                     ..broker
                 },
             ),
@@ -156,6 +188,74 @@ mod tests {
                 },
             ),
             (&[(KEY_DELIVERY_COUNT_LIMIT, "many")], broker),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (configs, settings) in rows {
+            actual.push(GroupShareSettings::resolve(&image(configs), "g", &defaults));
+            expected.push(settings);
+        }
+        assert!(actual == expected);
+    }
+
+    /// Kafka's `GroupConfig.evaluate` caps a stored value to the broker's
+    /// bounds: the record lock duration, the delivery count limit and the
+    /// record lock limit each to their `group.share.min.*` and
+    /// `group.share.max.*`. A negative value is below every bound.
+    #[test]
+    fn an_override_outside_the_broker_bounds_is_capped() {
+        let defaults = ShareGroupConfig::default();
+        let broker = GroupShareSettings::resolve(&image(&[]), "g", &defaults);
+        let rows: Vec<(&[(&str, &str)], GroupShareSettings)> = vec![
+            (
+                &[(KEY_RECORD_LOCK_DURATION_MS, "1")],
+                GroupShareSettings {
+                    record_lock_duration: defaults.min_record_lock_duration,
+                    ..broker
+                },
+            ),
+            (
+                &[(KEY_RECORD_LOCK_DURATION_MS, "-7")],
+                GroupShareSettings {
+                    record_lock_duration: defaults.min_record_lock_duration,
+                    ..broker
+                },
+            ),
+            (
+                &[(KEY_RECORD_LOCK_DURATION_MS, "3600000")],
+                GroupShareSettings {
+                    record_lock_duration: defaults.max_record_lock_duration,
+                    ..broker
+                },
+            ),
+            (
+                &[(KEY_DELIVERY_COUNT_LIMIT, "1")],
+                GroupShareSettings {
+                    delivery_count_limit: defaults.min_delivery_count_limit,
+                    ..broker
+                },
+            ),
+            (
+                &[(KEY_DELIVERY_COUNT_LIMIT, "100000")],
+                GroupShareSettings {
+                    delivery_count_limit: defaults.max_delivery_count_limit,
+                    ..broker
+                },
+            ),
+            (
+                &[(KEY_PARTITION_MAX_RECORD_LOCKS, "10")],
+                GroupShareSettings {
+                    max_record_locks: defaults.min_partition_max_record_locks,
+                    ..broker
+                },
+            ),
+            (
+                &[(KEY_PARTITION_MAX_RECORD_LOCKS, "1000000")],
+                GroupShareSettings {
+                    max_record_locks: defaults.max_partition_max_record_locks,
+                    ..broker
+                },
+            ),
         ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();

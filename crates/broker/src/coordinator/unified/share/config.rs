@@ -1,7 +1,9 @@
 //! KIP-932 share-group membership configuration.
 use std::{borrow::Cow, collections::BTreeMap, time::Duration};
 
-use crate::coordinator::unified::config::{DEFAULT_ASSIGNMENT_INTERVAL, group_millis};
+use crate::coordinator::unified::config::{
+    DEFAULT_ASSIGNMENT_INTERVAL, MAX_ASSIGNMENT_INTERVAL, MIN_ASSIGNMENT_INTERVAL, group_millis,
+};
 
 /// Kafka's `GroupConfig.SHARE_SESSION_TIMEOUT_MS_CONFIG`.
 const KEY_SHARE_SESSION_TIMEOUT_MS: &str = "share.session.timeout.ms";
@@ -105,17 +107,34 @@ impl ShareGroupConfig {
     }
 
     /// The membership settings a share group runs with: each `share.*`
-    /// override in the group's stored config over the broker value.
+    /// override in the group's stored config over the broker value, clamped to
+    /// the broker's `group.share.min.*` and `group.share.max.*` bounds.
     ///
     /// This is Kafka's `GroupMetadataManager.shareGroupSessionTimeoutMs`,
     /// `shareGroupHeartbeatIntervalMs` and `shareGroupAssignmentIntervalMs`:
-    /// `GroupConfigManager.groupConfig` over `GroupCoordinatorConfig`. A group
-    /// with no override borrows the broker value.
+    /// `GroupConfigManager.groupConfig` over `GroupCoordinatorConfig`, with the
+    /// stored config evaluated against the bounds (`GroupConfig.evaluate`). A
+    /// group with no override borrows the broker value.
     #[must_use]
     pub(crate) fn for_group(&self, overrides: Option<&BTreeMap<String, String>>) -> Cow<'_, Self> {
-        let session = group_millis(overrides, KEY_SHARE_SESSION_TIMEOUT_MS);
-        let heartbeat = group_millis(overrides, KEY_SHARE_HEARTBEAT_INTERVAL_MS);
-        let assignment = group_millis(overrides, KEY_SHARE_ASSIGNMENT_INTERVAL_MS);
+        let session = group_millis(
+            overrides,
+            KEY_SHARE_SESSION_TIMEOUT_MS,
+            self.min_session_timeout,
+            self.max_session_timeout,
+        );
+        let heartbeat = group_millis(
+            overrides,
+            KEY_SHARE_HEARTBEAT_INTERVAL_MS,
+            self.min_heartbeat_interval,
+            self.max_heartbeat_interval,
+        );
+        let assignment = group_millis(
+            overrides,
+            KEY_SHARE_ASSIGNMENT_INTERVAL_MS,
+            MIN_ASSIGNMENT_INTERVAL,
+            MAX_ASSIGNMENT_INTERVAL,
+        );
         if session.is_none() && heartbeat.is_none() && assignment.is_none() {
             return Cow::Borrowed(self);
         }
@@ -205,6 +224,42 @@ mod tests {
                     ("share.heartbeat.interval.ms", "many"),
                 ],
                 broker.clone(),
+            ),
+            // `GroupConfig.evaluate` caps a value to the broker's bounds.
+            (
+                &[("share.session.timeout.ms", "1000")],
+                ShareGroupConfig {
+                    session_timeout: broker.min_session_timeout,
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[("share.session.timeout.ms", "3600000")],
+                ShareGroupConfig {
+                    session_timeout: broker.max_session_timeout,
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[("share.heartbeat.interval.ms", "0")],
+                ShareGroupConfig {
+                    heartbeat_interval: broker.min_heartbeat_interval,
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[("share.heartbeat.interval.ms", "60000")],
+                ShareGroupConfig {
+                    heartbeat_interval: broker.max_heartbeat_interval,
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[("share.assignment.interval.ms", "3600000")],
+                ShareGroupConfig {
+                    assignment_interval: MAX_ASSIGNMENT_INTERVAL,
+                    ..broker.clone()
+                },
             ),
         ];
         let (actual, expected): (Vec<_>, Vec<_>) = rows

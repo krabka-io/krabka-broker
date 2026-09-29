@@ -114,9 +114,12 @@ async fn a_group_reports_its_own_heartbeat_interval() {
 /// member for the broker's 45 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_expires_a_member_by_its_own_session_timeout() {
+    // The broker's minimum admits the 1 ms that the group asks for, which its
+    // own override is capped to.
     let coordinator = coordinator(
         NextGenConfig {
             session_expiry_tick: Duration::from_millis(10),
+            min_session_timeout: Duration::from_millis(1),
             ..NextGenConfig::assigning_at_once()
         },
         &[("brief", &[("consumer.session.timeout.ms", "1")])],
