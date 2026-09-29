@@ -154,10 +154,10 @@ fn uniform_share(budget: i64, partitions: usize, index: usize) -> i32 {
 fn materialize_within_deferral_bound(
     state: &mut crate::share_partition::state::AcquisitionState,
     upper: Offset,
-    max_inflight: i32,
+    max_record_locks: i32,
 ) {
     if state.deferred_records() < SHARE_DELIVERY_MAX_DEFERRED_RECORDS {
-        state.materialize(upper, max_inflight);
+        state.materialize(upper, max_record_locks);
     }
 }
 
@@ -171,7 +171,7 @@ fn materialize_within_deferral_bound(
 /// `SharePartition` does: the share consumer has no aborted transaction list
 /// to filter them with.
 ///
-/// One materialization adds at most `max_inflight` offsets. When all of them
+/// One materialization adds at most the room the record lock limit leaves. When all of them
 /// are archived, the window grows again in the same pass, so a large aborted
 /// transaction does not turn into a run of empty fetches. The first scan
 /// covers the whole window, and each later scan covers only the offsets that
@@ -180,7 +180,7 @@ async fn grow_readable_window(
     state: &mut crate::share_partition::state::AcquisitionState,
     partition: &crate::partition::Partition,
     upper: Offset,
-    max_inflight: i32,
+    max_record_locks: i32,
     read_committed: bool,
 ) -> Result<(), BrokerError> {
     // The scan floor must never sit below the log's own start offset: an
@@ -194,7 +194,7 @@ async fn grow_readable_window(
     let mut scan_from = state.start_offset.max(log_start);
     loop {
         let end_before = state.end_offset;
-        materialize_within_deferral_bound(state, upper, max_inflight);
+        materialize_within_deferral_bound(state, upper, max_record_locks);
         let scan_start = scan_from.max(state.start_offset).max(log_start);
         for (first, last) in
             unreadable_batch_ranges(partition, scan_start, state.end_offset, read_committed).await?
