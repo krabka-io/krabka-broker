@@ -24,7 +24,9 @@ follower-in replica traffic (KIP-73), and intra-broker log directory moves
   `record` that charges the whole request and leaves what the balance could
   not cover as debt, which the refill repays first. A quota caller turns the
   debt into its throttle delay, as Kafka's `Sensor.record` and
-  `QuotaUtils.throttleTime` do. A change of rate keeps the balance and the
+  `QuotaUtils.throttleTime` do. `record_bounded` keeps at most what the refill
+  repays in a given wait, for a quota whose throttle is bounded, as Kafka's
+  quota window forgets old samples. A change of rate keeps the balance and the
   debt. Each consume and each rate change is one critical section, so a
   consume never straddles a change and never loses the refill it claimed. An
   unthrottled bucket grants without the lock.

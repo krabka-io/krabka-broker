@@ -6,8 +6,23 @@ pub use krabka_throttle::{MICROS_PER_TOKEN, ThrottleState, TokenBucket};
 
 mod refresh;
 use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::{Time, secs};
 pub(crate) use refresh::apply_image;
 pub use refresh::run;
+
+/// How long a throttled-replication quota remembers what it measured: Kafka's
+/// `replication.quota.window.num` (11) times
+/// `replication.quota.window.size.seconds` (1), after which a sample leaves
+/// the window (`ReplicationQuotaManagerConfig`, whose defaults are
+/// `QuotaConfig.NUM_QUOTA_SAMPLES_DEFAULT` and
+/// `QuotaConfig.QUOTA_WINDOW_SIZE_SECONDS_DEFAULT`).
+///
+/// The bytes of an in-sync follower count against the bucket, so the debt they
+/// leave stops an out-of-sync follower drawing from it. That debt is kept for
+/// no longer than this window, so a burst of in-sync traffic starves a lagging
+/// follower for at most the window and it cannot fall out of the ISR on a
+/// debt that Kafka would already have forgotten.
+pub(crate) const REPLICATION_QUOTA_WINDOW: Time = secs(11);
 
 /// Topic-level `*.throttled.replicas` config value.
 #[derive(Debug, Clone, PartialEq, Eq)]
