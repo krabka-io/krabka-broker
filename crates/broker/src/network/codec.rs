@@ -1,11 +1,13 @@
 //! Kafka uses a 4-byte big-endian length prefix followed by the frame body.
-//! Both directions of every connection share this framing.
+//! Both directions of every connection share this framing, but the two
+//! directions do not share a size limit: see [`KafkaCodec`].
 
+use bytes::{BufMut, Bytes, BytesMut};
 #[cfg(test)]
 use tokio::net::TcpStream;
 #[cfg(test)]
 use tokio_util::codec::Framed;
-use tokio_util::codec::LengthDelimitedCodec;
+use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 
 pub(crate) fn validate_frame_length(
     frame_body_len: usize,
@@ -19,23 +21,91 @@ pub(crate) fn validate_frame_length(
     Ok(())
 }
 
-/// Builds a [`LengthDelimitedCodec`] configured for Kafka's wire framing.
+/// The size prefix of a response frame of `frame_body_len` bytes.
+///
+/// Kafka bounds no response by `socket.request.max.bytes`: that limit is the
+/// `maxSize` of the `NetworkReceive` that reads a request, and
+/// `Processor.sendResponse` writes a `NetworkSend` of any size. The one bound
+/// a response has is the signed int32 its size prefix is written as.
+pub(crate) fn response_frame_length(frame_body_len: usize) -> std::io::Result<u32> {
+    i32::try_from(frame_body_len)
+        .map(i32::cast_unsigned)
+        .map_err(|_| std::io::Error::other("response frame exceeds the int32 size prefix"))
+}
+
+/// Whether `error` is the codec's refusal of a size prefix over the request
+/// limit: Kafka's `InvalidReceiveException`. Every other decode error is a
+/// broken transport.
+pub(crate) fn is_invalid_receive(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::InvalidData
+}
+
+/// Kafka's length-prefixed framing.
+///
+/// Decoding refuses a request whose size prefix exceeds the current request
+/// limit, before its body is read, as Kafka's `NetworkReceive.readFrom` does
+/// with `socket.request.max.bytes`. [`KafkaCodec::set_max_request_bytes`]
+/// changes the limit for the next frame: the connection loop holds a peer that
+/// has not finished authenticating to `sasl.server.max.receive.size`.
+///
+/// Encoding has no configurable limit. A response is bounded only by its int32
+/// size prefix, see [`response_frame_length`].
+#[derive(Debug)]
+pub struct KafkaCodec {
+    requests: LengthDelimitedCodec,
+}
+
+impl KafkaCodec {
+    /// Sets the largest request frame the next [`Decoder::decode`] accepts.
+    pub fn set_max_request_bytes(&mut self, max_request_bytes: usize) {
+        self.requests.set_max_frame_length(max_request_bytes);
+    }
+}
+
+impl Decoder for KafkaCodec {
+    type Item = BytesMut;
+    type Error = std::io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> std::io::Result<Option<BytesMut>> {
+        self.requests.decode(src)
+    }
+
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<BytesMut>> {
+        self.requests.decode_eof(buf)
+    }
+}
+
+impl Encoder<Bytes> for KafkaCodec {
+    type Error = std::io::Error;
+
+    fn encode(&mut self, frame: Bytes, dst: &mut BytesMut) -> std::io::Result<()> {
+        let size_prefix = response_frame_length(frame.len())?;
+        dst.reserve(4 + frame.len());
+        dst.put_u32(size_prefix);
+        dst.extend_from_slice(&frame);
+        Ok(())
+    }
+}
+
+/// Builds the [`KafkaCodec`] for a connection whose requests may be up to
+/// `max_request_bytes`.
 #[must_use]
-pub fn codec(max_frame_bytes: usize) -> LengthDelimitedCodec {
-    LengthDelimitedCodec::builder()
+pub fn codec(max_request_bytes: usize) -> KafkaCodec {
+    let requests = LengthDelimitedCodec::builder()
         .length_field_offset(0)
         .length_field_length(4)
         .length_field_type::<u32>()
-        .max_frame_length(max_frame_bytes)
+        .max_frame_length(max_request_bytes)
         .big_endian()
-        .new_codec()
+        .new_codec();
+    KafkaCodec { requests }
 }
 
 /// Wraps a [`TcpStream`] with the Kafka length-delimited codec.
 #[must_use]
 #[cfg(test)]
-pub fn frame(stream: TcpStream, max_frame_bytes: usize) -> Framed<TcpStream, LengthDelimitedCodec> {
-    Framed::new(stream, codec(max_frame_bytes))
+pub fn frame(stream: TcpStream, max_request_bytes: usize) -> Framed<TcpStream, KafkaCodec> {
+    Framed::new(stream, codec(max_request_bytes))
 }
 
 #[cfg(test)]
@@ -47,7 +117,6 @@ mod tests {
         io::AsyncWriteExt,
         net::{TcpListener, TcpStream},
     };
-    use tokio_util::codec::{Decoder as _, Encoder as _};
 
     use super::*;
 
@@ -101,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn codec_honors_nondefault_max_frame_length() {
+    fn codec_limits_requests_only_and_does_not_limit_responses() {
         let mut exact = BytesMut::with_capacity(12);
         exact.put_u32(8);
         exact.resize(12, 0xA5);
@@ -118,14 +187,58 @@ mod tests {
         let err = codec(8).decode(&mut bytes).expect_err("oversized frame");
         assert!(err.to_string().contains("frame size too big"));
 
+        // `socket.request.max.bytes` bounds a request. A response over it is
+        // framed whole, with the size prefix of the frame that follows.
+        let response = Bytes::from_static(b"123456789");
         let mut encoded = BytesMut::new();
         codec(8)
-            .encode(Bytes::from_static(b"12345678"), &mut encoded)
-            .expect("encode exact maximum");
-        let err = codec(8)
-            .encode(Bytes::from_static(b"123456789"), &mut encoded)
-            .expect_err("oversized response");
-        assert!(err.to_string().contains("frame size too big"));
+            .encode(response.clone(), &mut encoded)
+            .expect("a response over the request limit is written");
+        let mut expected = BytesMut::new();
+        expected.put_u32(9);
+        expected.put_slice(&response);
+        assert!(encoded == expected);
+    }
+
+    #[test]
+    fn set_max_request_bytes_changes_the_limit_of_the_next_frame() {
+        let mut codec = codec(8);
+        let mut frame_of_nine = BytesMut::new();
+        frame_of_nine.put_u32(9);
+        frame_of_nine.resize(13, 0xA5);
+
+        let mut refused = frame_of_nine.clone();
+        assert!(codec.decode(&mut refused).is_err());
+
+        codec.set_max_request_bytes(9);
+        assert!(
+            codec
+                .decode(&mut frame_of_nine)
+                .expect("decode under the raised limit")
+                .is_some()
+        );
+
+        codec.set_max_request_bytes(4);
+        let mut frame_of_five = BytesMut::new();
+        frame_of_five.put_u32(5);
+        frame_of_five.resize(9, 0xA5);
+        assert!(codec.decode(&mut frame_of_five).is_err());
+    }
+
+    #[test]
+    fn response_frame_length_is_bounded_by_the_int32_size_prefix() {
+        let int32_max = usize::try_from(i32::MAX).expect("i32::MAX fits usize");
+        for (len, accepted) in [
+            (0, Some(0_u32)),
+            (100 * 1024 * 1024 + 1, Some(104_857_601)),
+            (int32_max, Some(i32::MAX.cast_unsigned())),
+            (int32_max + 1, None),
+        ] {
+            check!(
+                response_frame_length(len).ok() == accepted,
+                "a {len}-byte response frame"
+            );
+        }
     }
 
     #[test]

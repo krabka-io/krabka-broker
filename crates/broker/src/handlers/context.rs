@@ -54,6 +54,12 @@ pub(crate) struct RequestContext<'a> {
     /// charges it to `producer_byte_rate`. It is zero unless the dispatch loop
     /// set it with [`RequestContext::with_request_size`].
     pub request_size: u64,
+    /// Whether the connection is still authenticating on a SASL listener.
+    /// Kafka answers `ApiVersions` there from `SaslServerAuthenticator`, which
+    /// runs none of the `KafkaApis` checks that need an authenticated session.
+    /// It is `false` unless the dispatch loop set it with
+    /// [`RequestContext::with_pre_authentication`].
+    pub pre_authentication: bool,
 }
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
@@ -86,7 +92,16 @@ impl<'a> RequestContext<'a> {
             throttle: crate::quota::ThrottleSlot::default(),
             close_after_response: std::sync::atomic::AtomicBool::new(false),
             request_size: 0,
+            pre_authentication: false,
         }
+    }
+
+    /// Marks the request as one that arrived before the connection finished
+    /// authenticating.
+    #[must_use]
+    pub(crate) fn with_pre_authentication(mut self, pre_authentication: bool) -> Self {
+        self.pre_authentication = pre_authentication;
+        self
     }
 
     /// Records the size of the request frame this context serves, header and

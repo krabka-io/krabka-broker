@@ -6,9 +6,8 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use futures_util::SinkExt;
-use krabka_units::convert::ByteSizeExt as _;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::Framed;
 use tracing::Instrument as _;
 
 use super::{
@@ -16,10 +15,10 @@ use super::{
     response::{ResponseShape, ThrottledResponse, apply_request_quota, encode_response},
     session::principal_or_anonymous,
 };
-use crate::{broker::Broker, error::BrokerError};
+use crate::{broker::Broker, error::BrokerError, network::codec::KafkaCodec};
 
 pub(super) async fn send_registry_response<S>(
-    framed: &mut Framed<S, LengthDelimitedCodec>,
+    framed: &mut Framed<S, KafkaCodec>,
     entry: crate::handlers::DispatchEntry,
     context: DispatchContext<'_, '_>,
     request_span: tracing::Span,
@@ -124,10 +123,13 @@ async fn dispatch_registered_bytes(
                 connection_id,
                 false,
                 listener_name,
-            );
+            )
+            // The per-state gate lets only `ApiVersions` through to a handler
+            // before authentication, and that handler answers it as Kafka's
+            // `SaslServerAuthenticator` does.
+            .with_pre_authentication(!auth.is_authenticated());
             let encoded = encode_dispatch_result(
                 parsed,
-                broker.config.socket_request_max.bytes_usize(),
                 handler(
                     broker,
                     parsed.api_version,
@@ -141,7 +143,6 @@ async fn dispatch_registered_bytes(
         }
         crate::handlers::DispatchKind::Auth(handler) => Some(unthrottled(encode_dispatch_result(
             parsed,
-            broker.config.socket_request_max.bytes_usize(),
             handler(
                 broker,
                 parsed.api_version,
@@ -177,7 +178,6 @@ async fn dispatch_registered_bytes(
             };
             let encoded = encode_dispatch_result(
                 parsed,
-                broker.config.socket_request_max.bytes_usize(),
                 handler(
                     broker,
                     parsed.api_version,
@@ -204,7 +204,6 @@ async fn dispatch_registered_bytes(
             );
             Some(unthrottled(encode_dispatch_result(
                 parsed,
-                broker.config.socket_request_max.bytes_usize(),
                 handler(
                     broker,
                     parsed.api_version,
@@ -261,7 +260,6 @@ fn unthrottled(encoded: Result<Bytes, BrokerError>) -> Result<ThrottledResponse,
 
 fn encode_dispatch_result(
     parsed: &crate::network::request::ParsedRequest<'_>,
-    max_frame_bytes: usize,
     result: Result<Bytes, BrokerError>,
 ) -> Result<Bytes, BrokerError> {
     result.and_then(|body| {
@@ -270,7 +268,6 @@ fn encode_dispatch_result(
             parsed.correlation_id,
             parsed.body_flexible,
             &body,
-            max_frame_bytes,
         )
     })
 }

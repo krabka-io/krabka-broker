@@ -2,9 +2,9 @@
 //!
 //! Two functions make up that path: [`super::response::encode_response`],
 //! which copies a handler's body to prepend the 4- or 5-byte response header,
-//! and the [`LengthDelimitedCodec`] the connection loop wraps its stream in,
-//! whose `Encoder<Bytes>` copies that body a second time into the codec's
-//! write buffer. The PERF note on `encode_response` weighs replacing the pair
+//! and the [`KafkaCodec`] the connection loop wraps its stream in, whose
+//! `Encoder<Bytes>` copies that body a second time into the codec's write
+//! buffer. The PERF note on `encode_response` weighs replacing the pair
 //! with a chained `Buf` and a vectored write; `benches/perf_deferrals.rs` is
 //! what put the measured saving into that note.
 //!
@@ -12,8 +12,8 @@
 //! they are crate-internal and a benchmark is an external crate.
 
 use bytes::Bytes;
-use tokio_util::codec::LengthDelimitedCodec;
 
+pub use crate::network::codec::KafkaCodec;
 use crate::{
     error::BrokerError,
     handlers::{ApiKeyCode, CorrelationId},
@@ -23,29 +23,22 @@ use crate::{
 ///
 /// # Errors
 ///
-/// Returns [`BrokerError`] when the framed response would exceed
-/// `max_frame_bytes`.
+/// Returns [`BrokerError`] when the framed response would exceed the int32
+/// size prefix of a Kafka frame.
 pub fn encode_response(
     api_key: ApiKeyCode,
     correlation_id: CorrelationId,
     body_flexible: bool,
     body: &[u8],
-    max_frame_bytes: usize,
 ) -> Result<Bytes, BrokerError> {
-    super::response::encode_response(
-        api_key,
-        correlation_id,
-        body_flexible,
-        body,
-        max_frame_bytes,
-    )
+    super::response::encode_response(api_key, correlation_id, body_flexible, body)
 }
 
 /// The Kafka length-delimited codec the connection loop frames its stream
-/// with.
+/// with, for requests of up to `max_request_bytes`.
 #[must_use]
-pub fn codec(max_frame_bytes: usize) -> LengthDelimitedCodec {
-    crate::network::codec::codec(max_frame_bytes)
+pub fn codec(max_request_bytes: usize) -> KafkaCodec {
+    crate::network::codec::codec(max_request_bytes)
 }
 
 /// Bytes the response header occupies for `api_key` at a flexible or

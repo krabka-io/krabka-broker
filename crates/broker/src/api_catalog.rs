@@ -1086,7 +1086,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/api_versions.rs",
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
-        note: "Kafka trunk's ApiVersions v5, served only under `unstable.api.versions.enable`. By default both listeners serve 4.3.1's v0-v4 and answer v5 `UNSUPPORTED_VERSION` with that range, so REBOOTSTRAP_REQUIRED (129) is never sent.",
+        note: "Kafka trunk's ApiVersions v5, served only under `unstable.api.versions.enable`. By default both listeners serve 4.3.1's v0-v4 and answer v5 `UNSUPPORTED_VERSION` with that range, so REBOOTSTRAP_REQUIRED (129) is never sent. On a SASL listener the first ApiVersions, which arrives before authentication, is answered as Kafka's `SaslServerAuthenticator` answers it: `INVALID_REQUEST` for an invalid request and otherwise the table, with no routing check.",
     },
     KipAnnotation {
         key: "KIP-1251",

@@ -99,7 +99,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
     // `api_key`/`version` and return the response body with its 5-byte
     // flexible header (corr_id + empty tagged-fields byte) stripped.
     async fn round_trip(
-        framed: &mut Framed<TcpStream, tokio_util::codec::LengthDelimitedCodec>,
+        framed: &mut Framed<TcpStream, crate::network::codec::KafkaCodec>,
         api_key: i16,
         version: i16,
         body: &[u8],
@@ -941,15 +941,12 @@ mod request_budget {
     use assert2::{assert, check};
     use futures_util::{SinkExt as _, StreamExt as _};
 
-    use super::{DEFAULT_MAX_FRAME_BYTES, close_counts, request_frame};
+    use super::{DEFAULT_MAX_FRAME_BYTES, KafkaCodec, close_counts, request_frame};
     use crate::{broker::Broker, network::codec};
 
     /// One connection served by the loop, and the client end already framed.
     struct Served {
-        client: tokio_util::codec::Framed<
-            tokio::net::TcpStream,
-            tokio_util::codec::LengthDelimitedCodec,
-        >,
+        client: tokio_util::codec::Framed<tokio::net::TcpStream, KafkaCodec>,
         loop_task: tokio::task::JoinHandle<()>,
     }
 
@@ -1311,5 +1308,84 @@ mod log_levels {
             ));
         }
         assert!(logged_rows == expected_rows);
+    }
+}
+
+/// `socket.request.max.bytes` bounds a request. Kafka's `NetworkReceive`
+/// enforces it on the receive side, and `Processor.sendResponse` writes a
+/// response of any size.
+mod request_limit {
+    use assert2::assert;
+    use futures_util::{SinkExt as _, StreamExt as _};
+
+    use super::{DEFAULT_MAX_FRAME_BYTES, request_frame};
+    use crate::{broker::Broker, network::codec};
+
+    /// Serves one connection on a broker whose `socket.request.max.bytes` is
+    /// `limit`, sends `request`, and returns the response frame, or `None`
+    /// when the broker closed the connection instead.
+    async fn answer_under_limit(limit: usize, request: bytes::BytesMut) -> Option<bytes::BytesMut> {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        cfg.socket_request_max = krabka_units::bytes(u32::try_from(limit).expect("limit"));
+        let handle = Broker::start(cfg).await.expect("start broker");
+        let broker = handle.broker_arc_for_test();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let spec = crate::config::ListenerSpec {
+            name: "PLAINTEXT".to_string(),
+            bind_addr: addr,
+            advertised: "127.0.0.1:9092".to_string(),
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
+        };
+        let loop_task = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
+        });
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect to the serve loop");
+        // The client's own codec is not the broker's limit.
+        let mut client = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        client
+            .send(request.freeze())
+            .await
+            .expect("send the request");
+        let answer = client.next().await.and_then(Result::ok);
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(30), loop_task)
+            .await
+            .expect("the serve loop ends within 30s")
+            .expect("the serve loop does not panic");
+        handle.shutdown().await;
+        answer
+    }
+
+    /// An `ApiVersions` v0 request is a dozen bytes, and its answer lists every
+    /// api the broker serves, some 400 bytes. With the limit at 64 bytes the
+    /// request is under it and the answer far over.
+    #[tokio::test]
+    async fn a_response_over_the_limit_is_written_and_a_request_over_it_is_refused() {
+        let small_request = request_frame(18, 0, 7, None, None, &[]);
+        assert!(small_request.len() - 4 <= 64);
+        let oversize_request = request_frame(18, 0, 8, Some(&[b'c'; 100]), None, &[]);
+        assert!(oversize_request.len() - 4 > 64);
+
+        let answer = answer_under_limit(64, small_request)
+            .await
+            .expect("a request under the limit is answered");
+        assert!(answer.len() > 64, "the answer is {} bytes", answer.len());
+        assert!(answer[..4] == 7_i32.to_be_bytes());
+
+        assert!(
+            answer_under_limit(64, oversize_request).await.is_none(),
+            "a request over the limit closes the connection"
+        );
     }
 }

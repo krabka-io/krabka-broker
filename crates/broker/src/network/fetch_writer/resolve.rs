@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use crate::network::fetch_writer::{
         build_fetch_plan,
-        test_support::{DEFAULT_MAX_FRAME_BYTES, file_payload, raw_batch},
+        test_support::{file_payload, raw_batch},
     };
 
     /// The Increment-D wire invariant: a `FileRegions` payload through the
@@ -151,21 +151,14 @@ mod tests {
             let mut file_resp = raw_resp.clone();
             file_resp.responses[0].partitions[0].records = Some(file_payload);
 
-            let raw_ops = build_fetch_plan(
-                &raw_resp,
-                version,
-                9,
-                version >= 12,
-                DEFAULT_MAX_FRAME_BYTES,
-                resolve_records_inline,
-            )
-            .unwrap();
+            let raw_ops =
+                build_fetch_plan(&raw_resp, version, 9, version >= 12, resolve_records_inline)
+                    .unwrap();
             let file_ops = build_fetch_plan(
                 &file_resp,
                 version,
                 9,
                 version >= 12,
-                DEFAULT_MAX_FRAME_BYTES,
                 resolve_records_sendfile,
             )
             .unwrap();
