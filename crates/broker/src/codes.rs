@@ -30,6 +30,20 @@ macro_rules! kafka_codes {
     };
 }
 
+/// Declares the constants that carry a wire code Kafka trunk assigns and no
+/// Kafka release has yet, and collects them into `KAFKA_TRUNK_CODES` for the
+/// guard test against the trunk table.
+macro_rules! kafka_trunk_codes {
+    ($( $(#[$meta:meta])* $name:ident = $value:expr; )*) => {
+        $( $(#[$meta])* pub const $name: i16 = $value; )*
+
+        /// Every trunk-only constant above, with the name a guard-test failure
+        /// reports.
+        #[cfg(test)]
+        const KAFKA_TRUNK_CODES: &[(&str, i16)] = &[$( (stringify!($name), $name), )*];
+    };
+}
+
 /// Declares the krabka-private constants and collects them the same way.
 macro_rules! krabka_private_codes {
     ($( $(#[$meta:meta])* $name:ident = $value:expr; )*) => {
@@ -486,13 +500,31 @@ kafka_codes! {
 }
 
 // ---------------------------------------------------------------------------
+// Kafka trunk codes.
+//
+// Kafka trunk assigns these above the 133 the pinned `apache/kafka:4.3.1`
+// image ends at. They serve the trunk-only api keys krabka implements because
+// krabka-protocol vendors their schemas, and a guard test checks them against
+// the trunk `Errors` table recorded in the private `tests` module.
+// ---------------------------------------------------------------------------
+
+kafka_trunk_codes! {
+    /// `STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED` (135, KIP-1331): the
+    /// broker could not store a `StreamsGroupTopologyDescriptionUpdate`.
+    STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED = 135;
+    /// `CONTROLLER_ID_NOT_REGISTERED` (136, KIP-1312): `UnregisterController`
+    /// named a controller id that has no registration.
+    CONTROLLER_ID_NOT_REGISTERED = 136;
+}
+
+// ---------------------------------------------------------------------------
 // krabka-private error codes.
 //
 // The Apache Kafka table in the pinned image ends at 133
-// (`SHARE_SESSION_LIMIT_REACHED`), and Kafka assigns codes upward from 0, so
-// krabka reserves 1000 and above for errors that no Kafka error table names.
-// The gap from 134 to 999 is what keeps the two ranges apart as Kafka adds
-// codes. A broker returns a code in this range only on a krabka-private api
+// (`SHARE_SESSION_LIMIT_REACHED`), Kafka trunk's at 136, and Kafka assigns
+// codes upward from 0, so krabka reserves 1000 and above for errors that no
+// Kafka error table names. The gap below 1000 is what keeps the two ranges
+// apart as Kafka adds codes. A broker returns a code in this range only on a krabka-private api
 // key, which sits at or above `crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR`.
 // A JVM client cannot negotiate such an api key, so it never receives one of
 // these codes.

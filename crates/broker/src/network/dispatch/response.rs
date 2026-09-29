@@ -425,7 +425,9 @@ pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion
         | ApiKey::StreamsGroupDescribe
         | ApiKey::DescribeShareGroupOffsets
         | ApiKey::AlterShareGroupOffsets
-        | ApiKey::DeleteShareGroupOffsets => true,
+        | ApiKey::DeleteShareGroupOffsets
+        | ApiKey::StreamsGroupTopologyDescriptionUpdate
+        | ApiKey::UnregisterController => true,
         // Moved to the front at v1.
         ApiKey::Fetch
         | ApiKey::FindCoordinator

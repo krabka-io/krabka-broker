@@ -156,9 +156,14 @@ pub(crate) mod share_fetch;
 pub(crate) mod streams_group_describe;
 // KIP-1071 streams-group membership / rebalance protocol (api_key 88).
 pub(crate) mod streams_group_heartbeat;
+// KIP-1331 topology description push (api_key 93, Kafka trunk).
+pub(crate) mod streams_group_topology_description_update;
 pub(crate) mod sync_group;
 // KIP-919 admin RPC to permanently drop a broker registration (api_key 64).
 pub(crate) mod unregister_broker;
+// KIP-1312 admin RPC to drop a controller registration (api_key 94, Kafka
+// trunk).
+pub(crate) mod unregister_controller;
 // KIP-584 feature finalization (api_key 57). Intercepted inline in
 // `network::dispatch` so the handler receives the per-connection principal +
 // peer `SocketAddr` for the Cluster:Alter ACL gate.

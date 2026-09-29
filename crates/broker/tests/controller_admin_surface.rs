@@ -75,6 +75,9 @@ use krabka_protocol::{
         sasl_authenticate_response::SaslAuthenticateResponse,
         sasl_handshake_request::SaslHandshakeRequest,
         sasl_handshake_response::SaslHandshakeResponse,
+        unregister_controller_request::UnregisterControllerRequest,
+        unregister_controller_response::UnregisterControllerResponse,
+        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -100,9 +103,13 @@ const INVALID_REPLICATION_FACTOR: i16 = 38;
 /// Read off a live `mirror.gcr.io/apache/kafka:4.3.1` controller with a raw
 /// `ApiVersions` v0 request, and identical to the set the `listeners` tag on
 /// the request schemas in `kafka-clients-4.3.1.jar` marks `controller`.
-const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 41] = [
+///
+/// Kafka trunk adds `UnregisterController` (94, KIP-1312), tagged `broker` and
+/// `controller`. No released image advertises it, and krabka serves it
+/// because krabka-protocol vendors the trunk schema.
+const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 42] = [
     1, 17, 18, 19, 20, 29, 30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 52,
-    53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 67, 70, 73, 80, 81, 82,
+    53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 67, 70, 73, 80, 81, 82, 94,
 ];
 
 /// Start a one-node broker whose controller listener is reachable on its own
@@ -209,6 +216,7 @@ fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
         envelope_request,
         unregister_broker_request,
         assign_replicas_to_dirs_request,
+        unregister_controller_request,
     )
 }
 
@@ -597,6 +605,84 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
                 }],
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
+    );
+    broker.shutdown().await;
+}
+
+/// Kafka trunk's `UnregisterController` (94) over the controller listener: a
+/// registered controller id is dropped from the image, and an unknown one is
+/// `CONTROLLER_ID_NOT_REGISTERED`. The cluster is first moved to trunk's
+/// 4.4-IV2 (33), the level the RPC needs, through `UpdateFeatures` on the
+/// same listener.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_unregister_controller() {
+    const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
+
+    let (broker, _dir) = start_broker().await;
+    broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ControllerRegistration(
+            krabka_metadata::ControllerRegistrationRecord {
+                node_id: NodeId(7),
+                incarnation_id: uuid::Uuid::from_u128(7),
+                zk_migration_ready: false,
+                endpoints: Vec::new(),
+                features: std::collections::BTreeMap::from([(
+                    "metadata.version".to_owned(),
+                    (7, krabka_metadata::metadata_version::METADATA_VERSION_MAX),
+                )]),
+            },
+        ))
+        .await
+        .expect("seed the registration");
+    let connection = dial_controller(&broker).await;
+    let upgraded = connection
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "metadata.version".into(),
+                max_version_level:
+                    krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                upgrade_type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures over the controller listener");
+    check!(upgraded.error_code == 0, "{upgraded:?}");
+
+    let mut answers = Vec::new();
+    for controller_id in [7, 9] {
+        answers.push(
+            connection
+                .send(UnregisterControllerRequest {
+                    controller_id,
+                    ..Default::default()
+                })
+                .await
+                .expect("UnregisterController over the controller listener"),
+        );
+    }
+    connection.close();
+
+    check!(
+        answers
+            == vec![
+                UnregisterControllerResponse {
+                    error_message: Some(String::new()),
+                    ..Default::default()
+                },
+                UnregisterControllerResponse {
+                    error_code: CONTROLLER_ID_NOT_REGISTERED,
+                    error_message: Some("Controller ID 9 is not currently registered.".into()),
+                    ..Default::default()
+                },
+            ]
+    );
+    check!(
+        broker
+            .controller_image_for_test()
+            .controller(NodeId(7))
+            .is_none()
     );
     broker.shutdown().await;
 }

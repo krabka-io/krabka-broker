@@ -40,6 +40,8 @@ fn registry_registers_raw_context_handlers() {
         ApiKey::DescribeTransactions as i16,
         ApiKey::ListTransactions as i16,
         ApiKey::UnregisterBroker as i16,
+        ApiKey::UnregisterController as i16,
+        ApiKey::StreamsGroupTopologyDescriptionUpdate as i16,
         ApiKey::DescribeTopicPartitions as i16,
         ApiKey::ListConfigResources as i16,
         ApiKey::DescribeQuorum as i16,

@@ -1050,6 +1050,28 @@
       },
       "verdict": "same",
       "intent": null
+    },
+    {
+      "api_key": 93,
+      "name": "StreamsGroupTopologyDescriptionUpdate",
+      "krabka": {
+        "min": 0,
+        "max": 0
+      },
+      "kafka": null,
+      "verdict": "krabka_only",
+      "intent": null
+    },
+    {
+      "api_key": 94,
+      "name": "UnregisterController",
+      "krabka": {
+        "min": 0,
+        "max": 0
+      },
+      "kafka": null,
+      "verdict": "krabka_only",
+      "intent": null
     }
   ]
 }
