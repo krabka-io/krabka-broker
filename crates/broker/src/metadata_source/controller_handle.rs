@@ -60,6 +60,13 @@ impl MetadataSource for ControllerHandle {
     fn read_snapshot_range(&self, position: i64, max_bytes: i32) -> SnapshotRange {
         ControllerHandle::read_snapshot_range(self, position, max_bytes)
     }
+    async fn fetch_snapshot(
+        &self,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Option<Result<bytes::Bytes, RaftError>> {
+        Some(ControllerHandle::fetch_snapshot(self, version, body).await)
+    }
     async fn trigger_snapshot(&self) -> Result<(), RaftError> {
         ControllerHandle::trigger_snapshot(self).await
     }
