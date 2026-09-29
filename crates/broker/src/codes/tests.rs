@@ -50,10 +50,37 @@ fn every_kafka_range_constant_appears_in_the_kafka_table() {
     }
 }
 
+/// The codes Kafka trunk adds after the 4.3.1 table ends, as
+/// `org.apache.kafka.common.protocol.Errors` assigns them at trunk
+/// `abf522e1ca5d`: 134 is `GROUP_DELETION_FAILED`, which krabka does not
+/// return, 135 is KIP-1331's and 136 is KIP-1312's.
+const KAFKA_TRUNK_ERROR_TABLE: &[(&str, i16)] = &[
+    ("GROUP_DELETION_FAILED", 134),
+    ("STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED", 135),
+    ("CONTROLLER_ID_NOT_REGISTERED", 136),
+];
+
+#[test]
+fn every_trunk_constant_appears_in_the_trunk_table_and_not_in_the_release() {
+    for (name, code) in KAFKA_TRUNK_CODES {
+        let trunk = KAFKA_TRUNK_ERROR_TABLE
+            .iter()
+            .find(|(trunk_name, _)| trunk_name == name);
+        assert!(trunk == Some(&(*name, *code)), "{name} = {code}");
+        assert!(
+            KAFKA_ERROR_TABLE
+                .iter()
+                .all(|(_, released)| released != code),
+            "{name} is in the release table and belongs with the Kafka-range codes"
+        );
+    }
+}
+
 #[test]
 fn no_two_error_code_constants_collide() {
     let all: Vec<(&str, i16)> = KAFKA_RANGE_CODES
         .iter()
+        .chain(KAFKA_TRUNK_CODES)
         .chain(KRABKA_PRIVATE_CODES)
         .copied()
         .collect();
@@ -74,9 +101,15 @@ fn krabka_private_codes_sit_above_the_whole_kafka_table() {
         .map(|(_, code)| *code)
         .max()
         .expect("the extracted Kafka table is not empty");
+    let highest_trunk = KAFKA_TRUNK_ERROR_TABLE
+        .iter()
+        .map(|(_, code)| *code)
+        .max()
+        .expect("the trunk table is not empty");
     for (name, code) in KRABKA_PRIVATE_CODES {
         assert!(*code >= 1000, "{name}");
         assert!(*code > highest_kafka, "{name}");
+        assert!(*code > highest_trunk, "{name}");
     }
 }
 

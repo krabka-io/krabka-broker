@@ -42,6 +42,11 @@ pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
 pub(crate) const CIDR_ACL_HOST_MIN_LEVEL: i16 =
     krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL;
 
+/// The `metadata.version` level from which the controller serves
+/// `UnregisterController` (KIP-1312): Kafka trunk's `4.4-IV2`,
+/// `MetadataVersion.isControllerUnregistrationSupported`.
+pub(crate) const CONTROLLER_UNREGISTRATION_MIN_LEVEL: i16 = 33;
+
 /// One row of the `ApiVersions.supported_features` advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SupportedFeature {

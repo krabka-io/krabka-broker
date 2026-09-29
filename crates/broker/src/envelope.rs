@@ -78,7 +78,8 @@ impl EnvelopeError {
     }
 }
 
-/// `ApiKeys.forwardable`, read out of `kafka-clients-4.3.1.jar`.
+/// `ApiKeys.forwardable`, read out of `kafka-clients-4.3.1.jar`, plus
+/// `UnregisterController`, which Kafka trunk's `ApiKeys` declares forwardable.
 ///
 /// KIP-590 lets a broker wrap only these api keys, and
 /// `EnvelopeUtils.handleEnvelopeRequest` refuses any other embedded key with
@@ -106,6 +107,7 @@ const FORWARDABLE_API_KEYS: &[ApiKeyCode] = &[
     67, // AllocateProducerIds
     80, // AddRaftVoter
     81, // RemoveRaftVoter
+    94, // UnregisterController (Kafka trunk, KIP-1312)
 ];
 
 /// Whether Kafka wraps `api_key` in an `Envelope` when a broker forwards it.
@@ -777,6 +779,7 @@ mod tests {
     fn the_forwardable_set_is_the_one_kafka_publishes() {
         let want: std::collections::BTreeSet<i16> = maplit::btreeset! {
             19, 20, 30, 31, 33, 37, 38, 39, 40, 43, 44, 45, 46, 49, 51, 55, 57, 64, 67, 80, 81,
+            94,
         };
         let declared: std::collections::BTreeSet<i16> =
             FORWARDABLE_API_KEYS.iter().copied().collect();

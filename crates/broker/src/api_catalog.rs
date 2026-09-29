@@ -1115,6 +1115,19 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1312",
+        claim: "UnregisterController drops a controller registration",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/unregister_controller.rs",
+        tests: &[
+            "crates/broker/src/handlers/unregister_controller/tests.rs::refusals_follow_trunks_order",
+            "crates/broker/src/handlers/unregister_controller/tests.rs::handle_unregisters_a_registered_controller_as_trunk_does",
+            "crates/broker/tests/controller_admin_surface.rs::controller_listener_serves_unregister_controller",
+            "crates/broker/tests/unregister_controller_forward.rs",
+        ],
+        note: "Matches Kafka trunk: no Kafka release has api key 94. The controller listener answers it and a broker listener forwards it in an Envelope, as trunk's `ControllerApis` and `KafkaApis` do. It needs `metadata.version` 4.4-IV2 (level 33), which the pinned krabka-metadata table does not list yet, so until the table grows that level every request below it answers trunk's UNSUPPORTED_VERSION.",
+    },
+    KipAnnotation {
         key: "KIP-1319",
         claim: "Transactions v2 producer-id rotation and verification on Produce",
         status: KipStatus::Implemented,
@@ -1127,7 +1140,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-1331",
-        claim: "Streams topology descriptions: StreamsGroupHeartbeat and StreamsGroupDescribe v1",
+        claim: "Streams topology descriptions: StreamsGroupHeartbeat, StreamsGroupDescribe v1 and StreamsGroupTopologyDescriptionUpdate",
         status: KipStatus::Partial,
         module: "crates/broker/src/coordinator/unified/streams/actor/response.rs",
         tests: &[
@@ -1135,8 +1148,9 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/handlers/streams_group_heartbeat.rs::handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request",
             "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
+            "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_answers_as_a_trunk_broker_without_a_plugin",
         ],
-        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
+        note: "Matches Kafka trunk. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
     },
     KipAnnotation {
         key: "KIP-1357",
@@ -1536,6 +1550,10 @@ fn admin_apis() -> Vec<CatalogApi> {
         // UnregisterBroker (KIP-919) — admin RPC to permanently drop a
         // broker registration from the cluster's metadata image.
         v!(unregister_broker_request),
+        // UnregisterController (KIP-1312, Kafka trunk) — drops a controller
+        // registration. Tagged `broker` and `controller`: a broker listener
+        // forwards it to the active controller.
+        v!(unregister_controller_request),
         v!(alter_user_scram_credentials_request),
         // UpdateFeatures (api_key 57, KIP-584) — `kafka-features` admin tool
         // finalizes broker-supported features through a Raft-persisted path.
@@ -1598,6 +1616,10 @@ fn admin_apis() -> Vec<CatalogApi> {
         // KIP-1071 streams-group rebalance protocol.
         v!(streams_group_heartbeat_request),
         v!(streams_group_describe_request),
+        // KIP-1331 topology description push (Kafka trunk). krabka has no
+        // topology description plugin, so it answers as a trunk broker
+        // without one.
+        v!(streams_group_topology_description_update_request),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
         v!(share_acknowledge_request),
