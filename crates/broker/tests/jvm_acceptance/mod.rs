@@ -51,6 +51,7 @@ mod wait;
 pub(crate) use self::{
     broker::{
         start_host_broker, start_host_broker_in, start_host_broker_jbod, start_host_broker_with,
+        start_legacy_host_broker,
     },
     delegation_tokens::{
         extract_jvm_kv, start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,

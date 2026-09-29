@@ -14,7 +14,7 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE, KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool,
-    nc_check_connectivity, start_host_broker,
+    nc_check_connectivity, start_legacy_host_broker,
 };
 
 /// Test 2: legacy producer, modern consumer.
@@ -29,7 +29,7 @@ use crate::jvm_acceptance::{
 async fn jvm_legacy_010_produce_modern_consume() {
     const TOPIC: &str = "legacy-010-produce-modern-consume";
 
-    let (broker, _dir) = start_host_broker().await;
+    let (broker, _dir) = start_legacy_host_broker().await;
     nc_check_connectivity();
 
     docker_run_kafka_tool(&[
@@ -119,7 +119,7 @@ async fn jvm_legacy_010_produce_modern_consume() {
 async fn jvm_modern_produce_legacy_010_consume() {
     const TOPIC: &str = "modern-produce-legacy-010-consume";
 
-    let (broker, _dir) = start_host_broker().await;
+    let (broker, _dir) = start_legacy_host_broker().await;
     nc_check_connectivity();
 
     docker_run_kafka_tool(&[

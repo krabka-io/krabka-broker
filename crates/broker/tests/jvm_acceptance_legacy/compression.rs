@@ -14,7 +14,7 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool, nc_check_connectivity,
-    start_host_broker,
+    start_legacy_host_broker,
 };
 
 /// Test 4: gzip-compressed legacy round-trip.
@@ -31,7 +31,7 @@ use crate::jvm_acceptance::{
 async fn jvm_legacy_010_compressed_round_trip() {
     const TOPIC: &str = "legacy-010-compressed-round-trip";
 
-    let (broker, _dir) = start_host_broker().await;
+    let (broker, _dir) = start_legacy_host_broker().await;
     nc_check_connectivity();
 
     docker_run_kafka_tool(&[
@@ -141,7 +141,7 @@ async fn jvm_legacy_010_compressed_round_trip() {
 async fn jvm_legacy_010_snappy_round_trip() {
     const TOPIC: &str = "legacy-010-snappy-round-trip";
 
-    let (broker, _dir) = start_host_broker().await;
+    let (broker, _dir) = start_legacy_host_broker().await;
     nc_check_connectivity();
 
     docker_run_kafka_tool(&[

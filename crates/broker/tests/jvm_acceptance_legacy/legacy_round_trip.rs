@@ -14,7 +14,7 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool, nc_check_connectivity,
-    start_host_broker,
+    start_legacy_host_broker,
 };
 
 /// Test 1: pure-legacy round-trip.
@@ -29,7 +29,7 @@ use crate::jvm_acceptance::{
 async fn jvm_legacy_010_round_trip() {
     const TOPIC: &str = "legacy-010-round-trip";
 
-    let (broker, _dir) = start_host_broker().await;
+    let (broker, _dir) = start_legacy_host_broker().await;
     nc_check_connectivity();
 
     // 1. Create the topic via the modern AdminClient. The 0.10.x-era
