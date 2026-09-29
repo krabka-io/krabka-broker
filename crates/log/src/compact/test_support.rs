@@ -2,13 +2,14 @@
 //! builders, and the two configuration constants every rewrite test passes
 //! through.
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use bytes::Bytes;
-use krabka_ids::Offset;
+use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 use krabka_units::prelude::{ByteSize, Time};
 
+use super::{CleaningRound, ProducerLastRecord};
 use crate::segment::Segment;
 
 /// Kafka's default `index.interval.bytes`. The compaction tests do not
@@ -76,5 +77,22 @@ pub(super) fn control_batch(base_offset: i64, producer_id: i64, marker_type: i16
             ..Default::default()
         }],
         ..RecordBatch::default()
+    }
+}
+
+/// The cleaning round a test rewrites `segments` in, over `active_producers`.
+/// The round ends where the last segment does, the way a pass that rewrites
+/// every sealed segment ends at the active segment's base.
+pub(super) fn round_over<'a>(
+    segments: &[&Segment],
+    active_producers: &'a HashMap<ProducerId, ProducerLastRecord>,
+) -> CleaningRound<'a> {
+    CleaningRound {
+        active_producers,
+        upper_bound: segments
+            .last()
+            .expect("a round has a segment")
+            .last_offset()
+            + 1,
     }
 }

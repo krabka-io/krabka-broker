@@ -150,9 +150,10 @@ mod tests {
             .unwrap();
 
         // position_for uses the sparse offset index, whose entries hold each
-        // batch's last offset (14 and 19): offset 15 sits after the first
-        // batch's entry, so the floor is that batch, and offset 19 lands on the
-        // second batch's own entry.
+        // indexed batch's last offset. The first batch takes none (Kafka's
+        // `LogSegment.append` does not index it), so the second batch's, 19, is
+        // the only entry: offsets below it floor to the segment start, and 19
+        // lands on the entry itself.
         let p1 = seg.position_for(Offset(10)).unwrap();
         let p2 = seg.position_for(Offset(15)).unwrap();
         let p3 = seg.position_for(Offset(19)).unwrap();
@@ -161,9 +162,9 @@ mod tests {
         assert2::check!(p3 == pos2);
         assert2::check!(p3 > 0);
 
-        // A read starts at the batch after an indexed batch that ends below
-        // its offset, which is the second batch for offset 15.
-        assert2::check!(seg.read_start_position(5).unwrap() == pos2);
+        // A read below the only entry starts at the segment start, and one for
+        // the entry's own offset starts at its batch.
+        assert2::check!(seg.read_start_position(5).unwrap() == 0);
         assert2::check!(seg.read_start_position(9).unwrap() == pos2);
         assert2::check!(seg.read_start_position(4).unwrap() == 0);
 
@@ -199,5 +200,24 @@ mod tests {
         })
         .unwrap();
         assert2::check!(count == 1);
+    }
+
+    /// A read for an offset past an indexed batch starts at the batch after
+    /// it, so a small byte budget is not spent stepping over the indexed one.
+    #[test]
+    fn a_read_past_an_indexed_batch_starts_at_the_batch_after_it() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
+        seg.append(&sample_batch(10, 5, 1_000), DENSE_INDEX)
+            .unwrap();
+        seg.append(&sample_batch(15, 5, 2_000), DENSE_INDEX)
+            .unwrap();
+        let third = seg.log_size;
+        seg.append(&sample_batch(20, 5, 3_000), DENSE_INDEX)
+            .unwrap();
+
+        // The second batch (ending at relative offset 9) is indexed, and the
+        // read for relative offset 12 is inside the third.
+        assert2::check!(seg.read_start_position(12).unwrap() == third);
     }
 }

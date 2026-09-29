@@ -11,7 +11,8 @@ use super::*;
 use crate::compact::{
     build_offset_map,
     test_support::{
-        RETENTION, control_batch, make_record, write_sealed_batches, write_sealed_segment,
+        RETENTION, control_batch, make_record, round_over, write_sealed_batches,
+        write_sealed_segment,
     },
 };
 
@@ -22,7 +23,7 @@ const NEVER_AGE_NOW_MS: i64 = 0;
 fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
     let map = build_offset_map(segment_refs, vec![]).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
-    let active: HashMap<ProducerId, Offset> = HashMap::new();
+    let active = HashMap::new();
     rewrite_segments(
         &crate::io::FileIo,
         dir,
@@ -33,7 +34,7 @@ fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
             now_ms: NEVER_AGE_NOW_MS,
             delete_retention: RETENTION,
         },
-        &active,
+        round_over(segment_refs, &active),
     )
     .unwrap()
 }
@@ -226,7 +227,7 @@ fn rewrite_tombstone_gets_horizon_stamp() {
             now_ms: now,
             delete_retention: retention,
         },
-        &HashMap::new(),
+        round_over(&segment_refs, &HashMap::new()),
     )
     .unwrap();
     let bytes = fs::read(&out.log_swap).unwrap();
@@ -281,7 +282,7 @@ fn rewrite_marker_dropped_when_data_gone_and_horizon_elapsed() {
             now_ms: 200,
             delete_retention: millis(50),
         },
-        &HashMap::new(),
+        round_over(&segment_refs, &HashMap::new()),
     )
     .unwrap();
     let bytes = fs::read(&out.log_swap).unwrap();
@@ -329,7 +330,14 @@ fn rewrite_retain_empty_for_active_producer() {
     let map = build_offset_map(&segment_refs, vec![]).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
     let mut active = HashMap::new();
-    active.insert(ProducerId(1000), Offset(0)); // pid 1000 active, last batch base 0
+    // pid 1000 is active, and its last data batch ends at offset 0.
+    active.insert(
+        ProducerId(1000),
+        ProducerLastRecord {
+            last_data_offset: Some(Offset(0)),
+            producer_epoch: 7,
+        },
+    );
     let out = rewrite_segments(
         &crate::io::FileIo,
         dir.path(),
@@ -340,7 +348,7 @@ fn rewrite_retain_empty_for_active_producer() {
             now_ms: 0,
             delete_retention: RETENTION,
         },
-        &active,
+        round_over(&segment_refs, &active),
     )
     .unwrap();
     let bytes = fs::read(&out.log_swap).unwrap();
@@ -424,6 +432,158 @@ fn rewrite_retain_empty_extends_last_offset() {
                     producer_id: -1,
                     ..RecordBatch::default()
                 },
+            ]
+    );
+}
+
+/// A one-record batch at `base` from `producer_id` at `producer_epoch`. A
+/// `None` key makes the record one the cleaner always drops.
+fn one_record_batch(
+    base: i64,
+    (producer_id, producer_epoch): (i64, i16),
+    key: Option<&[u8]>,
+) -> RecordBatch {
+    RecordBatch {
+        base_offset: base,
+        last_offset_delta: 0,
+        producer_id,
+        producer_epoch,
+        records: vec![make_record(0, key, Some(b"v"))],
+        ..RecordBatch::default()
+    }
+}
+
+/// Which bare headers `Cleaner.cleanInto` keeps (#1198): a batch emptied by
+/// the pass is written again only when it is its producer's last data batch
+/// (or, for a producer that wrote only transaction markers, a marker of its
+/// current epoch), or when it is the last batch of the whole round. Each case
+/// is `(label, batches, the active producer, the base offsets that survive)`.
+#[test]
+fn retain_empty_follows_kafkas_cleaner_rules() {
+    // A commit marker whose delete horizon has elapsed, so the pass drops its
+    // record, from producer 1000 at epoch 7.
+    let mut marker = control_batch(0, 1000, 1 /* COMMIT */);
+    marker.producer_epoch = 7;
+    marker.base_timestamp = 100;
+    marker.attributes = marker.attributes.with_delete_horizon(true);
+    let kept = |base| one_record_batch(base, (-1, -1), Some(b"k"));
+    let dropped = |base, producer| one_record_batch(base, producer, None);
+    let last = |last_data_offset, producer_epoch| ProducerLastRecord {
+        last_data_offset,
+        producer_epoch,
+    };
+    let cases = [
+        (
+            "the producer's last data batch keeps its header",
+            vec![dropped(0, (1000, 7)), dropped(1, (1000, 7)), kept(2)],
+            Some(last(Some(Offset(1)), 7)),
+            vec![1, 2],
+        ),
+        (
+            "a producer that is not active keeps nothing",
+            vec![dropped(0, (1000, 7)), dropped(1, (1000, 7)), kept(2)],
+            None,
+            vec![2],
+        ),
+        (
+            "a marker of the current epoch keeps a marker-only producer alive",
+            vec![marker.clone(), kept(1)],
+            Some(last(None, 7)),
+            vec![0, 1],
+        ),
+        (
+            "a marker of another epoch does not",
+            vec![marker.clone(), kept(1)],
+            Some(last(None, 8)),
+            vec![1],
+        ),
+        (
+            "a data batch of a marker-only producer does not",
+            vec![dropped(0, (1000, 7)), kept(1)],
+            Some(last(None, 7)),
+            vec![1],
+        ),
+        (
+            "only the last batch of the round is kept empty",
+            vec![kept(0), dropped(1, (-1, -1)), dropped(2, (-1, -1))],
+            None,
+            vec![0, 2],
+        ),
+    ];
+    for (label, batches, active, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = write_sealed_batches(dir.path(), &batches);
+        let segment_refs = vec![&seg];
+        let map = build_offset_map(&segment_refs, vec![]).unwrap();
+        let active: HashMap<_, _> = active
+            .into_iter()
+            .map(|last| (ProducerId(1000), last))
+            .collect();
+
+        let out = rewrite_segments(
+            &crate::io::FileIo,
+            dir.path(),
+            &segment_refs,
+            &map,
+            &mut CleanedTransactionMetadata::default(),
+            RewriteRetention {
+                now_ms: 200,
+                delete_retention: millis(50),
+            },
+            round_over(&segment_refs, &active),
+        )
+        .unwrap();
+
+        let survivors: Vec<i64> = decode_all(&fs::read(&out.log_swap).unwrap())
+            .iter()
+            .map(|batch| batch.base_offset)
+            .collect();
+        assert2::assert!(survivors == expected, "{label}");
+    }
+}
+
+/// A round that rewrites several size-bounded groups keeps only the last
+/// batch of the round when it is empty, not the last batch of every group:
+/// Kafka's `batch.nextOffset() == upperBoundOffsetOfCleaningRound`.
+#[test]
+fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = write_sealed_batches(dir.path(), &[one_record_batch(0, (-1, -1), None)]);
+    let second = write_sealed_batches(dir.path(), &[one_record_batch(1, (-1, -1), None)]);
+    let map = build_offset_map(&[&first, &second], vec![]).unwrap();
+    let active = HashMap::new();
+    let round = CleaningRound {
+        active_producers: &active,
+        upper_bound: Offset(2),
+    };
+    let mut txn = CleanedTransactionMetadata::default();
+
+    let outputs = [&first, &second].map(|segment| {
+        let out = rewrite_segments(
+            &crate::io::FileIo,
+            dir.path(),
+            &[segment],
+            &map,
+            &mut txn,
+            RewriteRetention {
+                now_ms: NEVER_AGE_NOW_MS,
+                delete_retention: RETENTION,
+            },
+            round,
+        )
+        .unwrap();
+        decode_all(&fs::read(&out.log_swap).unwrap())
+    });
+
+    assert2::assert!(
+        outputs
+            == [
+                vec![],
+                vec![RecordBatch {
+                    base_offset: 1,
+                    last_offset_delta: 0,
+                    ..RecordBatch::default()
+                }]
             ]
     );
 }

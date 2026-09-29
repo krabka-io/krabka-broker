@@ -9,13 +9,13 @@ use krabka_protocol::records::{Attributes, RecordBatch};
 use krabka_units::prelude::millis;
 
 use super::{
-    CleanedTransactionMetadata, RewriteOutput, RewriteRetention, Segment, rewrite_segments,
-    tests::decode_all,
+    CleanedTransactionMetadata, ProducerLastRecord, RewriteOutput, RewriteRetention, Segment,
+    rewrite_segments, tests::decode_all,
 };
 use crate::{
     compact::{
         build_offset_map,
-        test_support::{RETENTION, control_batch, make_record, write_sealed_batches},
+        test_support::{RETENTION, control_batch, make_record, round_over, write_sealed_batches},
     },
     txn_index::{AbortedTxn, TxnIndex},
 };
@@ -51,7 +51,7 @@ fn rewrite_at(
     segment_refs: &[&Segment],
     txn: &mut CleanedTransactionMetadata,
     now_ms: i64,
-    active: &HashMap<ProducerId, Offset>,
+    active: &HashMap<ProducerId, ProducerLastRecord>,
 ) -> RewriteOutput {
     let map = build_offset_map(segment_refs, vec![]).unwrap();
     rewrite_segments(
@@ -64,7 +64,7 @@ fn rewrite_at(
             now_ms,
             delete_retention: millis(50),
         },
-        active,
+        round_over(segment_refs, active),
     )
     .unwrap()
 }
@@ -110,7 +110,7 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
             now_ms: 0,
             delete_retention: RETENTION,
         },
-        &HashMap::new(),
+        round_over(&segment_refs, &HashMap::new()),
     )
     .unwrap();
 

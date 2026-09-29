@@ -32,7 +32,9 @@ pub(crate) use self::decision::{
 };
 pub use self::{
     offset_map::build_offset_map,
-    rewrite::{RewriteOutput, RewriteRetention, rewrite_segments},
+    rewrite::{
+        CleaningRound, ProducerLastRecord, RewriteOutput, RewriteRetention, rewrite_segments,
+    },
     swap::atomic_swap,
     txn_metadata::CleanedTransactionMetadata,
 };

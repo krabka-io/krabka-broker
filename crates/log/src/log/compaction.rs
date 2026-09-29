@@ -13,7 +13,9 @@ use krabka_units::prelude::{
 use tracing::instrument;
 
 use super::Log;
-use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
+use crate::{
+    compact::ProducerLastRecord, error::LogError, retention, segment::Segment, txn_index::TxnIndex,
+};
 
 /// Inputs to one [`Log::compact`] pass that depend on broker-side state.
 ///
@@ -21,10 +23,12 @@ use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
 /// the last stable offset that bounds what a pass may rewrite, and the set of
 /// producers that count as active.
 ///
-/// `active_producers` maps `producer_id` to the `base_offset` of that
-/// producer's last batch. When compaction removes every record of that batch,
-/// the cleaner writes a bare batch header (`RETAIN_EMPTY`) again, so the
-/// producer's sequence and epoch state and the log-end offset survive.
+/// `active_producers` maps `producer_id` to that producer's last record, as
+/// Kafka's `UnifiedLog.lastRecordsOfActiveProducers` reads it from the
+/// producer state. When compaction removes every record of the producer's last
+/// data batch, or of a marker that is its last record, the cleaner writes a
+/// bare batch header (`RETAIN_EMPTY`) again, so the producer's sequence and
+/// epoch state survive.
 #[derive(Debug, Clone)]
 pub struct CompactionContext {
     /// Wall clock for this pass. It drives delete-horizon stamps and expiry.
@@ -44,9 +48,8 @@ pub struct CompactionContext {
     /// `read_committed` consumer could then see a record from a transaction
     /// that later aborts.
     pub last_stable_offset: Offset,
-    /// `producer_id` → last batch `base_offset` for currently-active
-    /// producers.
-    pub active_producers: std::collections::HashMap<ProducerId, Offset>,
+    /// `producer_id` → last record for currently-active producers.
+    pub active_producers: std::collections::HashMap<ProducerId, ProducerLastRecord>,
 }
 
 /// What a partition looks like to the broker's cleaner before it decides
@@ -336,9 +339,9 @@ impl Log {
     ///
     /// `ctx` carries the wall clock, which drives the KIP-534 delete-horizon
     /// computation, the last stable offset, and the set of currently-active
-    /// producers. The cleaner
-    /// keeps the last batch of each active producer with `RETAIN_EMPTY`, even
-    /// when compaction removes all of its records.
+    /// producers. The cleaner keeps each active producer's last data batch
+    /// with `RETAIN_EMPTY`, and the last batch of the pass, even when
+    /// compaction removes all of their records.
     #[instrument(
         level = "info",
         skip_all,
@@ -429,7 +432,12 @@ impl Log {
                         now_ms,
                         delete_retention,
                     },
-                    &ctx.active_producers,
+                    crate::compact::CleaningRound {
+                        active_producers: &ctx.active_producers,
+                        // The round rewrites the offset map's whole range, so
+                        // it ends where the last consumed segment does.
+                        upper_bound: consumed_end,
+                    },
                 )?;
                 rewrites.push((group_bases, rewrite));
                 start += group_len;

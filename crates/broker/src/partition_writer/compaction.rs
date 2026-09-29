@@ -25,12 +25,12 @@ async fn active_producers_for_compaction(
     partition: PartitionIndex,
     now_ms: i64,
     producer_id_expiration: Time,
-) -> std::collections::HashMap<krabka_log::ProducerId, Offset> {
+) -> std::collections::HashMap<krabka_log::ProducerId, krabka_log::ProducerLastRecord> {
     producer_state
         .active_snapshot(topic, partition, now_ms, producer_id_expiration)
         .await
         .into_iter()
-        .map(|(producer_id, offset)| (krabka_log::ProducerId(producer_id), Offset(offset)))
+        .map(|(producer_id, last)| (krabka_log::ProducerId(producer_id), last))
         .collect()
 }
 
@@ -112,9 +112,15 @@ mod tests {
         assert!(expired.is_empty());
         assert!(
             active
-                == [(krabka_log::ProducerId(7), Offset(12))]
-                    .into_iter()
-                    .collect()
+                == [(
+                    krabka_log::ProducerId(7),
+                    krabka_log::ProducerLastRecord {
+                        last_data_offset: Some(Offset(12)),
+                        producer_epoch: 0,
+                    },
+                )]
+                .into_iter()
+                .collect()
         );
     }
 }

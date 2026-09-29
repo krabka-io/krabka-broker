@@ -111,6 +111,7 @@ mod stamp_source;
 pub mod topic_name;
 mod txn_index;
 
+pub use compact::ProducerLastRecord;
 pub use config::{
     CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DeliveryPolicy, LogConfig, RemoteTierFlags,
     ScheduleOrder,
