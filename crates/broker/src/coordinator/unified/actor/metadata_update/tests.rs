@@ -1,7 +1,7 @@
 //! Tests for the metadata refresh that a metadata update asks of a consumer
 //! group, through the group actor's mailbox.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
@@ -38,7 +38,7 @@ async fn heartbeat(
             request,
             client_id: "client".into(),
             client_host: "host".into(),
-            regex_authorized_topics: HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply,
         })
         .await
@@ -286,9 +286,9 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
     let coordinator = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             migration_policy: ConsumerGroupMigrationPolicy::Upgrade,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        ShareGroupConfig::default(),
+        ShareGroupConfig::assigning_at_once(),
         metadata.clone(),
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),

@@ -39,7 +39,7 @@ async fn actor_exits_on_append_error() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await;
@@ -84,7 +84,7 @@ async fn run_until_the_ticker_dies(timer: Arc<dyn Timer>) -> CoordinatorGroup {
     let (coordinator, log) = make_coordinator();
     let config = Arc::new(NextGenConfig {
         timer,
-        ..NextGenConfig::default()
+        ..NextGenConfig::assigning_at_once()
     });
     let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
     let group = tokio::time::timeout(

@@ -1,6 +1,6 @@
 //! Static broker config for the KIP-848 next-gen consumer group protocol.
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::BTreeMap, str::FromStr, sync::Arc, time::Duration};
 
 use qubit_clock::Timer;
 
@@ -68,6 +68,16 @@ pub struct NextGenConfig {
     pub rebalance_protocols: Vec<RebalanceProtocol>,
     pub session_timeout: Duration,
     pub heartbeat_interval: Duration,
+    /// Kafka's `group.consumer.assignment.interval.ms`: the least time between
+    /// two target assignments of a group. Zero does not wait.
+    pub assignment_interval: Duration,
+    /// Kafka's `group.consumer.regex.refresh.interval.ms`: how long a resolution
+    /// of a subscribed regular expression stands before a heartbeat resolves it
+    /// again.
+    pub regex_refresh_interval: Duration,
+    /// Kafka's `REGEX_BATCH_REFRESH_MIN_INTERVAL_MS`: the least time between
+    /// two resolutions of the regular expressions of a group.
+    pub regex_refresh_min_interval: Duration,
     pub min_session_timeout: Duration,
     pub max_session_timeout: Duration,
     pub min_heartbeat_interval: Duration,
@@ -110,6 +120,12 @@ impl std::fmt::Debug for NextGenConfig {
             .field("rebalance_protocols", &self.rebalance_protocols)
             .field("session_timeout", &self.session_timeout)
             .field("heartbeat_interval", &self.heartbeat_interval)
+            .field("assignment_interval", &self.assignment_interval)
+            .field("regex_refresh_interval", &self.regex_refresh_interval)
+            .field(
+                "regex_refresh_min_interval",
+                &self.regex_refresh_min_interval,
+            )
             .field("min_session_timeout", &self.min_session_timeout)
             .field("max_session_timeout", &self.max_session_timeout)
             .field("min_heartbeat_interval", &self.min_heartbeat_interval)
@@ -161,6 +177,32 @@ pub const DEFAULT_SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 /// `group.consumer.heartbeat.interval.ms`.
 pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Default interval between two target assignments of a group: 1 s, matching
+/// Kafka's `group.consumer.assignment.interval.ms` and
+/// `group.share.assignment.interval.ms`.
+pub const DEFAULT_ASSIGNMENT_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Default time a resolution of a subscribed regular expression stands: 10
+/// minutes, matching Kafka's `group.consumer.regex.refresh.interval.ms`.
+pub const DEFAULT_REGEX_REFRESH_INTERVAL: Duration = Duration::from_mins(10);
+
+/// Default least time between two resolutions of the regular expressions of a
+/// group: 10 s, matching Kafka's `REGEX_BATCH_REFRESH_MIN_INTERVAL_MS`.
+pub const DEFAULT_REGEX_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The millisecond value of the group config `key` in `overrides`, the
+/// group's stored override map, or `None` when the group has no override for
+/// it. Kafka's `GroupConfig` parses the stored value as an `INT`, and the
+/// config RPCs validate it before they store it, so a value that does not
+/// parse as a whole number of milliseconds is ignored.
+pub(crate) fn group_millis(
+    overrides: Option<&BTreeMap<String, String>>,
+    key: &str,
+) -> Option<Duration> {
+    let millis = overrides?.get(key)?.trim().parse::<i32>().ok()?;
+    u64::try_from(millis).ok().map(Duration::from_millis)
+}
+
 /// Lower bound on the negotiated session timeout: 45 s, matching Kafka's
 /// `group.consumer.min.session.timeout.ms`.
 pub const DEFAULT_MIN_SESSION_TIMEOUT: Duration = Duration::from_secs(45);
@@ -200,6 +242,9 @@ impl Default for NextGenConfig {
             rebalance_protocols: vec![RebalanceProtocol::Classic, RebalanceProtocol::Consumer],
             session_timeout: DEFAULT_SESSION_TIMEOUT,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            assignment_interval: DEFAULT_ASSIGNMENT_INTERVAL,
+            regex_refresh_interval: DEFAULT_REGEX_REFRESH_INTERVAL,
+            regex_refresh_min_interval: DEFAULT_REGEX_REFRESH_MIN_INTERVAL,
             min_session_timeout: DEFAULT_MIN_SESSION_TIMEOUT,
             max_session_timeout: DEFAULT_MAX_SESSION_TIMEOUT,
             min_heartbeat_interval: DEFAULT_MIN_HEARTBEAT_INTERVAL,
@@ -256,7 +301,47 @@ impl NextGenConfig {
     pub fn assignor_enabled(&self, name: &str) -> bool {
         self.find_assignor(name).is_some()
     }
+
+    /// The defaults with no assignment interval, for the tests that expect
+    /// each membership change to be assigned at once.
+    #[cfg(test)]
+    pub(crate) fn assigning_at_once() -> Self {
+        Self {
+            assignment_interval: Duration::ZERO,
+            ..Self::default()
+        }
+    }
+
+    /// The settings a consumer group runs with: each `consumer.*` override in
+    /// the group's stored config over the broker value.
+    ///
+    /// This is Kafka's `GroupMetadataManager.consumerGroupSessionTimeoutMs`,
+    /// `consumerGroupHeartbeatIntervalMs` and
+    /// `consumerGroupAssignmentIntervalMs`: `GroupConfigManager.groupConfig`
+    /// over `GroupCoordinatorConfig`. A group with no override borrows the
+    /// broker value.
+    #[must_use]
+    pub(crate) fn for_group(&self, overrides: Option<&BTreeMap<String, String>>) -> Cow<'_, Self> {
+        let session = group_millis(overrides, KEY_CONSUMER_SESSION_TIMEOUT_MS);
+        let heartbeat = group_millis(overrides, KEY_CONSUMER_HEARTBEAT_INTERVAL_MS);
+        let assignment = group_millis(overrides, KEY_CONSUMER_ASSIGNMENT_INTERVAL_MS);
+        if session.is_none() && heartbeat.is_none() && assignment.is_none() {
+            return Cow::Borrowed(self);
+        }
+        let mut config = self.clone();
+        config.session_timeout = session.unwrap_or(config.session_timeout);
+        config.heartbeat_interval = heartbeat.unwrap_or(config.heartbeat_interval);
+        config.assignment_interval = assignment.unwrap_or(config.assignment_interval);
+        Cow::Owned(config)
+    }
 }
+
+/// Kafka's `GroupConfig.CONSUMER_SESSION_TIMEOUT_MS_CONFIG`.
+const KEY_CONSUMER_SESSION_TIMEOUT_MS: &str = "consumer.session.timeout.ms";
+/// Kafka's `GroupConfig.CONSUMER_HEARTBEAT_INTERVAL_MS_CONFIG`.
+const KEY_CONSUMER_HEARTBEAT_INTERVAL_MS: &str = "consumer.heartbeat.interval.ms";
+/// Kafka's `GroupConfig.CONSUMER_ASSIGNMENT_INTERVAL_MS_CONFIG`.
+const KEY_CONSUMER_ASSIGNMENT_INTERVAL_MS: &str = "consumer.assignment.interval.ms";
 
 #[cfg(test)]
 mod tests {
@@ -375,6 +460,78 @@ mod tests {
                 "policy {policy:?}"
             );
         }
+    }
+
+    /// Kafka's `consumerGroupSessionTimeoutMs`,
+    /// `consumerGroupHeartbeatIntervalMs` and
+    /// `consumerGroupAssignmentIntervalMs`: a `consumer.*` override replaces
+    /// the broker value; another coordinator's key, and a value that does not
+    /// parse, leave it.
+    #[test]
+    fn for_group_applies_each_consumer_override() {
+        // (overrides, session timeout, heartbeat interval, assignment interval)
+        type Row<'a> = (&'a [(&'a str, &'a str)], Duration, Duration, Duration);
+        let broker = NextGenConfig::default();
+        let rows: [Row<'_>; 6] = [
+            (
+                &[],
+                DEFAULT_SESSION_TIMEOUT,
+                DEFAULT_HEARTBEAT_INTERVAL,
+                DEFAULT_ASSIGNMENT_INTERVAL,
+            ),
+            (
+                &[("consumer.session.timeout.ms", "50000")],
+                Duration::from_secs(50),
+                DEFAULT_HEARTBEAT_INTERVAL,
+                DEFAULT_ASSIGNMENT_INTERVAL,
+            ),
+            (
+                &[("consumer.heartbeat.interval.ms", "7000")],
+                DEFAULT_SESSION_TIMEOUT,
+                Duration::from_secs(7),
+                DEFAULT_ASSIGNMENT_INTERVAL,
+            ),
+            (
+                &[("consumer.assignment.interval.ms", "0")],
+                DEFAULT_SESSION_TIMEOUT,
+                DEFAULT_HEARTBEAT_INTERVAL,
+                Duration::ZERO,
+            ),
+            (
+                &[
+                    ("share.session.timeout.ms", "50000"),
+                    ("streams.heartbeat.interval.ms", "7000"),
+                ],
+                DEFAULT_SESSION_TIMEOUT,
+                DEFAULT_HEARTBEAT_INTERVAL,
+                DEFAULT_ASSIGNMENT_INTERVAL,
+            ),
+            (
+                &[
+                    ("consumer.session.timeout.ms", "soon"),
+                    ("consumer.heartbeat.interval.ms", "-1"),
+                ],
+                DEFAULT_SESSION_TIMEOUT,
+                DEFAULT_HEARTBEAT_INTERVAL,
+                DEFAULT_ASSIGNMENT_INTERVAL,
+            ),
+        ];
+        for (entries, session, heartbeat, assignment) in rows {
+            let overrides: BTreeMap<String, String> = entries
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect();
+            let group = broker.for_group(Some(&overrides));
+            assert!(
+                (
+                    group.session_timeout,
+                    group.heartbeat_interval,
+                    group.assignment_interval
+                ) == (session, heartbeat, assignment),
+                "{entries:?}"
+            );
+        }
+        assert!(matches!(broker.for_group(None), Cow::Borrowed(_)));
     }
 
     #[test]

@@ -42,8 +42,8 @@ pub(crate) fn make_coord_with_log() -> (
     let metadata: Arc<dyn MetadataProvider> = Arc::new(ImageMetadatalessProvider);
     let offsets_log = Arc::new(InMemoryOffsetsLog::default());
     let coord = Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
+        NextGenConfig::assigning_at_once(),
+        ShareGroupConfig::assigning_at_once(),
         metadata,
         offsets_log.clone(),
         StreamsGroupConfig::default(),
@@ -101,8 +101,8 @@ pub(crate) fn make_coord_with_metadata(
     metadata: Arc<dyn MetadataProvider>,
 ) -> Arc<GroupCoordinator> {
     Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
+        NextGenConfig::assigning_at_once(),
+        ShareGroupConfig::assigning_at_once(),
         metadata,
         Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),

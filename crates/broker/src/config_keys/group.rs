@@ -9,12 +9,15 @@
 //!
 //! An alter accepts and validates every key the broker serves, as Kafka's
 //! `ControllerConfigurationValidator` does: it has no filter for the keys a
-//! coordinator applies. krabka's streams coordinator applies the `streams.*`
-//! keys it runs with, its share partitions apply `share.auto.offset.reset`,
-//! four other `share.*` keys and, at `share.version` 2, the two
-//! `errors.deadletterqueue.*` keys, and the rest are stored and reported, and
-//! not applied yet (see `docs/KIP_MATRIX.md`). Each coordinator reads the keys
-//! it applies out of the group's stored override map and ignores the others.
+//! coordinator applies. Each coordinator reads the keys it applies out of the
+//! group's stored override map, over the broker's value, and ignores the
+//! others: the consumer coordinator applies the three `consumer.*` keys, the
+//! share coordinator the `share.*` session, heartbeat and assignment-interval
+//! keys, its share partitions the other `share.*` keys, and the streams
+//! coordinator the `streams.*` keys. At `share.version` 2 the share
+//! partitions also apply the two `errors.deadletterqueue.*` keys (KIP-1191).
+//! The assignor offload keys are stored and reported, and not applied
+//! (`NOT_APPLIED`, and `docs/KIP_MATRIX.md`).
 
 use std::collections::BTreeMap;
 
@@ -254,30 +257,24 @@ pub(crate) fn kafka_group_key(
     served_group_keys(unstable).find(|key| key.name == name)
 }
 
-/// The group keys krabka's coordinators apply and that carry no registry row
-/// of their own: `GroupShareSettings` reads these `share.*` keys, the share
-/// dead-letter queue (KIP-1191) reads the two `errors.deadletterqueue.*`
-/// keys, and the streams coordinator reads the two `streams.*` keys of Kafka's
-/// `GroupConfig` that the registry does not describe.
-const APPLIED_WITHOUT_ROW: &[&str] = &[
-    "errors.deadletterqueue.copy.record.enable",
-    "errors.deadletterqueue.topic.name",
-    "share.delivery.count.limit",
-    "share.isolation.level",
-    "share.partition.max.record.locks",
-    "share.record.lock.duration.ms",
-    "share.renew.acknowledge.enable",
-    "streams.assignment.interval.ms",
-    "streams.initial.rebalance.delay.ms",
+/// The group keys krabka's coordinators accept and store and do not apply:
+/// the assignor offload keys, because krabka runs its assignors in the group's
+/// own actor. Every other key of Kafka's `GroupConfig` is applied by the
+/// coordinator of its protocol; the two `errors.deadletterqueue.*` keys act
+/// once `share.version` is 2.
+const NOT_APPLIED: &[&str] = &[
+    "consumer.assignor.offload.enable",
+    "share.assignor.offload.enable",
+    "streams.assignor.offload.enable",
 ];
 
 /// A registry-shaped row for a Kafka group key that has none of its own,
 /// which `DescribeConfigs` reports typed and disclosed, at the broker's value.
 pub(crate) fn group_row(key: &GroupKey) -> super::registry::ConfigKey {
-    let doc = if APPLIED_WITHOUT_ROW.contains(&key.name) {
-        "A Kafka group config, stored per group and applied by this broker."
-    } else {
+    let doc = if NOT_APPLIED.contains(&key.name) {
         "A Kafka group config this broker accepts, stores and reports, and does not apply yet."
+    } else {
+        "A Kafka group config, stored per group and applied by this broker."
     };
     super::registry::ConfigKey {
         name: key.name,

@@ -18,6 +18,7 @@ pub mod offsets_log;
 pub(crate) mod persistence;
 pub mod persistence_next_gen;
 pub mod reconciler;
+pub mod regex_resolver;
 pub mod share;
 pub mod streams;
 

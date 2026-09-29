@@ -14,7 +14,7 @@ use std::{
 
 use krabka_protocol::primitives::uuid::Uuid;
 
-use super::{TargetAssignment, member::MemberState};
+use super::{TargetAssignment, member::MemberState, regex::ResolvedRegularExpression};
 use crate::{
     codes,
     coordinator::unified::{
@@ -42,12 +42,10 @@ pub struct GroupState {
     /// Kafka's `scheduleConsumerGroupRebalanceTimeout` keeps the same deadline
     /// in a timer.
     rebalance_deadlines: HashMap<String, Instant>,
-    /// Members replay restored with a `subscribed_topic_regex` that no
-    /// heartbeat has resolved since. Kafka persists a regex's resolved topics
-    /// (`ConsumerGroupRegularExpression`) and replays them; krabka does not,
-    /// so until the member's next heartbeat carrying the pattern the group
-    /// cannot tell which topics the regex subscribes it to.
-    unresolved_regex_members: HashSet<String>,
+    /// Kafka's `ConsumerGroup.resolvedRegularExpressions`: the topics that
+    /// each regex the members subscribe to resolved to, persisted as
+    /// `ConsumerGroupRegularExpression` records. See `regex`.
+    pub(super) resolved_regexes: HashMap<String, ResolvedRegularExpression>,
     /// Kafka's `ModernGroup.metadataHash`: the hash of the subscribed topics'
     /// metadata that the current target assignment was computed from. See
     /// `reconciler::metadata_hash`.
@@ -56,6 +54,10 @@ pub struct GroupState {
     /// `DeadlineAndEpoch.EMPTY`: a subscribed topic changed, so the next
     /// heartbeat computes the metadata hash again.
     metadata_refresh_requested: bool,
+    /// Kafka's `ConsumerGroup.assignmentTimestamp`: when the last target
+    /// assignment calculation finished, or `None` when there is no previous
+    /// assignment or its time is unknown, as after a replay.
+    assignment_timestamp: Option<Instant>,
 }
 
 impl GroupState {
@@ -68,10 +70,32 @@ impl GroupState {
             target: TargetAssignment::default(),
             dirty: false,
             rebalance_deadlines: HashMap::new(),
-            unresolved_regex_members: HashSet::new(),
+            resolved_regexes: HashMap::new(),
             metadata_hash: 0,
             metadata_refresh_requested: false,
+            assignment_timestamp: None,
         }
+    }
+
+    /// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`, negated:
+    /// `true` while the assignment `interval` holds the next target
+    /// assignment back at `now`.
+    ///
+    /// The next assignment computes at once when there is no previous one or
+    /// its time is unknown, and when the interval is zero, which is Kafka's
+    /// escape hatch for a wall clock that stepped back. Otherwise it waits
+    /// until the interval has elapsed since the last one.
+    #[must_use]
+    pub(crate) fn assignment_delayed(&self, interval: Duration, now: Instant) -> bool {
+        !interval.is_zero()
+            && self
+                .assignment_timestamp
+                .is_some_and(|computed| now < computed + interval)
+    }
+
+    /// Records that a target assignment calculation finished at `now`.
+    pub(crate) fn record_assignment(&mut self, now: Instant) {
+        self.assignment_timestamp = Some(now);
     }
 
     pub fn bump_epoch(&mut self) -> bool {
@@ -158,12 +182,7 @@ impl GroupState {
         if accepted { Ok(()) } else { Err(refused) }
     }
 
-    pub fn add_or_update_member(&mut self, mut m: MemberState) {
-        // Ensure the cached compiled regex matches the pattern the caller
-        // supplied. Construction sites set `subscribed_topic_regex` via a
-        // struct literal and leave `compiled_regex` as `None`; recompile once
-        // here so the reconciler never has to.
-        m.sync_regex_cache();
+    pub fn add_or_update_member(&mut self, m: MemberState) {
         if let Some(iid) = m.instance_id.clone() {
             self.instance_to_member.insert(iid, m.member_id.clone());
         }
@@ -185,7 +204,6 @@ impl GroupState {
 
     pub fn remove_member(&mut self, member_id: &str) -> Option<MemberState> {
         self.rebalance_deadlines.remove(member_id);
-        self.unresolved_regex_members.remove(member_id);
         let m = self.members.remove(member_id)?;
         if let Some(ref iid) = m.instance_id
             && self.instance_to_member.get(iid).map(String::as_str) == Some(member_id)
@@ -196,42 +214,18 @@ impl GroupState {
         Some(m)
     }
 
-    /// Record that replay restored `member_id` with a regex it has not
-    /// resolved yet.
-    pub(crate) fn mark_regex_unresolved(&mut self, member_id: &str) {
-        self.unresolved_regex_members.insert(member_id.to_owned());
-    }
-
-    /// Record that a heartbeat resolved `member_id`'s regex subscription, or
-    /// that the member no longer has one.
-    pub(crate) fn mark_regex_resolved(&mut self, member_id: &str) {
-        self.unresolved_regex_members.remove(member_id);
-    }
-
-    /// `true` when a member still carries a regex that replay restored and no
-    /// heartbeat has resolved since, so its subscribed topics are unknown.
-    pub(crate) fn has_unresolved_regex(&self) -> bool {
-        self.unresolved_regex_members.iter().any(|member_id| {
-            self.members
-                .get(member_id)
-                .is_some_and(|member| member.subscribed_topic_regex.is_some())
-        })
-    }
-
     /// `true` when a member subscribes to one of `topics`, by name or through
     /// a regex that resolved to it. This is Kafka's
     /// `GroupMetadataManager.groupsSubscribedToTopic`, asked about this group.
     ///
-    /// A regex resolves to the topics that the member's last heartbeat found
-    /// matching and authorized, `MemberState::regex_authorized_topics`. A new
-    /// topic that a regex matches is not resolved yet. The member's next
+    /// A new topic that a regex matches is not resolved yet. The next
     /// heartbeat resolves it, as Kafka's regex refresh does.
     #[must_use]
     pub fn subscribes_to_any(&self, topics: &[String]) -> bool {
         self.members.values().any(|member| {
             topics.iter().any(|topic| {
                 member.subscribed_topic_names.contains(topic)
-                    || member.regex_authorized_topics.contains(topic)
+                    || self.regex_topics(member).any(|resolved| resolved == topic)
             })
         })
     }
@@ -881,6 +875,33 @@ mod tests {
         g.dirty = false;
         g.remove_member("m1");
         assert!(g.dirty);
+    }
+
+    /// Kafka's `canComputeNextTargetAssignment`: no previous assignment, or a
+    /// zero interval, never waits; otherwise the next assignment waits until
+    /// the interval has elapsed since the last one.
+    #[test]
+    fn the_assignment_interval_holds_the_next_assignment_back() {
+        let assigned_at = Instant::now();
+        let second = Duration::from_secs(1);
+        // (last assignment recorded, interval, time since it, delayed)
+        let rows = [
+            (false, second, Duration::ZERO, false),
+            (true, Duration::ZERO, Duration::ZERO, false),
+            (true, second, Duration::from_millis(999), true),
+            (true, second, second, false),
+            (true, second, Duration::from_mins(1), false),
+        ];
+        for (recorded, interval, since, delayed) in rows {
+            let mut g = GroupState::new("g");
+            if recorded {
+                g.record_assignment(assigned_at);
+            }
+            assert!(
+                g.assignment_delayed(interval, assigned_at + since) == delayed,
+                "{recorded} {interval:?} {since:?}"
+            );
+        }
     }
 
     #[test]

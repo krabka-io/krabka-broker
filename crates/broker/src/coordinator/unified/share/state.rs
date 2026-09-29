@@ -104,6 +104,10 @@ pub struct ShareGroupState {
     ///
     /// [`UNKNOWN_TOPIC_NAME`]: super::persistence::UNKNOWN_TOPIC_NAME
     pub topic_names: HashMap<Uuid, String>,
+    /// Kafka's `ShareGroup.assignmentTimestamp`: when the last target
+    /// assignment calculation finished, or `None` when there is no previous
+    /// assignment or its time is unknown, as after a replay.
+    assignment_timestamp: Option<Instant>,
 }
 
 impl ShareGroupState {
@@ -121,7 +125,24 @@ impl ShareGroupState {
             initializing: HashMap::new(),
             subscribed_metadata: None,
             topic_names: HashMap::new(),
+            assignment_timestamp: None,
         }
+    }
+
+    /// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`, negated:
+    /// `true` while the assignment `interval` holds the next target
+    /// assignment back at `now`.
+    ///
+    /// The next assignment computes at once when there is no previous one or
+    /// its time is unknown, and when the interval is zero, which is Kafka's
+    /// escape hatch for a wall clock that stepped back. Otherwise it waits
+    /// until the interval has elapsed since the last one.
+    #[must_use]
+    pub(crate) fn assignment_delayed(&self, interval: Duration, now: Instant) -> bool {
+        !interval.is_zero()
+            && self
+                .assignment_timestamp
+                .is_some_and(|computed| now < computed + interval)
     }
 
     /// Records that the persister initialized `tp`, as Kafka's
@@ -217,21 +238,27 @@ impl ShareGroupState {
     }
 
     /// Install a freshly computed target assignment stamped with the current
-    /// group epoch.
+    /// group epoch, and record when the calculation finished.
     pub fn install_target(&mut self, per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>) {
         self.target = ShareTargetAssignment {
             epoch: self.group_epoch,
             per_member,
         };
+        self.assignment_timestamp = Some(Instant::now());
     }
 
-    /// Advance a member to the current group epoch and hand it the partitions
-    /// that the latest target assignment gave it.
+    /// Advance a member to the target assignment epoch and hand it the
+    /// partitions that the latest target assignment gave it.
+    ///
+    /// The target epoch is the group epoch unless the assignment interval is
+    /// holding the next target back, and Kafka's
+    /// `shareGroupHeartbeat` moves a member to `targetAssignmentEpoch`, not to
+    /// the group epoch.
     pub fn advance_member_epoch(&mut self, member_id: &str) {
         if let Some(m) = self.members.get_mut(member_id) {
-            if m.member_epoch != self.group_epoch {
+            if m.member_epoch != self.target.epoch {
                 m.previous_member_epoch = m.member_epoch;
-                m.member_epoch = self.group_epoch;
+                m.member_epoch = self.target.epoch;
             }
             if let Some(a) = self.target.per_member.get(member_id) {
                 m.assigned_partitions.clone_from(a);

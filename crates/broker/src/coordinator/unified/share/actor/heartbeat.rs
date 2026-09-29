@@ -59,7 +59,7 @@ pub(super) async fn handle_heartbeat(
         let new_member_id = req.member_id.clone();
         let m = build_member(&new_member_id, req, client, now);
         state.add_or_update_member(m);
-        if !reconcile(state, metadata) {
+        if !reconcile(state, metadata, config.assignment_interval) {
             state.remove_member(&new_member_id);
             return Ok(error_resp(codes::INVALID_REQUEST, config));
         }
@@ -81,7 +81,8 @@ pub(super) async fn handle_heartbeat(
         .members
         .get(&req.member_id)
         .map(|m| m.assigned_partitions.clone());
-    let Some(changed) = update_member_state(state, metadata, req, client, now, cur_epoch) else {
+    let Some(changed) = update_member_state(state, config, metadata, req, client, now, cur_epoch)
+    else {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     };
     if changed {
@@ -112,6 +113,7 @@ pub(super) async fn handle_heartbeat(
 /// if anything changed that requires a log write.
 fn update_member_state(
     state: &mut ShareGroupState,
+    config: &ShareGroupConfig,
     metadata: &dyn MetadataProvider,
     req: &ShareGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
@@ -145,7 +147,7 @@ fn update_member_state(
         }
     }
     let group_epoch_before = state.group_epoch;
-    if !reconcile(state, metadata) {
+    if !reconcile(state, metadata, config.assignment_interval) {
         return None;
     }
     let epoch_advanced = state.target.epoch > cur_epoch;
@@ -328,10 +330,10 @@ mod tests {
         let (metadata, _id) = metadata_with_topic("t", 1);
         let log = Arc::new(InMemoryOffsetsLog::default());
         let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::default(),
+            NextGenConfig::assigning_at_once(),
             ShareGroupConfig {
                 max_size: 1,
-                ..ShareGroupConfig::default()
+                ..ShareGroupConfig::assigning_at_once()
             },
             metadata,
             log,
@@ -501,7 +503,7 @@ mod tests {
 
             let resp = heartbeat(&handle, request(member_id, member_epoch)).await;
 
-            let config = ShareGroupConfig::default();
+            let config = ShareGroupConfig::assigning_at_once();
             let expected = if accepted {
                 // A rejoin and the previous epoch get the current epoch and
                 // the full assignment, as a current heartbeat does.

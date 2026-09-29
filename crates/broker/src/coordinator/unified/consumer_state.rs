@@ -1,11 +1,12 @@
 //! Per-group state for KIP-848 next-gen consumer groups. Exactly one
 //! `actor::GroupActor` task owns this state. It is never shared.
 //!
-//! This file is the module root. The [`MemberState`] record and its cached
-//! subscription regex live in `member`, the [`GroupState`] container and its
-//! membership transitions in `group`, and the target-assignment
-//! reconciliation in `reconcile`. [`TargetAssignment`] stays here: it is a
-//! leaf record with no behaviour of its own.
+//! This file is the module root. The [`MemberState`] record lives in
+//! `member`, the [`GroupState`] container and its membership transitions in
+//! `group`, the regular-expression subscriptions and what they resolved to in
+//! `regex`, and the target-assignment reconciliation in `reconcile`.
+//! [`TargetAssignment`] stays here: it is a leaf record with no behaviour of
+//! its own.
 
 use std::collections::HashMap;
 
@@ -14,13 +15,15 @@ use krabka_protocol::primitives::uuid::Uuid;
 mod group;
 mod member;
 mod reconcile;
+mod regex;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
 pub use self::{
     group::GroupState,
-    member::{ClassicMemberFacade, CompiledRegex, MemberState},
+    member::{ClassicMemberFacade, MemberState},
+    regex::ResolvedRegularExpression,
 };
 
 #[derive(Debug, Clone, Default)]

@@ -70,7 +70,7 @@ pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
             let group_id = get_string(&mut buf)?;
             Ok(Key::GroupMetadata { group_id })
         }
-        3 | 5 | 6 | 7 | 8 => Ok(Key::NextGen(
+        3 | 5 | 6 | 7 | 8 | 16 => Ok(Key::NextGen(
             crate::coordinator::unified::persistence_next_gen::parse_key(version, buf)?,
         )),
         10..=15 => Ok(Key::Share(

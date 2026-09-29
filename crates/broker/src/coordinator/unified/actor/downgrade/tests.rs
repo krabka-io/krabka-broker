@@ -73,7 +73,7 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -96,7 +96,7 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await

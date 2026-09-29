@@ -11,6 +11,7 @@ use super::{
     downgrade::maybe_downgrade,
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
+    regex_resolution::delete_unsubscribed_regexes,
     waiters::{drain_followers_with, drain_removed_classic_waiters, maybe_complete_classic},
 };
 use crate::{
@@ -166,8 +167,10 @@ async fn handle_session_tick(
     // `evict_expired` → `remove_member` already set `dirty`. Let the
     // reconciler own the single `bump_epoch` (via `reconcile_if_dirty`); an
     // explicit pre-bump here would double-advance `group_epoch` per eviction.
+    let regex_records = delete_unsubscribed_regexes(state);
     run_reconcile(state, config, metadata);
     let mut pending = snapshot_pending_after_change(state, &[], true);
+    pending.resolved_regexes = regex_records;
     for mid in &evicted {
         pending.member_metadata.push((mid.clone(), None));
         pending.target_per_member.push((mid.clone(), None));
@@ -195,7 +198,7 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            GroupActorMessage, GroupKindTag,
+            GroupActorMessage, GroupKindTag, RegexResolution,
             member_state::build_member,
             test_support::{
                 completing_classic_group, empty_metadata, last_classic_metadata, make_coordinator,
@@ -245,7 +248,7 @@ mod tests {
         // CI runners (e.g. a freshly-booted Windows agent).
         let config = NextGenConfig {
             session_timeout: Duration::from_millis(1),
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         };
         let metadata = empty_metadata();
 
@@ -264,7 +267,6 @@ mod tests {
                 host: "h",
             },
             Instant::now(),
-            &std::collections::HashSet::new(),
         );
         // Force the member to look session-expired. 50ms is always within
         // `Instant`'s range (no underflow on any host) yet far exceeds the
@@ -360,7 +362,7 @@ mod tests {
 
         for row in rows {
             let (coord, log) = make_coordinator();
-            let config = NextGenConfig::default();
+            let config = NextGenConfig::assigning_at_once();
             let mut state = GroupState::new("g");
             // Every heartbeat happened a second ago, so a 100 ms timeout armed
             // by them has fired when the tick runs, and a session has not.
@@ -383,7 +385,7 @@ mod tests {
                         },
                         client,
                         earlier,
-                        &std::collections::HashSet::new(),
+                        &RegexResolution::none(),
                     )
                     .response
                 };
@@ -442,9 +444,9 @@ mod tests {
             NextGenConfig {
                 timer: clock.new_timer(),
                 session_expiry_tick: Duration::from_hours(1),
-                ..NextGenConfig::default()
+                ..NextGenConfig::assigning_at_once()
             },
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             Arc::new(StaticMetadata {
                 input: crate::coordinator::unified::reconciler::ReconcileInput {
                     topic_id_by_name: [("t".to_string(), topic)].into(),
@@ -484,7 +486,8 @@ mod tests {
                         client_id: "c".into(),
                         client_host: "h".into(),
                         reply,
-                        regex_authorized_topics: std::collections::HashSet::new(),
+                        regex_resolver:
+                            crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
                     })
                     .await
                     .unwrap();
@@ -546,9 +549,9 @@ mod tests {
             NextGenConfig {
                 timer: clock.new_timer(),
                 session_expiry_tick: tick_interval,
-                ..NextGenConfig::default()
+                ..NextGenConfig::assigning_at_once()
             },
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             empty_metadata(),
             log.clone(),
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),

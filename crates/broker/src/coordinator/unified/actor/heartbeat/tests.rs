@@ -1,9 +1,6 @@
 //! Unit tests for the KIP-848 heartbeat path.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_protocol::primitives::uuid::Uuid;
@@ -41,7 +38,7 @@ async fn first_join_emits_one_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -75,7 +72,7 @@ async fn first_join_adopts_client_member_id() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -96,9 +93,9 @@ async fn member_limit_rejects_only_new_members() {
     let coord = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             max_size: 1,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         empty_metadata(),
         log,
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -173,7 +170,7 @@ fn handoff_heartbeat(
 ) -> HeartbeatStep {
     step_heartbeat(
         state,
-        &NextGenConfig::default(),
+        &NextGenConfig::assigning_at_once(),
         &handoff_metadata(),
         &ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -184,7 +181,7 @@ fn handoff_heartbeat(
             host: "host",
         },
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     )
 }
 
@@ -341,7 +338,12 @@ impl IdentityRow {
 }
 
 fn heartbeat_interval_ms() -> i32 {
-    i32::try_from(NextGenConfig::default().heartbeat_interval.as_millis()).unwrap()
+    i32::try_from(
+        NextGenConfig::assigning_at_once()
+            .heartbeat_interval
+            .as_millis(),
+    )
+    .unwrap()
 }
 
 fn identity_ok(
@@ -538,7 +540,6 @@ fn identity_group() -> GroupState {
             &identity_request(member_id, instance_id, 0, None),
             crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
             Instant::now(),
-            &HashSet::new(),
         );
         member.member_epoch = 5;
         member.previous_member_epoch = 4;
@@ -561,7 +562,7 @@ fn identity_group() -> GroupState {
 /// [`identity_group`] and compares the whole response and the members after.
 #[test]
 fn heartbeat_identity_rules_follow_kafka() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let metadata = StaticMetadata {
         input: ReconcileInput {
             topic_id_by_name: HashMap::from([("t".to_string(), IDENTITY_TOPIC)]),
@@ -581,7 +582,7 @@ fn heartbeat_identity_rules_follow_kafka() {
                 &identity_request("s1", Some("i1"), -2, None),
                 client,
                 Instant::now(),
-                &HashSet::new(),
+                &RegexResolution::none(),
             );
             check!(released.response.error_code == codes::NONE, "{}", row.name);
         }
@@ -593,7 +594,7 @@ fn heartbeat_identity_rules_follow_kafka() {
             &identity_request(row.member_id, row.instance_id, row.member_epoch, row.owned),
             client,
             Instant::now(),
-            &HashSet::new(),
+            &RegexResolution::none(),
         );
 
         let mut members: Vec<(&str, i32)> = state
@@ -629,7 +630,7 @@ fn written<T>(records: &[(String, Option<T>)]) -> Vec<(String, bool)> {
 /// `replaceMember` does.
 #[test]
 fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let metadata = empty_metadata();
     let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
     let join = |member_id: &str, member_epoch: i32| {
@@ -643,7 +644,7 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         &join("s1", 0),
         client,
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     check!(joined.response.error_code == codes::NONE);
 
@@ -654,7 +655,7 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         &join("s1", -2),
         client,
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     let current: Vec<(&str, Option<i32>)> = left
         .pending
@@ -677,7 +678,7 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         },
         client,
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     check!(replaced.response.error_code == codes::NONE);
     check!(replaced.response.member_epoch == joined.response.member_epoch);
@@ -714,7 +715,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -737,7 +738,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -768,7 +769,7 @@ async fn leave_emits_tombstone_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -788,7 +789,7 @@ async fn leave_emits_tombstone_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -805,7 +806,7 @@ async fn leave_emits_tombstone_batch() {
 
 #[test]
 fn leave_reconciles_and_persists_survivor_assignments() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let topic_id = Uuid([8; 16]);
     let metadata = StaticMetadata {
         input: ReconcileInput {
@@ -828,7 +829,6 @@ fn leave_reconciles_and_persists_survivor_assignments() {
                 host: "host",
             },
             Instant::now(),
-            &HashSet::new(),
         ));
     }
     run_reconcile(&mut state, &config, &metadata);
@@ -849,7 +849,7 @@ fn leave_reconciles_and_persists_survivor_assignments() {
             host: "host",
         },
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
 
     check!(state.group_epoch == epoch_before + 1);
@@ -926,7 +926,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -973,7 +973,7 @@ async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -995,7 +995,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
             ..Default::default()
         },
     };
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let mut group = GroupState::new("g");
     let req = ConsumerGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -1015,7 +1015,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
             host: "",
         },
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     // First join succeeds, advances to group epoch 1, targets all
     // partitions of "t", and must persist records.
@@ -1127,7 +1127,8 @@ async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
                 },
                 client_id: "client-a".into(),
                 client_host: String::new(),
-                regex_authorized_topics: HashSet::new(),
+                regex_resolver:
+                    crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
                 reply: tx,
             })
             .await

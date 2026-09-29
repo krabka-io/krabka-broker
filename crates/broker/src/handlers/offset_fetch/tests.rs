@@ -1009,7 +1009,7 @@ async fn join_consumer_group(broker: &Broker, group: &str, member_id: &str) -> i
             client_id: "client".into(),
             client_host: "host".into(),
             reply,
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
         })
         .await
         .expect("send Heartbeat");

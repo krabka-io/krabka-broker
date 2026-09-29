@@ -768,6 +768,7 @@ fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed
             },
         )]
         .into(),
+        ..GroupSeed::default()
     }
 }
 

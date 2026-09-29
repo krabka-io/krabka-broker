@@ -1,5 +1,14 @@
 //! KIP-932 share-group membership configuration.
-use std::time::Duration;
+use std::{borrow::Cow, collections::BTreeMap, time::Duration};
+
+use crate::coordinator::unified::config::{DEFAULT_ASSIGNMENT_INTERVAL, group_millis};
+
+/// Kafka's `GroupConfig.SHARE_SESSION_TIMEOUT_MS_CONFIG`.
+const KEY_SHARE_SESSION_TIMEOUT_MS: &str = "share.session.timeout.ms";
+/// Kafka's `GroupConfig.SHARE_HEARTBEAT_INTERVAL_MS_CONFIG`.
+const KEY_SHARE_HEARTBEAT_INTERVAL_MS: &str = "share.heartbeat.interval.ms";
+/// Kafka's `GroupConfig.SHARE_ASSIGNMENT_INTERVAL_MS_CONFIG`.
+const KEY_SHARE_ASSIGNMENT_INTERVAL_MS: &str = "share.assignment.interval.ms";
 
 /// The broker share-group settings: the share keys of Kafka's
 /// `GroupCoordinatorConfig` and of its `ShareGroupConfig`.
@@ -16,6 +25,9 @@ pub struct ShareGroupConfig {
     pub session_timeout: Duration,
     /// Kafka's `group.share.heartbeat.interval.ms`.
     pub heartbeat_interval: Duration,
+    /// Kafka's `group.share.assignment.interval.ms`: the least time between
+    /// two target assignments of a group. Zero does not wait.
+    pub assignment_interval: Duration,
     /// Kafka's `group.share.min.session.timeout.ms`.
     pub min_session_timeout: Duration,
     /// Kafka's `group.share.max.session.timeout.ms`.
@@ -59,6 +71,7 @@ impl Default for ShareGroupConfig {
         Self {
             session_timeout: Duration::from_secs(45),
             heartbeat_interval: Duration::from_secs(5),
+            assignment_interval: DEFAULT_ASSIGNMENT_INTERVAL,
             min_session_timeout: Duration::from_secs(45),
             max_session_timeout: Duration::from_mins(1),
             min_heartbeat_interval: Duration::from_secs(5),
@@ -80,6 +93,40 @@ impl Default for ShareGroupConfig {
     }
 }
 
+impl ShareGroupConfig {
+    /// The defaults with no assignment interval, for the tests that expect
+    /// each membership change to be assigned at once.
+    #[cfg(test)]
+    pub(crate) fn assigning_at_once() -> Self {
+        Self {
+            assignment_interval: Duration::ZERO,
+            ..Self::default()
+        }
+    }
+
+    /// The membership settings a share group runs with: each `share.*`
+    /// override in the group's stored config over the broker value.
+    ///
+    /// This is Kafka's `GroupMetadataManager.shareGroupSessionTimeoutMs`,
+    /// `shareGroupHeartbeatIntervalMs` and `shareGroupAssignmentIntervalMs`:
+    /// `GroupConfigManager.groupConfig` over `GroupCoordinatorConfig`. A group
+    /// with no override borrows the broker value.
+    #[must_use]
+    pub(crate) fn for_group(&self, overrides: Option<&BTreeMap<String, String>>) -> Cow<'_, Self> {
+        let session = group_millis(overrides, KEY_SHARE_SESSION_TIMEOUT_MS);
+        let heartbeat = group_millis(overrides, KEY_SHARE_HEARTBEAT_INTERVAL_MS);
+        let assignment = group_millis(overrides, KEY_SHARE_ASSIGNMENT_INTERVAL_MS);
+        if session.is_none() && heartbeat.is_none() && assignment.is_none() {
+            return Cow::Borrowed(self);
+        }
+        let mut config = self.clone();
+        config.session_timeout = session.unwrap_or(config.session_timeout);
+        config.heartbeat_interval = heartbeat.unwrap_or(config.heartbeat_interval);
+        config.assignment_interval = assignment.unwrap_or(config.assignment_interval);
+        Cow::Owned(config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -93,6 +140,7 @@ mod tests {
         let expected = ShareGroupConfig {
             session_timeout: Duration::from_secs(45),
             heartbeat_interval: Duration::from_secs(5),
+            assignment_interval: Duration::from_secs(1),
             min_session_timeout: Duration::from_secs(45),
             max_session_timeout: Duration::from_mins(1),
             min_heartbeat_interval: Duration::from_secs(5),
@@ -112,5 +160,58 @@ mod tests {
             initialize_retry_interval: Duration::from_secs(30),
         };
         assert!(ShareGroupConfig::default() == expected);
+    }
+
+    /// Kafka's `shareGroupSessionTimeoutMs`, `shareGroupHeartbeatIntervalMs`
+    /// and `shareGroupAssignmentIntervalMs`: a `share.*` override replaces the
+    /// broker value, another coordinator's key and a value that does not parse
+    /// leave it.
+    #[test]
+    fn for_group_applies_each_share_override() {
+        let broker = ShareGroupConfig::default();
+        let with = |entries: &[(&str, &str)]| {
+            let overrides: BTreeMap<String, String> = entries
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect();
+            broker.for_group(Some(&overrides)).into_owned()
+        };
+        let rows: Vec<(&[(&str, &str)], ShareGroupConfig)> = vec![
+            (&[], broker.clone()),
+            (
+                &[("share.session.timeout.ms", "50000")],
+                ShareGroupConfig {
+                    session_timeout: Duration::from_secs(50),
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[("share.heartbeat.interval.ms", "7000")],
+                ShareGroupConfig {
+                    heartbeat_interval: Duration::from_secs(7),
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[("share.assignment.interval.ms", "0")],
+                ShareGroupConfig {
+                    assignment_interval: Duration::ZERO,
+                    ..broker.clone()
+                },
+            ),
+            (
+                &[
+                    ("consumer.session.timeout.ms", "50000"),
+                    ("share.heartbeat.interval.ms", "many"),
+                ],
+                broker.clone(),
+            ),
+        ];
+        let (actual, expected): (Vec<_>, Vec<_>) = rows
+            .into_iter()
+            .map(|(entries, config)| (with(entries), config))
+            .unzip();
+        assert!(actual == expected);
+        assert!(matches!(broker.for_group(None), Cow::Borrowed(_)));
     }
 }

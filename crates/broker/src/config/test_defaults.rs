@@ -240,11 +240,21 @@ impl BrokerConfig {
             txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
             txn_id_expiration_cleanup_interval: <Time as TimeExt>::ZERO,
             static_config_origins: crate::config::StaticConfigOrigins::default(),
-            next_gen_consumer_group: Box::new(
-                crate::coordinator::unified::config::NextGenConfig::default(),
-            ),
+            // Tests drive consumer and share heartbeats directly and expect
+            // each change to be assigned at once, so they run without Kafka's
+            // assignment interval, and a consumer group resolves its regular
+            // expressions again as soon as the metadata changed, without
+            // Kafka's ten seconds between two resolutions.
+            next_gen_consumer_group: Box::new(crate::coordinator::unified::config::NextGenConfig {
+                assignment_interval: std::time::Duration::ZERO,
+                regex_refresh_min_interval: std::time::Duration::ZERO,
+                ..crate::coordinator::unified::config::NextGenConfig::default()
+            }),
             share_group: Box::new(
-                crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+                crate::coordinator::unified::share::config::ShareGroupConfig {
+                    assignment_interval: std::time::Duration::ZERO,
+                    ..crate::coordinator::unified::share::config::ShareGroupConfig::default()
+                },
             ),
             // Tests drive streams heartbeats directly and expect each change to
             // be assigned at once, so they run without Kafka's initial

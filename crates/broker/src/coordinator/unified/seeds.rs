@@ -23,6 +23,11 @@ pub struct GroupSeed {
         std::collections::HashMap<String, persistence_next_gen::TargetAssignmentMemberValue>,
     pub current_per_member:
         std::collections::HashMap<String, persistence_next_gen::CurrentMemberAssignmentValue>,
+    /// The `ConsumerGroupRegularExpression` records: what each regular
+    /// expression that the members subscribe to resolved to, by regular
+    /// expression.
+    pub resolved_regexes:
+        std::collections::HashMap<String, persistence_next_gen::RegularExpressionValue>,
 }
 
 /// Hydration seed for a [`share::actor::ShareGroupActorHandle`].

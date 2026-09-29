@@ -21,7 +21,9 @@ use super::{
     },
 };
 use crate::coordinator::unified::{
-    ClientIdentity, actor::step_heartbeat, persistence_next_gen::MemberAssignmentState,
+    ClientIdentity,
+    actor::{RegexResolution, step_heartbeat},
+    persistence_next_gen::MemberAssignmentState,
 };
 
 impl Model for ReconModel {
@@ -117,7 +119,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.entry(id.clone()).or_default(); // new member owns nothing yet
@@ -135,7 +137,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.remove(&id);
@@ -154,7 +156,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 adv.insert(id, advertised_of(&step).unwrap_or_default());
@@ -171,7 +173,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 // Without an assignment in the answer, the member keeps the one

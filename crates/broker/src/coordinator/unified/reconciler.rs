@@ -45,7 +45,7 @@ pub fn reconcile_if_dirty(
         .map(|m| MemberSubscription {
             member_id: m.member_id.clone(),
             rack_id: m.rack_id.clone(),
-            subscribed_topic_ids: resolve_subscribed_topic_ids(m, &input.topic_id_by_name),
+            subscribed_topic_ids: resolve_subscribed_topic_ids(group, m, &input.topic_id_by_name),
             assigned_partitions: group
                 .target
                 .per_member
@@ -60,7 +60,7 @@ pub fn reconcile_if_dirty(
         .map(|m| SubscriptionShape {
             topic_names: &m.subscribed_topic_names,
             topic_regex: m.subscribed_topic_regex.as_deref(),
-            regex_topic_names: regex_topic_names(m, &input.topic_id_by_name),
+            regex_topic_names: regex_topic_names(group, m, &input.topic_id_by_name),
         })
         .collect();
     let spec = GroupSpec {
@@ -100,7 +100,7 @@ pub fn metadata_hash(group: &GroupState, input: &ReconcileInput) -> u64 {
     let mut topics: BTreeSet<&str> = BTreeSet::new();
     for member in group.members.values() {
         topics.extend(member.subscribed_topic_names.iter().map(String::as_str));
-        topics.extend(regex_topic_names(member, &input.topic_id_by_name));
+        topics.extend(regex_topic_names(group, member, &input.topic_id_by_name));
     }
     let mut hasher = DefaultHasher::new();
     let mut any_topic = false;
@@ -145,58 +145,55 @@ pub fn refresh_metadata(group: &mut GroupState, input: &ReconcileInput) {
 }
 
 /// Insert into `out` every topic-id that a member subscribes to, both by exact
-/// name and through its cached compiled regex. This is the single source of
-/// truth for what a member subscribes to, and both `reconcile_if_dirty`
-/// and `membership_topic_ids` use it.
+/// name and through the topics that its regex resolved to in the group. This
+/// is the single source of truth for what a member subscribes to, and both
+/// `reconcile_if_dirty` and `membership_topic_ids` use it.
 ///
-/// At KIP-848 v1+ the client supplies the regex as a Java `Pattern`-syntax
-/// string. Krabka compiles it with Rust's RE2-based `regex` crate, which
-/// differs only in extended constructs such as lookaround. Operator-facing
-/// subscription patterns do not use those. Compilation happens once, when the
-/// pattern changes, and `MemberState` caches the result. An invalid pattern
-/// compiles to `None`, with one warning at set time, so a bad regex never
-/// poisons the rest of the assignment and never recompiles on the hot path.
+/// The group resolves a pattern against the metadata image, as Kafka's
+/// `TopicRegexResolver` does, and keeps the topics that the requesting
+/// principal may `Describe` (see `GroupState::resolved_regex`). A resolved
+/// topic that the snapshot no longer has, or that it does not have yet, is
+/// skipped. A pattern the group has not resolved yet subscribes the member to
+/// no topic.
 fn collect_subscribed_topic_ids(
+    group: &GroupState,
     member: &MemberState,
     topic_id_by_name: &HashMap<String, Uuid>,
     out: &mut HashSet<Uuid>,
 ) {
-    for name in &member.subscribed_topic_names {
+    for name in member
+        .subscribed_topic_names
+        .iter()
+        .chain(group.regex_topics(member))
+    {
         if let Some(id) = topic_id_by_name.get(name) {
             out.insert(*id);
         }
     }
-    if let Some(re) = member.compiled_regex() {
-        for (name, id) in topic_id_by_name {
-            if re.is_match(name) && member.regex_authorized_topics.contains(name) {
-                out.insert(*id);
-            }
-        }
-    }
 }
 
-/// The existing topic names that a member's regex subscription resolves to,
+/// The existing topic names that a member's regex subscription resolved to,
 /// for Kafka's subscription-type rule.
 fn regex_topic_names<'a>(
+    group: &GroupState,
     member: &MemberState,
     topic_id_by_name: &'a HashMap<String, Uuid>,
 ) -> Vec<&'a str> {
-    member.compiled_regex().map_or_else(Vec::new, |re| {
-        topic_id_by_name
-            .keys()
-            .filter(|name| re.is_match(name) && member.regex_authorized_topics.contains(*name))
-            .map(String::as_str)
-            .collect()
-    })
+    group
+        .regex_topics(member)
+        .filter_map(|name| topic_id_by_name.get_key_value(name))
+        .map(|(name, _)| name.as_str())
+        .collect()
 }
 
 /// Resolve a member's effective topic-id subscription as a vector.
 fn resolve_subscribed_topic_ids(
+    group: &GroupState,
     member: &MemberState,
     topic_id_by_name: &HashMap<String, Uuid>,
 ) -> Vec<Uuid> {
     let mut out = HashSet::new();
-    collect_subscribed_topic_ids(member, topic_id_by_name, &mut out);
+    collect_subscribed_topic_ids(group, member, topic_id_by_name, &mut out);
     out.into_iter().collect()
 }
 
@@ -204,7 +201,7 @@ fn resolve_subscribed_topic_ids(
 pub fn membership_topic_ids(group: &GroupState, input: &ReconcileInput) -> HashSet<Uuid> {
     let mut out = HashSet::new();
     for m in group.members.values() {
-        collect_subscribed_topic_ids(m, &input.topic_id_by_name, &mut out);
+        collect_subscribed_topic_ids(group, m, &input.topic_id_by_name, &mut out);
     }
     out
 }
@@ -217,7 +214,8 @@ mod tests {
 
     use super::{super::assignor::UniformAssignor, *};
     use crate::coordinator::unified::{
-        consumer_state::MemberState, persistence_next_gen::MemberAssignmentState,
+        consumer_state::{MemberState, ResolvedRegularExpression},
+        persistence_next_gen::MemberAssignmentState,
     };
 
     fn fresh_member(id: &str, topic: &str) -> MemberState {
@@ -231,8 +229,6 @@ mod tests {
             client_host: "/127.0.0.1".into(),
             subscribed_topic_names: sub,
             subscribed_topic_regex: None,
-            compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_authorized_topics: HashSet::new(),
             server_assignor: None,
             rebalance_timeout: Duration::from_mins(1),
             member_epoch: 0,
@@ -343,169 +339,125 @@ mod tests {
         }
     }
 
-    fn member_with_regex(
-        id: &str,
-        names: &[&str],
-        regex: Option<&str>,
-        authorized: &[&str],
-    ) -> MemberState {
-        let mut sub = HashSet::new();
-        for n in names {
-            sub.insert((*n).to_string());
-        }
-        MemberState {
-            member_id: id.into(),
-            instance_id: None,
-            rack_id: None,
-            client_id: "c".into(),
-            client_host: "/127.0.0.1".into(),
-            subscribed_topic_names: sub,
-            subscribed_topic_regex: regex.map(String::from),
-            compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_authorized_topics: authorized.iter().map(|n| (*n).to_string()).collect(),
-            server_assignor: None,
-            rebalance_timeout: Duration::from_mins(1),
-            member_epoch: 0,
-            previous_member_epoch: 0,
-            assignment_state: MemberAssignmentState::Stable,
-            assigned_partitions: HashMap::new(),
-            partitions_pending_revocation: HashMap::new(),
-            assignment_epochs: HashMap::new(),
-            last_seen: Instant::now(),
-            classic: None,
-        }
+    fn member_with_regex(id: &str, names: &[&str], regex: Option<&str>) -> MemberState {
+        let mut member = fresh_member(id, "unused");
+        member.subscribed_topic_names = names.iter().map(|name| (*name).to_string()).collect();
+        member.subscribed_topic_regex = regex.map(String::from);
+        member
     }
 
-    #[test]
-    fn regex_resolves_to_matching_topic_ids() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex(
-            "m1",
-            &[],
-            Some("^orders-.*"),
-            &["orders-eu", "orders-us"],
-        ));
-        let inp = input_with_topics(&[("orders-eu", 1), ("orders-us", 1), ("shipments", 1)]);
-        let orders_eu = inp.topic_id_by_name["orders-eu"];
-        let orders_us = inp.topic_id_by_name["orders-us"];
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        // Both `orders-*` topics match; `shipments` must not.
-        assert!(assigned == maplit::hashset! {orders_eu, orders_us});
-    }
-
-    /// The security-fix regression case: a regex matches two topics, but the
-    /// member's principal may not `Describe` one of them. The reconciler must
-    /// drop that topic from the assignment even though it matches the
-    /// pattern, matching Kafka's `filterTopicDescribeAuthorizedTopics`.
-    #[test]
-    fn regex_match_excludes_describe_denied_topics() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex(
-            "m1",
-            &[],
-            Some("^orders-.*"),
-            &["orders-eu"],
-        ));
-        let inp = input_with_topics(&[("orders-eu", 1), ("orders-us", 1), ("shipments", 1)]);
-        let orders_eu = inp.topic_id_by_name["orders-eu"];
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        // `orders-us` matches the pattern but is not (yet) Describe-authorized,
-        // so only `orders-eu` is assigned.
-        assert!(assigned == maplit::hashset! {orders_eu});
-    }
-
-    #[test]
-    fn regex_unions_with_names() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex(
-            "m1",
-            &["audit"],
-            Some("^orders-.*"),
-            &["orders-eu"],
-        ));
-        let inp = input_with_topics(&[("orders-eu", 1), ("audit", 1), ("shipments", 1)]);
-        let orders_eu = inp.topic_id_by_name["orders-eu"];
-        let audit = inp.topic_id_by_name["audit"];
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        // Union of the regex match (`orders-eu`) and the explicit name
-        // (`audit`); `shipments` must not appear.
-        assert!(assigned == maplit::hashset! {orders_eu, audit});
-    }
-
-    #[test]
-    fn invalid_regex_is_silently_dropped_and_names_still_apply() {
-        let mut g = GroupState::new("g");
-        // `*` at the start is an invalid Rust regex (and invalid in JVM
-        // too — `PatternSyntaxException`). We must not panic; just fall
-        // back to the names-only subscription.
-        g.add_or_update_member(member_with_regex("m1", &["audit"], Some("*invalid"), &[]));
-        let inp = input_with_topics(&[("audit", 1), ("orders-eu", 1)]);
-        let audit = inp.topic_id_by_name["audit"];
-        let orders_eu = inp.topic_id_by_name["orders-eu"];
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        assert!(
-            assigned.contains(&audit),
-            "names-only subscription still applied"
-        );
-        assert!(
-            !assigned.contains(&orders_eu),
-            "invalid regex must not silently match every topic"
+    /// Records that `regex` resolved to `topics` in `group`, as a heartbeat
+    /// that resolved it does.
+    fn resolve(group: &mut GroupState, regex: &str, topics: &[&str]) {
+        group.set_resolved_regex(
+            regex.to_owned(),
+            ResolvedRegularExpression {
+                topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+                version: 1,
+                timestamp_ms: 1,
+            },
         );
     }
 
-    /// Kafka's `isNotEmpty` gate: the empty pattern is how the Java client
-    /// drops a regex subscription, so it selects no topic, whatever the
-    /// authorized set holds. The explicit names still apply.
-    #[test]
-    fn empty_regex_subscribes_to_no_topic() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &["a"], Some(""), &["a", "b", "c"]));
-        let inp = input_with_topics(&[("a", 1), ("b", 1), ("c", 1)]);
-        let a = inp.topic_id_by_name["a"];
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        assert!(assigned == maplit::hashset! {a}, "{assigned:?}");
+    /// The topics that `member_id` is assigned, by name.
+    fn assigned_names(group: &GroupState, input: &ReconcileInput, member_id: &str) -> Vec<String> {
+        let mut names: Vec<String> = group
+            .target
+            .per_member
+            .get(member_id)
+            .map(|topics| {
+                input
+                    .topic_id_by_name
+                    .iter()
+                    .filter(|(_, id)| topics.contains_key(id))
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
     }
 
-    /// Kafka's `TopicRegexResolver` selects a topic with `Matcher.matches()`,
-    /// so the pattern `orders` selects the topic `orders` and neither
-    /// `orders-eu` nor `my-orders`.
+    /// (regex, names, what the group resolved the regex to, the topics that
+    /// the member is assigned). The reconciler subscribes a member to its
+    /// names and to the topics its regex resolved to in the group, whatever
+    /// else the pattern would match: a topic that the resolution leaves out,
+    /// because the requesting principal may not `Describe` it or because it is
+    /// too new, is not assigned, and a regex the group has not resolved yet
+    /// subscribes to nothing.
     #[test]
-    fn regex_selects_only_topics_whose_whole_name_matches() {
-        let authorized = ["orders", "orders-eu", "my-orders"];
-        let inp = input_with_topics(&[("orders", 1), ("orders-eu", 1), ("my-orders", 1)]);
-        // (pattern, the topics the member subscribes to)
-        for (pattern, expected) in [
-            ("orders", vec!["orders"]),
-            ("orders.*", vec!["orders", "orders-eu"]),
-            (".*orders", vec!["orders", "my-orders"]),
-            ("rders", vec![]),
-        ] {
+    fn a_member_is_assigned_the_names_and_the_topics_its_regex_resolved_to() {
+        type Row<'a> = (&'a str, &'a [&'a str], Option<&'a [&'a str]>, &'a [&'a str]);
+        let inp = input_with_topics(&[
+            ("orders-eu", 1),
+            ("orders-us", 1),
+            ("audit", 1),
+            ("shipments", 1),
+        ]);
+        let rows: [Row<'_>; 5] = [
+            (
+                "^orders-.*",
+                &[],
+                Some(&["orders-eu", "orders-us"]),
+                &["orders-eu", "orders-us"],
+            ),
+            ("^orders-.*", &[], Some(&["orders-eu"]), &["orders-eu"]),
+            (
+                "^orders-.*",
+                &["audit"],
+                Some(&["orders-eu"]),
+                &["audit", "orders-eu"],
+            ),
+            // The resolution may name a topic that has been deleted since.
+            (
+                "^orders-.*",
+                &[],
+                Some(&["orders-eu", "orders-gone"]),
+                &["orders-eu"],
+            ),
+            // No resolution yet: the names still apply.
+            ("^orders-.*", &["audit"], None, &["audit"]),
+        ];
+        for (regex, names, resolved, expected) in rows {
             let mut g = GroupState::new("g");
-            g.add_or_update_member(member_with_regex("m1", &[], Some(pattern), &authorized));
+            g.add_or_update_member(member_with_regex("m1", names, Some(regex)));
+            if let Some(topics) = resolved {
+                resolve(&mut g, regex, topics);
+            }
             reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-            let assigned: HashSet<Uuid> = g
-                .target
-                .per_member
-                .get("m1")
-                .map(|topics| topics.keys().copied().collect())
-                .unwrap_or_default();
-            let expected: HashSet<Uuid> = expected
-                .into_iter()
-                .map(|name| inp.topic_id_by_name[name])
-                .collect();
-            assert!(assigned == expected, "{pattern}: {assigned:?}");
+            assert!(
+                assigned_names(&g, &inp, "m1") == expected,
+                "{regex} {names:?} {resolved:?}"
+            );
         }
+    }
+
+    /// Every member of a group that subscribes to the same regex gets the
+    /// resolution that the group holds for it, and a member with a different
+    /// regex gets that regex's.
+    #[test]
+    fn members_share_the_resolution_of_the_same_regex() {
+        let inp = input_with_topics(&[("a1", 2), ("a2", 2), ("b1", 2)]);
+        let mut g = GroupState::new("g");
+        g.add_or_update_member(member_with_regex("m1", &[], Some("a.*")));
+        g.add_or_update_member(member_with_regex("m2", &[], Some("a.*")));
+        g.add_or_update_member(member_with_regex("m3", &[], Some("b.*")));
+        resolve(&mut g, "a.*", &["a1", "a2"]);
+        resolve(&mut g, "b.*", &["b1"]);
+        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
+        let assigned: Vec<Vec<String>> = ["m1", "m2", "m3"]
+            .iter()
+            .map(|member_id| assigned_names(&g, &inp, member_id))
+            .collect();
+        assert!(assigned == [vec!["a1", "a2"], vec!["a1", "a2"], vec!["b1"]]);
     }
 
     #[test]
     fn regex_change_marks_group_dirty() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^a"), &["a1"]));
+        g.add_or_update_member(member_with_regex("m1", &[], Some("^a")));
+        resolve(&mut g, "^a", &["a1"]);
+        resolve(&mut g, "^b", &["b1"]);
         let inp = input_with_topics(&[("a1", 1), ("b1", 1)]);
         reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         assert!(!g.dirty, "fresh recompute clears dirty");
@@ -513,7 +465,7 @@ mod tests {
 
         // Change the regex pattern → must dirty the group so the next
         // reconcile re-runs.
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^b"), &["b1"]));
+        g.add_or_update_member(member_with_regex("m1", &[], Some("^b")));
         assert!(g.dirty, "regex change must mark group dirty");
         let outcome = reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         assert!(outcome == ReconcileOutcome::Recomputed);
@@ -547,7 +499,8 @@ mod tests {
         ];
         let mut g = GroupState::new("g");
         g.add_or_update_member(fresh_member("m1", "orders"));
-        g.add_or_update_member(member_with_regex("m2", &[], Some("^pay.*"), &["payments"]));
+        g.add_or_update_member(member_with_regex("m2", &[], Some("^pay.*")));
+        resolve(&mut g, "^pay.*", &["payments"]);
         let before = metadata_hash(&g, &snapshot(base, &[(1, 0, "rack-a")]));
 
         // (name, the snapshot after, whether the hash moves)
@@ -629,12 +582,8 @@ mod tests {
     #[test]
     fn membership_topic_ids_includes_regex_matches() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex(
-            "m1",
-            &[],
-            Some("^orders-.*"),
-            &["orders-eu"],
-        ));
+        g.add_or_update_member(member_with_regex("m1", &[], Some("^orders-.*")));
+        resolve(&mut g, "^orders-.*", &["orders-eu"]);
         let inp = input_with_topics(&[("orders-eu", 1), ("shipments", 1)]);
         let orders = inp.topic_id_by_name["orders-eu"];
         let ids = membership_topic_ids(&g, &inp);

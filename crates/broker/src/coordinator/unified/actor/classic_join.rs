@@ -323,7 +323,7 @@ mod tests {
     async fn zero_initial_rebalance_delay_completes_a_new_groups_first_join_at_once() {
         let (coord, _log) = make_coordinator_with_config(NextGenConfig {
             classic_initial_rebalance_delay: std::time::Duration::ZERO,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         });
         let handle = coord.get_or_create_classic("g");
         coord.mark_classic("g");
@@ -360,7 +360,7 @@ mod tests {
         for (version, requested_ms, want_ms) in [(0, -1, 45_000), (1, 90_000, 90_000)] {
             let (coord, log) = make_coordinator_with_config(NextGenConfig {
                 classic_initial_rebalance_delay: Duration::ZERO,
-                ..NextGenConfig::default()
+                ..NextGenConfig::assigning_at_once()
             });
             let handle = coord.get_or_create_classic("g");
             coord.mark_classic("g");
