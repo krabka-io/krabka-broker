@@ -38,8 +38,22 @@
 //! the measured `Rate` with a `Quota` bound), so a `consumer_byte_rate` of
 //! `0.5` must admit half a byte per second, not one and not an unlimited
 //! stream. A whole-token caller is granted whole tokens and leaves any part
-//! token in the bucket; [`TokenBucket::try_consume_micros`] also grants the
-//! part token, for a caller that turns the rest into a throttle delay.
+//! token in the bucket; [`TokenBucket::record`] charges the whole request and
+//! keeps the part token in the debt it reports, for a caller that turns the
+//! debt into a throttle delay.
+//!
+//! # Debt
+//!
+//! [`TokenBucket::record`] is Kafka's `Sensor.record` on a quota `Rate`: the
+//! value is recorded whether or not the balance covers it, and what the balance
+//! could not cover is debt. The refill repays the debt before it adds to the
+//! balance, so the throttle a caller derives from it, `debt / rate`, carries
+//! everything the client has sent above its bound. A grant-limited consume
+//! that clamped at zero would credit the overage back through the refill of the
+//! mute, and a client would send about twice its quota. `try_consume` grants
+//! nothing while the bucket is in debt. A change of rate keeps the balance and
+//! the debt (Kafka's `updateQuotaMetricConfigs` swaps the bound and leaves the
+//! recorded samples); only a bucket that had no rate starts full.
 //!
 //! One value is read outside the lock. `micro_rate_per_sec` mirrors the
 //! locked rate, and it is written only while the lock is held, so the unthrottled
@@ -97,6 +111,11 @@ fn clock_nanos(clock: &dyn MonotonicClock) -> u64 {
 /// It lives behind [`TokenBucket::state`]. `micro_available <= micro_burst`
 /// holds whenever the lock is free, and `last_refill_nanos` never moves
 /// backwards. Every count is in micro-tokens; see [`MICROS_PER_TOKEN`].
+///
+/// The balance the bucket stands at is `micro_available - micro_debt`, and
+/// at most one of the two is non-zero. A [`TokenBucket::record`] that charges
+/// more than the bucket holds leaves the rest as debt, and the refill repays
+/// the debt before it adds to the balance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BucketState {
     /// Micro-tokens per second. `0` means no limit.
@@ -105,6 +124,9 @@ struct BucketState {
     micro_burst: u64,
     /// Micro-tokens the bucket can grant now.
     micro_available: u64,
+    /// Micro-tokens a [`TokenBucket::record`] charged beyond what the bucket
+    /// held, and the refill has not repaid yet.
+    micro_debt: u64,
     /// The clock reading up to which elapsed time has become tokens.
     last_refill_nanos: u64,
 }
@@ -129,6 +151,7 @@ impl std::fmt::Debug for TokenBucket {
             .field("micro_rate_per_sec", &state.micro_rate_per_sec)
             .field("micro_burst", &state.micro_burst)
             .field("micro_available", &state.micro_available)
+            .field("micro_debt", &state.micro_debt)
             .field("last_refill_nanos", &state.last_refill_nanos)
             .finish_non_exhaustive()
     }
@@ -152,6 +175,7 @@ impl TokenBucket {
             micro_rate_per_sec: 0,
             micro_burst: 0,
             micro_available: 0,
+            micro_debt: 0,
             last_refill_nanos: clock_nanos(&*clock),
         };
         Self {

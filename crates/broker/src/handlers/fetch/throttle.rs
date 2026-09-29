@@ -83,16 +83,17 @@ pub(super) fn consumer_quota_window_bytes(
     (rate * window_secs).to_usize().unwrap_or(usize::MAX)
 }
 
-/// The byte-rate charge a consumer fetch made, in micro-bytes, which a
-/// throttled fetch gives back.
+/// The byte-rate charge a consumer fetch made, in bytes, which a throttled
+/// fetch gives back.
 pub(super) struct ConsumerCharge(Option<(std::sync::Arc<crate::throttle::TokenBucket>, u64)>);
 
 impl ConsumerCharge {
     /// Kafka's `quotas.fetch.unrecordQuotaSensor`: a throttled fetch sends
-    /// no records, so the bytes it was charged come off the quota.
+    /// no records, so the bytes it was charged come off the quota. The whole
+    /// charge comes back, the debt it left included.
     pub(super) fn refund(self) {
-        if let Some((bucket, granted_micros)) = self.0 {
-            bucket.refund_micros(granted_micros);
+        if let Some((bucket, bytes)) = self.0 {
+            bucket.refund(bytes);
         }
     }
 }
@@ -219,18 +220,13 @@ fn consume_consumer_quota(
         .find(|(k, _)| k == "client-id")
         .and_then(|(_, v)| v.clone());
     // Kafka holds the quota as a double (`ClientQuotaManager`), so the bucket
-    // runs at the configured rate, fractional part included, and grants a
-    // part byte too: the throttle is the exact shortfall over the rate.
-    let bucket = buckets.get_or_create(
-        "consumer_byte_rate",
-        &entity_key,
-        principal,
-        client_id,
-        rate,
-    );
-    let granted_micros = bucket.try_consume_micros(bytes);
-    let charge = ConsumerCharge(Some((std::sync::Arc::clone(&bucket), granted_micros)));
-    let Some(overage) = crate::quota::overage_tokens(bytes, granted_micros) else {
+    // runs at the configured rate, fractional part included. Like the
+    // producer path it records the whole response and turns the debt into the
+    // throttle (#1212); a throttled fetch then gives the whole charge back.
+    let bucket = buckets.get_or_create("consumer_byte_rate", &entity_key, rate);
+    let debt = bucket.record(bytes);
+    let charge = ConsumerCharge(Some((std::sync::Arc::clone(&bucket), bytes)));
+    let Some(overage) = crate::quota::debt_tokens(debt) else {
         return (crate::quota::QuotaDelay::zero(), charge);
     };
     let delay_secs = overage / rate;
@@ -284,6 +280,40 @@ mod tests {
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"
         );
+    }
+
+    /// A fetch is charged in full and, when that throttles it, the whole
+    /// charge comes back (`ClientQuotaManager.unrecordQuotaSensor`), the debt
+    /// it left included: the fetch that follows the throttle finds the bucket
+    /// as it was. A throttled fetch that is not refunded stays charged.
+    #[test]
+    fn a_throttled_fetch_gives_the_whole_charge_back() {
+        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+        let mut img = MetadataImage::new(uuid::Uuid::nil());
+        img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+            entity: vec![QuotaEntity {
+                entity_type: "user".into(),
+                entity_name: Some("alice".into()),
+            }],
+            config_key: "consumer_byte_rate".into(),
+            config_value: Some(1_000.0),
+        }));
+        let consume = |buckets: &crate::quota::QuotaBuckets, bytes| {
+            super::consume_consumer_quota(&img, buckets, "alice", "app", bytes)
+        };
+
+        let refunded = crate::quota::QuotaBuckets::with_window(secs(1));
+        let (throttle, charge) = consume(&refunded, 1_500);
+        charge.refund();
+        let (after_refund, _) = consume(&refunded, 1_000);
+
+        let kept = crate::quota::QuotaBuckets::with_window(secs(1));
+        let _ = consume(&kept, 1_500);
+        let (after_kept, _) = consume(&kept, 1_000);
+
+        assert!(throttle > <Time as TimeExt>::ZERO, "{throttle:?}");
+        assert!(after_refund == <Time as TimeExt>::ZERO, "{after_refund:?}");
+        assert!(after_kept > millis(1_400), "{after_kept:?}");
     }
 
     /// Kafka's `ClientQuotaManager` holds `consumer_byte_rate` as a double,

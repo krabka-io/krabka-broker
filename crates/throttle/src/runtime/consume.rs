@@ -1,10 +1,12 @@
 //! [`TokenBucket::try_consume`]: turn the time elapsed since the last refill
 //! into micro-tokens, cap them at the burst, and grant from the result, all in
-//! one critical section.
+//! one critical section. [`TokenBucket::record`] charges the same bucket
+//! without a grant limit and leaves what the balance could not cover as debt.
 //!
 //! The arithmetic that caps and grants is the verified [`plan_consume`]
-//! kernel, run over micro-token counts. [`BucketState::consume`] is the whole
-//! step on the locked group, so it can be tested without threads.
+//! kernel, run over micro-token counts. [`BucketState::consume`] and
+//! [`BucketState::record`] are the whole step on the locked group, so they can
+//! be tested without threads.
 
 use krabka_verified::throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
@@ -13,16 +15,6 @@ use krabka_verified::throttle::{
 use super::{BucketState, MICROS_PER_TOKEN, TokenBucket};
 
 const NANOS_PER_SEC: u128 = 1_000_000_000;
-
-/// How much of a part token a consume may grant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Grain {
-    /// Whole tokens only. A part token stays in the bucket.
-    WholeTokens,
-    /// Micro-tokens: when the bucket holds less than the request, the grant
-    /// is everything it holds, part token included.
-    MicroTokens,
-}
 
 /// The micro-token request a whole-token consume hands to [`plan_consume`].
 ///
@@ -49,8 +41,9 @@ impl TokenBucket {
     /// Tries to consume up to `requested` whole tokens.
     ///
     /// This method returns the whole tokens actually granted. A part token in
-    /// the bucket is not granted; it stays for a later consume. Rate-0 grants
-    /// the full request.
+    /// the bucket is not granted; it stays for a later consume. A bucket in
+    /// debt from [`Self::record`] grants nothing. Rate-0 grants the full
+    /// request.
     ///
     /// The refill, the grant, and the new balance are one critical section on
     /// the bucket's group, so a concurrent
@@ -70,36 +63,39 @@ impl TokenBucket {
         let mut state = self.lock_state();
         let now = self.now_nanos();
         state
-            .consume(now, requested, Grain::WholeTokens)
+            .consume(now, requested)
             .map_or(requested, |micros| micros / MICROS_PER_TOKEN)
     }
 
-    /// Tries to consume up to `requested` whole tokens and returns the grant
-    /// in micro-tokens, [`MICROS_PER_TOKEN`] to a token.
+    /// Charges `tokens` whole tokens whatever the bucket holds, and returns
+    /// the debt the charge leaves, in micro-tokens, [`MICROS_PER_TOKEN`] to a
+    /// token. The debt is `0` while the charge fits the balance.
     ///
-    /// Unlike [`Self::try_consume`], a bucket that holds less than the request
-    /// grants everything it holds, part token included. A quota caller turns
-    /// the rest of the request into a throttle delay at the configured rate,
-    /// so that delay is the exact shortfall even under a rate of a fraction
-    /// of a token per second. Rate-0 grants the full request.
+    /// This is Kafka's `Sensor.record(value, timeMs, true)` on a quota's
+    /// `Rate`: the value is recorded first and the quota is checked after, so
+    /// an over-quota request is charged in full. The part the balance could
+    /// not cover is debt, and the refill repays it before it adds to the
+    /// balance, so a client that keeps sending above its quota is throttled by
+    /// everything it has sent above the bound and not only by its latest
+    /// request. A caller turns the debt into the throttle time `debt / rate`,
+    /// which is Kafka's `QuotaUtils.throttleTime`.
+    ///
+    /// A rate-0 bucket has no limit, records nothing and reports no debt.
     ///
     /// # Panics
     /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
     /// since its origin, about 584 years.
-    pub fn try_consume_micros(&self, requested: u64) -> u64 {
-        let unlimited = requested.saturating_mul(MICROS_PER_TOKEN);
+    pub fn record(&self, tokens: u64) -> u64 {
         if self.fast_path_rate() == 0 {
-            return unlimited;
+            return 0;
         }
         let mut state = self.lock_state();
         let now = self.now_nanos();
-        state
-            .consume(now, requested, Grain::MicroTokens)
-            .unwrap_or(unlimited)
+        state.record(now, tokens).unwrap_or(0)
     }
 
-    /// Gives back `tokens` that an earlier [`Self::try_consume`] granted and
-    /// the caller did not use, capped at the burst.
+    /// Gives back `tokens` that an earlier charge took and the caller did not
+    /// use, capped at the burst.
     ///
     /// This is Kafka's `ClientQuotaManager.unrecordQuotaSensor`: a fetch that
     /// is throttled sends no records, so the bytes it was charged come off
@@ -108,8 +104,9 @@ impl TokenBucket {
         self.refund_micros(tokens.saturating_mul(MICROS_PER_TOKEN));
     }
 
-    /// Gives back `micros` micro-tokens that an earlier
-    /// [`Self::try_consume_micros`] granted, capped at the burst.
+    /// Gives back `micros` micro-tokens that an earlier charge took, capped at
+    /// the burst. Debt is repaid first, so refunding a [`Self::record`] in
+    /// full restores the balance it started from.
     pub fn refund_micros(&self, micros: u64) {
         if micros == 0 {
             return;
@@ -118,10 +115,22 @@ impl TokenBucket {
     }
 }
 
+/// What the time up to a clock reading makes of a bucket: the balance after
+/// the refill, and the elapsed time the refill accounts for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Refilled {
+    /// Micro-tokens the bucket can grant, refill added and capped at the
+    /// burst.
+    pub(super) available: u64,
+    /// Debt the refill did not repay.
+    pub(super) debt: u64,
+    /// The elapsed time, in nanoseconds, that became micro-tokens.
+    claimed_nanos: u64,
+}
+
 impl BucketState {
-    /// Refills the bucket for the time elapsed up to `now`, then grants up to
-    /// `requested` whole tokens from it at `grain`, and returns the grant in
-    /// micro-tokens, or `None` when the bucket has no limit.
+    /// Turns the time elapsed up to `now` into micro-tokens: the refill
+    /// repays the debt first, then adds to the balance, capped at the burst.
     ///
     /// Only the time the whole refilled micro-tokens account for is claimed.
     /// The remainder stays unclaimed for the next call, so a caller that
@@ -129,50 +138,96 @@ impl BucketState {
     /// refill at `rate`. Claiming the whole gap would drop that remainder on
     /// every call, and a bucket polled often enough would never refill at all.
     ///
-    /// Every value is computed before the first store, so a panic cannot leave
-    /// the group half updated.
-    fn consume(&mut self, now: u64, requested: u64, grain: Grain) -> Option<u64> {
+    /// The bucket must have a rate. Nothing is stored: the caller stores the
+    /// result together with the rest of its step.
+    pub(super) fn refilled(&self, now: u64) -> Refilled {
         let rate = self.micro_rate_per_sec;
-        if rate == 0 {
-            return None;
-        }
         let elapsed = now.saturating_sub(self.last_refill_nanos);
         let refill = u128::from(elapsed) * u128::from(rate) / NANOS_PER_SEC;
         let refill =
             u64::try_from(refill.min(u128::from(u64::MAX))).expect("refill is capped at u64::MAX");
-        let claimed = u64::try_from(
+        let claimed_nanos = u64::try_from(
             (u128::from(refill) * NANOS_PER_SEC / u128::from(rate)).min(u128::from(elapsed)),
         )
         .expect("the claimed time is at most the elapsed time");
-        let burst = BurstCapacity(self.micro_burst);
-        let (_, total) = plan_consume(
+        let repaid = refill.min(self.micro_debt);
+        let (_, available) = plan_consume(
             AvailableTokens(self.micro_available),
-            RefillTokens(refill),
-            burst,
+            RefillTokens(refill - repaid),
+            BurstCapacity(self.micro_burst),
             RequestedTokens(0),
         );
-        let request = match grain {
-            Grain::WholeTokens => whole_token_request(requested, total.0, MICROS_PER_TOKEN),
-            Grain::MicroTokens => requested.saturating_mul(MICROS_PER_TOKEN),
-        };
+        Refilled {
+            available: available.0,
+            debt: self.micro_debt - repaid,
+            claimed_nanos,
+        }
+    }
+
+    /// Stores a refilled balance, the balance left after the step took its
+    /// grant, and the debt the step leaves.
+    fn store(&mut self, refilled: Refilled, new_available: u64, debt: u64) {
+        self.last_refill_nanos += refilled.claimed_nanos;
+        self.micro_available = new_available;
+        self.micro_debt = debt;
+    }
+
+    /// Refills the bucket for the time elapsed up to `now`, then grants up to
+    /// `requested` whole tokens from it, and returns the grant in
+    /// micro-tokens, or `None` when the bucket has no limit.
+    ///
+    /// Every value is computed before the first store, so a panic cannot leave
+    /// the group half updated.
+    fn consume(&mut self, now: u64, requested: u64) -> Option<u64> {
+        if self.micro_rate_per_sec == 0 {
+            return None;
+        }
+        let refilled = self.refilled(now);
         let (grant, new_available) = plan_consume(
-            AvailableTokens(total.0),
+            AvailableTokens(refilled.available),
             RefillTokens(0),
-            burst,
-            RequestedTokens(request),
+            BurstCapacity(self.micro_burst),
+            RequestedTokens(whole_token_request(
+                requested,
+                refilled.available,
+                MICROS_PER_TOKEN,
+            )),
         );
-        self.last_refill_nanos += claimed;
-        self.micro_available = new_available.0;
+        self.store(refilled, new_available.0, refilled.debt);
         Some(grant.0)
     }
 
-    /// Adds `micros` back to the balance, capped at the burst. A rate-0
-    /// bucket is unthrottled and keeps no balance, so it is left alone.
+    /// Refills the bucket for the time elapsed up to `now`, then charges
+    /// `tokens` whole tokens: the balance pays what it can, and the rest is
+    /// debt. Returns the debt after the charge in micro-tokens, or `None` when
+    /// the bucket has no limit.
+    fn record(&mut self, now: u64, tokens: u64) -> Option<u64> {
+        if self.micro_rate_per_sec == 0 {
+            return None;
+        }
+        let refilled = self.refilled(now);
+        let request = tokens.saturating_mul(MICROS_PER_TOKEN);
+        let (grant, new_available) = plan_consume(
+            AvailableTokens(refilled.available),
+            RefillTokens(0),
+            BurstCapacity(self.micro_burst),
+            RequestedTokens(request),
+        );
+        let debt = refilled.debt.saturating_add(request - grant.0);
+        self.store(refilled, new_available.0, debt);
+        Some(debt)
+    }
+
+    /// Adds `micros` back to the balance, capped at the burst, after it has
+    /// repaid the debt. A rate-0 bucket is unthrottled and keeps no balance,
+    /// so it is left alone.
     fn refund(&mut self, micros: u64) {
         if self.micro_rate_per_sec != 0 {
+            let repaid = micros.min(self.micro_debt);
+            self.micro_debt -= repaid;
             self.micro_available = self
                 .micro_available
-                .saturating_add(micros)
+                .saturating_add(micros - repaid)
                 .min(self.micro_burst);
         }
     }
@@ -335,13 +390,89 @@ mod tests {
         assert2::assert!(g == 2048);
     }
 
+    /// A rate change keeps the balance, as Kafka's
+    /// `ClientQuotaManager.updateQuotaMetricConfigs` swaps a metric's bound
+    /// and leaves what it recorded (#1241). Each row drives one bucket
+    /// through a consume, an optional wait, a change of rate and burst, and a
+    /// consume that asks for more than the bucket can hold. The last grant is
+    /// the balance that survived the change.
     #[test]
-    fn set_rate_resets_available() {
-        let b = Arc::new(TokenBucket::new());
-        b.set_byte_rate(bytes_per_sec(1024));
-        try_consume_with_timeout(&b, 1024);
-        b.set_byte_rate(bytes_per_sec(2048));
-        assert2::assert!(try_consume_with_timeout(&b, 2048) == 2048);
+    fn a_rate_change_keeps_the_balance() {
+        // (label, first rate/burst, spent, wait in ms, second rate/burst,
+        // grant after the change)
+        let cases = [
+            (
+                "a drained bucket stays drained when its rate goes up",
+                (1_000, 1_000),
+                1_000,
+                0,
+                (2_000, 2_000),
+                0,
+            ),
+            (
+                "a wait refills at the old rate and the balance is kept",
+                (1_000, 1_000),
+                1_000,
+                500,
+                (2_000, 2_000),
+                500,
+            ),
+            (
+                "the balance is capped at the new burst",
+                (1_000, 1_000),
+                0,
+                0,
+                (2_000, 300),
+                300,
+            ),
+            (
+                "a balance under the new burst is kept as it is",
+                (1_000, 1_000),
+                600,
+                0,
+                (2_000, 2_000),
+                400,
+            ),
+            (
+                "the first rate of a bucket starts it full",
+                (0, 0),
+                0,
+                0,
+                (1_000, 1_000),
+                1_000,
+            ),
+            (
+                "a bucket that was unlimited starts full at its next rate",
+                (0, 0),
+                5_000,
+                0,
+                (1_000, 700),
+                700,
+            ),
+        ];
+        for (label, (rate, burst), spent, wait_ms, (new_rate, new_burst), want) in cases {
+            let (b, clock) = manual_bucket();
+            b.set_token_rate_with_burst(rate, burst);
+            b.try_consume(spent);
+            clock
+                .advance(Duration::from_millis(wait_ms))
+                .expect("manual time moves forward");
+            b.set_token_rate_with_burst(new_rate, new_burst);
+            check!(b.try_consume(u64::MAX) == want, "{label}");
+        }
+    }
+
+    /// A bucket in debt stays in debt across a change of its rate: the client
+    /// is still throttled, now by `debt / new rate`.
+    #[test]
+    fn a_rate_change_keeps_the_debt() {
+        let (b, _clock) = manual_bucket();
+        b.set_token_rate_with_burst(1_000, 1_000);
+        check!(b.record(3_000) == 2_000 * MICROS_PER_TOKEN);
+
+        b.set_token_rate_with_burst(2_000, 2_000);
+
+        check!((b.try_consume(1), b.record(0)) == (0, 2_000 * MICROS_PER_TOKEN));
     }
 
     #[test]
@@ -352,136 +483,212 @@ mod tests {
         assert2::assert!(try_consume_with_timeout(&b, 1) == 0);
     }
 
-    /// One whole consume step on the locked group, table-driven over the
-    /// cases that differ only in the group, the clock, the request and the
-    /// grain. Each row pins the grant and the whole group after the step.
-    /// The group is in micro-tokens and the request in whole tokens.
+    /// One whole-token consume step on the locked group, table-driven over the
+    /// cases that differ only in the group, the clock and the request. Each
+    /// row pins the grant and the whole group after the step. The group is in
+    /// micro-tokens and the request in whole tokens.
     #[test]
     fn consume_step_refills_caps_and_grants() {
         const SEC: u64 = 1_000_000_000;
         const M: u64 = MICROS_PER_TOKEN;
-        let group =
-            |micro_rate_per_sec, micro_burst, micro_available, last_refill_nanos| BucketState {
-                micro_rate_per_sec,
-                micro_burst,
-                micro_available,
-                last_refill_nanos,
-            };
-        let whole = Grain::WholeTokens;
-        let micro = Grain::MicroTokens;
-        // (label, group before, now, requested, grain, grant, group after)
+        let group = |rate, burst, available, debt, last_refill| BucketState {
+            micro_rate_per_sec: rate,
+            micro_burst: burst,
+            micro_available: available,
+            micro_debt: debt,
+            last_refill_nanos: last_refill,
+        };
+        // (label, group before, now, requested, grant, group after)
         let cases = [
             (
                 "rate 0 grants the request and leaves the group alone",
-                group(0, 0, 0, 0),
+                group(0, 0, 0, 0, 0),
                 5 * SEC,
                 7,
-                whole,
                 None,
-                group(0, 0, 0, 0),
+                group(0, 0, 0, 0, 0),
             ),
             (
                 "the whole elapsed second becomes tokens",
-                group(10 * M, 20 * M, 0, 0),
+                group(10 * M, 20 * M, 0, 0, 0),
                 SEC,
                 4,
-                whole,
                 Some(4 * M),
-                group(10 * M, 20 * M, 6 * M, SEC),
+                group(10 * M, 20 * M, 6 * M, 0, SEC),
             ),
             (
                 "the refill is capped at the burst, and the time is still claimed",
-                group(10 * M, 20 * M, 15 * M, 0),
+                group(10 * M, 20 * M, 15 * M, 0, 0),
                 SEC,
                 0,
-                whole,
                 Some(0),
-                group(10 * M, 20 * M, 20 * M, SEC),
+                group(10 * M, 20 * M, 20 * M, 0, SEC),
             ),
             (
                 "a part-micro-token remainder of the gap stays unclaimed",
-                group(4, 10, 0, 0),
+                group(4, 10 * M, 0, 0, 0),
                 SEC / 2 + SEC / 8,
                 10,
-                micro,
-                Some(2),
-                group(4, 10, 0, SEC / 2),
+                Some(0),
+                group(4, 10 * M, 2, 0, SEC / 2),
             ),
             (
                 "a positive rate with a zero burst grants nothing",
-                group(10 * M, 0, 0, 0),
+                group(10 * M, 0, 0, 0, 0),
                 SEC,
                 3,
-                whole,
                 Some(0),
-                group(10 * M, 0, 0, SEC),
+                group(10 * M, 0, 0, 0, SEC),
             ),
             (
                 "a clock reading behind last_refill refills nothing",
-                group(10 * M, 20 * M, 3 * M, SEC),
+                group(10 * M, 20 * M, 3 * M, 0, SEC),
                 0,
                 5,
-                whole,
                 Some(3 * M),
-                group(10 * M, 20 * M, 0, SEC),
-            ),
-            (
-                "half a token per second refills half a token in a second",
-                group(M / 2, M, 0, 0),
-                SEC,
-                1,
-                micro,
-                Some(M / 2),
-                group(M / 2, M, 0, SEC),
+                group(10 * M, 20 * M, 0, 0, SEC),
             ),
             (
                 "a whole-token consume leaves half a token in the bucket",
-                group(M / 2, M, 0, 0),
+                group(M / 2, M, 0, 0, 0),
                 SEC,
                 1,
-                whole,
                 Some(0),
-                group(M / 2, M, M / 2, SEC),
+                group(M / 2, M, M / 2, 0, SEC),
             ),
             (
                 "two seconds at half a token per second make one whole token",
-                group(M / 2, M, 0, 0),
+                group(M / 2, M, 0, 0, 0),
                 2 * SEC,
                 1,
-                whole,
                 Some(M),
-                group(M / 2, M, 0, 2 * SEC),
+                group(M / 2, M, 0, 0, 2 * SEC),
             ),
             (
                 "a whole-token consume grants the whole tokens of a part balance",
-                group(M, 3 * M, 2 * M + M / 4, 0),
+                group(M, 3 * M, 2 * M + M / 4, 0, 0),
                 0,
                 5,
-                whole,
                 Some(2 * M),
-                group(M, 3 * M, M / 4, 0),
+                group(M, 3 * M, M / 4, 0, 0),
             ),
             (
-                "a micro-token consume within the balance grants the request",
-                group(M, 3 * M, 2 * M + M / 4, 0),
-                0,
-                1,
-                micro,
-                Some(M),
-                group(M, 3 * M, M + M / 4, 0),
+                "a bucket in debt grants nothing and repays from the refill",
+                group(10 * M, 20 * M, 0, 8 * M, 0),
+                SEC / 2,
+                3,
+                Some(0),
+                group(10 * M, 20 * M, 0, 3 * M, SEC / 2),
+            ),
+            (
+                "a refill past the debt goes to the balance",
+                group(10 * M, 20 * M, 0, 4 * M, 0),
+                SEC,
+                3,
+                Some(3 * M),
+                group(10 * M, 20 * M, 3 * M, 0, SEC),
             ),
         ];
 
-        for (label, before, now, requested, grain, grant, after) in cases {
+        for (label, before, now, requested, grant, after) in cases {
             let mut state = before;
-            let granted = state.consume(now, requested, grain);
+            let granted = state.consume(now, requested);
             check!((granted, state) == (grant, after), "{label}");
+        }
+    }
+
+    /// One `record` step on the locked group: the charge is taken in full, the
+    /// balance pays what it can, and the debt is what it could not. Each row
+    /// pins the debt reported and the whole group after the step.
+    #[test]
+    fn record_step_charges_in_full_and_leaves_the_rest_as_debt() {
+        const SEC: u64 = 1_000_000_000;
+        const M: u64 = MICROS_PER_TOKEN;
+        let group = |rate, burst, available, debt, last_refill| BucketState {
+            micro_rate_per_sec: rate,
+            micro_burst: burst,
+            micro_available: available,
+            micro_debt: debt,
+            last_refill_nanos: last_refill,
+        };
+        // (label, group before, now, tokens charged, debt reported, group after)
+        let cases = [
+            (
+                "rate 0 records nothing",
+                group(0, 0, 0, 0, 0),
+                5 * SEC,
+                7,
+                None,
+                group(0, 0, 0, 0, 0),
+            ),
+            (
+                "a charge inside the balance leaves no debt",
+                group(10 * M, 20 * M, 20 * M, 0, 0),
+                0,
+                12,
+                Some(0),
+                group(10 * M, 20 * M, 8 * M, 0, 0),
+            ),
+            (
+                "a charge past the balance is debt",
+                group(10 * M, 20 * M, 5 * M, 0, 0),
+                0,
+                12,
+                Some(7 * M),
+                group(10 * M, 20 * M, 0, 7 * M, 0),
+            ),
+            (
+                "a second charge adds to the debt the first left",
+                group(10 * M, 20 * M, 0, 7 * M, 0),
+                0,
+                3,
+                Some(10 * M),
+                group(10 * M, 20 * M, 0, 10 * M, 0),
+            ),
+            (
+                "the refill repays debt before the charge",
+                group(10 * M, 20 * M, 0, 7 * M, 0),
+                SEC,
+                4,
+                Some(M),
+                group(10 * M, 20 * M, 0, M, SEC),
+            ),
+            (
+                "a part-micro-token remainder of the gap stays unclaimed",
+                group(4, 10 * M, 0, 0, 0),
+                SEC / 2 + SEC / 8,
+                10,
+                Some(10 * M - 2),
+                group(4, 10 * M, 0, 10 * M - 2, SEC / 2),
+            ),
+            (
+                "half a token per second owes half a token for a token",
+                group(M / 2, M, M / 2, 0, 0),
+                0,
+                1,
+                Some(M / 2),
+                group(M / 2, M, 0, M / 2, 0),
+            ),
+            (
+                "the debt saturates instead of wrapping",
+                group(M, M, 0, u64::MAX - 5, 0),
+                0,
+                1,
+                Some(u64::MAX),
+                group(M, M, 0, u64::MAX, 0),
+            ),
+        ];
+
+        for (label, before, now, tokens, debt, after) in cases {
+            let mut state = before;
+            let reported = state.record(now, tokens);
+            check!((reported, state) == (debt, after), "{label}");
         }
     }
 
     /// A bucket at half a token per second admits half a token per second:
     /// a caller asking for one token every second is granted one every other
-    /// second, and the micro-token grant sees the half token in between.
+    /// second, and a charge in between owes the half token it lacks.
     #[test]
     fn a_fractional_rate_is_enforced_at_its_rate() {
         let (b, clock) = manual_bucket();
@@ -493,12 +700,63 @@ mod tests {
                 .advance(Duration::from_secs(1))
                 .expect("manual time moves forward");
         }
-        let micros = b.try_consume_micros(1);
+        let debt = b.record(1);
 
-        check!((whole, micros) == (vec![1, 0, 1, 0, 1], MICROS_PER_TOKEN / 2));
+        check!((whole, debt) == (vec![1, 0, 1, 0, 1], MICROS_PER_TOKEN / 2));
     }
 
-    /// A micro-token grant given back is available again, capped at the
+    /// The overage of a charge is kept, not credited back: a bucket driven at
+    /// twice its rate by charges of a constant size owes more with every
+    /// charge, and a consume finds it empty however long the last mute was.
+    /// Before #1212 the bucket granted only what it held, so the refill of
+    /// the mute paid the overage and the client sent about twice its quota.
+    #[test]
+    fn charges_above_the_rate_accumulate_as_debt() {
+        let (b, clock) = manual_bucket();
+        b.set_token_rate_with_burst(1_000, 1_000);
+        let mut debts = Vec::new();
+        for _ in 0..4 {
+            debts.push(b.record(2_000) / MICROS_PER_TOKEN);
+            clock
+                .advance(Duration::from_secs(1))
+                .expect("manual time moves forward");
+        }
+
+        // The first charge is 1000 over the balance. Each later second's
+        // refill repays 1000 of the debt, and the next charge adds 2000.
+        check!(debts == vec![1_000, 2_000, 3_000, 4_000]);
+        check!(b.try_consume(1) == 0);
+    }
+
+    /// A debt is repaid by the refill and by a refund, and both come before
+    /// the balance.
+    #[test]
+    fn refill_and_refund_repay_the_debt_before_the_balance() {
+        let (b, clock) = manual_bucket();
+        b.set_token_rate_with_burst(100, 100);
+        check!(b.record(160) == 60 * MICROS_PER_TOKEN);
+
+        // Refunding the whole charge gives back the balance it started from.
+        b.refund(160);
+        check!(b.record(0) == 0);
+        check!(b.try_consume(100) == 100);
+
+        // A second's refill of 100 repays a debt of 30 and leaves 70.
+        check!(b.record(30) == 30 * MICROS_PER_TOKEN);
+        clock
+            .advance(Duration::from_secs(1))
+            .expect("manual time moves forward");
+        check!(b.try_consume(1_000) == 70);
+    }
+
+    /// A charge on an unlimited bucket records nothing, whatever its size.
+    #[test]
+    fn an_unlimited_bucket_records_no_debt() {
+        let b = TokenBucket::new();
+        check!((b.record(u64::MAX), b.try_consume(5)) == (0, 5));
+    }
+
+    /// A part-token charge given back is available again, capped at the
     /// burst, as a whole-token refund is.
     #[test]
     fn refund_micros_returns_a_part_token() {
@@ -507,18 +765,18 @@ mod tests {
             ByteRate::from_bytes_per_sec_f64(0.25),
             ByteSize::from_bytes_f64(0.75),
         );
-        let granted = b.try_consume_micros(1);
-        b.refund_micros(granted);
-        let again = b.try_consume_micros(1);
+        let debt = b.record(1);
+        b.refund_micros(MICROS_PER_TOKEN);
+        let after_refund = b.record(0);
         b.refund_micros(u64::MAX);
-        let capped = b.try_consume_micros(5);
+        let capped = b.record(5);
 
         check!(
-            (granted, again, capped)
+            (debt, after_refund, capped)
                 == (
-                    MICROS_PER_TOKEN * 3 / 4,
-                    MICROS_PER_TOKEN * 3 / 4,
-                    MICROS_PER_TOKEN * 3 / 4
+                    MICROS_PER_TOKEN / 4,
+                    0,
+                    5 * MICROS_PER_TOKEN - MICROS_PER_TOKEN * 3 / 4
                 )
         );
     }
@@ -561,6 +819,7 @@ mod tests {
             micro_rate_per_sec: 10 * MICROS_PER_TOKEN,
             micro_burst: 3 * MICROS_PER_TOKEN,
             micro_available: 3 * MICROS_PER_TOKEN,
+            micro_debt: 0,
             last_refill_nanos: 1_000_000_000,
         };
 

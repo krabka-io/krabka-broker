@@ -21,11 +21,13 @@ follower-in replica traffic (KIP-73), and intra-broker log directory moves
   The bucket counts micro-tokens, so a fractional byte rate such as Kafka's
   `consumer_byte_rate = 0.5` is enforced as configured.
 - A `try_consume` that grants at most the request in whole tokens, and a
-  `try_consume_micros` that also grants a part token, for a quota caller that
-  turns the rest into an exact throttle delay. Each consume and each rate
-  reset is one critical section, so a consume never straddles a reset and
-  never loses the refill it claimed. An unthrottled bucket grants without the
-  lock.
+  `record` that charges the whole request and leaves what the balance could
+  not cover as debt, which the refill repays first. A quota caller turns the
+  debt into its throttle delay, as Kafka's `Sensor.record` and
+  `QuotaUtils.throttleTime` do. A change of rate keeps the balance and the
+  debt. Each consume and each rate change is one critical section, so a
+  consume never straddles a change and never loses the refill it claimed. An
+  unthrottled bucket grants without the lock.
 - A caller-injected clock, so a test drives refills with
   `qubit_clock::ManualMonotonicClock` rather than sleeping.
 - The refill arithmetic is the Creusot-proved `plan_consume` kernel. A
