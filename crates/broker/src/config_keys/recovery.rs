@@ -34,7 +34,9 @@ pub(crate) enum RecoveryStrategy {
 
 impl RecoveryStrategy {
     pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
+        // A broker resource stores the client's string, and Kafka's
+        // `ConfigDef.parse` trims a `STRING` value before it checks it.
+        match super::parse::java_trim(value) {
             "None" => Some(Self::None),
             "Balanced" => Some(Self::Balanced),
             "Aggressive" => Some(Self::Aggressive),
@@ -120,6 +122,9 @@ mod tests {
             ("None", Some(RecoveryStrategy::None)),
             ("Balanced", Some(RecoveryStrategy::Balanced)),
             ("Aggressive", Some(RecoveryStrategy::Aggressive)),
+            // A broker resource stores the string the client sent, padding
+            // included, which Kafka's `ConfigDef.parse` trims.
+            (" Aggressive\t", Some(RecoveryStrategy::Aggressive)),
             ("bogus", None),
         ];
         for (input, want) in cases {

@@ -349,6 +349,7 @@ mod tests {
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                     authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -361,6 +362,7 @@ mod tests {
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                     authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -374,6 +376,7 @@ mod tests {
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                     authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -389,6 +392,7 @@ mod tests {
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                     authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -406,6 +410,7 @@ mod tests {
                     },
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                     authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -422,6 +427,7 @@ mod tests {
                         sasl_server_max_receive: true,
                         connection_failed_authentication_delay: true,
                     },
+                    ..Default::default()
                 },
             ),
         ] {

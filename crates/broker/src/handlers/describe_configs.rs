@@ -162,7 +162,7 @@ pub(crate) fn handle(
         // as what the operator named, not as what the broker runs: the source
         // a key reports is provenance, so a key set to its own default is
         // still `STATIC_BROKER_CONFIG`.
-        let origins = broker.config.static_config_origins;
+        let origins = &broker.config.static_config_origins;
         let settings = static_settings(&broker.config);
         let static_broker = StaticBrokerConfigs {
             txn_id_expiration: StaticBrokerSetting {
@@ -237,7 +237,6 @@ pub(crate) fn handle(
                         unstable_api_versions: broker.config.features.unstable_api_versions,
                     },
                     broker.config.client_metrics_default_interval.millis_i32(),
-                    &broker.config.streams_group,
                     options,
                 )
             })

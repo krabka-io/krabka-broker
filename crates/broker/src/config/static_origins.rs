@@ -29,8 +29,15 @@
 /// `[runtime]` file config supplied it -- all three arrive through
 /// [`crate::file_config::RuntimeFileConfig`] -- and left clear when the broker
 /// runs the built-in default.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StaticConfigOrigins {
+    /// The Kafka keys that the broker's own key table states a running value
+    /// of (`consumer_group_session_timeout` for
+    /// `group.consumer.session.timeout.ms`, and so on) and that a `[runtime]`
+    /// field supplied. A key here reports at `STATIC_BROKER_CONFIG` even at
+    /// Kafka's default value; a key that is not here does so only when the
+    /// node runs another value.
+    pub supplied_kafka_keys: std::collections::BTreeSet<&'static str>,
     /// `transactional.id.expiration.ms` was supplied.
     pub txn_id_expiration: bool,
     /// `transaction.remove.expired.transaction.cleanup.interval.ms` was

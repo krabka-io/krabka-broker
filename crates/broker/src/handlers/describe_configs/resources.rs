@@ -5,8 +5,8 @@
 //! a topic's effective configuration, a broker's per-node override over the
 //! cluster default plus its static `node.id` and idle window, a client-metrics
 //! subscription's effective values, and a group's dynamic overrides over the
-//! streams defaults. Every other resource type gets an empty configs list and
-//! no error.
+//! values the coordinators run with. Every other resource type gets an empty
+//! configs list and no error.
 //!
 //! A topic reports every key in the registry, not only the ones it overrides.
 //! `kafka-configs --describe --all` and `AdminClient.describeConfigs` exist to
@@ -84,7 +84,6 @@ pub(super) fn describe_one(
     r: &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     serving: ServingBroker<'_>,
     client_metrics_default_interval_ms: i32,
-    streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
@@ -211,10 +210,10 @@ pub(super) fn describe_one(
         return ok(group_configs(
             image,
             &r.resource_name,
-            GroupServing {
-                streams_defaults,
-                unstable: serving.unstable_api_versions,
-            },
+            (
+                serving.static_broker.settings,
+                serving.unstable_api_versions,
+            ),
             &wanted,
             options,
         ));
@@ -665,45 +664,42 @@ fn client_metrics_configs(
         .collect()
 }
 
-/// What a group resource is described against: the values the broker runs
-/// streams groups with, and whether Kafka trunk's group keys are served.
-#[derive(Clone, Copy)]
-struct GroupServing<'a> {
-    streams_defaults: &'a crate::coordinator::unified::streams::config::StreamsGroupConfig,
-    unstable: crate::api_catalog::UnstableApiVersions,
-}
-
 /// A group resource: every key of Kafka's `GroupConfig` the broker serves --
 /// 4.3.1's by default, trunk's under `unstable.api.versions.enable` -- with
 /// the group's override above the value this broker runs the group with.
 ///
 /// The chain is Kafka's `ConfigHelper.createGroupConfigEntry`: the override
 /// at `DYNAMIC_GROUP_CONFIG`, then the key's broker synonym, at
-/// `STATIC_BROKER_CONFIG` when this broker was started with a value other
-/// than Kafka's default and at `DEFAULT_CONFIG` otherwise, or, for a key with
-/// no broker synonym, a `DEFAULT_CONFIG` entry under the group key's own name.
+/// `STATIC_BROKER_CONFIG` when `statics` states it and at `DEFAULT_CONFIG`
+/// otherwise, or, for a key with no broker synonym, a `DEFAULT_CONFIG` entry
+/// under the group key's own name.
+///
+/// `statics` are the node's static settings, [`static_settings`], which state
+/// a broker synonym when the operator named it or the coordinator runs a
+/// value other than Kafka's default, and carry the value the coordinator runs
+/// with: the `consumer.*` keys are the settings of the consumer coordinator's
+/// `NextGenConfig`, the `share.*` keys those of `ShareGroupConfig`, and the
+/// `streams.*` keys those of `StreamsGroupConfig`. This is
+/// `extractGroupConfigMap`: the broker's value is every group's default.
 fn group_configs(
     image: &krabka_metadata::MetadataImage,
     group: &str,
-    serving: GroupServing<'_>,
+    (statics, unstable): (
+        &std::collections::BTreeMap<&'static str, String>,
+        crate::api_catalog::UnstableApiVersions,
+    ),
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     let overrides = image.group_config(group).cloned().unwrap_or_default();
-    // The values krabka's coordinators run with, for the keys they apply.
-    let broker_values = serving.streams_defaults.group_config_values();
 
-    config_keys::group::served_group_keys(serving.unstable)
+    config_keys::group::served_group_keys(unstable)
         .filter(|key| wanted(key.name))
         .map(|key| {
             let own_row = registry::lookup(ConfigScope::Group, key.name);
             let row = own_row
                 .copied()
                 .unwrap_or_else(|| config_keys::group::group_row(key));
-            let broker_value = broker_values
-                .get(key.name)
-                .map(String::as_str)
-                .or(key.default);
             let mut layers: Vec<Layer<'_>> = overrides
                 .get(key.name)
                 .map(|value| Layer {
@@ -714,13 +710,12 @@ fn group_configs(
                 .into_iter()
                 .collect();
             let broker_name = key.broker_synonym.unwrap_or(key.name);
-            if key.broker_synonym.is_some()
-                && let Some(value) = broker_value
-                && Some(value) != key.default
+            if let Some(synonym) = key.broker_synonym
+                && let Some(value) = statics.get(synonym)
             {
                 layers.push(Layer {
                     source: CONFIG_SOURCE_STATIC_BROKER,
-                    name: broker_name,
+                    name: synonym,
                     value,
                 });
             }
