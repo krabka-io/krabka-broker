@@ -12,11 +12,12 @@
 //! instead of `Name`, in the request and in the response. An id the image
 //! does not hold, or the zero id, answers `UNKNOWN_TOPIC_ID (100)` on every
 //! row of that topic before the topic `Read` gate, and an id it holds is
-//! authorized and checked for existence under the topic's name. At every
-//! version the committed offset records the topic's id, as Kafka trunk's
-//! `KafkaApis` hands it to the coordinator. v6 also answers a missing group
-//! `GROUP_ID_NOT_FOUND` and a refused member epoch `STALE_MEMBER_EPOCH`,
-//! which older versions answer `ILLEGAL_GENERATION`.
+//! authorized and checked for existence under the topic's name. The committed
+//! offset records the topic's id from v6 on, and at every version under
+//! `unstable.api.versions.enable`, as Kafka trunk's `KafkaApis` hands it to the
+//! coordinator. Kafka 4.3.1 records the zero id for the versions it has, 0 to
+//! 5. v6 also answers a missing group `GROUP_ID_NOT_FOUND` and a refused member
+//! epoch `STALE_MEMBER_EPOCH`, which older versions answer `ILLEGAL_GENERATION`.
 //!
 //! On v3 and above, the shared `validate_commit` validates the
 //! consumer-group metadata against the classic generation or the KIP-848
@@ -58,16 +59,17 @@
 //! routing check runs first, so a client on the wrong broker gets the
 //! retriable `NOT_COORDINATOR` and a shard still replaying answers
 //! `COORDINATOR_LOAD_IN_PROGRESS`, then the staged producer identity gate, then
-//! the KIP-447 fencing checks.
+//! the producer's verification with the transaction coordinator (KIP-890, see
+//! [`verification`]), then the KIP-447 fencing checks.
 
 use bytes::Bytes;
-use krabka_ids::PartitionIndex;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{Decode, owned::txn_offset_commit_request::TxnOffsetCommitRequest};
 
 mod batch;
 mod existence;
 mod response;
+mod verification;
 
 #[cfg(test)]
 mod integration_tests;
@@ -184,6 +186,14 @@ pub(crate) async fn handle(
     // Kafka merges the coordinator's answer into `responseBuilder`
     // (`KafkaApis.scala:2185`).
     let respond = |code: i16| {
+        // Kafka's `sendResponse` gives a client below v2 COORDINATOR_NOT_AVAILABLE
+        // for COORDINATOR_LOAD_IN_PROGRESS, which those clients do not handle
+        // (KAFKA-7296).
+        let code = if version < 2 && code == codes::COORDINATOR_LOAD_IN_PROGRESS {
+            codes::COORDINATOR_NOT_AVAILABLE
+        } else {
+            code
+        };
         encode_resp(
             version,
             &build_response(&req, code, topic_ids, &denied_topics, &unknown_rows),
@@ -228,6 +238,20 @@ pub(crate) async fn handle(
     {
         return respond(codes::INVALID_TXN_STATE);
     }
+
+    // KIP-890: Kafka verifies the producer with the transaction coordinator
+    // before the group coordinator's write operation validates the group, at
+    // every version. A wrong producer id, a stale epoch, an unknown
+    // transactional id, a partition that `AddOffsetsToTxn` never added, and a
+    // transaction in a prepare state fail every row. The log's own producer
+    // check then runs under the append lock with the guard the verification
+    // started.
+    let producer_check =
+        match verification::verify_producer(broker, &req, version, (offsets_partition, txnv)).await
+        {
+            Ok(check) => check,
+            Err(code) => return respond(code),
+        };
 
     // Kafka's `OffsetMetadataManager.validateTransactionalOffsetCommit`: a
     // group the coordinator does not hold is created as a simple group only
@@ -294,27 +318,6 @@ pub(crate) async fn handle(
         }
     }
 
-    // KIP-890 transaction protocol v2 folds AddOffsetsToTxn into v5+
-    // TxnOffsetCommit. Enroll the group's offsets partition with the
-    // transaction coordinator before appending the transactional records.
-    // At least one row reaches the log here: a request whose every row is
-    // denied or unknown returned above and never touches the transaction.
-    if version >= 5 && txnv.verified() {
-        let code = broker
-            .txn_coordinator
-            .register_offsets_partition(
-                &req.transactional_id,
-                krabka_log::ProducerId(req.producer_id),
-                req.producer_epoch,
-                PartitionIndex(offsets_partition),
-                txnv,
-            )
-            .await;
-        if code != codes::NONE {
-            return respond(code);
-        }
-    }
-
     // 3. Append a transactional RecordBatch to __consumer_offsets.
     //    We reuse the OffsetCommitKey/Value layout but stamp the batch with
     //    is_transactional=true + (producer_id, producer_epoch) so the log's
@@ -334,13 +337,19 @@ pub(crate) async fn handle(
         return respond(codes::COORDINATOR_NOT_AVAILABLE);
     }
     let now_ms = now_millis();
+    // Kafka trunk's `OffsetAndMetadata.fromRequest(topic.topicId(), ...)` keeps
+    // the topic id of every commit. 4.3.1 keeps the zero id, and its versions
+    // stop at 5, so only a v6 request and trunk mode record an id.
+    let record_topic_ids = version >= FIRST_TOPIC_ID_VERSION
+        || broker.config.features.unstable_api_versions
+            == crate::api_catalog::UnstableApiVersions::Enabled;
     let appended = match append_txn_batch(
         &req,
         &partitions,
         offsets_partition,
         now_ms,
-        &denied_topics,
-        &unknown_rows,
+        (&denied_topics, &unknown_rows),
+        (producer_check, record_topic_ids),
     )
     .await
     {
@@ -383,8 +392,10 @@ const FIRST_TOPIC_ID_VERSION: i16 = 6;
 /// at v6+ each topic id the image knows gives the topic its name, and one it
 /// does not know, or the zero id, leaves the name empty for the sweep to
 /// answer `UNKNOWN_TOPIC_ID`. Below v6 each topic gets the id the image holds
-/// for its name, or the zero id. Either way the id is what the committed
-/// offset records (`OffsetAndMetadata.fromRequest`).
+/// for its name, or the zero id. Either way the id is what the per-partition
+/// validator sees, and what the committed offset records where trunk's
+/// `OffsetAndMetadata.fromRequest` does: from v6, and under
+/// `unstable.api.versions.enable`.
 fn resolve_topics(
     req: &mut TxnOffsetCommitRequest,
     version: i16,

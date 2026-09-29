@@ -13,11 +13,18 @@ use crate::{
     },
 };
 
+/// `client_version` is the transaction version of the `EndTxn` request, which
+/// decides the epoch bump and is the version the Prepare record and its markers
+/// carry. `format_version` is the cluster's level, which only picks the
+/// `__transaction_state` value format.
 pub(super) async fn prepare_transaction(
     coordinator: &crate::txn::coordinator::TxnCoordinator,
     entry: &std::sync::Arc<tokio::sync::Mutex<TxnEntry>>,
     (committed, no_partition_added): (bool, bool),
-    version: crate::txn::version::TxnVersion,
+    (client_version, format_version): (
+        crate::txn::version::TxnVersion,
+        crate::txn::version::TxnVersion,
+    ),
     transactional_id: &str,
 ) -> Result<(MarkerType, TxnState, TxnState, TxnEntry), i16> {
     let marker_type = if committed {
@@ -53,7 +60,7 @@ pub(super) async fn prepare_transaction(
     } else {
         decide_phase1_transition(&mut staged, committed)?
     };
-    prepare_completion_identities(&mut staged, version, &coordinator.producer_ids)
+    prepare_completion_identities(&mut staged, client_version, &coordinator.producer_ids)
         .await
         .map_err(|error| {
             tracing::error!(
@@ -67,8 +74,10 @@ pub(super) async fn prepare_transaction(
             codes::from_broker_error(&error)
         })?;
     staged.last_update_ms = now_millis();
+    // Kafka `prepareAbortOrCommit` stamps the request's transaction version.
+    staged.client_transaction_version = client_version.level();
     if let Err(error) = coordinator
-        .put_under_state_partition_lock(staged.clone(), version)
+        .put_under_state_partition_lock(staged.clone(), format_version)
         .await
     {
         tracing::error!(

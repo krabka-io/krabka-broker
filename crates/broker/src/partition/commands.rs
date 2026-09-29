@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     error::BrokerError,
-    partition::{Partition, ProduceData, ProduceJob, WriterMessage},
+    partition::{Partition, ProduceData, ProduceJob, ProducerAppendCheck, WriterMessage},
 };
 
 /// Whether an internal produce definitely failed or may already be appended.
@@ -250,12 +250,24 @@ impl Partition {
         &self,
         batch: RecordBatch,
     ) -> Result<Offset, ProduceBatchError> {
+        self.produce_batch_checked(batch, None).await
+    }
+
+    /// [`Self::produce_batch_outcome`] with the producer transaction check the
+    /// log runs under its append lock, just before the append. A coordinator
+    /// that writes a producer's transactional records for it, such as
+    /// `TxnOffsetCommit`, passes the check its verification produced.
+    pub(crate) async fn produce_batch_checked(
+        &self,
+        batch: RecordBatch,
+        producer_check: Option<ProducerAppendCheck>,
+    ) -> Result<Offset, ProduceBatchError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.writer_tx
             .send(WriterMessage::Produce(ProduceJob {
                 data: ProduceData::Owned(batch),
                 ack: ack_tx,
-                producer_check: None,
+                producer_check,
             }))
             .await
             .map_err(|_| {

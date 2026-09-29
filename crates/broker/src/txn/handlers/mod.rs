@@ -12,3 +12,5 @@ pub(crate) mod write_txn_markers;
 
 #[cfg(test)]
 mod authorization_tests;
+#[cfg(test)]
+mod client_version_tests;

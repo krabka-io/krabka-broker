@@ -56,7 +56,7 @@ mod write_freeze;
 #[cfg(test)]
 mod authorization_tests;
 #[cfg(test)]
-mod test_support;
+pub(in crate::txn::handlers) mod test_support;
 
 use self::versions::{HandlerDependencies, handle_v3, handle_v4};
 use crate::{broker::Broker, error::BrokerError};

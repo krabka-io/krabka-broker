@@ -270,9 +270,10 @@ impl TxnCoordinator {
         let replay = match self.partitions.get(bootstrap::TOPIC, partition) {
             Some(part) => {
                 let read_max = self.recovery_read_max;
+                let last_epoch_tag = self.persist_last_producer_epoch;
                 let num_partitions = self.num_partitions;
                 crate::blocking::spawn_blocking(move || {
-                    replay_partition(&part, partition, read_max, |tid| {
+                    replay_partition(&part, partition, (read_max, last_epoch_tag), |tid| {
                         PartitionIndex(crate::txn::partitioner::partition_for_tid(
                             tid,
                             num_partitions,

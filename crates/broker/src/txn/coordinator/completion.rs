@@ -153,6 +153,7 @@ impl TxnCoordinator {
     /// leaves the field the `Prepare*` record already stamped in place, since
     /// that is the version this transaction completes under, independent of
     /// whatever level the cluster has reached by the time completion runs.
+    /// The marker fan-out reads the same stamp.
     // cargo-mutants: I/O over live entry locks, marker fan-out and log appends;
     // `completion_for`, `apply_completion` and `completion_decision` carry the
     // decisions and are tested on their own.
@@ -225,7 +226,7 @@ impl TxnCoordinator {
                     identity,
                     crate::txn::util::now_millis(),
                 );
-                match self.append_and_publish(completed, txnv).await {
+                match self.put_under_state_partition_lock(completed, txnv).await {
                     Ok(_) => {
                         info!(
                             tid = transactional_id,

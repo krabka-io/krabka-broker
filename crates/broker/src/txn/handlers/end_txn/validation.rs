@@ -31,7 +31,7 @@ pub(super) async fn validate_end_txn(
     image: &MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     request: &EndTxnRequest,
-    version: crate::txn::version::TxnVersion,
+    (client_version, trunk_rules): (crate::txn::version::TxnVersion, bool),
 ) -> Result<EndTxnValidation, i16> {
     let transactional_id = request.transactional_id.as_str();
     let authorization = AuthorizationRequest {
@@ -66,7 +66,7 @@ pub(super) async fn validate_end_txn(
             &state,
             (ProducerId(request.producer_id), request.producer_epoch),
             request.committed,
-            version.verified(),
+            (client_version.verified(), trunk_rules),
         )
     };
     match decision {

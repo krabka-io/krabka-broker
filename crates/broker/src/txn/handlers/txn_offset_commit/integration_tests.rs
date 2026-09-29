@@ -84,18 +84,82 @@ async fn seed_topic(broker: &crate::broker::Broker, name: &str) {
 }
 
 /// Starts a broker that grants what the principal name says, waits until its
-/// group coordinator serves `__consumer_offsets`, and seeds topic `a`.
+/// group and transaction coordinators serve, and seeds topic `a`.
 async fn start_seeded_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
             GrantsInPrincipalName,
         ));
+        cfg.transaction_state_num_partitions = 1;
+        cfg.transaction_state_replication_factor = 1;
     })
     .await;
-    handle.wait_until_group_coordinator_ready().await;
+    wait_for_coordinators(&handle).await;
     seed_topic_a(&handle.broker_arc_for_test()).await;
     (handle, dir)
+}
+
+/// Waits until the group coordinator serves `__consumer_offsets` and the
+/// transaction coordinator has loaded `__transaction_state`, which KIP-890
+/// makes every `TxnOffsetCommit` ask.
+pub(super) async fn wait_for_coordinators(handle: &crate::broker::BrokerHandle) {
+    handle.wait_until_controller_leader().await;
+    handle.wait_until_brokers_registered(1).await;
+    handle.wait_until_transaction_coordinator_ready().await;
+    handle.wait_until_group_coordinator_ready().await;
+}
+
+/// Gives `transactional_id` an ongoing transaction at `(producer_id,
+/// producer_epoch)` that already holds `group_id`'s `__consumer_offsets`
+/// partition, the state `AddOffsetsToTxn` leaves. KIP-890 verifies a
+/// `TxnOffsetCommit` against it before any offset is written.
+pub(super) async fn open_transaction_for_group(
+    broker: &crate::broker::Broker,
+    transactional_id: &str,
+    (producer_id, producer_epoch): (i64, i16),
+    group_id: &str,
+) {
+    seed_transaction(
+        broker,
+        transactional_id,
+        (producer_id, producer_epoch),
+        (crate::txn::state::TxnState::Ongoing, Some(group_id)),
+    )
+    .await;
+}
+
+/// Gives `transactional_id` an entry in `state` at `(producer_id,
+/// producer_epoch)`, holding `group_id`'s `__consumer_offsets` partition when
+/// a group is named.
+async fn seed_transaction(
+    broker: &crate::broker::Broker,
+    transactional_id: &str,
+    (producer_id, producer_epoch): (i64, i16),
+    (state, group_id): (crate::txn::state::TxnState, Option<&str>),
+) {
+    let image = broker.controller.current_image();
+    let now_ms = crate::txn::util::now_millis();
+    let mut entry = crate::txn::state::TxnEntry::new_empty(
+        transactional_id.to_owned(),
+        krabka_log::ProducerId(producer_id),
+        producer_epoch,
+        60_000,
+        now_ms,
+    );
+    entry.state = state;
+    entry.start_ms = now_ms;
+    if let Some(group_id) = group_id {
+        entry.partitions.insert(crate::txn::state::TopicPartition {
+            topic: OFFSETS_TOPIC.to_owned(),
+            partition: PartitionIndex(partition_for_group(&image, group_id)),
+        });
+    }
+    broker
+        .txn_coordinator
+        .put(entry, crate::txn::version::resolve_txn_version(&image))
+        .await
+        .unwrap_or_else(|error| panic!("seed a transaction for {transactional_id}: {error}"));
 }
 
 pub(super) fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
@@ -204,15 +268,18 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
     ];
 
     let address = peer();
-    let version = 3; // flexible, no KIP-890 offsets-partition registration (v5+ only)
+    let version = 3; // flexible; a verify-only check against the open transaction
     for (case_index, case) in cases.into_iter().enumerate() {
         let group_id = format!("group-{case_index}");
         let user = principal(case.grants);
         let ctx = request_context(&user, &address, "txn-offset-commit-existence");
+        let producer_id = 42 + i64::try_from(case_index).expect("small");
+        let transactional_id = format!("tid-{case_index}");
+        open_transaction_for_group(&broker, &transactional_id, (producer_id, 0), &group_id).await;
         let request = TxnOffsetCommitRequest {
-            transactional_id: format!("tid-{case_index}"),
+            transactional_id,
             group_id: group_id.clone(),
-            producer_id: 42,
+            producer_id,
             producer_epoch: 0,
             topics: case.topics.clone(),
             ..Default::default()
@@ -281,6 +348,7 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
     let group_id = "group-fencing";
     let user = principal(READ_ON_STAR);
     let ctx = request_context(&user, &address, "txn-offset-commit-fencing");
+    open_transaction_for_group(&broker, "tid-fencing", (42, 0), group_id).await;
     let request = TxnOffsetCommitRequest {
         transactional_id: "tid-fencing".to_string(),
         group_id: group_id.to_string(),
@@ -320,21 +388,6 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
     check!(!log_holds_key(&broker, group_id, "missing", 0));
 
     handle.shutdown().await;
-}
-
-/// Finalizes `transaction.version` 1, so a v5+ commit takes no KIP-890
-/// offsets-partition registration and needs no open transaction.
-async fn transaction_version_1(broker: &crate::broker::Broker) {
-    broker
-        .controller
-        .submit_change(vec![krabka_metadata::MetadataRecord::V1FeatureLevel(
-            krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
-                level: 1,
-            },
-        )])
-        .await
-        .expect("finalize transaction.version 1");
 }
 
 /// The `OffsetCommitValue` the log holds for `(group_id, topic, partition)`.
@@ -401,7 +454,8 @@ struct V6Case {
     /// The response topics in order: who the topic is and its rows.
     expected: Vec<(TopicRef, Vec<(i32, i16)>)>,
     /// The `(topic, partition)` rows the log holds after the request, each
-    /// with the topic id its offset records.
+    /// with the topic id its offset records: the id the image holds at v6, and
+    /// none below it, as Kafka 4.3.1 records.
     logged: Vec<(&'static str, i32)>,
 }
 
@@ -412,8 +466,8 @@ struct V6Case {
 /// the image does not hold, and the zero id, answer `UNKNOWN_TOPIC_ID` ahead
 /// of the `Read` gate. The v6 response carries the topic ids, and the rows the
 /// topic sweep settled lead the rows that reached the coordinator. v5 still
-/// names the topic, and its offset records the id the image holds for that
-/// name.
+/// names the topic, and its offset records no id, as Kafka 4.3.1 records the
+/// zero id for the versions it has.
 #[tokio::test]
 async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
     use krabka_protocol::{
@@ -426,13 +480,14 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
     let (handle, _dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(DeniesReadOnB);
+        cfg.transaction_state_num_partitions = 1;
+        cfg.transaction_state_replication_factor = 1;
     })
     .await;
-    handle.wait_until_group_coordinator_ready().await;
+    wait_for_coordinators(&handle).await;
     let broker = handle.broker_arc_for_test();
     seed_topic(&broker, "a").await;
     seed_topic(&broker, "b").await;
-    transaction_version_1(&broker).await;
     let image = broker.controller.current_image();
     let id_of = |name: &str| image.topic(name).expect("seeded topic").topic_id;
     let dead = uuid::Uuid::from_u128(0xDEAD);
@@ -442,7 +497,7 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
 
     let cases = [
         V6Case {
-            name: "v5_names_the_topic_and_logs_its_id",
+            name: "v5_names_the_topic_and_logs_no_id",
             version: 5,
             topics: vec![(TopicRef::Name("a"), &[0])],
             expected: vec![(TopicRef::Name("a"), vec![(0, codes::NONE)])],
@@ -524,10 +579,13 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
     };
     for (row, case) in cases.into_iter().enumerate() {
         let group_id = format!("group-v6-{row}");
+        let transactional_id = format!("tid-v6-{row}");
+        let producer_id = 42 + i64::try_from(row).expect("small");
+        open_transaction_for_group(&broker, &transactional_id, (producer_id, 0), &group_id).await;
         let request = TxnOffsetCommitRequest {
-            transactional_id: format!("tid-v6-{row}"),
+            transactional_id,
             group_id: group_id.clone(),
-            producer_id: 42,
+            producer_id,
             producer_epoch: 0,
             generation_id_or_member_epoch: -1,
             topics: case
@@ -592,7 +650,7 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
         let want: Vec<(&str, i32, Option<uuid::Uuid>)> = case
             .logged
             .iter()
-            .map(|&(name, partition)| (name, partition, Some(id_of(name))))
+            .map(|&(name, partition)| (name, partition, (case.version >= 6).then(|| id_of(name))))
             .collect();
         check!(logged == want, "{}: logged offsets", case.name);
     }
@@ -609,7 +667,6 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
 async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_generation() {
     let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    transaction_version_1(&broker).await;
     let address = peer();
     let user = principal(READ_ON_STAR);
     let ctx = request_context(&user, &address, "txn-offset-commit-missing-group");
@@ -626,10 +683,13 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
         (6, codes::GROUP_ID_NOT_FOUND),
     ] {
         let group_id = format!("missing-group-v{version}");
+        let transactional_id = format!("tid-missing-{version}");
+        let producer_id = 42 + i64::from(version);
+        open_transaction_for_group(&broker, &transactional_id, (producer_id, 0), &group_id).await;
         let request = TxnOffsetCommitRequest {
-            transactional_id: format!("tid-missing-{version}"),
+            transactional_id,
             group_id: group_id.clone(),
-            producer_id: 42,
+            producer_id,
             producer_epoch: 0,
             member_id: "member".into(),
             generation_id_or_member_epoch: 3,
@@ -719,7 +779,6 @@ fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed
 async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
     let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    transaction_version_1(&broker).await;
     let address = peer();
     let user = principal(READ_ON_STAR);
     let ctx = request_context(&user, &address, "txn-offset-commit-kip-1251");
@@ -750,10 +809,13 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
             .send(GroupActorMessage::Seed(kip_1251_seed(a_id)))
             .await
             .expect("seed");
+        let transactional_id = format!("tid-kip-1251-{i}");
+        let producer_id = 42 + i64::try_from(i).expect("small");
+        open_transaction_for_group(&broker, &transactional_id, (producer_id, 0), &group_id).await;
         let request = TxnOffsetCommitRequest {
-            transactional_id: format!("tid-kip-1251-{i}"),
+            transactional_id,
             group_id: group_id.clone(),
-            producer_id: 42 + i64::try_from(i).expect("small"),
+            producer_id,
             producer_epoch: 0,
             member_id: "m".into(),
             generation_id_or_member_epoch: epoch,
@@ -778,4 +840,287 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
     check!(actual == rows);
 
     handle.shutdown().await;
+}
+
+/// The transaction the coordinator holds for one verification case: its state,
+/// its producer epoch, and whether it holds the group's offsets partition.
+type HeldTransaction = (crate::txn::state::TxnState, i16, bool);
+
+struct VerificationCase {
+    name: &'static str,
+    version: i16,
+    /// `None` leaves the transactional id unknown to the coordinator.
+    held: Option<HeldTransaction>,
+    request_epoch: i16,
+    expected: i16,
+}
+
+/// #1228, KIP-890 part 1: Kafka verifies the producer with the transaction
+/// coordinator for every `TxnOffsetCommit` version, before it writes an offset
+/// (`CoordinatorPartitionWriter.maybeStartTransactionVerification`). Below v5
+/// it only checks that `AddOffsetsToTxn` added the group's offsets partition;
+/// from v5 it adds the partition itself. A stale epoch is
+/// `INVALID_PRODUCER_EPOCH`, as `AddPartitionsToTxnManager` translates the
+/// coordinator's `PRODUCER_FENCED`.
+#[tokio::test]
+async fn txn_offset_commit_verifies_the_producer_with_the_transaction_coordinator() {
+    use crate::txn::state::TxnState::{CompleteCommit, Empty, Ongoing, PrepareCommit};
+
+    let (handle, _dir) = start_seeded_broker().await;
+    let broker = handle.broker_arc_for_test();
+    let address = peer();
+    let user = principal(READ_ON_STAR);
+    let ctx = request_context(&user, &address, "txn-offset-commit-verification");
+
+    let cases = [
+        VerificationCase {
+            name: "v3 for a transactional id the coordinator does not know",
+            version: 3,
+            held: None,
+            request_epoch: 5,
+            expected: codes::INVALID_PRODUCER_ID_MAPPING,
+        },
+        VerificationCase {
+            name: "v3 from a fenced producer",
+            version: 3,
+            held: Some((Ongoing, 6, true)),
+            request_epoch: 5,
+            expected: codes::INVALID_PRODUCER_EPOCH,
+        },
+        VerificationCase {
+            name: "v3 when AddOffsetsToTxn never added the partition",
+            version: 3,
+            held: Some((Ongoing, 5, false)),
+            request_epoch: 5,
+            expected: codes::INVALID_TXN_STATE,
+        },
+        VerificationCase {
+            name: "v4 knows TRANSACTION_ABORTABLE",
+            version: 4,
+            held: Some((Ongoing, 5, false)),
+            request_epoch: 5,
+            expected: codes::TRANSACTION_ABORTABLE,
+        },
+        VerificationCase {
+            name: "v3 after the transaction completed",
+            version: 3,
+            held: Some((CompleteCommit, 5, false)),
+            request_epoch: 5,
+            expected: codes::INVALID_TXN_STATE,
+        },
+        VerificationCase {
+            name: "v3 while the transaction is ending",
+            version: 3,
+            held: Some((PrepareCommit, 5, true)),
+            request_epoch: 5,
+            expected: codes::CONCURRENT_TRANSACTIONS,
+        },
+        VerificationCase {
+            name: "v3 from the producer that added the partition",
+            version: 3,
+            held: Some((Ongoing, 5, true)),
+            request_epoch: 5,
+            expected: codes::NONE,
+        },
+        VerificationCase {
+            name: "v5 from a fenced producer",
+            version: 5,
+            held: Some((Ongoing, 6, true)),
+            request_epoch: 5,
+            expected: codes::INVALID_PRODUCER_EPOCH,
+        },
+        VerificationCase {
+            name: "v5 adds the partition to an empty transaction",
+            version: 5,
+            held: Some((Empty, 5, false)),
+            request_epoch: 5,
+            expected: codes::NONE,
+        },
+    ];
+
+    for (row, case) in cases.into_iter().enumerate() {
+        let group_id = format!("group-verified-{row}");
+        let transactional_id = format!("tid-verified-{row}");
+        let producer_id = 900 + i64::try_from(row).expect("small");
+        if let Some((state, epoch, holds_offsets)) = case.held {
+            seed_transaction(
+                &broker,
+                &transactional_id,
+                (producer_id, epoch),
+                (state, holds_offsets.then_some(group_id.as_str())),
+            )
+            .await;
+        }
+        let request = TxnOffsetCommitRequest {
+            transactional_id,
+            group_id: group_id.clone(),
+            producer_id,
+            producer_epoch: case.request_epoch,
+            generation_id_or_member_epoch: -1,
+            topics: vec![topic("a", &[0])],
+            ..Default::default()
+        };
+        let bytes = dispatch_context(
+            &broker,
+            txn_offset_commit_request::API_KEY,
+            case.version,
+            &encode_request(&request, case.version),
+            &ctx,
+        )
+        .await;
+        let response: TxnOffsetCommitResponse = decode_response(&bytes, case.version);
+        check!(
+            response.topics[0].partitions[0].error_code == case.expected,
+            "{}",
+            case.name
+        );
+        check!(
+            log_holds_key(&broker, &group_id, "a", 0) == (case.expected == codes::NONE),
+            "{}: only an admitted producer writes",
+            case.name
+        );
+    }
+
+    handle.shutdown().await;
+}
+
+/// From v5 the verification adds the offsets partition to the transaction
+/// whatever `transaction.version` the cluster finalized, as
+/// `txnOffsetCommitRequestVersionToTransactionSupportedOperation` gives
+/// `ADD_PARTITION` above v4. The coordinator records `TV_2` for the add.
+#[tokio::test]
+async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_cluster() {
+    let (handle, _dir) = start_seeded_broker().await;
+    let broker = handle.broker_arc_for_test();
+    broker
+        .controller
+        .submit_change(vec![krabka_metadata::MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
+                level: 1,
+            },
+        )])
+        .await
+        .expect("finalize transaction.version 1");
+    let address = peer();
+    let user = principal(READ_ON_STAR);
+    let ctx = request_context(&user, &address, "txn-offset-commit-tv1");
+
+    let group_id = "group-tv1";
+    seed_transaction(
+        &broker,
+        "tid-tv1",
+        (700, 5),
+        (crate::txn::state::TxnState::Ongoing, None),
+    )
+    .await;
+    let request = TxnOffsetCommitRequest {
+        transactional_id: "tid-tv1".to_string(),
+        group_id: group_id.to_string(),
+        producer_id: 700,
+        producer_epoch: 5,
+        generation_id_or_member_epoch: -1,
+        topics: vec![topic("a", &[0])],
+        ..Default::default()
+    };
+    let bytes = dispatch_context(
+        &broker,
+        txn_offset_commit_request::API_KEY,
+        5,
+        &encode_request(&request, 5),
+        &ctx,
+    )
+    .await;
+    let response: TxnOffsetCommitResponse = decode_response(&bytes, 5);
+    check!(response.topics[0].partitions[0].error_code == codes::NONE);
+    check!(log_holds_key(&broker, group_id, "a", 0));
+
+    let entry = broker
+        .txn_coordinator
+        .get("tid-tv1")
+        .expect("the transaction")
+        .lock()
+        .await
+        .clone();
+    let image = broker.controller.current_image();
+    check!(
+        entry.partitions
+            == [crate::txn::state::TopicPartition {
+                topic: OFFSETS_TOPIC.to_owned(),
+                partition: PartitionIndex(partition_for_group(&image, group_id)),
+            }]
+            .into_iter()
+            .collect::<HashSet<_>>()
+    );
+    check!(entry.client_transaction_version == 2);
+
+    handle.shutdown().await;
+}
+
+/// Kafka trunk records the topic id of a transactional commit at every
+/// version, and 4.3.1 records none. The topic id follows the request version
+/// and `unstable.api.versions.enable`, and a v5 request names its topic.
+#[tokio::test]
+async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
+    // (unstable api versions on, the topic id the offset records)
+    for (unstable, recorded) in [(false, false), (true, true)] {
+        let (handle, _dir) = start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+                GrantsInPrincipalName,
+            ));
+            cfg.transaction_state_num_partitions = 1;
+            cfg.transaction_state_replication_factor = 1;
+            if unstable {
+                cfg.features.unstable_api_versions =
+                    crate::api_catalog::UnstableApiVersions::Enabled;
+            }
+        })
+        .await;
+        wait_for_coordinators(&handle).await;
+        let broker = handle.broker_arc_for_test();
+        seed_topic_a(&broker).await;
+        let address = peer();
+        let user = principal(READ_ON_STAR);
+        let ctx = request_context(&user, &address, "txn-offset-commit-topic-id");
+
+        let group_id = "group-topic-id";
+        open_transaction_for_group(&broker, "tid-topic-id", (800, 0), group_id).await;
+        let request = TxnOffsetCommitRequest {
+            transactional_id: "tid-topic-id".to_string(),
+            group_id: group_id.to_string(),
+            producer_id: 800,
+            producer_epoch: 0,
+            generation_id_or_member_epoch: -1,
+            topics: vec![topic("a", &[0])],
+            ..Default::default()
+        };
+        let bytes = dispatch_context(
+            &broker,
+            txn_offset_commit_request::API_KEY,
+            5,
+            &encode_request(&request, 5),
+            &ctx,
+        )
+        .await;
+        let response: TxnOffsetCommitResponse = decode_response(&bytes, 5);
+        check!(
+            response.topics[0].partitions[0].error_code == codes::NONE,
+            "unstable={unstable}"
+        );
+
+        let topic_id = broker
+            .controller
+            .current_image()
+            .topic("a")
+            .expect("topic a")
+            .topic_id;
+        check!(
+            logged_value(&broker, group_id, "a", 0).map(|value| value.topic_id)
+                == Some(recorded.then_some(topic_id)),
+            "unstable={unstable}"
+        );
+
+        handle.shutdown().await;
+    }
 }

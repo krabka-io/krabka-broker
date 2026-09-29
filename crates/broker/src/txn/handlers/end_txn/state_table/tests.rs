@@ -111,12 +111,14 @@ fn the_state_table_follows_the_transaction_version() {
             EndTxnDecision::AlreadyComplete,
             prepare(TxnState::PrepareAbort, true),
         ),
+        // Kafka 4.3.1 answers INVALID_TXN_STATE here, and trunk answers
+        // PRODUCER_FENCED (KAFKA-20785), see the switch below the table.
         (
             TxnState::CompleteAbort,
             true,
             Identity::Retry,
             EndTxnDecision::Refuse(codes::PRODUCER_FENCED),
-            EndTxnDecision::Refuse(codes::PRODUCER_FENCED),
+            EndTxnDecision::Refuse(codes::INVALID_TXN_STATE),
         ),
         (
             TxnState::CompleteAbort,
@@ -200,11 +202,22 @@ fn the_state_table_follows_the_transaction_version() {
             "{state:?} {} {identity:?}",
             if committed { "commit" } else { "abort" }
         );
-        expected.push((row.clone(), classic, verified));
+        // Trunk changes one arm of the version-2 table. The version-1 table
+        // has no trunk arm.
+        let trunk = if (state, committed) == (TxnState::CompleteAbort, true)
+            && matches!(identity, Identity::Retry)
+        {
+            EndTxnDecision::Refuse(codes::PRODUCER_FENCED)
+        } else {
+            verified
+        };
+        expected.push((row.clone(), classic, classic, verified, trunk));
         actual.push((
             row,
-            end_txn_decision(&entry(state), request(identity), committed, false),
-            end_txn_decision(&entry(state), request(identity), committed, true),
+            end_txn_decision(&entry(state), request(identity), committed, (false, false)),
+            end_txn_decision(&entry(state), request(identity), committed, (false, true)),
+            end_txn_decision(&entry(state), request(identity), committed, (true, false)),
+            end_txn_decision(&entry(state), request(identity), committed, (true, true)),
         ));
     }
     assert!(actual == expected);
@@ -227,13 +240,13 @@ fn a_rotated_producer_id_retries_with_the_exhausted_epoch() {
     ];
     for (committed, expected) in cases {
         assert!(
-            end_txn_decision(&rotated, overflow, committed, true) == expected,
+            end_txn_decision(&rotated, overflow, committed, (true, false)) == expected,
             "committed={committed}"
         );
         // Below version 2 the same request names neither the entry's producer
         // id nor its epoch.
         assert!(
-            end_txn_decision(&rotated, overflow, committed, false)
+            end_txn_decision(&rotated, overflow, committed, (false, false))
                 == EndTxnDecision::Refuse(codes::INVALID_PRODUCER_ID_MAPPING),
             "committed={committed} below version 2"
         );
@@ -250,12 +263,12 @@ fn a_staged_recovery_identity_is_the_one_that_ends_the_transaction() {
     staged.next_producer_epoch = EPOCH + 1;
     for verified in [false, true] {
         assert!(
-            end_txn_decision(&staged, (PID, EPOCH + 1), true, verified)
+            end_txn_decision(&staged, (PID, EPOCH + 1), true, (verified, false))
                 == prepare(TxnState::PrepareCommit, false),
             "verified={verified}: the staged identity"
         );
         assert!(
-            end_txn_decision(&staged, (PID, EPOCH), true, verified)
+            end_txn_decision(&staged, (PID, EPOCH), true, (verified, false))
                 == EndTxnDecision::Refuse(codes::PRODUCER_FENCED),
             "verified={verified}: the identity from before the recovery"
         );

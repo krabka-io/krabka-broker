@@ -333,8 +333,8 @@ async fn set_up(client: &Client, case: &Case) -> Identity {
                 .await
                 .expect("EndTxn");
             assert!(end.error_code == 0, "{}: EndTxn {end:?}", case.name);
-            // EndTxn v5 carries the bumped epoch at transaction version 2.
-            // Below version 2 the epoch does not change.
+            // EndTxn v5 carries the bumped epoch at every cluster level, since
+            // the request version decides the client transaction version.
             let epoch = if end.producer_id >= 0 {
                 end.producer_epoch
             } else {
@@ -408,18 +408,17 @@ async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_res
             accepted: (0, 0),
         },
         Case {
-            name: "tv1-commit-keeps-the-epoch",
+            name: "tv1-cluster-v5-commit-bumps-the-epoch",
             topic: "seq-tv1",
             setup: Setup::Transaction {
                 downgrade_to: Some(1),
             },
-            // A gap at the kept epoch. The rejected batch must not start
-            // below the accepted one: the KIP-890 verification of the rejected
-            // batch keeps its first sequence as the lowest one, and Kafka's
-            // `ProducerAppendInfo.checkSequence` then refuses any higher first
-            // sequence until a transactional append clears that state.
-            rejected: (0, 4),
-            accepted: (0, 3),
+            // The EndTxn v5 request of this client is a TV_2 client whatever
+            // `transaction.version` the cluster finalized (Kafka's
+            // `transactionVersionForEndTxn`), so the commit bumps the epoch as
+            // it does at TV_2.
+            rejected: (0, 3),
+            accepted: (0, 0),
         },
         Case {
             name: "idempotent-epoch-bump",

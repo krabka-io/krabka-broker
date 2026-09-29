@@ -7,7 +7,9 @@
 //! writes an abort over an empty partition set, and it recognises the retry of
 //! a completed transaction by the epoch before the bump. Version 1 has no
 //! retry, and accepts a commit only from `CompleteCommit` and an abort only
-//! from `CompleteAbort`, both without a write.
+//! from `CompleteAbort`, both without a write. Kafka picks the table from the
+//! client's transaction version, which is the `EndTxn` request version and not
+//! the cluster's `transaction.version`.
 //!
 //! The table in `TransactionCoordinator.scala` above `endTransaction` is what
 //! this module implements, with `PF` = `PRODUCER_FENCED`,
@@ -42,13 +44,15 @@ pub(super) enum EndTxnDecision {
 
 /// The `EndTxn` decision for one request against one entry.
 ///
-/// `verified` is transaction version 2 and above, where completion bumps the
-/// producer epoch.
+/// `verified` is transaction version 2 and above for the *client*, that is an
+/// `EndTxn` v5 (Kafka's `TransactionVersion.transactionVersionForEndTxn`),
+/// where completion bumps the producer epoch. `trunk_rules` selects the one
+/// answer that Kafka trunk changed after 4.3.1, see [`verified_state_decision`].
 pub(super) fn end_txn_decision(
     entry: &TxnEntry,
     (request_pid, request_epoch): (ProducerId, i16),
     committed: bool,
-    verified: bool,
+    (verified, trunk_rules): (bool, bool),
 ) -> EndTxnDecision {
     // The identity a client holds is the staged KIP-939 recovery identity when
     // the entry has one, and the live identity otherwise.
@@ -78,7 +82,7 @@ pub(super) fn end_txn_decision(
         }
     }
     if verified {
-        verified_state_decision(entry.state, committed, is_retry)
+        verified_state_decision(entry.state, committed, is_retry, trunk_rules)
     } else {
         classic_state_decision(entry.state, committed)
     }
@@ -101,7 +105,17 @@ fn valid_verified_epoch(
 }
 
 /// The transaction-version-2 table.
-fn verified_state_decision(state: TxnState, committed: bool, is_retry: bool) -> EndTxnDecision {
+///
+/// Kafka 4.3.1 answers `INVALID_TXN_STATE` for a commit at the retry epoch of a
+/// `CompleteAbort` entry. Kafka trunk answers `PRODUCER_FENCED` instead
+/// (KAFKA-20785), and `trunk_rules` turns that arm on. Every other row is the
+/// same in both.
+fn verified_state_decision(
+    state: TxnState,
+    committed: bool,
+    is_retry: bool,
+    trunk_rules: bool,
+) -> EndTxnDecision {
     let prepare = |no_partition_added| EndTxnDecision::Prepare {
         state: if committed {
             TxnState::PrepareCommit
@@ -128,10 +142,14 @@ fn verified_state_decision(state: TxnState, committed: bool, is_retry: bool) -> 
                 no_partition_added: true,
             }
         }
-        // A commit at the pre-abort epoch raced a coordinator-side abort, for
-        // example on `transaction.timeout.ms`. It cannot have taken effect, so
-        // Kafka answers the recoverable `PRODUCER_FENCED` (KAFKA-20785).
-        (TxnState::CompleteAbort, true, true) => EndTxnDecision::Refuse(codes::PRODUCER_FENCED),
+        // Trunk only (KAFKA-20785, after 4.3.1): a commit at the pre-abort
+        // epoch raced a coordinator-side abort, for example on
+        // `transaction.timeout.ms`. It cannot have taken effect, so trunk
+        // answers the recoverable `PRODUCER_FENCED`. 4.3.1 falls through to
+        // `INVALID_TXN_STATE` below.
+        (TxnState::CompleteAbort, true, true) if trunk_rules => {
+            EndTxnDecision::Refuse(codes::PRODUCER_FENCED)
+        }
         (TxnState::PrepareCommit, true, _) | (TxnState::PrepareAbort, false, _) => {
             EndTxnDecision::Refuse(codes::CONCURRENT_TRANSACTIONS)
         }

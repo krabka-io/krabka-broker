@@ -54,6 +54,9 @@ pub(super) async fn start_coordinators(
         config.transaction_state_num_partitions,
         config.transaction_recovery_read_max,
     );
+    txn_coordinator.set_persist_last_producer_epoch(
+        config.features.unstable_api_versions == crate::api_catalog::UnstableApiVersions::Enabled,
+    );
     txn_coordinator.configure_marker_transport(
         Arc::clone(controller),
         Arc::clone(inter_broker_client),

@@ -16,6 +16,8 @@ use krabka_protocol::{
 use crate::{
     codes,
     coordinator::{bootstrap::OFFSETS_TOPIC, persistence::OffsetCommitValue},
+    error::BrokerError,
+    partition::ProduceBatchError,
 };
 
 /// What one `TxnOffsetCommit` durably wrote: the offsets-log position of its
@@ -41,13 +43,22 @@ pub(super) struct AppendedTxnOffsets {
 /// can never be marked pending without a durable record behind it for the
 /// transaction's marker to find again. The base offset travels with them
 /// because it is what orders the mark against that marker.
+///
+/// `producer_check` is the KIP-890 check the log runs under its append lock,
+/// with the guard the producer's verification started, and a refusal is
+/// answered as Kafka's append throws it. `record_topic_ids` says whether the
+/// offset records carry the topic ids the handler resolved, which Kafka 4.3.1
+/// does not record.
 pub(super) async fn append_txn_batch(
     req: &TxnOffsetCommitRequest,
     partitions: &std::sync::Arc<crate::partition_registry::PartitionRegistry>,
     offsets_partition: i32,
     now_ms: i64,
-    denied_topics: &std::collections::HashSet<String>,
-    unknown_rows: &std::collections::HashSet<(String, i32)>,
+    (denied_topics, unknown_rows): (
+        &std::collections::HashSet<String>,
+        &std::collections::HashSet<(String, i32)>,
+    ),
+    (producer_check, record_topic_ids): (crate::partition::ProducerAppendCheck, bool),
 ) -> Result<Option<AppendedTxnOffsets>, i16> {
     let mut batch = RecordBatch {
         attributes: Attributes::default().with_transactional(true),
@@ -80,8 +91,10 @@ pub(super) async fn append_txn_batch(
                 // broker-wide retention.
                 expire_timestamp_ms: None,
                 // The id the handler resolved the topic to, as Kafka trunk's
-                // `OffsetAndMetadata.fromRequest` keeps it (KIP-1319).
-                topic_id: Some(uuid::Uuid::from_bytes(topic.topic_id.0)).filter(|id| !id.is_nil()),
+                // `OffsetAndMetadata.fromRequest` keeps it (KIP-1319). 4.3.1
+                // keeps the zero id, which is no id.
+                topic_id: Some(uuid::Uuid::from_bytes(topic.topic_id.0))
+                    .filter(|id| record_topic_ids && !id.is_nil()),
             };
             batch.records.push(Record {
                 offset_delta: delta,
@@ -114,7 +127,7 @@ pub(super) async fn append_txn_batch(
     // `produce_batch` drives the single-writer task and returns the assigned
     // base offset, which is the log position the KIP-447 mark is ordered by.
     part_handle
-        .produce_batch(batch)
+        .produce_batch_checked(batch, Some(producer_check))
         .await
         .map(|written_at| {
             Some(AppendedTxnOffsets {
@@ -123,13 +136,23 @@ pub(super) async fn append_txn_batch(
             })
         })
         .map_err(|e| {
+            let error = match e {
+                ProduceBatchError::Rejected(error) => error,
+                ProduceBatchError::Indeterminate(error) => BrokerError::Txn(error),
+            };
             tracing::error!(
                 group = %req.group_id,
                 tid   = %req.transactional_id,
-                error = %e,
+                %error,
                 "TxnOffsetCommit: produce_batch failed"
             );
-            codes::UNKNOWN_SERVER_ERROR
+            // A refusal of the producer check is the exception Kafka's append
+            // throws: INVALID_PRODUCER_EPOCH, INVALID_TXN_STATE. Anything
+            // else is unexpected.
+            match error {
+                BrokerError::TransactionAppend(_) => codes::from_broker_error(&error),
+                _ => codes::UNKNOWN_SERVER_ERROR,
+            }
         })
 }
 
@@ -166,6 +189,29 @@ mod tests {
         );
     }
 
+    /// The check a verification of `req`'s producer on the offsets partition
+    /// hands the append, as `verification::verify_producer` starts it.
+    async fn verified(
+        registry: &PartitionRegistry,
+        req: &TxnOffsetCommitRequest,
+    ) -> crate::partition::ProducerAppendCheck {
+        let part = registry
+            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
+            .expect("offsets partition");
+        let batch = krabka_log::TransactionalBatch {
+            producer_id: krabka_log::ProducerId(req.producer_id),
+            producer_epoch: req.producer_epoch,
+            base_sequence: 0,
+            is_transactional: true,
+            is_control: false,
+        };
+        let guard = part
+            .start_transaction_verification(batch, false, (0, i64::MAX))
+            .await
+            .expect("verification starts");
+        crate::partition::ProducerAppendCheck { batch, guard }
+    }
+
     #[tokio::test]
     async fn append_txn_batch_writes_transactional_offset_records() {
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -178,8 +224,8 @@ mod tests {
             &registry,
             OFFSETS_PARTITION,
             12_345,
-            &HashSet::new(),
-            &HashSet::new(),
+            (&HashSet::new(), &HashSet::new()),
+            (verified(&registry, &req).await, false),
         )
         .await
         .expect("append batch")
@@ -231,8 +277,8 @@ mod tests {
             &registry,
             OFFSETS_PARTITION,
             12_345,
-            &denied,
-            &HashSet::new(),
+            (&denied, &HashSet::new()),
+            (verified(&registry, &req).await, false),
         )
         .await
         .expect("all denied succeeds");
@@ -250,13 +296,24 @@ mod tests {
     #[tokio::test]
     async fn append_txn_batch_returns_not_coordinator_when_offsets_partition_missing() {
         let registry = Arc::new(PartitionRegistry::new());
+        let req = request();
+        let unverified = crate::partition::ProducerAppendCheck {
+            batch: krabka_log::TransactionalBatch {
+                producer_id: krabka_log::ProducerId(req.producer_id),
+                producer_epoch: req.producer_epoch,
+                base_sequence: 0,
+                is_transactional: true,
+                is_control: false,
+            },
+            guard: krabka_log::VerificationGuard::SENTINEL,
+        };
         let err = append_txn_batch(
-            &request(),
+            &req,
             &registry,
             OFFSETS_PARTITION,
             12_345,
-            &HashSet::new(),
-            &HashSet::new(),
+            (&HashSet::new(), &HashSet::new()),
+            (unverified, false),
         )
         .await
         .expect_err("missing offsets partition");
@@ -277,8 +334,8 @@ mod tests {
             &registry,
             OFFSETS_PARTITION,
             12_345,
-            &HashSet::new(),
-            &unknown,
+            (&HashSet::new(), &unknown),
+            (verified(&registry, &req).await, false),
         )
         .await
         .expect("append batch")
@@ -294,5 +351,117 @@ mod tests {
             .expect("read offsets log");
         assert!(read.batches.len() == 1);
         assert!(read.batches[0].records.len() == 1);
+    }
+
+    /// Kafka 4.3.1 records the zero topic id for a transactional commit
+    /// (`OffsetAndMetadata.fromRequest(partition, now)`), and trunk records the
+    /// id its `KafkaApis` resolved.
+    #[tokio::test]
+    async fn the_topic_id_is_recorded_only_when_the_caller_asks_for_it() {
+        let topic_id = uuid::Uuid::from_u128(0xfeed);
+        // (label, record the topic id, the id the offset record carries)
+        for (mode, record_topic_ids, recorded) in
+            [("4.3.1", false, None), ("trunk", true, Some(topic_id))]
+        {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            let registry = Arc::new(PartitionRegistry::new());
+            open_offsets_partition(&registry, dir.path());
+            let mut req = request();
+            req.topics[0].topic_id = krabka_protocol::primitives::uuid::Uuid(topic_id.into_bytes());
+
+            append_txn_batch(
+                &req,
+                &registry,
+                OFFSETS_PARTITION,
+                12_345,
+                (&HashSet::new(), &HashSet::new()),
+                (verified(&registry, &req).await, record_topic_ids),
+            )
+            .await
+            .expect("append batch")
+            .expect("records appended");
+
+            let part = registry
+                .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
+                .expect("offsets partition");
+            let log = part.log.lock().expect("lock offsets log");
+            let read = log
+                .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
+                .expect("read offsets log");
+            let recorded_ids: Vec<Option<uuid::Uuid>> = read.batches[0]
+                .records
+                .iter()
+                .map(|record| {
+                    OffsetCommitValue::decode_value(record.value.as_deref().expect("a value"))
+                        .expect("decode the offset record")
+                        .topic_id
+                })
+                .collect();
+            assert!(recorded_ids == vec![recorded, recorded], "{mode}");
+        }
+    }
+
+    /// The log runs its producer check under the append lock, so an append the
+    /// verification did not admit never lands: a stale epoch is
+    /// `INVALID_PRODUCER_EPOCH`, and a producer with no verified transaction is
+    /// `INVALID_TXN_STATE`.
+    #[tokio::test]
+    async fn the_append_refuses_a_producer_the_log_check_does_not_admit() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let registry = Arc::new(PartitionRegistry::new());
+        open_offsets_partition(&registry, dir.path());
+        let req = request();
+        append_txn_batch(
+            &req,
+            &registry,
+            OFFSETS_PARTITION,
+            12_345,
+            (&HashSet::new(), &HashSet::new()),
+            (verified(&registry, &req).await, false),
+        )
+        .await
+        .expect("the verified producer appends");
+
+        let mut stale = request();
+        stale.producer_epoch = req.producer_epoch - 1;
+        let mut other = request();
+        other.producer_id += 1;
+        // (label, request, expected code)
+        let cases = [
+            ("a stale epoch", stale, codes::INVALID_PRODUCER_EPOCH),
+            ("an unverified producer", other, codes::INVALID_TXN_STATE),
+        ];
+        for (label, req, expected) in cases {
+            let unverified = crate::partition::ProducerAppendCheck {
+                batch: krabka_log::TransactionalBatch {
+                    producer_id: krabka_log::ProducerId(req.producer_id),
+                    producer_epoch: req.producer_epoch,
+                    base_sequence: 0,
+                    is_transactional: true,
+                    is_control: false,
+                },
+                guard: krabka_log::VerificationGuard::SENTINEL,
+            };
+            let refused = append_txn_batch(
+                &req,
+                &registry,
+                OFFSETS_PARTITION,
+                12_345,
+                (&HashSet::new(), &HashSet::new()),
+                (unverified, false),
+            )
+            .await
+            .expect_err(label);
+            assert!(refused == expected, "{label}");
+        }
+
+        let part = registry
+            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
+            .expect("offsets partition");
+        let log = part.log.lock().expect("lock offsets log");
+        let read = log
+            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
+            .expect("read offsets log");
+        assert!(read.batches.len() == 1, "only the verified append landed");
     }
 }

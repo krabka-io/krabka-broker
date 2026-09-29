@@ -173,12 +173,12 @@ public final class TransactionalProducer {
         producer.send(new ProducerRecord<>(args[1], "committed-" + i)).get();
       }
       producer.commitTransaction();
-    }
 
-    // Mirror two independent CLI invocations. The second init obtains the
-    // post-EndTxn epoch before it writes the transaction that is aborted.
-    try (KafkaProducer<String, String> producer = new KafkaProducer<>(config)) {
-      producer.initTransactions();
+      // A second transaction on the same producer instance. A client below
+      // EndTxn v5 (this cp-kafka 7.5.0 client speaks v3) keeps its epoch across
+      // transactions, so the coordinator of a transaction.version 2 cluster must
+      // not bump it on completion: the next AddPartitionsToTxn at the old epoch
+      // would be fenced, and the producer would fail with ProducerFencedException.
       producer.beginTransaction();
       for (int i = 0; i < 2; i++) {
         producer.send(new ProducerRecord<>(args[1], "aborted-" + i)).get();
