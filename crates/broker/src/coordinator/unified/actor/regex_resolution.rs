@@ -139,7 +139,7 @@ impl RegexUpdate {
 /// 1. The group subscribes to a regular expression, or the member just brought
 ///    a new one.
 /// 2. The last resolution is older than
-///    [`REGEX_BATCH_REFRESH_MIN_INTERVAL_MS`].
+///    [`RegexResolution::min_refresh_interval`].
 /// 3. A pattern is not resolved yet, or the metadata image has changed since
 ///    the last resolution in a way that can change it
 ///    ([`RegexResolution::refresh_version`]), or the last resolution is older
@@ -151,6 +151,14 @@ pub(crate) fn maybe_update_regular_expressions(
     regexes: &RegexResolution<'_>,
     records: &mut Vec<RegexRecord>,
 ) -> RegexUpdate {
+    // A member with no pattern before and after asks nothing of the group's
+    // resolutions, and this keeps its heartbeat free of a scan of the members.
+    // The members that use a pattern heartbeat too, and they refresh a stale
+    // resolution.
+    if old_regex.is_none() && new_regex.is_none() {
+        return RegexUpdate::NoChange;
+    }
+
     let mut require_refresh = false;
     let mut update = RegexUpdate::NoChange;
 
@@ -517,6 +525,15 @@ mod tests {
                 new: Some("a.*"),
                 resolves: false,
                 update: RegexUpdate::UpdatedAndResolved,
+            },
+            Row {
+                name: "a member without a pattern leaves a stale resolution to the members that use one",
+                since_ms: 600_001,
+                refresh_version: 6,
+                old: None,
+                new: None,
+                resolves: false,
+                update: RegexUpdate::NoChange,
             },
             Row {
                 name: "a member drops its pattern",
