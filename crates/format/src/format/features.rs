@@ -104,15 +104,7 @@ pub(super) fn resolve_format_features(
             continue;
         }
         let Some(feat) = krabka_metadata::feature(name) else {
-            let mut known: Vec<&str> = krabka_metadata::feature_registry()
-                .iter()
-                .map(|f| f.name())
-                .collect();
-            known.sort_unstable();
-            return Err(format!(
-                "Unsupported feature: {name}. Supported features are: {}",
-                known.join(", ")
-            ));
+            return Err(unsupported_feature(name));
         };
         let (min, max) = feat.supported_range();
         if name == METADATA_VERSION_FEATURE
@@ -124,9 +116,7 @@ pub(super) fn resolve_format_features(
             return Err(format!("metadata.version {ivn} is not yet stable."));
         }
         if *level < min || *level > max {
-            return Err(format!(
-                "feature {name}={level} is outside the supported range {min}..={max}"
-            ));
+            return Err(no_feature_level(name, *level));
         }
         if name == METADATA_VERSION_FEATURE {
             if release_version.is_some() {
@@ -164,6 +154,31 @@ pub(super) fn resolve_format_features(
     krabka_metadata::validate_feature_dependencies(&resolved)?;
 
     Ok((bootstrap_mv, overrides))
+}
+
+/// `Formatter.calculateEffectiveFeatureLevels`'s refusal of an unknown
+/// feature. Kafka lists its production features in name order (a `TreeMap`),
+/// which includes `kraft.version` and leaves out `metadata.version`, since
+/// `metadata.version` is not a `Feature` there.
+pub(crate) fn unsupported_feature(name: &str) -> String {
+    let mut known: Vec<&str> = krabka_metadata::feature_registry()
+        .iter()
+        .map(|f| f.name())
+        .filter(|feature| *feature != krabka_metadata::metadata_version::METADATA_VERSION_FEATURE)
+        .chain(std::iter::once(KRAFT_VERSION_FEATURE))
+        .collect();
+    known.sort_unstable();
+    known.dedup();
+    format!(
+        "Unsupported feature: {name}. Supported features are: {}",
+        known.join(", ")
+    )
+}
+
+/// `Feature.fromFeatureLevel`'s refusal of a level the feature does not
+/// define, which `kafka-storage format` prints as is.
+pub(crate) fn no_feature_level(name: &str, level: i16) -> String {
+    format!("No feature:{name} with feature level {level}")
 }
 
 #[cfg(test)]
@@ -303,12 +318,31 @@ mod tests {
         assert2::assert!(err.contains("metadata.version"));
     }
 
+    /// Kafka 4.3.1's `kafka-storage format` messages, word for word: the
+    /// unknown-feature list is its production features in name order, and a
+    /// level a feature does not define is `Feature.fromFeatureLevel`'s refusal.
     #[test]
-    fn resolve_features_rejects_unknown_feature() {
-        let err =
-            resolve_format_features(None, &[("bogus.version".into(), 1)], STRICT).unwrap_err();
-        assert2::assert!(err.contains("Unsupported feature"));
-        assert2::assert!(err.contains("bogus.version"));
+    fn feature_refusals_use_kafkas_messages() {
+        for (feature, expected) in [
+            (
+                ("bogus.version", 1),
+                "Unsupported feature: bogus.version. Supported features are: \
+                 eligible.leader.replicas.version, group.version, kraft.version, \
+                 share.version, streams.version, transaction.version",
+            ),
+            (
+                ("transaction.version", 9),
+                "No feature:transaction.version with feature level 9",
+            ),
+            (
+                ("group.version", 5),
+                "No feature:group.version with feature level 5",
+            ),
+        ] {
+            let err = resolve_format_features(None, &[(feature.0.into(), feature.1)], STRICT)
+                .unwrap_err();
+            assert2::assert!(err == expected, "{feature:?}");
+        }
     }
 
     #[test]

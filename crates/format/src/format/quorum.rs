@@ -33,8 +33,9 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
             return Err("feature kraft.version specified more than once".into());
         }
         if !(0..=1).contains(level) {
-            return Err(format!(
-                "feature kraft.version={level} is outside the supported range 0..=1"
+            return Err(super::features::no_feature_level(
+                KRAFT_VERSION_FEATURE,
+                *level,
             ));
         }
     }
