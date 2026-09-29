@@ -139,6 +139,10 @@ fn token(token_id: &str, expiry_timestamp_ms: i64) -> MetadataRecord {
             principal_type: "User".into(),
             name: TOKEN_OWNER.into(),
         },
+        requester: KafkaPrincipal {
+            principal_type: "User".into(),
+            name: TOKEN_OWNER.into(),
+        },
         hmac: TOKEN_HMAC.to_vec(),
         issue_timestamp_ms: 0,
         expiry_timestamp_ms,

@@ -72,15 +72,17 @@ pub fn scram_credential_source(
 ///
 /// Matches `DelegationTokenManager.filterToken` in Kafka trunk: a caller sees
 /// a token only when the (possibly absent) owner filter matches it, and even
-/// then only as the token's owner, a listed renewer, or the holder of an ACL
-/// grant: `Describe` on that exact token, or KIP-373's `DescribeTokens` on
-/// the owner's `User` resource. `acl_allows` is either grant. The caller is never a delegation-token-
+/// then only as the token's owner, its requester (the principal that created
+/// it, KIP-373), a listed renewer, or the holder of an ACL grant: `Describe`
+/// on that exact token, or KIP-373's `DescribeTokens` on the owner's `User`
+/// resource. `acl_allows` is either grant. The caller is never a delegation-token-
 /// authenticated identity here — [`token_api_admission`] refuses every such
 /// caller before the host ever builds this predicate, so this kernel does not
-/// re-derive that isolation; folding it into the owner/renewer/ACL relation
-/// would let a filter-matching owner or ACL grant leak a token-authed
-/// caller's sibling tokens back in.
-#[ensures(result == (owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)))]
+/// re-derive that isolation; folding it into the owner/requester/renewer/ACL
+/// relation would let a filter-matching owner or ACL grant leak a
+/// token-authed caller's sibling tokens back in.
+#[ensures(result == (owner_filter_matches
+    && (caller_is_owner || caller_is_requester || caller_is_renewer || acl_allows)))]
 #[allow(
     clippy::fn_params_excessive_bools,
     reason = "the proof classifies independent token visibility relationships"
@@ -89,10 +91,12 @@ pub fn scram_credential_source(
 pub fn token_describe_visible(
     owner_filter_matches: bool,
     caller_is_owner: bool,
+    caller_is_requester: bool,
     caller_is_renewer: bool,
     acl_allows: bool,
 ) -> bool {
-    owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)
+    owner_filter_matches
+        && (caller_is_owner || caller_is_requester || caller_is_renewer || acl_allows)
 }
 
 /// Admit delegation-token APIs only for a securely authenticated, non-token
@@ -486,14 +490,16 @@ mod tests {
 
     #[test]
     fn token_visibility_requires_owner_filter_plus_a_relationship() {
-        for (filter, owner, renewer, acl, visible) in [
-            (false, true, false, false, false),
-            (true, true, false, false, true),
-            (true, false, true, false, true),
-            (true, false, false, true, true),
-            (true, false, false, false, false),
+        for (filter, owner, requester, renewer, acl, visible) in [
+            (false, true, false, false, false, false),
+            (false, false, true, false, false, false),
+            (true, true, false, false, false, true),
+            (true, false, true, false, false, true),
+            (true, false, false, true, false, true),
+            (true, false, false, false, true, true),
+            (true, false, false, false, false, false),
         ] {
-            check!(token_describe_visible(filter, owner, renewer, acl) == visible);
+            check!(token_describe_visible(filter, owner, requester, renewer, acl) == visible);
         }
     }
 

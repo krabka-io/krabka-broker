@@ -124,6 +124,100 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
     p.broker.shutdown().await;
 }
 
+fn share_version_update(level: i16) -> UpdateFeaturesRequest {
+    UpdateFeaturesRequest {
+        feature_updates: vec![FeatureUpdateKey {
+            feature: "share.version".into(),
+            max_version_level: level,
+            upgrade_type: 1,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The `(supported max, finalized level)` of `share.version` in `ApiVersions`.
+async fn share_version_in_api_versions(p: &support::InProcess) -> (Option<i16>, Option<i16>) {
+    let av = p
+        .client
+        .send(ApiVersionsRequest {
+            client_software_name: "krabka-test".into(),
+            client_software_version: "0.0.0".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("ApiVersions");
+    (
+        av.supported_features
+            .iter()
+            .find(|f| f.name == "share.version")
+            .map(|f| f.max_version),
+        av.finalized_features
+            .iter()
+            .find(|f| f.name == "share.version")
+            .map(|f| f.max_version_level),
+    )
+}
+
+/// KIP-1191: `share.version` 2 is trunk's `SV_2`. A default node supports
+/// 0-1 as Kafka 4.3.1 does and refuses level 2.
+#[tokio::test]
+async fn share_version_two_is_refused_by_default() {
+    let p = support::start().await;
+    assert!(share_version_in_api_versions(&p).await == (Some(1), Some(1)));
+
+    let resp = p
+        .client
+        .send(share_version_update(2))
+        .await
+        .expect("UpdateFeatures");
+    assert_feature_error(&resp, "share.version");
+    assert!(
+        resp.error_message
+            .as_deref()
+            .is_some_and(|message| message.ends_with(
+                "Invalid update version 2 for feature share.version. \
+                 Local controller 1 only supports versions 0-1"
+            )),
+        "{resp:?}"
+    );
+    p.broker.shutdown().await;
+}
+
+/// KIP-1191: with `unstable.feature.versions.enable` on, `ApiVersions`
+/// advertises `share.version` 0-2, `UpdateFeatures` finalizes level 2, and
+/// `validate_only` persists nothing.
+#[tokio::test]
+async fn share_version_two_is_finalizable_under_unstable_feature_versions() {
+    let p = start_with_unstable_features().await;
+    assert!(share_version_in_api_versions(&p).await == (Some(2), Some(1)));
+
+    let mut validate_only = share_version_update(2);
+    validate_only.validate_only = true;
+    let resp = p.client.send(validate_only).await.expect("UpdateFeatures");
+    assert!(resp.error_code == 0, "{resp:?}");
+    assert!(
+        share_version_in_api_versions(&p).await == (Some(2), Some(1)),
+        "validate_only must not finalize level 2"
+    );
+
+    let resp = p
+        .client
+        .send(share_version_update(2))
+        .await
+        .expect("UpdateFeatures");
+    assert!(resp.error_code == 0, "{resp:?}");
+    assert!(share_version_in_api_versions(&p).await == (Some(2), Some(2)));
+
+    let resp = p
+        .client
+        .send(share_version_update(3))
+        .await
+        .expect("UpdateFeatures");
+    assert_feature_error(&resp, "share.version");
+    p.broker.shutdown().await;
+}
+
 /// Kafka answers a failed feature with `INVALID_UPDATE_VERSION` (95) at the
 /// top level, a message naming the feature, and no rows, at every version.
 fn assert_feature_error(

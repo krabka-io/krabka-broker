@@ -12,11 +12,6 @@ use std::collections::BTreeMap;
 use krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
 use krabka_raft::UnstableFeatureVersions;
 
-/// The `share.version` level of Kafka trunk's `SV_2` (KIP-1191, dead-letter
-/// queues), and the `metadata.version` from which trunk seeds it: `4.4-IV0`.
-const SHARE_VERSION_DLQ_LEVEL: i16 = 2;
-const SHARE_VERSION_DLQ_METADATA_LEVEL: i16 = 31;
-
 /// The highest `metadata.version` this format accepts under `unstable`:
 /// Kafka 4.3's latest production level, or with unstable feature versions the
 /// highest level krabka knows (Kafka's `MetadataVersion.latestTesting()`).
@@ -232,17 +227,6 @@ pub(super) fn resolve_format_features(
         if overrides.insert(name.clone(), *level).is_some() {
             return Err(format!("feature {name} specified more than once"));
         }
-    }
-
-    // Kafka trunk's `ShareVersion` bootstraps `SV_2` (KIP-1191) at `4.4-IV0`,
-    // which is only reachable under `unstable`. The registry lists level 1 as
-    // the release default at every level above `4.2-IV0`.
-    if unstable == UnstableFeatureVersions::Enabled
-        && bootstrap_mv >= SHARE_VERSION_DLQ_METADATA_LEVEL
-    {
-        overrides
-            .entry(krabka_metadata::metadata_version::SHARE_VERSION_FEATURE.to_owned())
-            .or_insert(SHARE_VERSION_DLQ_LEVEL);
     }
 
     // KIP-1022 dependency validation over the fully-resolved feature set
@@ -702,12 +686,12 @@ mod tests {
     }
 
     /// KIP-1191: `share.version` 2 is Kafka trunk's `SV_2`. Kafka 4.3.1 stops
-    /// at 1, so a default format refuses 2 and seeds no override; with
-    /// unstable feature versions the level is accepted, and a format at
-    /// `4.4-IV0` or later seeds it as trunk's default.
+    /// at 1, so a default format refuses 2 and seeds 1; with unstable feature
+    /// versions the level is accepted, and a format at `4.4-IV0` or later
+    /// seeds it as trunk's default, from the registry's `default_level`.
     #[test]
     fn share_version_two_is_trunks_level() {
-        // (release, features, unstable, the share.version override or the error)
+        // (release, features, unstable, the seeded share.version or the error)
         type Case<'a> = (
             Option<&'a str>,
             Vec<(String, i16)>,
@@ -717,7 +701,7 @@ mod tests {
         let trunk = UnstableFeatureVersions::Enabled;
         let share = |level| vec![("share.version".to_string(), level)];
         let cases: Vec<Case<'_>> = vec![
-            (None, vec![], STRICT, Ok(None)),
+            (None, vec![], STRICT, Ok(Some(1))),
             (None, share(1), STRICT, Ok(Some(1))),
             (
                 None,
@@ -730,16 +714,27 @@ mod tests {
             // trunk's default at `4.4-IV0` and above
             (None, vec![], trunk, Ok(Some(2))),
             (Some("4.4-IV0"), vec![], trunk, Ok(Some(2))),
-            // below `4.4-IV0` the release default stays the registry's
-            (Some("4.3"), vec![], trunk, Ok(None)),
+            // below `4.4-IV0` the release default is 1, and 0 below `4.2-IV0`
+            (Some("4.3"), vec![], trunk, Ok(Some(1))),
+            (Some("4.1"), vec![], trunk, Ok(None)),
         ];
         for (release, features, unstable, want) in cases {
-            check!(
-                resolve_format_features(release, &features, unstable)
-                    .map(|(_, overrides)| overrides.get("share.version").copied())
-                    == want,
-                "{release:?} {features:?} {unstable:?}"
+            let seeded = resolve_format_features(release, &features, unstable).map(
+                |(bootstrap_mv, overrides)| {
+                    krabka_metadata::bootstrap_feature_records_with_overrides(
+                        bootstrap_mv,
+                        &overrides,
+                    )
+                    .into_iter()
+                    .find_map(|record| match record {
+                        MetadataRecord::V1FeatureLevel(f) if f.name == "share.version" => {
+                            Some(f.level)
+                        }
+                        _ => None,
+                    })
+                },
             );
+            check!(seeded == want, "{release:?} {features:?} {unstable:?}");
         }
     }
 

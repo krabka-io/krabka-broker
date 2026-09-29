@@ -271,10 +271,12 @@ mod tests {
 
     #[test]
     fn share_version_is_supported() {
+        // The registry lists trunk's `SV_2`; a default node advertises 4.3.1's
+        // range, 0-1, below.
         let expected = SupportedFeature {
             name: SHARE_VERSION,
             min_version: 0,
-            max_version: 1,
+            max_version: 2,
         };
         assert!(lookup(SHARE_VERSION) == Some(expected));
         // Advertised via the registry-derived supported-feature table.
