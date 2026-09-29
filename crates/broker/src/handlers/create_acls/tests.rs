@@ -542,3 +542,36 @@ async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
 }
+
+/// `count_new_acls` counts the distinct ACLs the image does not hold, as
+/// Kafka's `AclControlManager.createAcls` does with a hash set of each, and it
+/// does so in time linear in the request. A request of 300,000 bindings that
+/// repeat 12,000 ACLs, 2,000 of which the image holds, takes hash probes, not
+/// a scan of the request and of the image for every binding: a scan makes it
+/// tens of billions of comparisons on an async worker.
+#[test]
+fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
+    let acl = |n: usize| AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: format!("topic-{n}"),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    };
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    for n in 0..2_000 {
+        image.apply(&MetadataRecord::V1AccessControlEntry(acl(n)));
+    }
+    let to_submit: Vec<(usize, MetadataRecord)> = (0..300_000)
+        .map(|n| (n, MetadataRecord::V1AccessControlEntry(acl(n % 12_000))))
+        .collect();
+
+    let started = std::time::Instant::now();
+    let counted = super::count_new_acls(&image, &to_submit);
+    let elapsed = started.elapsed();
+
+    check!(counted == 10_000);
+    check!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}

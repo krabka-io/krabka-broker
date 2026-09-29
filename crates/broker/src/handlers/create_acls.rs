@@ -12,8 +12,13 @@
 //! Binding validation lives in `validate`, the result rows and the encoder in
 //! `response`, and the audit trail in `audit`.
 
+use std::collections::HashSet;
+
 use bytes::Bytes;
-use krabka_metadata::{AclEntry, MetadataImage, MetadataRecord};
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataImage, MetadataRecord, PatternType, PermissionType,
+    ResourceType,
+};
 use krabka_protocol::owned::{
     create_acls_request::CreateAclsRequest, create_acls_response::AclCreationResult,
 };
@@ -48,19 +53,48 @@ use crate::{
 /// `EventHandlerExceptionInfo` makes of a `BoundedListTooLongException`.
 const EXCESSIVE_BATCH_MESSAGE: &str = "Unable to perform excessively large batch operation.";
 
+/// The seven fields that make one ACL, as a value a hash set can hold. The
+/// image's [`AclEntry`] is not `Hash`, and a set is what keeps a request of
+/// tens of thousands of bindings out of quadratic time.
+type AclKey<'a> = (
+    ResourceType,
+    &'a str,
+    PatternType,
+    &'a str,
+    &'a str,
+    AclOperation,
+    PermissionType,
+);
+
+fn acl_key(entry: &AclEntry) -> AclKey<'_> {
+    (
+        entry.resource_type,
+        &entry.resource_name,
+        entry.pattern_type,
+        &entry.principal,
+        &entry.host,
+        entry.operation,
+        entry.permission_type,
+    )
+}
+
 /// How many distinct ACLs of `to_submit` the image does not hold yet, counted
 /// only up to one past the bound the caller compares it with.
+///
+/// Kafka's `AclControlManager.createAcls` tests each binding against a hash set
+/// of the existing ACLs and another of the ones the request has added, so this
+/// does too: a request of 10 000 bindings that are mostly duplicates is a few
+/// hash probes each, not a scan of the request and the image for every one.
 fn count_new_acls(image: &MetadataImage, to_submit: &[(usize, MetadataRecord)]) -> usize {
-    let mut new: Vec<&AclEntry> = Vec::new();
+    let existing: HashSet<AclKey<'_>> = image.all_acls().map(acl_key).collect();
+    let mut new = HashSet::new();
     for (_, record) in to_submit {
         let MetadataRecord::V1AccessControlEntry(entry) = record else {
             continue;
         };
-        if !new.contains(&entry) && !image.all_acls().any(|existing| existing == entry) {
-            new.push(entry);
-            if new.len() > MAX_ACL_RECORDS_PER_REQUEST {
-                break;
-            }
+        let key = acl_key(entry);
+        if !existing.contains(&key) && new.insert(key) && new.len() > MAX_ACL_RECORDS_PER_REQUEST {
+            break;
         }
     }
     new.len()
