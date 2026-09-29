@@ -11,7 +11,7 @@ use std::{
 
 use arc_swap::ArcSwap;
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, Offset};
+use krabka_log::Log;
 use krabka_units::Time;
 
 use super::storage::{flag_storage_failure, lock_log, storage_failure_error};
@@ -93,6 +93,7 @@ pub(super) async fn handle_compact(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_log::Offset;
     use krabka_units::millis;
 
     use super::*;

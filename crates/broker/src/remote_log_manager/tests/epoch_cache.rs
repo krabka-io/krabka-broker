@@ -113,10 +113,14 @@ async fn survivors_of_a_tick(log_dir: &std::path::Path, log: Log) -> Vec<u128> {
     ids
 }
 
-/// The two ways a log start and its epoch cache reach a restart.
+/// A label, how the log is moved before the restart, and the ids of the archive
+/// segments that survive the tick after it.
+type Case = (&'static str, fn(&mut Log), Vec<u128>);
+
+/// The ways a log start and its epoch cache reach a restart.
 #[tokio::test]
 async fn the_epoch_cache_cleanup_follows_an_established_log_start_across_a_restart() {
-    let cases: [(&str, fn(&mut Log), Vec<u128>); 3] = [
+    let cases: [Case; 3] = [
         (
             "nobody moved the log start",
             |_| {},

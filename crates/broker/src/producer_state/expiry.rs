@@ -12,7 +12,6 @@ use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::Mutex;
 
 use super::{PartitionMap, PartitionProducerState, ProducerState};
-use crate::partition::LogOffset;
 
 impl ProducerState {
     /// Snapshot of currently-active producers on `(topic, partition)`.
