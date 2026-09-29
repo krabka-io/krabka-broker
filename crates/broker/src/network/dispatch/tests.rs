@@ -1317,17 +1317,45 @@ mod log_levels {
 mod request_limit {
     use assert2::assert;
     use futures_util::{SinkExt as _, StreamExt as _};
+    use krabka_protocol::{
+        Encode as _,
+        owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+    };
 
     use super::{DEFAULT_MAX_FRAME_BYTES, request_frame};
     use crate::{broker::Broker, network::codec};
 
+    /// The limit of the broker under test: well over its own requests to
+    /// itself, and well under the answer to a documentation-bearing
+    /// `DescribeConfigs`.
+    const LIMIT: usize = 2048;
+
+    /// A `DescribeConfigs` v4 for this broker's configs, with their documentation.
+    /// The request is a few dozen bytes and the answer many kilobytes.
+    fn describe_broker_configs(correlation_id: i32) -> bytes::BytesMut {
+        let mut body = bytes::BytesMut::new();
+        DescribeConfigsRequest {
+            resources: vec![DescribeConfigsResource {
+                resource_type: 4,
+                resource_name: "1".to_string(),
+                ..Default::default()
+            }],
+            include_synonyms: false,
+            include_documentation: true,
+            ..Default::default()
+        }
+        .encode(&mut body, 4)
+        .expect("encode DescribeConfigs");
+        request_frame(32, 4, correlation_id, None, Some(0), &body)
+    }
+
     /// Serves one connection on a broker whose `socket.request.max.bytes` is
-    /// `limit`, sends `request`, and returns the response frame, or `None`
+    /// [`LIMIT`], sends `request`, and returns the response frame, or `None`
     /// when the broker closed the connection instead.
-    async fn answer_under_limit(limit: usize, request: bytes::BytesMut) -> Option<bytes::BytesMut> {
+    async fn answer_under_limit(request: bytes::BytesMut) -> Option<bytes::BytesMut> {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        cfg.socket_request_max = krabka_units::bytes(u32::try_from(limit).expect("limit"));
+        cfg.socket_request_max = krabka_units::bytes(u32::try_from(LIMIT).expect("limit"));
         let handle = Broker::start(cfg).await.expect("start broker");
         let broker = handle.broker_arc_for_test();
 
@@ -1367,24 +1395,22 @@ mod request_limit {
         answer
     }
 
-    /// An `ApiVersions` v0 request is a dozen bytes, and its answer lists every
-    /// api the broker serves, some 400 bytes. With the limit at 64 bytes the
-    /// request is under it and the answer far over.
     #[tokio::test]
     async fn a_response_over_the_limit_is_written_and_a_request_over_it_is_refused() {
-        let small_request = request_frame(18, 0, 7, None, None, &[]);
-        assert!(small_request.len() - 4 <= 64);
-        let oversize_request = request_frame(18, 0, 8, Some(&[b'c'; 100]), None, &[]);
-        assert!(oversize_request.len() - 4 > 64);
+        let small_request = describe_broker_configs(7);
+        assert!(small_request.len() - 4 <= LIMIT);
+        // An ApiVersions v0 request whose client id alone is over the limit.
+        let oversize_request = request_frame(18, 0, 8, Some(&[b'c'; LIMIT + 1]), None, &[]);
+        assert!(oversize_request.len() - 4 > LIMIT);
 
-        let answer = answer_under_limit(64, small_request)
+        let answer = answer_under_limit(small_request)
             .await
             .expect("a request under the limit is answered");
-        assert!(answer.len() > 64, "the answer is {} bytes", answer.len());
+        assert!(answer.len() > LIMIT, "the answer is {} bytes", answer.len());
         assert!(answer[..4] == 7_i32.to_be_bytes());
 
         assert!(
-            answer_under_limit(64, oversize_request).await.is_none(),
+            answer_under_limit(oversize_request).await.is_none(),
             "a request over the limit closes the connection"
         );
     }
