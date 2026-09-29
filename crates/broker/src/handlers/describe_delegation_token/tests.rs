@@ -491,7 +491,8 @@ async fn unrelated_caller_sees_nothing() {
 #[tokio::test]
 async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
     // (caller, `owners` filter, expected token ids)
-    let cases: [(&str, Option<&[&str]>, &[&str]); 7] = [
+    type Case<'a> = (&'a str, Option<&'a [&'a str]>, &'a [&'a str]);
+    let cases: [Case<'_>; 7] = [
         ("admin", None, &["t-minted"]),
         ("admin", Some(&["admin"]), &["t-minted"]),
         ("admin", Some(&["alice"]), &["t-minted"]),
