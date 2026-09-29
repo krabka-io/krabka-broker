@@ -42,19 +42,28 @@
 //!
 //! The cache holds sessions in one bounded map, keyed by allocated id. Its
 //! capacity is `BrokerConfig::max_incremental_fetch_session_cache_slots`.
-//! When the map is full, an allocation evicts the LRU **non-privileged**
-//! session. Only another privileged session evicts a privileged session, which
-//! is a follower fetch with `replica_id >= 0`.
+//! When the map is full, an allocation displaces a session only where Kafka's
+//! `FetchSessionCacheShard.tryEvict` does:
 //!
-//! Finding that victim is O(1). The cache carries an explicit recency order
-//! beside the map — see the `order` submodule — so a full cache costs an
-//! allocation two list-head reads rather than a scan of every live session
-//! with the cache mutex held. `benches/fetch_session.rs` measures it.
+//! 1. the session unused the longest, when it has been unused for more than two
+//!    minutes, whoever asks;
+//! 2. otherwise the cheapest session the caller may displace, when the
+//!    newcomer outranks it. A consumer may displace only a consumer session
+//!    created more than two minutes ago that caches fewer partitions than the
+//!    newcomer. A follower fetch (`replica_id >= 0`) may displace any consumer
+//!    session, or a follower session created more than two minutes ago that
+//!    caches fewer partitions.
+//!
+//! Finding that victim reads the first entry of one of the ordered sets in the
+//! `order` submodule, so a full cache costs an allocation a lookup, not a scan
+//! of every live session with the cache mutex held. `benches/fetch_session.rs`
+//! measures it.
 //!
 //! When there is no eligible victim, `try_allocate` returns
 //! `INVALID_SESSION_ID` and the caller falls back to a sessionless response.
-//! This matches Apache Kafka. That case arises when the cache is full of
-//! privileged sessions and the caller is non-privileged.
+//! This matches Apache Kafka, and it is what keeps a full broker stable: a
+//! session in use is never displaced, so no client is pushed into reconnecting
+//! with a full fetch and displacing another.
 
 mod cache;
 mod classify;

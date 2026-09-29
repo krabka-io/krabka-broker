@@ -78,10 +78,12 @@ macro_rules! operations_fields {
             /// KIP-227: maximum number of incremental-fetch sessions kept in the
             /// per-broker cache. Each session tracks the (topic, partition) set a
             /// client is subscribed to, so later fetches can be deltas. When the
-            /// cache is full, the broker evicts a non-privileged (consumer) session
-            /// in LRU order. Only another privileged session evicts a privileged
-            /// (follower-fetch) session. Matches Apache Kafka's
-            /// `max.incremental.fetch.session.cache.slots` (default 1000).
+            /// cache is full, a new session displaces only a session that has
+            /// been unused for more than two minutes, or a smaller one older than
+            /// that (a follower-fetch session may also displace any consumer
+            /// session); otherwise it is refused and the fetch runs sessionless.
+            /// Matches Apache Kafka's `max.incremental.fetch.session.cache.slots`
+            /// (default 1000).
             pub max_incremental_fetch_session_cache_slots: usize,
 
             /// Maximum number of live broker connections across all listeners. The
