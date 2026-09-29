@@ -103,6 +103,7 @@ mod delivery;
 mod diskless;
 mod docs;
 pub(crate) mod group;
+pub(crate) mod kafka_broker;
 #[cfg(test)]
 mod kafka_parity;
 mod log_config;

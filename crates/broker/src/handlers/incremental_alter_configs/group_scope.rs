@@ -1,7 +1,7 @@
 //! Group resources for `IncrementalAlterConfigs`, the KIP-848, KIP-932 and
 //! KIP-1071 group configs. The handler merges the per-key operations onto
 //! the group's current override map, checks the merged map with Kafka's
-//! `GroupConfig.validate` against the broker's `StreamsGroupConfig` bounds,
+//! `GroupConfig.validate` against the broker's group bounds,
 //! and stages a `V1GroupConfig` record with that map.
 
 use krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord};
@@ -18,16 +18,15 @@ use crate::{
     api_catalog::UnstableApiVersions,
     codes,
     config_keys::{
-        group::{kafka_group_key, validate_group_configs},
+        group::{GroupBounds, kafka_group_key, validate_group_configs},
         registry::ConfigType,
     },
-    coordinator::unified::streams::config::StreamsGroupConfig,
 };
 
 fn group_record(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
-    defaults: &StreamsGroupConfig,
+    bounds: &GroupBounds,
     unstable: UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
     let mut merged = image
@@ -64,7 +63,7 @@ fn group_record(
             "Default group resources are not allowed.".into(),
         ));
     }
-    validate_group_configs(&merged, defaults, unstable)
+    validate_group_configs(&merged, bounds, unstable)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
         group_id: resource.resource_name.clone(),
@@ -75,12 +74,12 @@ fn group_record(
 pub(super) fn handle_group_scoped(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
-    defaults: &StreamsGroupConfig,
+    bounds: &GroupBounds,
     unstable: UnstableApiVersions,
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    match group_record(resource, image, defaults, unstable) {
+    match group_record(resource, image, bounds, unstable) {
         Ok(record) => to_submit.push(record),
         Err((code, message)) => {
             out.error_code = code;
@@ -102,6 +101,66 @@ mod tests {
         handlers::incremental_alter_configs::RESOURCE_TYPE_GROUP,
     };
 
+    /// Kafka's `ControllerConfigurationValidator` accepts every key of
+    /// `GroupConfig.CONFIG_DEF`, whatever the group coordinators apply, and the
+    /// controller stores the whole map: the documented
+    /// `kafka-configs.sh --alter --entity-type groups --add-config
+    /// consumer.session.timeout.ms=...` flow of KIP-848 and KIP-932.
+    #[test]
+    fn group_config_stores_every_key_kafka_4_3_1_accepts() {
+        let keys = [
+            ("consumer.session.timeout.ms", "50000"),
+            ("consumer.heartbeat.interval.ms", "6000"),
+            ("consumer.assignment.interval.ms", "500"),
+            ("share.session.timeout.ms", "50000"),
+            ("share.heartbeat.interval.ms", "6000"),
+            ("share.record.lock.duration.ms", "45000"),
+            ("share.delivery.count.limit", "7"),
+            ("share.partition.max.record.locks", "1000"),
+            ("share.isolation.level", "read_committed"),
+            ("share.renew.acknowledge.enable", "false"),
+            ("share.assignment.interval.ms", "500"),
+            ("streams.initial.rebalance.delay.ms", "0"),
+            ("streams.assignment.interval.ms", "500"),
+            (KEY_NUM_STANDBY_REPLICAS, "1"),
+        ];
+        let resource = AlterConfigsResource {
+            resource_type: RESOURCE_TYPE_GROUP,
+            resource_name: "g".into(),
+            configs: keys
+                .iter()
+                .map(|(name, value)| AlterableConfig {
+                    name: (*name).into(),
+                    config_operation: OP_SET,
+                    value: Some((*value).into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut out = AlterConfigsResourceResponse::default();
+        let mut records = Vec::new();
+        handle_group_scoped(
+            &resource,
+            &MetadataImage::new(uuid::Uuid::nil()),
+            &GroupBounds::default(),
+            crate::api_catalog::UnstableApiVersions::Disabled,
+            &mut out,
+            &mut records,
+        );
+        assert!(out.error_code == codes::NONE, "{out:?}");
+        assert!(
+            records
+                == vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
+                    group_id: "g".into(),
+                    configs: keys
+                        .iter()
+                        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                        .collect(),
+                })]
+        );
+    }
+
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
         let resource = AlterConfigsResource {
@@ -120,7 +179,7 @@ mod tests {
         handle_group_scoped(
             &resource,
             &MetadataImage::new(uuid::Uuid::nil()),
-            &StreamsGroupConfig::default(),
+            &GroupBounds::default(),
             crate::api_catalog::UnstableApiVersions::Enabled,
             &mut out,
             &mut records,
@@ -163,7 +222,7 @@ mod tests {
             handle_group_scoped(
                 &resource,
                 &MetadataImage::new(uuid::Uuid::nil()),
-                &StreamsGroupConfig::default(),
+                &GroupBounds::default(),
                 crate::api_catalog::UnstableApiVersions::Enabled,
                 &mut out,
                 &mut records,
@@ -206,7 +265,7 @@ mod tests {
         handle_group_scoped(
             &resource,
             &MetadataImage::new(uuid::Uuid::nil()),
-            &StreamsGroupConfig::default(),
+            &GroupBounds::default(),
             crate::api_catalog::UnstableApiVersions::Enabled,
             &mut out,
             &mut records,
@@ -280,7 +339,7 @@ mod tests {
                 group_record(
                     &resource,
                     &MetadataImage::new(uuid::Uuid::nil()),
-                    &StreamsGroupConfig::default(),
+                    &GroupBounds::default(),
                     crate::api_catalog::UnstableApiVersions::Enabled,
                 ) == want,
                 "{name:?} {configs:?}"

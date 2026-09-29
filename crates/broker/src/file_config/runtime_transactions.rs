@@ -38,6 +38,10 @@ impl RuntimeFileConfig {
             partition_writer_queue_depth,
             cfg.partition_writer_queue_depth
         );
+        // A topic reports a static `min.insync.replicas` at
+        // `STATIC_BROKER_CONFIG` when the operator named it, whatever the value.
+        cfg.static_config_origins.log.min_insync_replicas |=
+            runtime.default_min_insync_replicas.is_some();
         set_runtime_i32!(
             runtime,
             default_min_insync_replicas,

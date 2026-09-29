@@ -398,6 +398,7 @@ fn disclose_created_topic(
                 &result.name,
                 created.overrides,
                 broker.config.features.unstable_api_versions,
+                &crate::handlers::describe_configs::static_settings(&broker.config),
             ));
         }
     } else {

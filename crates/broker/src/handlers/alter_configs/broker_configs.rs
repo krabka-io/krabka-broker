@@ -244,6 +244,30 @@ mod tests {
                     "Cannot update these configs dynamically: [log.dirs]",
                 )),
             ),
+            // Every `KafkaConfig` key that is not dynamic is refused, not
+            // only the ones krabka reads at startup.
+            (
+                "",
+                vec![("auto.leader.rebalance.enable", "false")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Cannot update these configs dynamically: [auto.leader.rebalance.enable]",
+                )),
+            ),
+            // A dynamic key is parsed against its `ConfigDef`.
+            (
+                "1",
+                vec![("num.io.threads", "abc")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Invalid value abc for configuration num.io.threads: Not a number of type INT",
+                )),
+            ),
+            (
+                "",
+                vec![("max.connections", " 100 ")],
+                Ok(vec![record(cluster, "max.connections", Some("100"))]),
+            ),
         ];
         for (name, configs, want) in cases {
             let got = broker_config_records(

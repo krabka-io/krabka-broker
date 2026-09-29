@@ -89,8 +89,10 @@ impl EntryOptions {
 ///
 /// A key the registry marks sensitive reports a null value, in the entry and
 /// in every synonym, which is how Kafka keeps a password-valued config off the
-/// wire. A key with no registry row is treated the same way: krabka does not
-/// disclose a value it cannot describe.
+/// wire. A `row` of `None` is a name Kafka does not define, which
+/// `KafkaConfig.maybeSensitive` treats the same way, with type `UNKNOWN`, and
+/// which is read-only, because it is in no dynamic set
+/// (`ALL_DYNAMIC_CONFIGS.contains(name)` is false).
 pub(super) fn config_entry(
     row: Option<&ConfigKey>,
     name: &str,
@@ -132,14 +134,19 @@ pub(super) fn config_entry(
     DescribeConfigsResourceResult {
         name: name.to_owned(),
         value,
-        read_only: row.is_some_and(|row| row.read_only),
+        read_only: row.is_none_or(|row| row.read_only),
         config_source,
         is_sensitive: sensitive,
         synonyms,
         config_type: row.map_or(CONFIG_TYPE_UNKNOWN, |row| row.config_type.wire()),
+        // A row with no documentation string, such as a `KafkaConfig` key
+        // krabka has no row of its own for, reports none rather than "".
         documentation: options
             .include_documentation
-            .then(|| row.map(|row| row.doc.to_owned()))
+            .then(|| {
+                row.filter(|row| !row.doc.is_empty())
+                    .map(|row| row.doc.to_owned())
+            })
             .flatten(),
         ..Default::default()
     }

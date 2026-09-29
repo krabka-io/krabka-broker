@@ -346,6 +346,7 @@ mod tests {
                     txn_id_expiration: false,
                     txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
@@ -356,6 +357,7 @@ mod tests {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
@@ -367,6 +369,7 @@ mod tests {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: true,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
@@ -379,6 +382,23 @@ mod tests {
                     topic_creation: crate::config::TopicCreationOrigins {
                         num_partitions: true,
                         default_replication_factor: true,
+                    },
+                    log: crate::config::LogOrigins::default(),
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
+                },
+            ),
+            (
+                "the log defaults that back a topic key supplied, at Kafka's own default value",
+                "[runtime]\nmessage_max_bytes = \"1048588B\"\nlog_segment_bytes = \"1GiB\"\n\
+                 default_min_insync_replicas = 1\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins {
+                        message_max_bytes: true,
+                        log_segment_bytes: true,
+                        min_insync_replicas: true,
                     },
                     topic_admin: crate::config::TopicAdminOrigins::default(),
                 },

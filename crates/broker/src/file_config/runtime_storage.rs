@@ -147,6 +147,10 @@ impl RuntimeFileConfig {
             cfg.log_config.timestamp_scan_window,
             whole_bytes_usize
         );
+        // A topic reports these two at `STATIC_BROKER_CONFIG` when the
+        // operator named them, so the loader records the provenance.
+        cfg.static_config_origins.log.log_segment_bytes |= runtime.log_segment_bytes.is_some();
+        cfg.static_config_origins.log.message_max_bytes |= runtime.message_max_bytes.is_some();
         set_runtime_size_bytes!(
             runtime,
             log_segment_bytes,

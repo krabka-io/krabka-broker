@@ -9,19 +9,9 @@ pub const KEY_NUM_STANDBY_REPLICAS: &str = "streams.num.standby.replicas";
 pub const KEY_TASK_OFFSET_INTERVAL_MS: &str = "streams.task.offset.interval.ms";
 pub const KEY_ASSIGNOR_NAME: &str = "streams.assignor.name";
 pub const KEY_RACK_AWARE_ASSIGNMENT_TAGS: &str = "streams.rack.aware.assignment.tags";
+pub const KEY_INITIAL_REBALANCE_DELAY_MS: &str = "streams.initial.rebalance.delay.ms";
+pub const KEY_ASSIGNMENT_INTERVAL_MS: &str = "streams.assignment.interval.ms";
 pub const KEY_SHARE_AUTO_OFFSET_RESET: &str = "share.auto.offset.reset";
-
-pub const GROUP_CONFIG_KEYS: [&str; 9] = [
-    KEY_SESSION_TIMEOUT_MS,
-    KEY_HEARTBEAT_INTERVAL_MS,
-    KEY_ACCEPTABLE_RECOVERY_LAG,
-    KEY_NUM_WARMUP_REPLICAS,
-    KEY_NUM_STANDBY_REPLICAS,
-    KEY_TASK_OFFSET_INTERVAL_MS,
-    KEY_ASSIGNOR_NAME,
-    KEY_RACK_AWARE_ASSIGNMENT_TAGS,
-    KEY_SHARE_AUTO_OFFSET_RESET,
-];
 
 /// The `streams.assignor.name` value of a streams group.
 ///
@@ -353,9 +343,14 @@ const MAX_SIZE_DEFAULT: usize = 2_147_483_647;
 impl StreamsGroupConfig {
     /// Apply a persisted GROUP resource override map to these broker defaults.
     ///
+    /// A key this coordinator does not apply is left alone: the map holds
+    /// every group key Kafka's `GroupConfig` defines, the consumer and share
+    /// coordinators' among them, and reading one must not cost the group its
+    /// streams overrides.
+    ///
     /// # Errors
-    /// Returns a message suitable for `INVALID_CONFIG` when a key is unknown,
-    /// a value cannot be parsed, or a timeout falls outside broker bounds.
+    /// Returns a message suitable for `INVALID_CONFIG` when a value cannot be
+    /// parsed, or a timeout falls outside broker bounds.
     pub fn with_group_overrides(
         &self,
         overrides: &BTreeMap<String, String>,
@@ -388,7 +383,15 @@ impl StreamsGroupConfig {
                 KEY_SHARE_AUTO_OFFSET_RESET => {
                     out.share_auto_offset_reset = ShareAutoOffsetReset::parse(value)?;
                 }
-                _ => return Err(format!("unknown group config `{key}`")),
+                KEY_INITIAL_REBALANCE_DELAY_MS => {
+                    out.initial_rebalance_delay =
+                        Duration::from_millis(parse_nonnegative::<u64>(key, value)?);
+                }
+                KEY_ASSIGNMENT_INTERVAL_MS => {
+                    out.assignment_interval =
+                        Duration::from_millis(parse_nonnegative::<u64>(key, value)?);
+                }
+                _ => {}
             }
         }
         if !(out.min_session_timeout..=out.max_session_timeout).contains(&out.session_timeout) {
@@ -420,6 +423,8 @@ impl StreamsGroupConfig {
         KEY_NUM_WARMUP_REPLICAS.into() => self.num_warmup_replicas.to_string(),
         KEY_NUM_STANDBY_REPLICAS.into() => self.num_standby_replicas.to_string(),
         KEY_TASK_OFFSET_INTERVAL_MS.into() => self.task_offset_interval.as_millis().to_string(),
+        KEY_INITIAL_REBALANCE_DELAY_MS.into() => self.initial_rebalance_delay.as_millis().to_string(),
+        KEY_ASSIGNMENT_INTERVAL_MS.into() => self.assignment_interval.as_millis().to_string(),
         KEY_ASSIGNOR_NAME.into() => self.assignor.config_name().into(),
         KEY_RACK_AWARE_ASSIGNMENT_TAGS.into() => self.rack_aware_assignment_tags.join(","),
         KEY_SHARE_AUTO_OFFSET_RESET.into() => self.share_auto_offset_reset.config_value()}
@@ -713,18 +718,52 @@ mod tests {
     }
 
     #[test]
-    fn group_overrides_reject_unknown_and_out_of_bounds_values() {
-        let unknown = maplit::btreemap! {"streams.unknown".into() => "1".into()};
-        assert!(
-            StreamsGroupConfig::default()
-                .with_group_overrides(&unknown)
-                .is_err()
-        );
+    fn group_overrides_reject_out_of_bounds_values() {
         let too_short = maplit::btreemap! {KEY_SESSION_TIMEOUT_MS.into() => "1000".into()};
         assert!(
             StreamsGroupConfig::default()
                 .with_group_overrides(&too_short)
                 .is_err()
         );
+    }
+
+    /// The group override map holds every group key, the consumer and share
+    /// coordinators' among them. A key this coordinator does not apply must
+    /// not cost the group the streams overrides stored beside it.
+    #[test]
+    fn a_key_of_another_coordinator_leaves_the_streams_overrides_intact() {
+        let overrides = maplit::btreemap! {
+            KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
+            "consumer.session.timeout.ms".into() => "50000".into(),
+            "share.record.lock.duration.ms".into() => "45000".into(),
+            "errors.deadletterqueue.topic.name".into() => "dlq".into(),
+        };
+        let got = StreamsGroupConfig::default()
+            .with_group_overrides(&overrides)
+            .expect("foreign keys are ignored");
+        assert!(
+            got == StreamsGroupConfig {
+                num_standby_replicas: 1,
+                ..StreamsGroupConfig::default()
+            }
+        );
+    }
+
+    /// `streams.initial.rebalance.delay.ms` and `streams.assignment.interval.ms`
+    /// reach the fields the streams actor waits on, and are reported.
+    #[test]
+    fn the_rebalance_delay_and_assignment_interval_are_applied_and_reported() {
+        let overrides = maplit::btreemap! {
+            KEY_INITIAL_REBALANCE_DELAY_MS.into() => "0".into(),
+            KEY_ASSIGNMENT_INTERVAL_MS.into() => "250".into(),
+        };
+        let got = StreamsGroupConfig::default()
+            .with_group_overrides(&overrides)
+            .expect("valid overrides");
+        assert!(got.initial_rebalance_delay == Duration::ZERO);
+        assert!(got.assignment_interval == Duration::from_millis(250));
+        let reported = got.group_config_values();
+        assert!(reported[KEY_INITIAL_REBALANCE_DELAY_MS] == "0");
+        assert!(reported[KEY_ASSIGNMENT_INTERVAL_MS] == "250");
     }
 }

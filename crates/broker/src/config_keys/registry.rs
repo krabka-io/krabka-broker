@@ -63,8 +63,9 @@ pub(crate) const NODE_ID: &str = "node.id";
 /// `org.apache.kafka.common.requests.DescribeConfigsResponse.ConfigType`,
 /// which mirrors `ConfigDef.Type` one-for-one: `UNKNOWN = 0`, `BOOLEAN = 1`,
 /// `STRING = 2`, `INT = 3`, `SHORT = 4`, `LONG = 5`, `DOUBLE = 6`, `LIST = 7`,
-/// `CLASS = 8`, `PASSWORD = 9`. The variants here are the ones krabka's keys
-/// carry; add the rest when a key needs one.
+/// `CLASS = 8`, `PASSWORD = 9`. `Short`, `Class` and `Password` are the types
+/// of the `KafkaConfig` broker keys in [`super::kafka_broker`]; no topic key
+/// carries them.
 ///
 /// `UNKNOWN` is deliberately absent. A key krabka reports is a key krabka has
 /// a row for, and the `DescribeConfigs` handler treats a missing row as a
@@ -74,9 +75,12 @@ pub(crate) enum ConfigType {
     Boolean,
     String,
     Int,
+    Short,
     Long,
     Double,
     List,
+    Class,
+    Password,
 }
 
 impl ConfigType {
@@ -86,9 +90,12 @@ impl ConfigType {
             Self::Boolean => 1,
             Self::String => 2,
             Self::Int => 3,
+            Self::Short => 4,
             Self::Long => 5,
             Self::Double => 6,
             Self::List => 7,
+            Self::Class => 8,
+            Self::Password => 9,
         }
     }
 
@@ -98,9 +105,12 @@ impl ConfigType {
             Self::Boolean => "boolean",
             Self::String => "string",
             Self::Int => "int",
+            Self::Short => "short",
             Self::Long => "long",
             Self::Double => "double",
             Self::List => "list",
+            Self::Class => "class",
+            Self::Password => "password",
         }
     }
 }
@@ -178,6 +188,11 @@ pub(crate) struct ConfigKey {
     /// secret without being a password. `DescribeConfigs` reports a sensitive
     /// key with a null value, in the entry and in every synonym.
     pub(crate) sensitive: bool,
+    /// `true` for a key Kafka defines with `defineInternal`. Kafka leaves an
+    /// internal key out of `DescribeConfigs` and of the `CreateTopics` v5
+    /// config list unless the topic itself sets it
+    /// (`KafkaConfigSchema.resolveEffectiveTopicConfigs`).
+    pub(crate) internal: bool,
     /// The KIP or KFC the key comes from, for the reference page.
     pub(crate) kip: Option<&'static str>,
     /// The cluster-default broker config the broker falls back to when the
@@ -259,6 +274,7 @@ const fn key(
         doc,
         read_only: false,
         sensitive: false,
+        internal: false,
         kip: None,
         cluster_default: None,
         check,
@@ -637,6 +653,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     },
     ConfigKey {
         type_note: Some("bytes"),
+        internal: true,
         ..key(
             INTERNAL_SEGMENT_BYTES,
             ConfigScope::Topic,

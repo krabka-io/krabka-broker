@@ -27,9 +27,9 @@ use crate::{
 /// subscription's `match` names client ids and source addresses.
 ///
 /// This function returns the authorization-failed code to stamp on a Deny. It
-/// returns `None` when the check allows the request, and for a resource type
-/// that it does not gate. An ungated resource type still gets an empty configs
-/// list with no error.
+/// returns `None` when the check allows the request. A resource type Kafka
+/// does not describe never reaches it: [`unexpected_resource_type_results`]
+/// refuses the whole request first.
 pub(super) fn resource_authz_failure(
     authorizer: &dyn crate::authorizer::Authorizer,
     image: &krabka_metadata::MetadataImage,
@@ -67,6 +67,51 @@ pub(super) fn resource_authz_failure(
         },
     );
     (allow == AuthorizationResult::Deny).then_some(failure_code)
+}
+
+/// Kafka's `Errors.INVALID_REQUEST.message()`.
+const INVALID_REQUEST_MESSAGE: &str = "This most likely occurs because of a request being \
+     malformed by the client library or the message was sent to an incompatible broker. See the \
+     broker logs for more details.";
+
+/// Kafka's answer to a request that names a resource type it does not
+/// describe, or `None` when every type is one it does.
+///
+/// `ConfigHelper.handleDescribeConfigsRequest` partitions the request by
+/// authorization first and throws `InvalidRequestException("Unexpected
+/// resource type ...")` for any type but `BROKER`, `BROKER_LOGGER`,
+/// `CLIENT_METRICS`, `TOPIC` and `GROUP`. Nothing catches it inside, so
+/// `DescribeConfigsRequest.getErrorResponse` stamps *every* resource of the
+/// request with `INVALID_REQUEST`, the generic message and no configs.
+pub(super) fn unexpected_resource_type_results(
+    resources: &[krabka_protocol::owned::describe_configs_request::DescribeConfigsResource],
+) -> Option<Vec<DescribeConfigsResult>> {
+    let known = |resource_type| {
+        matches!(
+            resource_type,
+            RESOURCE_TYPE_TOPIC
+                | RESOURCE_TYPE_BROKER
+                | RESOURCE_TYPE_BROKER_LOGGER
+                | RESOURCE_TYPE_CLIENT_METRICS
+                | RESOURCE_TYPE_GROUP
+        )
+    };
+    resources
+        .iter()
+        .any(|resource| !known(resource.resource_type))
+        .then(|| {
+            resources
+                .iter()
+                .map(|resource| DescribeConfigsResult {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some(INVALID_REQUEST_MESSAGE.to_owned()),
+                    resource_type: resource.resource_type,
+                    resource_name: resource.resource_name.clone(),
+                    configs: Vec::new(),
+                    ..Default::default()
+                })
+                .collect()
+        })
 }
 
 /// Builds a `DescribeConfigsResult` that carries only the
@@ -198,6 +243,44 @@ mod tests {
                     configs: Vec::new(),
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }
+        );
+    }
+
+    /// One resource of a type Kafka does not describe fails the whole
+    /// request: every resource, the known ones included, is `INVALID_REQUEST`
+    /// with the generic message and no configs.
+    #[test]
+    fn an_unknown_resource_type_refuses_every_resource_of_the_request() {
+        use krabka_protocol::owned::describe_configs_request::DescribeConfigsResource;
+
+        let resource = |resource_type, name: &str| DescribeConfigsResource {
+            resource_type,
+            resource_name: name.to_owned(),
+            ..Default::default()
+        };
+        let known = [
+            resource(RESOURCE_TYPE_TOPIC, "t"),
+            resource(RESOURCE_TYPE_GROUP, "g"),
+        ];
+        assert!(unexpected_resource_type_results(&known).is_none());
+
+        let mixed = [resource(RESOURCE_TYPE_TOPIC, "t"), resource(0, "x")];
+        let refused = |resource_type, name: &str| DescribeConfigsResult {
+            error_code: crate::codes::INVALID_REQUEST,
+            error_message: Some(
+                "This most likely occurs because of a request being malformed by the client \
+                 library or the message was sent to an incompatible broker. See the broker logs \
+                 for more details."
+                    .to_owned(),
+            ),
+            resource_type,
+            resource_name: name.to_owned(),
+            configs: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        assert!(
+            unexpected_resource_type_results(&mixed)
+                == Some(vec![refused(RESOURCE_TYPE_TOPIC, "t"), refused(0, "x")])
         );
     }
 

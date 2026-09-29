@@ -63,9 +63,11 @@ fn serving_node_for(resource_type: i8, resource_name: &str) -> krabka_metadata::
     }
 }
 
-/// A named broker's entries without the topic-default broker keys it reports
-/// at their defaults, which `a_broker_reports_its_topic_default_keys_typed`
-/// covers, so the static-layer tests read only the keys they are about.
+/// A named broker's entries without the topic-default broker keys and the
+/// other `KafkaConfig` keys it reports at their defaults, which
+/// `a_broker_reports_its_topic_default_keys_typed` and
+/// `a_named_broker_reports_every_kafka_config_key` cover, so the static-layer
+/// tests read only the keys they are about.
 fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceResult> {
     result
         .configs
@@ -74,6 +76,8 @@ fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceRes
             !crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
                 .iter()
                 .any(|(broker, _)| *broker == entry.name)
+                && (EMITTED_ELSEWHERE.contains(&entry.name.as_str())
+                    || crate::config_keys::kafka_broker::lookup(&entry.name).is_none())
         })
         .cloned()
         .collect()
@@ -119,7 +123,6 @@ fn describe_at(
                 node_id: 1,
                 levels: &levels,
             },
-            static_min_insync_replicas: 1,
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
@@ -174,7 +177,6 @@ fn describe_with_loggers(
             node: serving_node_for(resource_type, resource_name),
             static_broker: untuned(),
             loggers,
-            static_min_insync_replicas: 1,
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
@@ -209,7 +211,6 @@ fn describe_with_static(
                 node_id: 1,
                 levels: &levels,
             },
-            static_min_insync_replicas: 1,
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
@@ -482,6 +483,7 @@ fn a_topic_with_no_overrides_reports_every_key_at_its_default() {
 
     let reported: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
     let mut expected: Vec<&str> = registry::keys_in(ConfigScope::Topic)
+        .filter(|row| !row.internal)
         .map(|row| row.name)
         .collect();
     expected.sort_unstable();
@@ -500,6 +502,65 @@ fn a_topic_with_no_overrides_reports_every_key_at_its_default() {
             .configs
             .iter()
             .all(|entry| entry.documentation.is_some())
+    );
+}
+
+/// Kafka's `KafkaConfigSchema.resolveEffectiveTopicConfigs` skips a key
+/// defined with `defineInternal` unless the topic sets it, so
+/// `internal.segment.bytes` is on neither a describe nor a KIP-525 config
+/// list of a topic that leaves it alone.
+#[test]
+fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
+    let untouched = describe_topic(&MetadataImage::new(Uuid::nil()), "orders", None);
+    check!(
+        !untouched
+            .configs
+            .iter()
+            .any(|entry| entry.name == config_keys::INTERNAL_SEGMENT_BYTES)
+    );
+
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "orders".into(),
+        overrides: maplit::btreemap! {
+            config_keys::INTERNAL_SEGMENT_BYTES.to_string() => "4096".to_string(),
+        },
+    }));
+    let set = describe_topic(&image, "orders", None);
+    let entry = set
+        .configs
+        .iter()
+        .find(|entry| entry.name == config_keys::INTERNAL_SEGMENT_BYTES)
+        .expect("a topic that sets the internal key reports it");
+    check!(entry.value.as_deref() == Some("4096"));
+    check!(entry.config_source == CONFIG_SOURCE_DYNAMIC_TOPIC);
+
+    // The KIP-525 list is the same computation.
+    let created = effective_topic_configs(
+        &MetadataImage::new(Uuid::nil()),
+        "orders",
+        &std::collections::BTreeMap::new(),
+        crate::api_catalog::UnstableApiVersions::Enabled,
+        &std::collections::BTreeMap::new(),
+    );
+    check!(
+        !created
+            .iter()
+            .any(|entry| entry.name == config_keys::INTERNAL_SEGMENT_BYTES)
+    );
+    let created = effective_topic_configs(
+        &MetadataImage::new(Uuid::nil()),
+        "orders",
+        &maplit::btreemap! {
+            config_keys::INTERNAL_SEGMENT_BYTES.to_string() => "4096".to_string(),
+        },
+        crate::api_catalog::UnstableApiVersions::Enabled,
+        &std::collections::BTreeMap::new(),
+    );
+    check!(
+        created
+            .iter()
+            .any(|entry| entry.name == config_keys::INTERNAL_SEGMENT_BYTES)
     );
 }
 
@@ -981,10 +1042,10 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
 
 #[test]
 fn every_key_an_alter_can_store_on_a_broker_comes_back_with_its_value() {
-    // The registry's own hazard: a stored key with no row is a key the
-    // entry builder must not disclose, so it would come back null, which is
-    // what Kafka does for a dynamic key it has no type for. Every key krabka
-    // runs with therefore has to have a row.
+    // A stored key with no row at all is a name Kafka does not define, which
+    // the entry builder withholds, as Kafka does. A key krabka runs with
+    // therefore has to have a row, its own or the `KafkaConfig` roster's (see
+    // `a_stored_kafka_config_key_comes_back_typed_and_disclosed`).
     for row in registry::keys_in(ConfigScope::Broker) {
         if row.read_only {
             continue;
@@ -1283,7 +1344,7 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
 }
 
 /// #784: with `unstable.api.versions.enable` off a group resource lists
-/// exactly Kafka 4.3.1's 20 `GroupConfig` keys, none of trunk's.
+/// exactly Kafka 4.3.1's 17 `GroupConfig` keys, none of trunk's.
 #[test]
 fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
     let image = MetadataImage::new(Uuid::nil());
@@ -1302,7 +1363,6 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
                 node_id: 1,
                 levels: &levels,
             },
-            static_min_insync_replicas: 1,
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         },
         300_000,
@@ -1314,11 +1374,9 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
         reported
             == vec![
                 "consumer.assignment.interval.ms",
-                "consumer.assignor.offload.enable",
                 "consumer.heartbeat.interval.ms",
                 "consumer.session.timeout.ms",
                 "share.assignment.interval.ms",
-                "share.assignor.offload.enable",
                 "share.auto.offset.reset",
                 "share.delivery.count.limit",
                 "share.heartbeat.interval.ms",
@@ -1328,7 +1386,6 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
                 "share.renew.acknowledge.enable",
                 "share.session.timeout.ms",
                 "streams.assignment.interval.ms",
-                "streams.assignor.offload.enable",
                 "streams.heartbeat.interval.ms",
                 "streams.initial.rebalance.delay.ms",
                 "streams.num.standby.replicas",
@@ -1366,7 +1423,6 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
                     node_id: 1,
                     levels: &levels,
                 },
-                static_min_insync_replicas: 1,
                 unstable_api_versions: unstable,
             },
             300_000,
@@ -1409,15 +1465,15 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
 }
 
 #[test]
-fn an_unhandled_resource_type_reports_nothing_and_no_error() {
+fn an_unhandled_resource_type_is_refused() {
     let image = MetadataImage::new(Uuid::nil());
     let result = describe(&image, 99, "whatever", None, EVERYTHING);
 
     assert!(
         result
             == DescribeConfigsResult {
-                error_code: crate::codes::NONE,
-                error_message: None,
+                error_code: crate::codes::INVALID_REQUEST,
+                error_message: Some("Unsupported resource type: 99".to_owned()),
                 resource_type: 99,
                 resource_name: "whatever".to_owned(),
                 configs: Vec::new(),
@@ -1908,6 +1964,299 @@ fn a_broker_reports_its_topic_default_keys_typed() {
             "{key}"
         );
     }
+}
+
+/// Kafka's `createBrokerConfigEntry` types a stored key by `KafkaConfig`'s own
+/// `ConfigDef`, and withholds a value only for a `PASSWORD` key or a name Kafka
+/// does not define (`KafkaConfig.maybeSensitive`). `readOnly` is
+/// `!ALL_DYNAMIC_CONFIGS.contains(name)`, so a listener override and a name
+/// Kafka does not define both read back read-only.
+#[test]
+fn a_stored_kafka_config_key_comes_back_typed_and_disclosed() {
+    // The key, its stored value, and the value, sensitivity, wire type and
+    // read-only flag the entry carries.
+    type Case = (
+        &'static str,
+        &'static str,
+        Option<&'static str>,
+        bool,
+        i8,
+        bool,
+    );
+    let cases: [Case; 7] = [
+        ("num.io.threads", "8", Some("8"), false, 3, false),
+        ("max.connections", "100", Some("100"), false, 3, false),
+        (
+            "follower.fetch.last.tiered.offset.enable",
+            "true",
+            Some("true"),
+            false,
+            1,
+            false,
+        ),
+        (
+            "listener.name.external.ssl.keystore.location",
+            "/keys/external.jks",
+            Some("/keys/external.jks"),
+            false,
+            2,
+            true,
+        ),
+        (
+            "listener.name.external.ssl.keystore.password",
+            "hunter2",
+            None,
+            true,
+            9,
+            true,
+        ),
+        // The mechanism-prefixed JAAS config is typed by the key it ends in.
+        (
+            "listener.name.external.plain.sasl.jaas.config",
+            "secret",
+            None,
+            true,
+            9,
+            true,
+        ),
+        // A name `KafkaConfig` does not define: untyped, so withheld.
+        ("plugin.custom.key", "x", None, true, 0, true),
+    ];
+    for (name, stored, value, sensitive, wire_type, read_only) in cases {
+        for (resource_name, node) in [("", DEFAULT_BROKER_CONFIG_NODE_ID), ("1", SERVING_NODE)] {
+            let image = image_with_broker_config(node, &[(name, stored)]);
+            let result = describe(
+                &image,
+                RESOURCE_TYPE_BROKER,
+                resource_name,
+                Some(vec![name.to_owned()]),
+                VALUES_ONLY,
+            );
+            let entry = entry_named(&result, name);
+            check!(
+                (
+                    entry.value.as_deref(),
+                    entry.is_sensitive,
+                    entry.config_type,
+                    entry.read_only,
+                ) == (value, sensitive, wire_type, read_only),
+                "{name} on {resource_name:?}"
+            );
+        }
+    }
+}
+
+/// Kafka's `ConfigHelperUtils.createResponseConfig` walks
+/// `config.nonInternalValues()` for a named broker, so tools that read
+/// `KafkaConfig` through `DescribeConfigs` find every non-internal key, at its
+/// default unless the process holds a value.
+#[test]
+fn a_named_broker_reports_every_kafka_config_key() {
+    let image = MetadataImage::new(Uuid::nil());
+    let result = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
+
+    for row in crate::config_keys::kafka_broker::KAFKA_BROKER_CONFIGS {
+        let count = result
+            .configs
+            .iter()
+            .filter(|entry| entry.name == row.name)
+            .count();
+        check!(count == usize::from(!row.internal), "{}", row.name);
+    }
+
+    // `num.network.threads` is not one krabka holds a static value of: it is
+    // the built-in default, typed, at `DEFAULT_CONFIG`.
+    let entry = entry_named(&result, "num.network.threads");
+    check!(
+        (
+            entry.value.as_deref(),
+            entry.config_source,
+            entry.config_type,
+            entry.read_only,
+            entry.synonyms.clone(),
+        ) == (
+            Some("3"),
+            CONFIG_SOURCE_DEFAULT,
+            ConfigType::Int.wire(),
+            false,
+            vec![synonym("num.network.threads", "3", CONFIG_SOURCE_DEFAULT)],
+        )
+    );
+    // A `PASSWORD` key is typed and withheld, and a read-only key says so.
+    let entry = entry_named(&result, "ssl.keystore.password");
+    check!((entry.value.clone(), entry.is_sensitive, entry.config_type) == (None, true, 9));
+    check!(entry_named(&result, "auto.leader.rebalance.enable").read_only);
+    // An internal key is not listed.
+    check!(
+        !result
+            .configs
+            .iter()
+            .any(|entry| entry.name == "unstable.api.versions.enable")
+    );
+}
+
+/// A key this process holds a static value of reports it at
+/// `STATIC_BROKER_CONFIG`, with the built-in default beneath it, as Kafka
+/// reports a key that `server.properties` names.
+#[test]
+fn a_named_broker_reports_the_static_values_it_holds() {
+    let settings = maplit::btreemap! {
+        "log.dirs" => "/data/a,/data/b".to_owned(),
+        "message.max.bytes" => "2097152".to_owned(),
+        "broker.rack" => "rack-1".to_owned(),
+    };
+    let result = describe_with_static(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "1",
+        None,
+        EVERYTHING,
+        StaticBrokerConfigs {
+            settings: &settings,
+            ..untuned()
+        },
+    );
+
+    let entry = entry_named(&result, "log.dirs");
+    check!(
+        (
+            entry.value.as_deref(),
+            entry.config_source,
+            entry.synonyms.clone(),
+        ) == (
+            Some("/data/a,/data/b"),
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![synonym(
+                "log.dirs",
+                "/data/a,/data/b",
+                CONFIG_SOURCE_STATIC_BROKER
+            )],
+        )
+    );
+    let entry = entry_named(&result, "message.max.bytes");
+    check!(
+        (
+            entry.value.as_deref(),
+            entry.config_source,
+            entry.synonyms.clone(),
+        ) == (
+            Some("2097152"),
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![
+                synonym("message.max.bytes", "2097152", CONFIG_SOURCE_STATIC_BROKER),
+                synonym("message.max.bytes", "1048588", CONFIG_SOURCE_DEFAULT),
+            ],
+        )
+    );
+    let entry = entry_named(&result, "broker.rack");
+    check!(
+        (entry.value.as_deref(), entry.config_source)
+            == (Some("rack-1"), CONFIG_SOURCE_STATIC_BROKER)
+    );
+}
+
+/// Kafka's `KafkaConfigSchema.resolveEffectiveTopicConfig` reports the static
+/// layer whenever `server.properties` names a synonym of the key, at the
+/// default value too, so `message.max.bytes`, `log.segment.bytes` and
+/// `min.insync.replicas` set on the broker reach a topic that overrides none
+/// of them, ahead of the built-in default. A topic override still wins.
+#[test]
+fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
+    let settings = maplit::btreemap! {
+        "message.max.bytes" => "2097152".to_owned(),
+        "log.segment.bytes" => "536870912".to_owned(),
+        // Kafka's own default, spelled out: still the static layer.
+        "min.insync.replicas" => "1".to_owned(),
+    };
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "orders".into(),
+        overrides: maplit::btreemap! {
+            "segment.bytes".to_string() => "1048576".to_string(),
+        },
+    }));
+    let result = describe_with_static(
+        &with_topic(&image, RESOURCE_TYPE_TOPIC, "orders"),
+        RESOURCE_TYPE_TOPIC,
+        "orders",
+        None,
+        EVERYTHING,
+        StaticBrokerConfigs {
+            settings: &settings,
+            ..untuned()
+        },
+    );
+
+    let chain = |key: &str| {
+        let entry = entry_named(&result, key);
+        (
+            entry.value.clone(),
+            entry.config_source,
+            entry.synonyms.clone(),
+        )
+    };
+    check!(
+        chain("max.message.bytes")
+            == (
+                Some("2097152".to_owned()),
+                CONFIG_SOURCE_STATIC_BROKER,
+                vec![
+                    synonym("message.max.bytes", "2097152", CONFIG_SOURCE_STATIC_BROKER),
+                    synonym("message.max.bytes", "1048588", CONFIG_SOURCE_DEFAULT),
+                ],
+            )
+    );
+    check!(
+        chain("min.insync.replicas")
+            == (
+                Some("1".to_owned()),
+                CONFIG_SOURCE_STATIC_BROKER,
+                vec![
+                    synonym("min.insync.replicas", "1", CONFIG_SOURCE_STATIC_BROKER),
+                    synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
+                ],
+            )
+    );
+    check!(
+        chain("segment.bytes")
+            == (
+                Some("1048576".to_owned()),
+                CONFIG_SOURCE_DYNAMIC_TOPIC,
+                vec![
+                    synonym("segment.bytes", "1048576", CONFIG_SOURCE_DYNAMIC_TOPIC),
+                    synonym(
+                        "log.segment.bytes",
+                        "536870912",
+                        CONFIG_SOURCE_STATIC_BROKER
+                    ),
+                    synonym("log.segment.bytes", "1073741824", CONFIG_SOURCE_DEFAULT),
+                ],
+            )
+    );
+
+    // The KIP-525 list `CreateTopics` v5+ carries is the same computation.
+    let created = effective_topic_configs(
+        &MetadataImage::new(Uuid::nil()),
+        "orders",
+        &std::collections::BTreeMap::new(),
+        crate::api_catalog::UnstableApiVersions::Disabled,
+        &settings,
+    );
+    let created_entry = |key: &str| {
+        let entry = created
+            .iter()
+            .find(|entry| entry.name == key)
+            .expect("a topic key");
+        (entry.value.clone(), entry.config_source)
+    };
+    check!(
+        created_entry("max.message.bytes")
+            == (Some("2097152".to_owned()), CONFIG_SOURCE_STATIC_BROKER)
+    );
+    check!(
+        created_entry("segment.bytes")
+            == (Some("536870912".to_owned()), CONFIG_SOURCE_STATIC_BROKER)
+    );
 }
 
 /// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group
