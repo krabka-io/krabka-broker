@@ -609,7 +609,14 @@ fn tiered_storage_rules_follow_kafkas_log_config() {
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
         check!(
-            canonical_topic_config_map(&map, &TopicDefaults::default(), tier_on).map(drop) == want,
+            canonical_topic_config_map(
+                &map,
+                &TopicDefaults::default(),
+                tier_on,
+                UnstableApiVersions::Enabled,
+            )
+            .map(drop)
+                == want,
             "tier={tier_on} {pairs:?}"
         );
     }
@@ -724,14 +731,21 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
         check!(
-            canonical_topic_config_map(&map, &TopicDefaults::from_image(&image), true).map(drop)
+            canonical_topic_config_map(
+                &map,
+                &TopicDefaults::from_image(&image, UnstableApiVersions::Enabled),
+                true,
+                UnstableApiVersions::Enabled,
+            )
+            .map(drop)
                 == want,
             "{cluster:?} {topic:?}"
         );
     }
 }
 
-/// The per-key refusals of Kafka trunk's four newest topic keys.
+/// The per-key refusals of Kafka trunk's four newest topic keys, on a broker
+/// serving trunk.
 #[test]
 fn kafka_trunks_newest_topic_keys_refuse_what_kafka_refuses() {
     for (key, value) in [
@@ -741,8 +755,82 @@ fn kafka_trunks_newest_topic_keys_refuse_what_kafka_refuses() {
         (MAX_DECOMPRESSED_MESSAGE_BYTES, "2147483640"),
         (ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "yes"),
     ] {
-        check!(validate_topic_config(key, value).is_err(), "{key}={value}");
+        check!(
+            canonical_topic_config(key, value, UnstableApiVersions::Enabled).is_err(),
+            "{key}={value}"
+        );
     }
+}
+
+/// #907's companion: Kafka 4.3.1's `LogConfig` does not define Kafka trunk's
+/// four newest topic keys, so `LogConfig.validateNames` refuses each with
+/// `Unknown topic config name`, whatever the value, on every path that
+/// validates a topic's map. `unstable.api.versions.enable` accepts them.
+#[test]
+fn kafka_trunks_newest_topic_keys_need_unstable_api_versions() {
+    for (key, value, canonical) in [
+        (REMOTE_COPY_LAG_MS, " 1000 ", "1000"),
+        (REMOTE_COPY_LAG_BYTES, "-1", "-1"),
+        (MAX_DECOMPRESSED_MESSAGE_BYTES, "2147483639", "2147483639"),
+        (ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "TRUE", "true"),
+    ] {
+        let unknown = format!("Unknown topic config name: {key}");
+        check!(
+            canonical_topic_config(key, value, UnstableApiVersions::Disabled)
+                == Err(unknown.clone()),
+            "{key}"
+        );
+        check!(
+            canonical_topic_config(key, value, UnstableApiVersions::Enabled)
+                == Ok(canonical.to_owned()),
+            "{key}"
+        );
+        let map = BTreeMap::from([(key.to_owned(), value.to_owned())]);
+        check!(
+            canonical_topic_config_map(
+                &map,
+                &TopicDefaults::default(),
+                true,
+                UnstableApiVersions::Disabled
+            )
+            .map(drop)
+                == Err(unknown),
+            "{key}"
+        );
+        check!(
+            canonical_topic_config_map(
+                &map,
+                &TopicDefaults::default(),
+                true,
+                UnstableApiVersions::Enabled
+            ) == Ok(BTreeMap::from([(key.to_owned(), canonical.to_owned())])),
+            "{key}"
+        );
+    }
+}
+
+/// Under Kafka 4.3.1 the broker keys `log.remote.copy.lag.ms` and
+/// `log.remote.copy.lag.bytes` are not `KafkaConfig` keys, so
+/// `extractLogConfigMap` carries no default for the topic keys from them, and
+/// a cluster value of either reaches no topic's effective defaults.
+#[test]
+fn trunk_topic_keys_take_no_cluster_default_under_kafka_4_3_1() {
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+        krabka_metadata::BrokerConfigRecord {
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            config_name: "log.remote.copy.lag.ms".to_owned(),
+            config_value: Some("5000".to_owned()),
+        },
+    ));
+    check!(
+        TopicDefaults::from_image(&image, UnstableApiVersions::Disabled).get(REMOTE_COPY_LAG_MS)
+            == None
+    );
+    check!(
+        TopicDefaults::from_image(&image, UnstableApiVersions::Enabled).get(REMOTE_COPY_LAG_MS)
+            == Some("5000")
+    );
 }
 
 /// A `compact,delete` topic is a compacted topic for every cross-key rule, so
@@ -941,7 +1029,10 @@ fn values_are_parsed_the_way_kafkas_config_def_parses_them() {
     ];
     for (key, value, canonical) in cases {
         check!(
-            canonical_topic_config(key, value).ok().as_deref() == canonical,
+            canonical_topic_config(key, value, UnstableApiVersions::Disabled)
+                .ok()
+                .as_deref()
+                == canonical,
             "{key}={value:?}"
         );
     }

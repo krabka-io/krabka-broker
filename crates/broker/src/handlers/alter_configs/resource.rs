@@ -171,6 +171,7 @@ pub(super) async fn process_resource(
                 image,
                 &broker.config.topic_policy,
                 broker.config.remote_storage_backend.is_some(),
+                broker.config.features.unstable_api_versions,
             ) {
                 Ok(record) => vec![record],
                 Err((code, message)) => {
@@ -185,6 +186,7 @@ pub(super) async fn process_resource(
             image,
             krabka_metadata::NodeId(broker.config.node_id.0),
             &broker.config.broker_log_dirs(),
+            broker.config.features.unstable_api_versions,
         ) {
             Ok(records) => records,
             Err((code, message)) => {

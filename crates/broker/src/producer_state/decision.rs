@@ -13,7 +13,7 @@ use krabka_verified::{
 };
 
 use super::{ProducerEntry, ProducerState, RetainedBatch, entry::NUM_BATCHES_TO_RETAIN};
-use crate::partition::LogOffset;
+use crate::{api_catalog::UnstableApiVersions, partition::LogOffset};
 
 /// How the tracker answers one idempotent-producer batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,28 @@ pub struct Checked {
     pub duplicate: Option<RetainedBatch>,
 }
 
+/// What the sequence check reads about the partition beside the producer's
+/// own entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SequenceContext {
+    /// Kafka's `ProducerStateManager.mapEndOffset() == 0`: no record has ever
+    /// been appended to the partition's log.
+    pub log_empty: bool,
+    /// Kafka's `unstable.api.versions.enable`. Kafka trunk's empty-log rule
+    /// (KAFKA-15591), which Kafka 4.3.1 does not have, applies only when it is
+    /// enabled.
+    pub unstable: UnstableApiVersions,
+}
+
+impl SequenceContext {
+    /// A partition that holds records, on a broker serving Kafka 4.3.1.
+    #[cfg(test)]
+    pub(crate) const RELEASED: Self = Self {
+        log_empty: false,
+        unstable: UnstableApiVersions::Disabled,
+    };
+}
+
 /// Pure idempotent-producer dedup/ordering decision.
 ///
 /// The async `check` is a thin lock-acquiring wrapper over this function. The
@@ -49,7 +71,14 @@ pub(crate) fn check_pure(
     base_sequence: i32,
     last_offset_delta: i32,
 ) -> Decision {
-    check_retained(entry, producer_epoch, base_sequence, last_offset_delta).decision
+    check_retained(
+        entry,
+        SequenceContext::RELEASED,
+        producer_epoch,
+        base_sequence,
+        last_offset_delta,
+    )
+    .decision
 }
 
 /// [`check_pure`], with the batch a duplicate repeats.
@@ -57,10 +86,12 @@ pub(crate) fn check_pure(
 /// The whole classification, including Kafka's search of the producer's five
 /// retained batches (`ProducerStateEntry.findDuplicateBatch`) ahead of the
 /// sequence check, is the proved [`producer_decision`]. This function only
-/// hands it the entry's epoch, last sequence and retained sequence ranges,
-/// and maps a duplicate's index back to the retained batch it names.
+/// hands it the entry's epoch, last sequence and retained sequence ranges and
+/// the partition's [`SequenceContext`], and maps a duplicate's index back to
+/// the retained batch it names.
 pub(crate) fn check_retained(
     entry: Option<&ProducerEntry>,
+    context: SequenceContext,
     producer_epoch: i16,
     base_sequence: i32,
     last_offset_delta: i32,
@@ -85,6 +116,8 @@ pub(crate) fn check_retained(
         producer_epoch,
         base_sequence,
         last_offset_delta,
+        context.log_empty,
+        context.unstable == UnstableApiVersions::Enabled,
     ) {
         ProducerDecision::Append => Decision::Append,
         ProducerDecision::Duplicate { retained } => {
@@ -126,6 +159,7 @@ impl ProducerState {
         self.check_batch(
             topic,
             partition,
+            SequenceContext::RELEASED,
             (producer_id, producer_epoch),
             (base_sequence, last_offset_delta),
         )
@@ -133,12 +167,13 @@ impl ProducerState {
         .decision
     }
 
-    /// [`Self::check`], with the retained batch a duplicate repeats, read
-    /// under the same lock.
+    /// [`Self::check`] against the partition's [`SequenceContext`], with the
+    /// retained batch a duplicate repeats, read under the same lock.
     pub async fn check_batch(
         &self,
         topic: &str,
         partition: PartitionIndex,
+        context: SequenceContext,
         (producer_id, producer_epoch): (i64, i16),
         (base_sequence, last_offset_delta): (i32, i32),
     ) -> Checked {
@@ -146,6 +181,7 @@ impl ProducerState {
         let s = handle.lock().await;
         check_retained(
             s.entries.get(&ProducerId(producer_id)),
+            context,
             producer_epoch,
             base_sequence,
             last_offset_delta,

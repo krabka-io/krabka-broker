@@ -66,7 +66,10 @@ impl<'a> TopicCreation<'a> {
             broker,
             image,
             preferred_site: resolve_preferred_leader_site(image),
-            topic_defaults: config_keys::TopicDefaults::from_image(image),
+            topic_defaults: config_keys::TopicDefaults::from_image(
+                image,
+                broker.config.features.unstable_api_versions,
+            ),
             validate_only,
         }
     }
@@ -123,6 +126,7 @@ impl<'a> TopicCreation<'a> {
             &topic_config_overrides(&topic_req),
             &self.topic_defaults,
             broker.config.remote_storage_backend.is_some(),
+            broker.config.features.unstable_api_versions,
         ) {
             Ok(canonical) => canonical,
             Err(reason) => {

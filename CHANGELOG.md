@@ -48,10 +48,19 @@ the `krabka-*` names to crates.io.
   and `krabka format`. CIDR ACL hosts (4.4-IV1) and controller unregistration
   (4.4-IV2) are therefore unreachable by default. A group resource carries
   4.3.1's 20 `GroupConfig` keys, and trunk's seven are `Unknown group config
-  name`. There are three opt-ins:
+  name`. A topic resource carries 4.3.1's `LogConfig` keys (with krabka's
+  own), so trunk's `remote.copy.lag.ms`, `remote.copy.lag.bytes`,
+  `max.decompressed.message.bytes` and `errors.deadletterqueue.group.enable`
+  are `Unknown topic config name` in `CreateTopics`, `AlterConfigs` and
+  `IncrementalAlterConfigs` and are left out of `DescribeConfigs`, with the
+  broker synonyms of the first three. An idempotent producer with no state may
+  start at any sequence, as on 4.3.1. There are three opt-ins:
   - `server_properties` `unstable.api.versions.enable = "true"`, Kafka's own
-    switch, serves the trunk versions, api keys and group keys above, plus
-    `InitProducerId` v6. With `transaction.two.phase.commit.enable` it also
+    switch, serves the trunk versions, api keys, group keys and topic keys
+    above, plus `InitProducerId` v6. It also applies trunk's KAFKA-15591 rule
+    (#907): a producer with no state on a partition that has never held a
+    record must start at sequence 0, and is otherwise answered
+    `OUT_OF_ORDER_SEQUENCE_NUMBER` with nothing appended. With `transaction.two.phase.commit.enable` it also
     serves krabka's KIP-939 `keepPreparedTxn` recovery, which 4.3.1 answers
     `UNSUPPORTED_VERSION`.
   - `server_properties` `unstable.feature.versions.enable = "true"`, Kafka's

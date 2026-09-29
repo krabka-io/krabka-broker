@@ -29,7 +29,9 @@ use super::{
         self, CLEANUP_POLICY_VALUES, ConfigKey, ConfigScope, GZIP_DEFAULT_LEVEL, GZIP_MAX_LEVEL,
         GZIP_MIN_LEVEL, ValueCheck,
     },
+    serves_topic_key,
 };
+use crate::api_catalog::UnstableApiVersions;
 
 /// Kafka's `validateRemoteStorageOnlyIfSystemEnabled` refusal: a topic asks
 /// for tiered storage on a broker with no remote storage backend.
@@ -55,16 +57,26 @@ pub(crate) fn flag(map: &BTreeMap<String, String>, key: &str) -> bool {
 ///
 /// The accepted values come from the key's row in [`super::registry`], so the
 /// check an operator meets here is the one the reference page and
-/// `DescribeConfigs` describe.
+/// `DescribeConfigs` describe. The key set is Kafka 4.3.1's, which is what a
+/// broker without `unstable.api.versions.enable` serves.
 pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String> {
-    canonical_topic_config(key, value).map(drop)
+    canonical_topic_config(key, value, UnstableApiVersions::Disabled).map(drop)
 }
 
 /// Validate a single key/value pair and return the value in the form Kafka
 /// reports it: trimmed, a boolean in lower case, a number as it parses, and a
 /// list joined with bare commas.
-pub(crate) fn canonical_topic_config(key: &str, value: &str) -> Result<String, String> {
-    let Some(row) = registry::lookup(ConfigScope::Topic, key).filter(|row| row.is_alterable())
+///
+/// A key the broker does not serve under `unstable` (see
+/// [`super::serves_topic_key`]) is `Unknown topic config name`, the text of
+/// Kafka's `LogConfig.validateNames`.
+pub(crate) fn canonical_topic_config(
+    key: &str,
+    value: &str,
+    unstable: UnstableApiVersions,
+) -> Result<String, String> {
+    let Some(row) = registry::lookup(ConfigScope::Topic, key)
+        .filter(|row| row.is_alterable() && serves_topic_key(row.name, unstable))
     else {
         return Err(format!("Unknown topic config name: {key}"));
     };
@@ -124,7 +136,13 @@ pub(crate) fn canonical_value(row: &ConfigKey, value: &str) -> Result<String, St
 pub(crate) fn validate_topic_config_map(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    canonical_topic_config_map(overrides, &TopicDefaults::default(), true).map(drop)
+    canonical_topic_config_map(
+        overrides,
+        &TopicDefaults::default(),
+        true,
+        UnstableApiVersions::Disabled,
+    )
+    .map(drop)
 }
 
 /// Validate a topic's complete override map, and return it in the canonical
@@ -135,15 +153,18 @@ pub(crate) fn validate_topic_config_map(
 /// `defaults` are the effective broker defaults the cross-key rules read for a
 /// key the map leaves unset. `remote_storage_system_enabled` is Kafka's
 /// `RemoteLogManagerConfig.isRemoteStorageSystemEnabled`: whether this broker
-/// has a remote storage backend at all.
+/// has a remote storage backend at all. `unstable` is Kafka's
+/// `unstable.api.versions.enable`, which decides whether Kafka trunk's topic
+/// keys are accepted.
 pub(crate) fn canonical_topic_config_map(
     overrides: &BTreeMap<String, String>,
     defaults: &TopicDefaults,
     remote_storage_system_enabled: bool,
+    unstable: UnstableApiVersions,
 ) -> Result<BTreeMap<String, String>, String> {
     let canonical = overrides
         .iter()
-        .map(|(key, value)| Ok((key.clone(), canonical_topic_config(key, value)?)))
+        .map(|(key, value)| Ok((key.clone(), canonical_topic_config(key, value, unstable)?)))
         .collect::<Result<BTreeMap<_, _>, String>>()?;
     validate_config_combination(&canonical, defaults, remote_storage_system_enabled)?;
     Ok(canonical)
@@ -234,12 +255,20 @@ impl TopicDefaults {
     /// preference. `log.retention.minutes` and `log.retention.hours` are
     /// converted to milliseconds, and a negative retention is `-1`, as
     /// `KafkaConfig.logRetentionTimeMillis` reads them.
-    pub(crate) fn from_image(image: &krabka_metadata::MetadataImage) -> Self {
+    ///
+    /// A topic key the broker does not serve under `unstable` has no broker
+    /// default: its broker key is not a `KafkaConfig` key there, so Kafka's
+    /// `extractLogConfigMap` does not carry it.
+    pub(crate) fn from_image(
+        image: &krabka_metadata::MetadataImage,
+        unstable: UnstableApiVersions,
+    ) -> Self {
         let Some(cluster) = image.default_broker_config() else {
             return Self::default();
         };
         Self(
             registry::keys_in(ConfigScope::Topic)
+                .filter(|row| serves_topic_key(row.name, unstable))
                 .filter_map(|row| {
                     super::broker_dynamic::topic_broker_synonyms(row.name)
                         .iter()
