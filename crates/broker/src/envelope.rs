@@ -23,7 +23,8 @@
 //!   `00 00 05 55 73 65 72 06 61 6c 69 63 65 00 00`, and its `deserialize`
 //!   refuses any version outside `0..=0`.
 //! - `kafka.server.EnvelopeUtils` maps the failures: a request header it
-//!   cannot parse is an `UnsupportedVersionException`, an inner api key whose
+//!   cannot parse, or an embedded body that does not decode, is an
+//!   `UnsupportedVersionException`, an inner api key whose
 //!   `ApiKeys.forwardable` is false is an `InvalidRequestException`, and a
 //!   principal it cannot deserialize is a `PrincipalDeserializationException`.
 //!   It performs no principal-*type* check, so neither does this module.
@@ -59,7 +60,7 @@ pub(crate) enum EnvelopeError {
     /// `request_principal` was absent, carried an unreadable schema version,
     /// or did not decode as a `DefaultPrincipalData` body.
     PrincipalDeserializationFailure,
-    /// The embedded request header did not parse.
+    /// The embedded request header did not parse, or its body did not decode.
     UnsupportedVersion,
     /// The envelope itself was malformed, or the embedded request is not one
     /// Kafka forwards.
@@ -78,41 +79,88 @@ impl EnvelopeError {
     }
 }
 
-/// `ApiKeys.forwardable`, read out of `kafka-clients-4.3.1.jar`, plus
-/// `UnregisterController`, which Kafka trunk's `ApiKeys` declares forwardable.
-///
-/// KIP-590 lets a broker wrap only these api keys, and
-/// `EnvelopeUtils.handleEnvelopeRequest` refuses any other embedded key with
-/// `InvalidRequestException`. Accepting a key outside the set would let a
-/// forwarding hop launder a request the client could not have sent itself.
-const FORWARDABLE_API_KEYS: &[ApiKeyCode] = &[
-    19, // CreateTopics
-    20, // DeleteTopics
-    30, // CreateAcls
-    31, // DeleteAcls
-    33, // AlterConfigs
-    37, // CreatePartitions
-    38, // CreateDelegationToken
-    39, // RenewDelegationToken
-    40, // ExpireDelegationToken
-    43, // ElectLeaders
-    44, // IncrementalAlterConfigs
-    45, // AlterPartitionReassignments
-    46, // ListPartitionReassignments
-    49, // AlterClientQuotas
-    51, // AlterUserScramCredentials
-    55, // DescribeQuorum
-    57, // UpdateFeatures
-    64, // UnregisterBroker
-    67, // AllocateProducerIds
-    80, // AddRaftVoter
-    81, // RemoveRaftVoter
-    94, // UnregisterController (Kafka trunk, KIP-1312)
-];
+/// Declares the forwardable api keys with the request type each one carries,
+/// as the key list [`FORWARDABLE_API_KEYS`] and the body check
+/// [`embedded_body_decodes`] that `EnvelopeUtils` runs through
+/// `RequestContext.parseRequest`.
+macro_rules! forwardable_apis {
+    ($($key:literal => $module:ident::$request:ident,)*) => {
+        /// `ApiKeys.forwardable`, read out of `kafka-clients-4.3.1.jar`, plus
+        /// `UnregisterController`, which Kafka trunk's `ApiKeys` declares
+        /// forwardable.
+        ///
+        /// KIP-590 lets a broker wrap only these api keys, and
+        /// `EnvelopeUtils.handleEnvelopeRequest` refuses any other embedded key
+        /// with `InvalidRequestException`. Accepting a key outside the set would
+        /// let a forwarding hop launder a request the client could not have sent
+        /// itself.
+        const FORWARDABLE_API_KEYS: &[ApiKeyCode] = &[$($key,)*];
+
+        /// Whether `body` decodes as the request of `api_key` at `version`.
+        ///
+        /// `RequestContext.parseRequest` decodes the body and nothing checks
+        /// what is left after it, so neither does this. A key outside the
+        /// forwardable set decodes as nothing.
+        fn embedded_body_decodes(api_key: ApiKeyCode, version: ApiVersion, body: &[u8]) -> bool {
+            let mut cur = body;
+            match api_key {
+                $($key => krabka_protocol::owned::$module::$request::decode(&mut cur, version).is_ok(),)*
+                _ => false,
+            }
+        }
+    };
+}
+
+forwardable_apis! {
+    19 => create_topics_request::CreateTopicsRequest, // CreateTopics
+    20 => delete_topics_request::DeleteTopicsRequest, // DeleteTopics
+    30 => create_acls_request::CreateAclsRequest, // CreateAcls
+    31 => delete_acls_request::DeleteAclsRequest, // DeleteAcls
+    33 => alter_configs_request::AlterConfigsRequest, // AlterConfigs
+    37 => create_partitions_request::CreatePartitionsRequest, // CreatePartitions
+    38 => create_delegation_token_request::CreateDelegationTokenRequest, // CreateDelegationToken
+    39 => renew_delegation_token_request::RenewDelegationTokenRequest, // RenewDelegationToken
+    40 => expire_delegation_token_request::ExpireDelegationTokenRequest, // ExpireDelegationToken
+    43 => elect_leaders_request::ElectLeadersRequest, // ElectLeaders
+    44 => incremental_alter_configs_request::IncrementalAlterConfigsRequest, // IncrementalAlterConfigs
+    45 => alter_partition_reassignments_request::AlterPartitionReassignmentsRequest, // AlterPartitionReassignments
+    46 => list_partition_reassignments_request::ListPartitionReassignmentsRequest, // ListPartitionReassignments
+    49 => alter_client_quotas_request::AlterClientQuotasRequest, // AlterClientQuotas
+    51 => alter_user_scram_credentials_request::AlterUserScramCredentialsRequest, // AlterUserScramCredentials
+    55 => describe_quorum_request::DescribeQuorumRequest, // DescribeQuorum
+    57 => update_features_request::UpdateFeaturesRequest, // UpdateFeatures
+    64 => unregister_broker_request::UnregisterBrokerRequest, // UnregisterBroker
+    67 => allocate_producer_ids_request::AllocateProducerIdsRequest, // AllocateProducerIds
+    80 => add_raft_voter_request::AddRaftVoterRequest, // AddRaftVoter
+    81 => remove_raft_voter_request::RemoveRaftVoterRequest, // RemoveRaftVoter
+    94 => unregister_controller_request::UnregisterControllerRequest, // UnregisterController (Kafka trunk, KIP-1312)
+}
 
 /// Whether Kafka wraps `api_key` in an `Envelope` when a broker forwards it.
 pub(crate) fn is_forwardable(api_key: ApiKeyCode) -> bool {
     FORWARDABLE_API_KEYS.contains(&api_key)
+}
+
+/// Whether `api_key` is an api key `RequestHeader.parse` accepts on a listener
+/// running with `unstable`: one the release has (`ApiKeys.forId`) with a valid
+/// version (`hasValidVersion`).
+///
+/// Kafka 4.3.1 has no key from 93 up, and its removed `LeaderAndIsr`,
+/// `StopReplica`, `UpdateMetadata` and `ControlledShutdown` (keys 4 to 7) have
+/// no valid version. Trunk's own keys are known while
+/// `unstable.api.versions.enable` is on.
+fn is_known_api_key(
+    api_key: ApiKeyCode,
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> bool {
+    match unstable {
+        crate::api_catalog::UnstableApiVersions::Disabled => {
+            krabka_raft::kafka_4_3_1_api(api_key).is_some()
+        }
+        crate::api_catalog::UnstableApiVersions::Enabled => {
+            krabka_protocol::api_key::ApiKey::from_i16(api_key).is_some()
+        }
+    }
 }
 
 /// The client identity a forwarder put in `request_principal`.
@@ -338,21 +386,34 @@ pub(crate) fn decode_request(body: &[u8], version: i16) -> Result<EnvelopeReques
 /// embedded body is flexible — the same rule the client-listener dispatch
 /// loop applies.
 ///
+/// The checks run in the order of `EnvelopeUtils.handleEnvelopeRequest`:
+/// the header, then the forwardable test, then the body.
+///
 /// # Errors
-/// [`EnvelopeError::UnsupportedVersion`] when the header does not parse, and
-/// [`EnvelopeError::InvalidRequest`] when the embedded api key is not one
-/// Kafka forwards.
+/// [`EnvelopeError::UnsupportedVersion`] when the header does not parse, which
+/// covers an api key `unstable` leaves unknown, and when the body does not
+/// decode: `EnvelopeUtils` turns the `InvalidRequestException` of either parse
+/// into `UnsupportedVersionException`, so the forwarder can tell this from a
+/// malformed envelope. [`EnvelopeError::InvalidRequest`] when the embedded api
+/// key is a known one that Kafka does not forward.
 pub(crate) fn unwrap_request<F>(
     request_data: &Bytes,
     flexible_for: F,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<ForwardedRequest, EnvelopeError>
 where
     F: Fn(ApiKeyCode, ApiVersion) -> bool,
 {
     let parsed = crate::network::request::parse_request(request_data, flexible_for)
         .map_err(|_| EnvelopeError::UnsupportedVersion)?;
+    if !is_known_api_key(parsed.api_key, unstable) {
+        return Err(EnvelopeError::UnsupportedVersion);
+    }
     if !is_forwardable(parsed.api_key) {
         return Err(EnvelopeError::InvalidRequest);
+    }
+    if !embedded_body_decodes(parsed.api_key, parsed.api_version, parsed.body) {
+        return Err(EnvelopeError::UnsupportedVersion);
     }
     Ok(ForwardedRequest {
         api_key: parsed.api_key,
@@ -457,6 +518,19 @@ mod tests {
             token_authenticated,
         }
     }
+
+    /// The bytes of a default request of type `R` at `version`, which the
+    /// embedded-body check decodes.
+    fn body_of<R: krabka_protocol::Encode + Default>(version: i16) -> Vec<u8> {
+        let mut body = BytesMut::new();
+        R::default()
+            .encode(&mut body, version)
+            .expect("encode a default request");
+        body.to_vec()
+    }
+
+    const UNSTABLE_OFF: crate::api_catalog::UnstableApiVersions =
+        crate::api_catalog::UnstableApiVersions::Disabled;
 
     /// The bytes a real JVM forwarder puts in `request_principal` decode into
     /// the identity that JVM meant. These buffers are the oracle: they were
@@ -655,6 +729,10 @@ mod tests {
     /// frame the receive-side tests use.
     #[test]
     fn a_wrapped_request_unwraps_to_the_same_request() {
+        let create_topics =
+            body_of::<krabka_protocol::owned::create_topics_request::CreateTopicsRequest>(7);
+        let alter_configs =
+            body_of::<krabka_protocol::owned::alter_configs_request::AlterConfigsRequest>(0);
         let cases = [
             (
                 "flexible CreateTopics with a client id",
@@ -663,10 +741,10 @@ mod tests {
                     api_version: 7,
                     correlation_id: 5,
                     client_id: Some("c".to_owned()),
-                    body: Bytes::from_static(b"topics"),
+                    body: Bytes::from(create_topics.clone()),
                     body_flexible: true,
                 },
-                request_frame(19, 7, 5, Some("c"), true, b"topics"),
+                request_frame(19, 7, 5, Some("c"), true, &create_topics),
             ),
             (
                 "non-flexible AlterConfigs with a null client id",
@@ -675,10 +753,10 @@ mod tests {
                     api_version: 0,
                     correlation_id: -3,
                     client_id: None,
-                    body: Bytes::from_static(b"body"),
+                    body: Bytes::from(alter_configs.clone()),
                     body_flexible: false,
                 },
-                request_frame(33, 0, -3, None, false, b"body"),
+                request_frame(33, 0, -3, None, false, &alter_configs),
             ),
         ];
 
@@ -687,7 +765,8 @@ mod tests {
 
             check!(wrapped == frame, "case: {case}");
             check!(
-                unwrap_request(&wrapped, |_, _| forwarded.body_flexible) == Ok(forwarded),
+                unwrap_request(&wrapped, |_, _| forwarded.body_flexible, UNSTABLE_OFF)
+                    == Ok(forwarded),
                 "case: {case}"
             );
         }
@@ -822,37 +901,42 @@ mod tests {
     /// byte is consumed rather than left at the head of the body.
     #[test]
     fn an_embedded_request_is_split_into_its_header_and_body() {
+        let incremental = body_of::<
+            krabka_protocol::owned::incremental_alter_configs_request::IncrementalAlterConfigsRequest,
+        >(1);
+        let alter_configs =
+            body_of::<krabka_protocol::owned::alter_configs_request::AlterConfigsRequest>(0);
         let cases = [
             (
                 "flexible IncrementalAlterConfigs",
-                request_frame(44, 1, 77, Some("adminclient-1"), true, b"body"),
+                request_frame(44, 1, 77, Some("adminclient-1"), true, &incremental),
                 true,
                 ForwardedRequest {
                     api_key: 44,
                     api_version: 1,
                     correlation_id: 77,
                     client_id: Some("adminclient-1".to_owned()),
-                    body: Bytes::from_static(b"body"),
+                    body: Bytes::from(incremental),
                     body_flexible: true,
                 },
             ),
             (
                 "non-flexible AlterConfigs with a null client id",
-                request_frame(33, 0, 3, None, false, b"body"),
+                request_frame(33, 0, 3, None, false, &alter_configs),
                 false,
                 ForwardedRequest {
                     api_key: 33,
                     api_version: 0,
                     correlation_id: 3,
                     client_id: None,
-                    body: Bytes::from_static(b"body"),
+                    body: Bytes::from(alter_configs),
                     body_flexible: false,
                 },
             ),
         ];
 
         for (case, frame, flexible, want) in cases {
-            assert!(let Ok(forwarded) = unwrap_request(&frame, |_, _| flexible),
+            assert!(let Ok(forwarded) = unwrap_request(&frame, |_, _| flexible, UNSTABLE_OFF),
                 "case: {case}"
             );
 
@@ -860,32 +944,118 @@ mod tests {
         }
     }
 
-    /// An embedded key outside `ApiKeys.forwardable` is refused before any
-    /// handler runs, and a frame too short to hold a header is refused as an
-    /// unparseable header.
+    /// `EnvelopeUtils.handleEnvelopeRequest` answers each way an embedded
+    /// request can fail with the code its own throw site gives.
+    ///
+    /// - A header `RequestHeader.parse` refuses is `UNSUPPORTED_VERSION`: a
+    ///   frame too short for one, an api key the release does not have (93 and
+    ///   up on 4.3.1, trunk's own keys until `unstable.api.versions.enable`),
+    ///   and the removed keys 4 to 7.
+    /// - A known key outside `ApiKeys.forwardable` is `INVALID_REQUEST`, and
+    ///   the forwardable test runs before the body is read.
+    /// - A forwardable key whose body does not decode is
+    ///   `UNSUPPORTED_VERSION`, since `parseForwardedRequest` rewraps the
+    ///   `InvalidRequestException` of `RequestContext.parseRequest`.
     #[test]
-    fn an_embedded_request_kafka_would_not_forward_is_refused() {
-        let cases: [(&str, Bytes, EnvelopeError); 3] = [
+    fn an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {
+        use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
+
+        let create_topics =
+            body_of::<krabka_protocol::owned::create_topics_request::CreateTopicsRequest>(7);
+        let unregister_controller = body_of::<
+            krabka_protocol::owned::unregister_controller_request::UnregisterControllerRequest,
+        >(0);
+        let truncated = &create_topics[..create_topics.len() - 1];
+        let cases: [(&str, Bytes, _, Result<(), EnvelopeError>); 14] = [
+            (
+                "a frame too short to hold a header",
+                Bytes::from_static(&[0, 19, 0]),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
             (
                 "Produce is not forwardable",
                 request_frame(0, 9, 1, None, true, b""),
-                EnvelopeError::InvalidRequest,
+                Disabled,
+                Err(EnvelopeError::InvalidRequest),
             ),
             (
                 "a nested Envelope is not forwardable",
                 request_frame(58, 0, 1, None, true, b""),
-                EnvelopeError::InvalidRequest,
+                Disabled,
+                Err(EnvelopeError::InvalidRequest),
             ),
             (
-                "a frame too short to hold a header",
-                Bytes::from_static(&[0, 19, 0]),
-                EnvelopeError::UnsupportedVersion,
+                "a non-forwardable key is refused before its body is read",
+                request_frame(3, 12, 1, None, true, b"garbage"),
+                Disabled,
+                Err(EnvelopeError::InvalidRequest),
+            ),
+            (
+                "the removed LeaderAndIsr has no valid version",
+                request_frame(4, 0, 1, None, true, b""),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "the removed ControlledShutdown has no valid version",
+                request_frame(7, 0, 1, None, true, b""),
+                Enabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "an api key past the release's last is unknown",
+                request_frame(93, 0, 1, None, true, b""),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "a negative api key is unknown",
+                request_frame(-1, 0, 1, None, true, b""),
+                Enabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "trunk's UnregisterController is unknown to 4.3.1",
+                request_frame(94, 0, 1, None, true, &unregister_controller),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "trunk's UnregisterController is known under the flag",
+                request_frame(94, 0, 1, None, true, &unregister_controller),
+                Enabled,
+                Ok(()),
+            ),
+            (
+                "a body that does not decode",
+                request_frame(19, 7, 1, None, true, b"garbage"),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "a body cut short",
+                request_frame(19, 7, 1, None, true, truncated),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "a version the request type does not have",
+                request_frame(19, 99, 1, None, true, &create_topics),
+                Disabled,
+                Err(EnvelopeError::UnsupportedVersion),
+            ),
+            (
+                "a body that decodes",
+                request_frame(19, 7, 1, None, true, &create_topics),
+                Disabled,
+                Ok(()),
             ),
         ];
 
-        for (case, frame, want) in cases {
+        for (case, frame, unstable, want) in cases {
             check!(
-                unwrap_request(&frame, |_, _| true) == Err(want),
+                unwrap_request(&frame, |_, _| true, unstable).map(|_| ()) == want,
                 "case: {case}"
             );
         }

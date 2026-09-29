@@ -485,8 +485,12 @@ impl FakeController {
                 if api_key == envelope_request::API_KEY {
                     let outer =
                         envelope::decode_request(parsed.body, version).expect("an Envelope");
-                    let forwarded = envelope::unwrap_request(&outer.request_data, flexible_for)
-                        .expect("an embedded request");
+                    let forwarded = envelope::unwrap_request(
+                        &outer.request_data,
+                        flexible_for,
+                        crate::api_catalog::UnstableApiVersions::Disabled,
+                    )
+                    .expect("an embedded request");
                     let principal =
                         envelope::deserialize_principal(outer.request_principal.as_deref())
                             .expect("a principal");

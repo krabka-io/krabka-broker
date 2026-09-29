@@ -766,6 +766,87 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
     );
 }
 
+/// `EnvelopeUtils` answers an embedded request it cannot parse in the
+/// envelope, and the controller keeps the connection for the next one:
+/// `RequestHeader.parse` refuses an api key the release does not have (93 and
+/// up on 4.3.1) or that has no valid version (the removed keys 4 to 7), and
+/// `RequestContext.parseRequest` refuses a body that does not decode. Both are
+/// `UNSUPPORTED_VERSION`. A known key that Kafka does not forward is
+/// `INVALID_REQUEST`. A forwarder that saw the connection drop instead could
+/// not tell any of these from a network fault.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {
+    const TOPIC: &str = "envelope-after-refusals";
+
+    let (broker, _dir) = start_broker().await;
+    let create_topics_version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
+    let embedded = |api_key: i16, version: i16, body: &[u8]| {
+        request_frame(
+            api_key,
+            version,
+            EMBEDDED_CORRELATION_ID,
+            Some("adminclient-1"),
+            true,
+            body,
+        )
+        .slice(4..)
+    };
+    let truncated_body = {
+        let whole = embedded_create_topics(TOPIC);
+        whole.slice(..whole.len() - 2)
+    };
+    let cases = [
+        (
+            "a body that does not decode",
+            embedded(19, create_topics_version, b"not a CreateTopics body"),
+            35,
+        ),
+        (
+            "a body cut short",
+            // The embedded header and body of a valid CreateTopics, minus the
+            // tail of its last field.
+            truncated_body,
+            35,
+        ),
+        (
+            "an api key the release does not have",
+            embedded(93, 0, &[]),
+            35,
+        ),
+        ("a removed api key", embedded(5, 0, &[]), 35),
+        (
+            "a known api key that is not forwardable",
+            embedded(0, 9, &[]),
+            42,
+        ),
+    ];
+
+    let mut stream = tokio::net::TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect controller listener");
+    for (case, request_data, want) in cases {
+        let response = send_envelope_on(
+            &mut stream,
+            &envelope_for(request_data, Some(JVM_USER_ALICE)),
+        )
+        .await;
+        check!(
+            (response.error_code, response.response_data) == (want, None),
+            "{case}"
+        );
+    }
+
+    // The same connection still serves a request that parses.
+    let response = send_envelope_on(
+        &mut stream,
+        &envelope_for(embedded_create_topics(TOPIC), Some(JVM_USER_ALICE)),
+    )
+    .await;
+    check!(response.error_code == 0, "{response:?}");
+    check!(broker.controller_image_for_test().topic(TOPIC).is_some());
+    broker.shutdown().await;
+}
+
 /// #784: `UnregisterController` (94) is Kafka trunk's, so a 4.3.1 controller
 /// cannot parse an embedded header naming it, and `EnvelopeUtils` reports
 /// that as `UNSUPPORTED_VERSION`. krabka answers the same while

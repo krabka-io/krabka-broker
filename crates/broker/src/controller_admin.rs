@@ -404,9 +404,11 @@ fn unwrap_envelope(
     let forwarded_principal =
         envelope::deserialize_principal(envelope.request_principal.as_deref())?;
     let client_host = envelope::deserialize_client_host_address(&envelope.client_host_address)?;
-    let forwarded = envelope::unwrap_request(&envelope.request_data, |api_key, api_version| {
-        broker.handlers().body_flexible(api_key, api_version)
-    })?;
+    let forwarded = envelope::unwrap_request(
+        &envelope.request_data,
+        |api_key, api_version| broker.handlers().body_flexible(api_key, api_version),
+        broker.config.features.unstable_api_versions,
+    )?;
     // The embedded key is forwardable in Kafka's table; it still has to be one
     // this broker serves, at a version it serves, before a handler sees it.
     let entry = broker
