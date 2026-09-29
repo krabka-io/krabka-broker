@@ -33,6 +33,14 @@
 //! `crate::handlers::offline_replicas::partition_availability`, so this API and
 //! `DescribeTopicPartitions` cannot report a replica offline in one column and
 //! leading in another.
+//!
+//! The `brokers` array follows `KRaftMetadataCache.getAliveBrokerNodes`: the
+//! brokers that are not fenced and that have an endpoint on the listener the
+//! request arrived on, each at that endpoint's address. A broker with no such
+//! endpoint is left out, and is never advertised at another listener's
+//! address. A partition whose leader is not in that state answers leader `-1`
+//! with `LEADER_NOT_AVAILABLE`, or, when the leader is registered without the
+//! listener, `LISTENER_NOT_FOUND` from version 6 on.
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -54,8 +62,12 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::{
-        acl_wire::CLUSTER_RESOURCE_NAME, authorized_operations::authorized_operations_bits,
-        offline_replicas::NO_LEADER_ID,
+        acl_wire::CLUSTER_RESOURCE_NAME,
+        authorized_operations::authorized_operations_bits,
+        offline_replicas::{
+            LeaderEndpointError, NO_LEADER_ID, PartitionAvailability, leader_endpoint_error,
+            listener_endpoint,
+        },
     },
 };
 
@@ -64,12 +76,20 @@ mod missing_topics;
 #[cfg(test)]
 mod authorization_tests;
 #[cfg(test)]
+mod listener_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 /// The first `Metadata` version whose topic rows may carry a null name or a
 /// non-zero topic id. Versions 10 and 11 have both fields on the wire, but
 /// Kafka refuses a request that uses them.
 const FIRST_TOPIC_ID_VERSION: i16 = 12;
+
+/// The first `Metadata` version that answers `LISTENER_NOT_FOUND` for a leader
+/// that lacks the request's listener. Kafka's
+/// `KafkaApis.handleTopicMetadataRequest` sets `errorUnavailableListeners` for
+/// `version >= 6`, and answers `LEADER_NOT_AVAILABLE` before that.
+const FIRST_LISTENER_NOT_FOUND_VERSION: i16 = 6;
 
 /// The versions that carry `cluster_authorized_operations` (KIP-430).
 const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: std::ops::RangeInclusive<i16> = 8..=10;
@@ -92,7 +112,6 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let controller = broker.controller.clone();
-    let inter_broker_name = broker.config.inter_broker_listener_name.clone();
 
     let mut cur: &[u8] = req_bytes;
     let req = MetadataRequest::decode(&mut cur, version)?;
@@ -106,24 +125,24 @@ pub(crate) async fn handle(
         }
     };
 
-    // Brokers: enumerate registered nodes from the metadata image. Keep
-    // endpoint discovery separate from replica-placement eligibility: a
-    // partition can still name a fenced/dead broker as leader until failover
-    // commits, and clients need its endpoint to route or receive the broker's
-    // protocol error. DescribeCluster v2 exposes authoritative fencing state
-    // to placement clients.
-    // Each broker's `host:port` is projected from the endpoint matching the
-    // listener this request arrived on (Kafka returns the connection
-    // listener's advertised address), falling back to the inter-broker
-    // endpoint when the connection listener isn't recorded on that broker.
-    let brokers = image
-        .brokers()
-        .map(|broker| project_broker(broker, ctx.connection_listener_name, &inter_broker_name))
-        .collect();
-
     // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
     // as the image; see `handlers::offline_replicas`.
     let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+
+    // Brokers: Kafka's `KRaftMetadataCache.getAliveBrokerNodes`. A fenced or
+    // dead broker is not listed, so a client does not dial it for a bootstrap
+    // or a metadata refresh. Each listed broker's `host:port` is the endpoint
+    // of the listener this request arrived on, and a broker with no endpoint
+    // on it is left out rather than advertised at another listener's address.
+    // A partition can still name an unlisted broker as leader until failover
+    // commits; its row says so with `-1` and an error code.
+    let listener = ctx.connection_listener_name;
+    let brokers = image
+        .brokers()
+        .filter(|registration| !unavailable.contains(&registration.node_id.0))
+        .filter_map(|registration| project_broker(registration, listener))
+        .collect();
+
     let topics_out = build_topic_rows(
         broker,
         &image,
@@ -133,6 +152,7 @@ pub(crate) async fn handle(
             version,
             requested: &requested,
             unavailable: &unavailable,
+            listener,
             correlation_id,
         },
     );
@@ -325,6 +345,8 @@ struct TopicRowInputs<'a> {
     /// Brokers the controller currently treats as fenced or dead, from
     /// [`crate::handlers::offline_replicas::unavailable_brokers`].
     unavailable: &'a std::collections::HashSet<u64>,
+    /// The listener the request arrived on.
+    listener: &'a str,
     /// The correlation id of the request, which an auto-creation forwards to
     /// the controller.
     correlation_id: i32,
@@ -480,38 +502,7 @@ fn success_topic_row(
     let name = record.name.as_str();
     let partitions = image
         .partitions_of(name)
-        .map(|partition| {
-            let availability = crate::handlers::offline_replicas::partition_availability(
-                image,
-                partition,
-                inputs.unavailable,
-            );
-            MetadataResponsePartition {
-                // Kafka's `KRaftMetadataCache.partitionMetadata` answers a
-                // partition it can find no live leader endpoint for with
-                // `LEADER_NOT_AVAILABLE` beside the `-1`, and with the
-                // replica, ISR and offline lists filled in as usual. Read out
-                // of `kafka-metadata-4.3.1.jar`; `DescribeTopicPartitions`
-                // takes the same `-1` with no error code, which is why only
-                // this API sets one.
-                error_code: if availability.leader_id == NO_LEADER_ID {
-                    codes::LEADER_NOT_AVAILABLE
-                } else {
-                    codes::NONE
-                },
-                partition_index: partition.partition,
-                leader_id: availability.leader_id,
-                leader_epoch: partition.leader_epoch.0,
-                replica_nodes: partition
-                    .replicas
-                    .iter()
-                    .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
-                    .collect(),
-                isr_nodes: availability.isr_nodes,
-                offline_replicas: availability.offline_replicas,
-                ..Default::default()
-            }
-        })
+        .map(|partition| partition_row(image, inputs, partition))
         .collect();
     MetadataResponseTopic {
         error_code: codes::NONE,
@@ -523,6 +514,85 @@ fn success_topic_row(
     }
 }
 
+/// One partition row, as `KRaftMetadataCache.partitionMetadata` builds it.
+///
+/// A partition it can find no leader endpoint for on the request's listener
+/// answers `-1` beside an error, with the replica, ISR and offline lists filled
+/// in as usual. The error is `LEADER_NOT_AVAILABLE` when the leader has no
+/// registration, and `LISTENER_NOT_FOUND` from version 6 on (`LEADER_NOT_AVAILABLE`
+/// before) when the leader is registered without the listener. A leader on a
+/// failed log directory answers `-1` with `LEADER_NOT_AVAILABLE` as well. Read
+/// out of `kafka-metadata-4.3.1.jar`; `DescribeTopicPartitions` takes the same
+/// `-1` with no error code, which is why only this API sets one.
+///
+/// Version 0 also drops the replicas and ISR members that are fenced,
+/// unregistered or without the listener from the lists, and reports
+/// `REPLICA_NOT_AVAILABLE` beside a leader when it dropped any
+/// (`errorUnavailableEndpoints`).
+fn partition_row(
+    image: &krabka_metadata::MetadataImage,
+    inputs: &TopicRowInputs<'_>,
+    partition: &krabka_metadata::PartitionRecord,
+) -> MetadataResponsePartition {
+    let availability = crate::handlers::offline_replicas::partition_availability(
+        image,
+        partition,
+        inputs.unavailable,
+        inputs.listener,
+    );
+    let PartitionAvailability {
+        leader_id,
+        mut isr_nodes,
+        offline_replicas,
+    } = availability;
+    let mut replica_nodes: Vec<i32> = partition.replicas.iter().copied().map(wire_id).collect();
+    let mut error_code = if leader_id == NO_LEADER_ID {
+        match leader_endpoint_error(image, partition.leader, inputs.listener) {
+            Some(LeaderEndpointError::ListenerNotFound)
+                if inputs.version >= FIRST_LISTENER_NOT_FOUND_VERSION =>
+            {
+                codes::LISTENER_NOT_FOUND
+            }
+            _ => codes::LEADER_NOT_AVAILABLE,
+        }
+    } else {
+        codes::NONE
+    };
+    if inputs.version == 0 {
+        let alive = |node: krabka_metadata::NodeId| {
+            image.broker(node).is_some_and(|registration| {
+                !inputs.unavailable.contains(&node.0)
+                    && listener_endpoint(registration, inputs.listener).is_some()
+            })
+        };
+        if error_code == codes::NONE
+            && (!partition.replicas.iter().all(|&node| alive(node))
+                || !partition.isr.iter().all(|&node| alive(node)))
+        {
+            error_code = codes::REPLICA_NOT_AVAILABLE;
+        }
+        let alive_wire =
+            |node: &i32| u64::try_from(*node).is_ok_and(|id| alive(krabka_metadata::NodeId(id)));
+        replica_nodes.retain(alive_wire);
+        isr_nodes.retain(alive_wire);
+    }
+    MetadataResponsePartition {
+        error_code,
+        partition_index: partition.partition,
+        leader_id,
+        leader_epoch: partition.leader_epoch.0,
+        replica_nodes,
+        isr_nodes,
+        offline_replicas,
+        ..Default::default()
+    }
+}
+
+/// A node id as the wire carries it.
+fn wire_id(node: krabka_metadata::NodeId) -> i32 {
+    i32::try_from(node.0).unwrap_or(i32::MAX)
+}
+
 /// Projects a stored [`krabka_metadata::BrokerRegistrationRecord`] into one
 /// wire-format [`MetadataResponseBroker`].
 ///
@@ -531,15 +601,10 @@ fn success_topic_row(
 /// `MetadataResponseBroker` has no `endpoints[]` array. Apache Kafka returns
 /// the advertised address **of the listener that the request arrived on**, so
 /// a TLS client gets the TLS endpoint and a plaintext client gets the
-/// plaintext endpoint. This function follows that rule and selects, in order:
-///   1. the endpoint whose name matches the connection's listener
-///      (`connection_listener_name`), which is the correct, Kafka-faithful
-///      choice;
-///   2. the inter-broker endpoint, matched by name, as a defensive fallback
-///      when this broker has no record of the connection listener, for example
-///      in a cluster with heterogeneous listeners;
-///   3. the first recorded endpoint;
-///   4. the legacy top-level `host` and `port` when `endpoints` is empty.
+/// plaintext endpoint. A broker with no endpoint on that listener has no
+/// address to return: this function answers `None`, as Kafka's
+/// `BrokerRegistration.node(listenerName)` does, and the broker is left out of
+/// the response. It never falls back to another listener's address.
 ///
 /// This function clamps `node_id` to `i32::MAX` when the openraft `u64`
 /// overflows. Broker ids are small in practice, so that clamp is purely
@@ -547,24 +612,22 @@ fn success_topic_row(
 fn project_broker(
     b: &krabka_metadata::BrokerRegistrationRecord,
     connection_listener_name: &str,
-    inter_broker_name: &str,
-) -> MetadataResponseBroker {
-    let (host, port) = pick_endpoint_host_port(b, connection_listener_name, inter_broker_name);
-    MetadataResponseBroker {
+) -> Option<MetadataResponseBroker> {
+    let endpoint = listener_endpoint(b, connection_listener_name)?;
+    Some(MetadataResponseBroker {
         node_id: i32::try_from(b.node_id.0).unwrap_or(i32::MAX),
-        host,
-        port,
+        host: endpoint.host.clone(),
+        port: i32::from(endpoint.port),
         rack: b.rack.clone(),
         ..Default::default()
-    }
+    })
 }
 
 /// Selects the `(host, port)` to advertise for a registered broker, from the
-/// listener that the request arrived on.
-///
-/// Every handler that projects a broker address into a wire response, such as
-/// `Metadata` and `DescribeCluster`, shares this function, so they all treat
-/// the connection listener the same way. The selection order is:
+/// listener that the request arrived on, for the `Produce`, `Fetch` and
+/// `ShareFetch` responses that name a leader. `Metadata` and `DescribeCluster`
+/// do not use it: they list only the brokers that have an endpoint on the
+/// connection listener. The selection order is:
 ///   1. the endpoint whose name matches `connection_listener_name`, because
 ///      Kafka returns the connection listener's advertised address;
 ///   2. the inter-broker endpoint, matched by name;
@@ -621,73 +684,63 @@ mod tests {
         }
     }
 
-    /// The connection-listener endpoint wins when it is present. A request
-    /// that arrived on the `"tls"` listener gets the tls endpoint's host and
-    /// port, even though `"plain"` is the inter-broker listener.
+    /// A broker is advertised at the endpoint of the listener the request
+    /// arrived on, so a request on the `"tls"` listener gets the tls endpoint
+    /// and one on `"plain"` gets the plain endpoint.
     #[test]
-    fn project_broker_picks_connection_listener_endpoint() {
+    fn project_broker_picks_the_connection_listener_endpoint() {
         let rec = record(vec![
             endpoint("plain", "plain-host", 9092),
             endpoint("tls", "tls-host", 9094),
         ]);
-        let out = project_broker(&rec, "tls", "plain");
-        let expected = MetadataResponseBroker {
-            node_id: 7,
-            host: "tls-host".to_string(),
-            port: 9094,
-            rack: Some("rack-a".to_string()),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
-        assert!(out == expected);
+        let cases = [("tls", "tls-host", 9094), ("plain", "plain-host", 9092)];
+
+        for (listener, host, port) in cases {
+            assert!(
+                project_broker(&rec, listener)
+                    == Some(MetadataResponseBroker {
+                        node_id: 7,
+                        host: host.to_string(),
+                        port,
+                        rack: Some("rack-a".to_string()),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+                    }),
+                "{listener}"
+            );
+        }
     }
 
-    /// A plaintext client on the `"plain"` listener gets the plain endpoint.
-    /// This is a regression guard against the behaviour before the fix.
+    /// A broker with no endpoint on the connection listener has no address to
+    /// advertise there, and is left out. Kafka's
+    /// `BrokerRegistration.node(listenerName)` is empty for it, and Kafka
+    /// never falls back to the inter-broker listener, to the first endpoint or
+    /// to a legacy host and port, which would hand the client an address that
+    /// another network serves.
     #[test]
-    fn project_broker_picks_plain_for_plain_connection() {
-        let rec = record(vec![
-            endpoint("plain", "plain-host", 9092),
-            endpoint("tls", "tls-host", 9094),
-        ]);
-        let out = project_broker(&rec, "plain", "plain");
-        assert!(out.host == "plain-host");
-        assert!(out.port == 9092);
-    }
+    fn project_broker_has_no_fallback_to_another_listener() {
+        let cases = [
+            (
+                "an unknown listener next to the inter-broker one",
+                record(vec![
+                    endpoint("plain", "plain-host", 9092),
+                    endpoint("tls", "tls-host", 9094),
+                ]),
+                "external",
+            ),
+            (
+                "only other listeners",
+                record(vec![
+                    endpoint("other-a", "host-a", 5000),
+                    endpoint("other-b", "host-b", 5001),
+                ]),
+                "tls",
+            ),
+            ("no endpoint at all", record(vec![]), "tls"),
+        ];
 
-    /// When the broker has no record of the connection listener, it falls back
-    /// to the inter-broker endpoint. That keeps the previous behaviour.
-    #[test]
-    fn project_broker_falls_back_to_inter_broker() {
-        let rec = record(vec![
-            endpoint("plain", "plain-host", 9092),
-            endpoint("tls", "tls-host", 9094),
-        ]);
-        let out = project_broker(&rec, "external", "plain");
-        assert!(out.host == "plain-host");
-        assert!(out.port == 9092);
-    }
-
-    /// When neither the connection listener nor the inter-broker listener is
-    /// present, the broker falls back to the first recorded endpoint.
-    #[test]
-    fn project_broker_falls_back_to_first_endpoint() {
-        let rec = record(vec![
-            endpoint("other-a", "host-a", 5000),
-            endpoint("other-b", "host-b", 5001),
-        ]);
-        let out = project_broker(&rec, "tls", "plain");
-        assert!(out.host == "host-a");
-        assert!(out.port == 5000);
-    }
-
-    /// With no endpoint at all, the broker falls back to the legacy top-level
-    /// host and port.
-    #[test]
-    fn project_broker_falls_back_to_legacy_host_port() {
-        let rec = record(vec![]);
-        let out = project_broker(&rec, "tls", "plain");
-        assert!(out.host == "legacy-host");
-        assert!(out.port == 1000);
+        for (label, rec, listener) in cases {
+            assert!(project_broker(&rec, listener).is_none(), "{label}");
+        }
     }
 
     /// `MetadataResponse.ClusterId` reports Kafka's base64 `Uuid` form, not

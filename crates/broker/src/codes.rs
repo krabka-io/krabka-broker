@@ -126,6 +126,11 @@ kafka_codes! {
     INVALID_PARTITIONS = 37;
     INVALID_REPLICATION_FACTOR = 38;
     NOT_CONTROLLER = 41;
+    /// `LISTENER_NOT_FOUND` (72): the leader of a partition is registered but
+    /// has no endpoint on the listener the request arrived on. `Metadata` v6
+    /// and later answer it beside a `-1` leader; earlier versions answer
+    /// `LEADER_NOT_AVAILABLE`.
+    LISTENER_NOT_FOUND = 72;
     /// `TOPIC_DELETION_DISABLED` (73): `delete.topic.enable` is `false`, so
     /// `DeleteTopics` v3 and later refuse every topic.
     TOPIC_DELETION_DISABLED = 73;

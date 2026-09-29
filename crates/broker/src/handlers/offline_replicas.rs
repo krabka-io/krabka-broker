@@ -12,8 +12,9 @@
 //! Kafka computes the offline set in
 //! `KRaftMetadataCache.getOfflineReplicas`: a replica is offline when its
 //! broker has no registration in the metadata image, when that broker is
-//! fenced, or when the log directory that holds the replica is not among the
-//! broker's online directories.
+//! fenced, when that broker has no endpoint on the listener the request
+//! arrived on, or when the log directory that holds the replica is not among
+//! the broker's online directories.
 //!
 //! Krabka keeps the directory half of that state in the same place Kafka does.
 //! [`BrokerRegistrationRecord::log_dirs`] is the broker's *online* directory
@@ -86,15 +87,30 @@ fn electable(image: &MetadataImage, unavailable: &HashSet<u64>) -> HashSet<u64> 
         .collect()
 }
 
+/// The endpoint of `broker` named `listener`, as Kafka's
+/// `BrokerRegistration.node(listenerName)` finds it, or `None` when the broker
+/// has no endpoint on that listener. There is no fallback to another listener.
+pub(crate) fn listener_endpoint<'a>(
+    broker: &'a BrokerRegistrationRecord,
+    listener: &str,
+) -> Option<&'a krabka_metadata::BrokerEndpoint> {
+    broker
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == listener)
+}
+
 /// The offline replicas of `partition`, in replica order.
 ///
-/// `unavailable` comes from [`unavailable_brokers`]. The result is the wire
-/// value for `MetadataResponsePartition.offline_replicas` and
+/// `unavailable` comes from [`unavailable_brokers`], and `listener` is the
+/// listener the request arrived on. The result is the wire value for
+/// `MetadataResponsePartition.offline_replicas` and
 /// `DescribeTopicPartitionsResponsePartition.offline_replicas`.
 pub(crate) fn offline_replicas(
     image: &MetadataImage,
     partition: &PartitionRecord,
     unavailable: &HashSet<u64>,
+    listener: &str,
 ) -> Vec<i32> {
     partition
         .replicas
@@ -102,7 +118,7 @@ pub(crate) fn offline_replicas(
         .enumerate()
         .filter(|&(slot, &replica)| {
             let directory = partition.directories.get(slot).copied();
-            is_offline(image, unavailable, replica, directory)
+            is_offline(image, unavailable, listener, replica, directory)
         })
         .map(|(_, &replica)| wire_id(replica))
         .collect()
@@ -129,6 +145,11 @@ pub(crate) struct PartitionAvailability {
 ///
 /// A replica on a log directory its own broker no longer lists as online is
 /// not a leader and is not in-sync, whatever the partition record still says.
+///
+/// A leader with no registration, or none with an endpoint on `listener`, also
+/// answers `-1`, as Kafka's `KRaftMetadataCache.getAliveEndpoint` finds no node
+/// for it. `Metadata` tells the two cases apart for its error code: see
+/// [`leader_endpoint_error`].
 ///
 /// Apache Kafka answers that shape from the image alone. Its controller writes
 /// the conclusion down -- measured against `mirror.gcr.io/apache/kafka:4.3.1`,
@@ -169,6 +190,7 @@ pub(crate) fn partition_availability(
     image: &MetadataImage,
     partition: &PartitionRecord,
     unavailable: &HashSet<u64>,
+    listener: &str,
 ) -> PartitionAvailability {
     let dead_dir: Vec<i32> = partition
         .replicas
@@ -183,7 +205,9 @@ pub(crate) fn partition_availability(
         .collect();
     let leader = wire_id(partition.leader);
     PartitionAvailability {
-        leader_id: if dead_dir.contains(&leader) {
+        leader_id: if dead_dir.contains(&leader)
+            || leader_endpoint_error(image, partition.leader, listener).is_some()
+        {
             NO_LEADER_ID
         } else {
             leader
@@ -195,8 +219,36 @@ pub(crate) fn partition_availability(
             .map(wire_id)
             .filter(|replica| !dead_dir.contains(replica))
             .collect(),
-        offline_replicas: offline_replicas(image, partition, unavailable),
+        offline_replicas: offline_replicas(image, partition, unavailable, listener),
     }
+}
+
+/// Why `leader` has no endpoint to advertise on `listener`, or `None` when it
+/// has one. This is Kafka's `KRaftMetadataCache.getAliveEndpoint`, and the two
+/// errors that `partitionMetadata` derives from its absence.
+pub(crate) fn leader_endpoint_error(
+    image: &MetadataImage,
+    leader: NodeId,
+    listener: &str,
+) -> Option<LeaderEndpointError> {
+    match image.broker(leader) {
+        None => Some(LeaderEndpointError::Unregistered),
+        Some(registration) if listener_endpoint(registration, listener).is_none() => {
+            Some(LeaderEndpointError::ListenerNotFound)
+        }
+        Some(_) => None,
+    }
+}
+
+/// The two ways a leader can lack an endpoint on the listener of a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeaderEndpointError {
+    /// The leader has no registration. Kafka answers `LEADER_NOT_AVAILABLE`.
+    Unregistered,
+    /// The leader is registered without the listener. Kafka answers
+    /// `LISTENER_NOT_FOUND` from `Metadata` v6 on, and `LEADER_NOT_AVAILABLE`
+    /// before that.
+    ListenerNotFound,
 }
 
 /// A node id as the wire carries it.
@@ -208,6 +260,7 @@ fn wire_id(node: NodeId) -> i32 {
 fn is_offline(
     image: &MetadataImage,
     unavailable: &HashSet<u64>,
+    listener: &str,
     replica: NodeId,
     directory: Option<uuid::Uuid>,
 ) -> bool {
@@ -216,7 +269,9 @@ fn is_offline(
     let Some(registration) = image.broker(replica) else {
         return true;
     };
-    unavailable.contains(&replica.0) || !has_online_dir(registration, directory)
+    unavailable.contains(&replica.0)
+        || listener_endpoint(registration, listener).is_none()
+        || !has_online_dir(registration, directory)
 }
 
 /// Whether `directory` is one of the broker's online log directories.
