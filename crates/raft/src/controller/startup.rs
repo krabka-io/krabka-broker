@@ -161,10 +161,12 @@ impl Controller {
             config.handshake.clone(),
             config.shard_router.clone(),
             config.admin_router.clone(),
-            server::Unstable {
-                api_versions: config.unstable_api_versions,
-                feature_versions: config.unstable_feature_versions,
-            },
+            (
+                server::Unstable {
+                    api_versions: config.unstable_api_versions,
+                },
+                config.listener_limits,
+            ),
         ));
         info!(
             node_id = config.node_id.0,

@@ -1,5 +1,9 @@
-//! The KIP-584 feature rows of an `ApiVersions` response, shared by the
-//! controller listener and the broker listener so the two cannot disagree.
+//! The KIP-584 feature rows of an `ApiVersions` response, built by one set of
+//! rules for the controller listener and the broker listener. The two pass it
+//! different caps, as Kafka does: the controller listener's
+//! `SimpleApiVersionManager` takes `unstable.api.versions.enable`, and the
+//! broker's `BrokerFeatures.createDefault` takes
+//! `unstable.feature.versions.enable`.
 //!
 //! The rules are Kafka 4.3.1's:
 //!

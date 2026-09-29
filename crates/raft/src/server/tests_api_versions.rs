@@ -85,10 +85,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
         (0, vec![], 0, 0, true),
     ];
     for (api_versions, served_max, rows) in [(Disabled, 4, strict_rows), (Enabled, 5, trunk_rows)] {
-        let unstable = super::Unstable {
-            api_versions,
-            ..super::Unstable::default()
-        };
+        let unstable = super::Unstable { api_versions };
         let (engine, _dir) = single_voter_engine();
         let listener_api_versions = ListenerApiVersions {
             engine: engine.clone(),
@@ -109,6 +106,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
                 authenticated_via_token: false,
                 grants: Arc::new(AllowAllGrants),
                 unstable,
+                limits: crate::ListenerLimits::default(),
             },
         ));
 
