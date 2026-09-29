@@ -1235,8 +1235,7 @@ fn assert_acl_sync(target: &str, mm2: &MirrorMaker) {
     );
     let text = both_streams(&out);
     assert!(
-        text.contains("SecurityDisabledException")
-            && text.contains("No Authorizer is configured on the broker"),
+        text.contains("SecurityDisabledException") && text.contains("No Authorizer is configured."),
         "krabka answered MM2's target-side ACL creation with something other than Kafka's \
          SecurityDisabledException:\n{text}",
     );
