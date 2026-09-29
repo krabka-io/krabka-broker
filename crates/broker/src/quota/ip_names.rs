@@ -12,13 +12,18 @@
 //! `DescribeClientQuotas` reports it back that way, so the image keeps
 //! `localhost` and not the address it resolved to. This module is the
 //! resolution Kafka does at apply time: an IP literal in any spelling
-//! resolves on the spot, and a host name resolves once, off the request path,
-//! when the quota refresh task first sees it.
+//! resolves on the spot. A host name resolves off the request path, when the
+//! quota refresh task sees it and no lookup of it is running. A lookup is
+//! bounded by a timeout, and a name that fails is held back for a wait that
+//! grows with each failure, so a resolver that is down is not asked again on
+//! every image.
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
+    future::Future,
     net::IpAddr,
     sync::{Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
 };
 
 use krabka_metadata::MetadataImage;
@@ -87,6 +92,52 @@ struct Resolved {
     hosts: HashMap<String, IpAddr>,
     /// The `ip` entity names of the last image that stand for each address.
     names: HashMap<IpAddr, BTreeSet<String>>,
+    /// The host names a lookup is running for, so that an image that arrives
+    /// while one runs does not start a second.
+    in_flight: HashSet<String>,
+    /// The host names whose last lookup failed, with the earliest time the next
+    /// one may start.
+    failed: HashMap<String, Failure>,
+}
+
+/// How long one host-name lookup may run before it counts as failed.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The wait after the first failed lookup of a host name. Each further failure
+/// doubles it, up to [`RETRY_MAX`].
+const RETRY_BASE: Duration = Duration::from_secs(1);
+
+/// The longest wait between two lookups of a host name that does not resolve.
+const RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// A host name that did not resolve: how often, and when it may be tried again.
+#[derive(Debug, Clone, Copy)]
+struct Failure {
+    attempts: u32,
+    retry_at: Instant,
+}
+
+impl Failure {
+    /// The failure of a lookup that ended at `now`, after `previous`.
+    fn after(previous: Option<Self>, now: Instant) -> Self {
+        let attempts = previous.map_or(1, |failure| failure.attempts.saturating_add(1));
+        let doublings = 1_u32
+            .checked_shl(attempts.saturating_sub(1))
+            .unwrap_or(u32::MAX);
+        Self {
+            attempts,
+            retry_at: now + RETRY_BASE.saturating_mul(doublings).min(RETRY_MAX),
+        }
+    }
+}
+
+/// The first address the system resolver returns for `host`, as
+/// `InetAddress.getByName` does.
+async fn system_lookup(host: String) -> Option<IpAddr> {
+    let addrs = krabka_client_core::transport::resolve(&format!("{host}:0"))
+        .await
+        .ok()?;
+    addrs.first().map(|addr| addr.ip().to_canonical())
 }
 
 impl IpNames {
@@ -132,24 +183,61 @@ impl IpNames {
         resolved
             .hosts
             .retain(|host, _| in_image.contains(host.as_str()));
+        resolved
+            .failed
+            .retain(|host, _| in_image.contains(host.as_str()));
         resolved.names = by_address;
         unresolved
     }
 
-    /// Resolves each host name to the first address the resolver returns, as
-    /// `InetAddress.getByName` does, and remembers it for the next
-    /// [`Self::update`]. A name that does not resolve is left out and is tried
-    /// again on the next image.
+    /// Takes the host names of `unresolved` that a lookup should start for at
+    /// `now`, and marks them as running until [`Self::resolve`] has been through
+    /// them. A name that a lookup is already running for, or that failed too
+    /// recently to try again, is left out, so a stream of images neither
+    /// stacks lookups of one name nor asks a resolver that is down again on
+    /// every image.
+    pub(super) fn claim(&self, unresolved: Vec<String>, now: Instant) -> Vec<String> {
+        let mut resolved = self.lock();
+        let mut claimed = Vec::new();
+        for host in unresolved {
+            let backing_off = resolved
+                .failed
+                .get(&host)
+                .is_some_and(|failure| now < failure.retry_at);
+            if !backing_off && resolved.in_flight.insert(host.clone()) {
+                claimed.push(host);
+            }
+        }
+        claimed
+    }
+
+    /// Resolves each host name that [`Self::claim`] returned, and remembers the
+    /// address for the next [`Self::update`]. A lookup that fails or takes
+    /// longer than [`LOOKUP_TIMEOUT`] leaves the name out and holds it back for
+    /// a wait that doubles with each failure.
     pub(super) async fn resolve(&self, hosts: &[String]) {
+        self.resolve_with(hosts, LOOKUP_TIMEOUT, system_lookup)
+            .await;
+    }
+
+    async fn resolve_with<Lookup, Found>(&self, hosts: &[String], timeout: Duration, lookup: Lookup)
+    where
+        Lookup: Fn(String) -> Found,
+        Found: Future<Output = Option<IpAddr>>,
+    {
         for host in hosts {
-            let Ok(addrs) = krabka_client_core::transport::resolve(&format!("{host}:0")).await
-            else {
-                continue;
-            };
-            if let Some(addr) = addrs.first() {
-                self.lock()
-                    .hosts
-                    .insert(host.clone(), addr.ip().to_canonical());
+            let found = tokio::time::timeout(timeout, lookup(host.clone()))
+                .await
+                .ok()
+                .flatten();
+            let mut resolved = self.lock();
+            resolved.in_flight.remove(host);
+            if let Some(addr) = found {
+                resolved.failed.remove(host);
+                resolved.hosts.insert(host.clone(), addr);
+            } else {
+                let failure = Failure::after(resolved.failed.get(host).copied(), Instant::now());
+                resolved.failed.insert(host.clone(), failure);
             }
         }
     }
@@ -279,7 +367,9 @@ mod tests {
             1.0,
         );
         let unresolved = names.update(&image);
-        names.resolve(&unresolved).await;
+        names
+            .resolve(&names.claim(unresolved.clone(), Instant::now()))
+            .await;
         let unresolved_after = names.update(&image);
 
         let listed: Vec<IpAddr> = tokio::net::lookup_host("localhost:0")
@@ -294,5 +384,130 @@ mod tests {
                 .iter()
                 .any(|addr| names.entity_names(*addr) == vec!["localhost".to_owned()])
         );
+    }
+
+    fn host_image(name: &str) -> MetadataImage {
+        image_with_quota(vec![("ip", Some(name))], "connection_creation_rate", 1.0)
+    }
+
+    fn db() -> Vec<String> {
+        vec!["db".to_owned()]
+    }
+
+    /// Runs a lookup of `hosts` that never answers, with a short timeout, and
+    /// fails the test if the timeout does not cut it off.
+    async fn hang_until_timeout(names: &IpNames, hosts: &[String]) {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            names.resolve_with(hosts, Duration::from_millis(10), |_host| {
+                std::future::pending::<Option<IpAddr>>()
+            }),
+        )
+        .await
+        .expect("the lookup is cut off at its timeout");
+    }
+
+    /// An image that arrives while a lookup of a name runs does not start a
+    /// second: the name is claimed once until `resolve` has been through it.
+    #[test]
+    fn a_host_being_looked_up_is_not_claimed_again() {
+        let names = IpNames::default();
+        let now = Instant::now();
+
+        let first = names.claim(vec!["db".to_owned(), "cache".to_owned()], now);
+        let second = names.claim(vec!["db".to_owned(), "other".to_owned()], now);
+
+        check!(
+            (first, second)
+                == (
+                    vec!["db".to_owned(), "cache".to_owned()],
+                    vec!["other".to_owned()]
+                )
+        );
+    }
+
+    /// A lookup that never answers is cut off at the timeout and releases its
+    /// claim, and the name is held back afterwards: a resolver that hangs
+    /// costs one lookup per wait, not one per image, and the next lookup is
+    /// allowed once the wait is over.
+    #[tokio::test]
+    async fn a_lookup_that_times_out_holds_the_name_back() {
+        let names = IpNames::default();
+        let claimed = names.claim(db(), Instant::now());
+        hang_until_timeout(&names, &claimed).await;
+
+        let straight_after = names.claim(db(), Instant::now());
+        let after_the_longest_wait = names.claim(db(), Instant::now() + RETRY_MAX + RETRY_BASE);
+
+        check!((claimed, straight_after, after_the_longest_wait) == (db(), vec![], db()));
+    }
+
+    /// The wait after a failed lookup doubles with each failure, from
+    /// [`RETRY_BASE`] up to [`RETRY_MAX`], and a count that overflows the
+    /// shift stays at the cap.
+    #[test]
+    fn the_wait_after_a_failure_doubles_up_to_the_cap() {
+        let t = Instant::now();
+        // (attempts already failed, attempts after, wait after)
+        for (before, attempts, wait_secs) in [
+            (None, 1, 1),
+            (Some(1), 2, 2),
+            (Some(2), 3, 4),
+            (Some(8), 9, 256),
+            (Some(9), 10, 300),
+            (Some(100), 101, 300),
+            (Some(u32::MAX), u32::MAX, 300),
+        ] {
+            let previous = before.map(|attempts| Failure {
+                attempts,
+                retry_at: t,
+            });
+
+            let next = Failure::after(previous, t);
+
+            check!(
+                (next.attempts, next.retry_at - t) == (attempts, Duration::from_secs(wait_secs)),
+                "after {before:?}"
+            );
+        }
+    }
+
+    /// A lookup that answers records the address and clears the name's
+    /// failures, and one that failed before is looked up again once its wait
+    /// has passed.
+    #[tokio::test]
+    async fn a_lookup_that_answers_after_a_failure_resolves_the_name() {
+        let names = IpNames::default();
+        let image = host_image("db");
+        let address = IpAddr::from([10, 0, 0, 9]);
+        let unresolved = names.update(&image);
+        let claimed = names.claim(unresolved, Instant::now());
+        hang_until_timeout(&names, &claimed).await;
+
+        let retry = names.claim(db(), Instant::now() + RETRY_MAX + RETRY_BASE);
+        names
+            .resolve_with(&retry, Duration::from_secs(1), |_host| async move {
+                Some(address)
+            })
+            .await;
+        let unresolved_after = names.update(&image);
+
+        check!(unresolved_after.is_empty());
+        check!(names.entity_names(address) == db());
+    }
+
+    /// A name whose entity is gone is forgotten with its failures, so a record
+    /// applied again is looked up at once, as Kafka resolves it on every
+    /// apply.
+    #[tokio::test]
+    async fn a_failed_host_whose_entity_is_gone_is_looked_up_again_at_once() {
+        let names = IpNames::default();
+        let claimed = names.claim(names.update(&host_image("db")), Instant::now());
+        hang_until_timeout(&names, &claimed).await;
+
+        let _ = names.update(&host_image("other"));
+        let reapplied = names.update(&host_image("db"));
+
+        check!(names.claim(reapplied, Instant::now()) == db());
     }
 }
