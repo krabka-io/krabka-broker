@@ -74,6 +74,9 @@ pub(super) struct ServingBroker<'a> {
     /// The `min.insync.replicas` this process was started with, which a
     /// topic reports as its static broker layer.
     pub(super) static_min_insync_replicas: i32,
+    /// Kafka's `unstable.api.versions.enable`, which decides whether a group
+    /// resource carries Kafka trunk's group keys.
+    pub(super) unstable_api_versions: crate::api_catalog::UnstableApiVersions,
 }
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
@@ -215,7 +218,10 @@ pub(super) fn describe_one(
         return ok(group_configs(
             image,
             &r.resource_name,
-            streams_defaults,
+            GroupServing {
+                streams_defaults,
+                unstable: serving.unstable_api_versions,
+            },
             &wanted,
             options,
         ));
@@ -606,8 +612,17 @@ fn client_metrics_configs(
         .collect()
 }
 
-/// A group resource: every key of Kafka's `GroupConfig`, with the group's
-/// override above the value this broker runs the group with.
+/// What a group resource is described against: the values the broker runs
+/// streams groups with, and whether Kafka trunk's group keys are served.
+#[derive(Clone, Copy)]
+struct GroupServing<'a> {
+    streams_defaults: &'a crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    unstable: crate::api_catalog::UnstableApiVersions,
+}
+
+/// A group resource: every key of Kafka's `GroupConfig` the broker serves --
+/// 4.3.1's by default, trunk's under `unstable.api.versions.enable` -- with
+/// the group's override above the value this broker runs the group with.
 ///
 /// The chain is Kafka's `ConfigHelper.createGroupConfigEntry`: the override
 /// at `DYNAMIC_GROUP_CONFIG`, then the key's broker synonym, at
@@ -617,16 +632,15 @@ fn client_metrics_configs(
 fn group_configs(
     image: &krabka_metadata::MetadataImage,
     group: &str,
-    streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    serving: GroupServing<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     let overrides = image.group_config(group).cloned().unwrap_or_default();
     // The values krabka's coordinators run with, for the keys they apply.
-    let broker_values = streams_defaults.group_config_values();
+    let broker_values = serving.streams_defaults.group_config_values();
 
-    config_keys::group::KAFKA_GROUP_KEYS
-        .iter()
+    config_keys::group::served_group_keys(serving.unstable)
         .filter(|key| wanted(key.name))
         .map(|key| {
             let own_row = registry::lookup(ConfigScope::Group, key.name);

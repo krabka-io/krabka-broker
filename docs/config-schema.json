@@ -1393,24 +1393,6 @@
       "additionalProperties": false,
       "description": "Validated operational policy loaded from `[runtime]`.",
       "properties": {
-        "acl_max_principal": {
-          "default": null,
-          "description": "Maximum encoded ACL principal length.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "acl_max_resource_name": {
-          "default": null,
-          "description": "Maximum encoded ACL resource-name length.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "audit_event_queue_capacity": {
           "description": "Capacity of the asynchronous audit event queue.",
           "format": "uint",
@@ -1980,6 +1962,13 @@
             "null"
           ]
         },
+        "legacy_request_versions_enable": {
+          "description": "Whether the broker serves the request versions Kafka 4.x removed:\n`Fetch` v0-v3, `ListOffsets` v0 and `Produce` v0-v2. krabka-only, with\nno Kafka equivalent. The default is `false`, which advertises and\naccepts exactly Kafka 4.3.1's minimums (`Fetch` v4, `ListOffsets` v1,\nand `Produce` v3 though it is still advertised from v0, KAFKA-18659)\nand closes a connection that sends an older version, as a 4.3.1 broker\ndoes. `true` keeps a pre-0.11 client working.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "liveness_tick_interval": {
           "default": null,
           "description": "Cadence of broker liveness maintenance.",
@@ -2545,12 +2534,37 @@
             "null"
           ]
         },
+        "share_coordinator_append_linger_ms": {
+          "description": "Kafka's `share.coordinator.append.linger.ms`, a whole number of\nmilliseconds, or -1 (the default) for an adaptive linger. Accepted and\nhas no effect: each share-state write is its own append, and the\npartition writer groups concurrent appends without waiting for more.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_coordinator_cached_buffer_max_bytes": {
+          "default": null,
+          "description": "Kafka's `share.coordinator.cached.buffer.max.bytes`, at least 512KiB,\ndefault 1MiB plus 12 bytes. Accepted and has no effect: the share\ncoordinator encodes each record into a new buffer and keeps no buffer\nfor reuse.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "share_coordinator_load_buffer_size": {
           "default": null,
           "description": "Maximum bytes read by one share-state recovery read, Kafka's\n`share.coordinator.load.buffer.size`.",
           "format": "byte-size",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "share_coordinator_threads": {
+          "description": "Kafka's `share.coordinator.threads`, at least 1. Accepted and has no\neffect: the share coordinator runs as tasks on the broker's shared\nasync runtime rather than on a thread pool of its own.",
+          "format": "int32",
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -2572,6 +2586,16 @@
             "null"
           ]
         },
+        "share_group_delivery_count_limit": {
+          "description": "The delivery count at which a share record is archived, Kafka's\n`group.share.delivery.count.limit`: from 2 to 10, within the minimum\nand maximum below.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "share_group_enable": {
           "description": "Whether the broker serves KIP-932 share groups, Kafka's\n`group.share.enable`.",
           "type": [
@@ -2588,15 +2612,8 @@
             "null"
           ]
         },
-        "share_group_isolation_level": {
-          "description": "Transaction isolation for share-group reads, Kafka's\n`share.group.isolation.level`. Either `read-uncommitted`, which reads\nup to the high watermark, or `read-committed`, which clamps reads to\nthe last stable offset.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "share_group_max_delivery_attempts": {
-          "description": "Number of times a share record may be delivered before it is archived,\nKafka's `group.share.delivery.count.limit`.",
+        "share_group_max_delivery_count_limit": {
+          "description": "Upper bound on the delivery count limit, and on a group's\n`share.delivery.count.limit`, Kafka's\n`group.share.max.delivery.count.limit`: from 5 to 25.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -2605,16 +2622,43 @@
             "null"
           ]
         },
-        "share_group_max_inflight_records": {
-          "description": "Maximum records a share partition may hold in flight, Kafka's\n`group.share.partition.max.record.locks`.",
+        "share_group_max_heartbeat_interval": {
+          "default": null,
+          "description": "Upper bound on the share-group heartbeat interval, and on a group's\n`share.heartbeat.interval.ms`, Kafka's\n`group.share.max.heartbeat.interval.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_max_partition_max_record_locks": {
+          "description": "Upper bound on the record lock limit, and on a group's\n`share.partition.max.record.locks`, Kafka's\n`group.share.max.partition.max.record.locks`: from 2000 to 10000.",
           "format": "int32",
           "type": [
             "integer",
             "null"
           ]
         },
+        "share_group_max_record_lock_duration": {
+          "default": null,
+          "description": "Upper bound on the record lock duration, and on a group's\n`share.record.lock.duration.ms`, Kafka's\n`group.share.max.record.lock.duration.ms`: from 30s to 1h.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_max_session_timeout": {
+          "default": null,
+          "description": "Upper bound on the share-group session timeout, and on a group's\n`share.session.timeout.ms`, Kafka's\n`group.share.max.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "share_group_max_size": {
-          "description": "Maximum number of members in one share group, Kafka's\n`group.share.max.size`.",
+          "description": "Maximum number of members in one share group, Kafka's\n`group.share.max.size`: from 1 to 1000.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2622,9 +2666,62 @@
             "null"
           ]
         },
+        "share_group_min_delivery_count_limit": {
+          "description": "Lower bound on the delivery count limit, and on a group's\n`share.delivery.count.limit`, Kafka's\n`group.share.min.delivery.count.limit`: from 2 to 5.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_min_heartbeat_interval": {
+          "default": null,
+          "description": "Lower bound on the share-group heartbeat interval, and on a group's\n`share.heartbeat.interval.ms`, Kafka's\n`group.share.min.heartbeat.interval.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_min_partition_max_record_locks": {
+          "description": "Lower bound on the record lock limit, and on a group's\n`share.partition.max.record.locks`, Kafka's\n`group.share.min.partition.max.record.locks`: from 100 to 2000.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_min_record_lock_duration": {
+          "default": null,
+          "description": "Lower bound on the record lock duration, and on a group's\n`share.record.lock.duration.ms`, Kafka's\n`group.share.min.record.lock.duration.ms`: from 1s to 30s.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_min_session_timeout": {
+          "default": null,
+          "description": "Lower bound on the share-group session timeout, and on a group's\n`share.session.timeout.ms`, Kafka's\n`group.share.min.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_partition_max_record_locks": {
+          "description": "Maximum records a share partition may hold in flight, Kafka's\n`group.share.partition.max.record.locks`: from 100 to 10000, within\nthe minimum and maximum below.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "share_group_record_lock_duration": {
           "default": null,
-          "description": "How long an acquired share record stays locked before it is released\nfor redelivery, Kafka's `group.share.record.lock.duration.ms`.",
+          "description": "How long an acquired share record stays locked before it is released\nfor redelivery, Kafka's `group.share.record.lock.duration.ms`: a whole\nnumber of milliseconds from 1s to 1h, within the minimum and maximum\nbelow.",
           "format": "duration",
           "type": [
             "string",
@@ -2653,6 +2750,14 @@
           "description": "Updates of one share key between two snapshots of it, Kafka's\n`share.coordinator.snapshot.update.records.per.snapshot`. At most 500.",
           "format": "uint32",
           "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_state_compression_codec": {
+          "description": "Codec of the batches the share coordinator appends to\n`__share_group_state`, Kafka's\n`share.coordinator.state.topic.compression.codec`, as Kafka's codec\nid: 0 none (the default), 1 gzip, 2 snappy, 3 lz4 or 4 zstd.",
+          "format": "int32",
           "type": [
             "integer",
             "null"
@@ -2791,6 +2896,16 @@
           "format": "int32",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "streams_group_rack_aware_assignment_tags": {
+          "description": "Client tag keys every streams-group member must send, Kafka's\n`group.streams.rack.aware.assignment.tags` and the default of a\ngroup's `streams.rack.aware.assignment.tags`. A repeated or an empty\ntag key is refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -3279,7 +3394,7 @@
         "type": "string"
       },
       "default": {},
-      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and\n`default.replication.factor`. Any other entry is accepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
+      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`,\n`default.replication.factor`, `delete.topic.enable`,\n`auto.create.topics.enable`, the KIP-1066 `cordoned.log.dirs`, and\nKafka's two internal switches. `unstable.api.versions.enable`\n(default `false`) advertises and serves what krabka implements from\nKafka trunk beyond 4.3.1: `ApiVersions` v5 (KIP-1242),\n`TxnOffsetCommit` v6 (KIP-1319), `StreamsGroupHeartbeat` and\n`StreamsGroupDescribe` v1 (KIP-1331, KIP-1357),\n`StreamsGroupTopologyDescriptionUpdate` (93) and `UnregisterController`\n(94), `InitProducerId` v6 and with 2PC the KIP-939 `keepPreparedTxn`\nrecovery, and trunk's group config keys; while it is `false` every\nlistener serves exactly Kafka 4.3.1's API versions.\n`unstable.feature.versions.enable` (default `false`) lets this node\nsupport `metadata.version` past 4.3.1's `4.3-IV0` (30), up to trunk's\n`4.4-IV2` (33), which the CIDR ACL hosts of KIP-1276 and the controller\nunregistration of KIP-1312 need. Any other entry is accepted and\nignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
       "type": "object"
     },
     "stretch": {

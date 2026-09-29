@@ -27,10 +27,24 @@ use tempfile::TempDir;
 use crate::support;
 
 pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
+    boot_single_with(|_| {}).await
+}
+
+/// [`boot_single`] under Kafka's `unstable.api.versions.enable`, for the
+/// cases that drive Kafka trunk's `TxnOffsetCommit` v6 (KIP-1319).
+pub async fn boot_single_trunk() -> (BrokerHandle, String, TempDir) {
+    boot_single_with(|config| {
+        config.features.unstable_api_versions =
+            krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+    })
+    .await
+}
+
+async fn boot_single_with(configure: fn(&mut BrokerConfig)) -> (BrokerHandle, String, TempDir) {
     let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    configure(&mut config);
+    let broker = Broker::start(config).await.unwrap();
     wait_until_coordinators_ready(&broker).await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)

@@ -293,6 +293,7 @@ pub(super) fn build_member(
         assignment_state: MemberAssignmentState::Stable,
         assigned_partitions: HashMap::new(),
         partitions_pending_revocation: HashMap::new(),
+        assignment_epochs: HashMap::new(),
         last_seen: now,
         classic: None,
     };

@@ -47,8 +47,9 @@ use self::{
 pub(crate) use self::{
     creation::TopicCreation,
     placement::{
-        InitialLeadership, automatic_leaderships, manual_leaderships, placement_failure_message,
-        round_robin_replicas, site_broker_views, validate_manual_partition_assignment,
+        InitialLeadership, automatic_leaderships, automatic_placement_exclusions,
+        manual_leaderships, placement_failure_message, round_robin_replicas, site_broker_views,
+        validate_manual_partition_assignment,
     },
 };
 use crate::{authorizer::AuthorizationResult, broker::Broker, codes, error::BrokerError};

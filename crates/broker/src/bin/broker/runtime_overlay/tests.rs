@@ -240,8 +240,11 @@ fn group_member_limits_and_streams_switch_apply_from_cli() {
     let args = Args::try_parse_from([
         "krabka-broker",
         "--share-group-max-size=17",
+        "--share-group-partition-max-record-locks=150",
+        "--share-group-delivery-count-limit=3",
         "--streams-group-enable=false",
         "--streams-group-max-size=19",
+        "--streams-group-rack-aware-assignment-tags=zone,rack",
     ])
     .expect("parse group limits");
     let mut config = BrokerConfig::default();
@@ -250,8 +253,11 @@ fn group_member_limits_and_streams_switch_apply_from_cli() {
         .expect("apply group limits");
 
     assert!(config.share_group.max_size == 17);
+    assert!(config.share_group.max_inflight_records == 150);
+    assert!(config.share_group.max_delivery_attempts == 3);
     assert!(!config.streams_group.enable);
     assert!(config.streams_group.max_size == 19);
+    assert!(config.streams_group.rack_aware_assignment_tags == ["zone", "rack"]);
 }
 
 fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConfig {

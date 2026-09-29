@@ -75,6 +75,9 @@ use krabka_protocol::{
         sasl_authenticate_response::SaslAuthenticateResponse,
         sasl_handshake_request::SaslHandshakeRequest,
         sasl_handshake_response::SaslHandshakeResponse,
+        unregister_controller_request::UnregisterControllerRequest,
+        unregister_controller_response::UnregisterControllerResponse,
+        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -100,20 +103,45 @@ const INVALID_REPLICATION_FACTOR: i16 = 38;
 /// Read off a live `mirror.gcr.io/apache/kafka:4.3.1` controller with a raw
 /// `ApiVersions` v0 request, and identical to the set the `listeners` tag on
 /// the request schemas in `kafka-clients-4.3.1.jar` marks `controller`.
+///
+/// Kafka trunk adds `UnregisterController` (94, KIP-1312), tagged `broker` and
+/// `controller`. No released image advertises it, and krabka serves it
+/// because krabka-protocol vendors the trunk schema.
 const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 41] = [
     1, 17, 18, 19, 20, 29, 30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 52,
     53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 67, 70, 73, 80, 81, 82,
 ];
 
+/// What Kafka trunk's controller listener adds to 4.3.1's, and krabka's
+/// under `unstable.api.versions.enable`: `UnregisterController` (94,
+/// KIP-1312).
+const KAFKA_TRUNK_CONTROLLER_LISTENER_KEYS: [i16; 1] = [94];
+
 /// Start a one-node broker whose controller listener is reachable on its own
 /// port, and return the handle. Both listeners are bound before the broker
 /// starts so the test knows the ports without racing the bind.
 async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
-    start_node(&[NodeRole::Controller, NodeRole::Broker]).await
+    start_node(&[NodeRole::Controller, NodeRole::Broker], |_| {}).await
 }
 
-/// The same node, with the `process.roles` the case needs.
-async fn start_node(roles: &[NodeRole]) -> (BrokerHandle, tempfile::TempDir) {
+/// [`start_broker`], serving what krabka implements from Kafka trunk:
+/// `unstable.api.versions.enable` and `unstable.feature.versions.enable` on.
+async fn start_trunk_broker() -> (BrokerHandle, tempfile::TempDir) {
+    start_node(&[NodeRole::Controller, NodeRole::Broker], enable_trunk).await
+}
+
+fn enable_trunk(config: &mut BrokerConfig) {
+    config.features.unstable_api_versions =
+        krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+    config.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
+}
+
+/// The same node, with the `process.roles` the case needs and `configure`
+/// applied last.
+async fn start_node(
+    roles: &[NodeRole],
+    configure: fn(&mut BrokerConfig),
+) -> (BrokerHandle, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -129,6 +157,7 @@ async fn start_node(roles: &[NodeRole]) -> (BrokerHandle, tempfile::TempDir) {
     config.controller_listen_addr = controller_addr;
     config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
     config.roles = roles.to_vec();
+    configure(&mut config);
     let broker =
         Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
             .await
@@ -170,7 +199,11 @@ async fn dial_controller(broker: &BrokerHandle) -> Connection {
 /// Admin bridge.
 /// `DescribeClientQuotas` (48) is tagged `broker` only, so it is absent there,
 /// absent here, and asserted absent below.
-fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
+///
+/// Every one of them is at the version range Kafka 4.3.1 serves, which is the
+/// vendored range, so the default and the trunk tables agree on them; trunk
+/// adds `UnregisterController`.
+fn expected_admin_versions(trunk: bool) -> std::collections::BTreeMap<i16, (i16, i16)> {
     macro_rules! range {
         ($($request:ident),+ $(,)?) => {
             std::collections::BTreeMap::from([$((
@@ -183,7 +216,7 @@ fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
         };
     }
 
-    range!(
+    let mut versions = range!(
         create_topics_request,
         delete_topics_request,
         describe_acls_request,
@@ -209,38 +242,49 @@ fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
         envelope_request,
         unregister_broker_request,
         assign_replicas_to_dirs_request,
-    )
+    );
+    if trunk {
+        versions.extend(range!(unregister_controller_request));
+    }
+    versions
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_api_versions_advertises_the_kafka_controller_admin_surface() {
-    let (broker, _dir) = start_broker().await;
-    let connection = dial_controller(&broker).await;
+    for trunk in [false, true] {
+        let (broker, _dir) = if trunk {
+            start_trunk_broker().await
+        } else {
+            start_broker().await
+        };
+        let connection = dial_controller(&broker).await;
 
-    let response = connection
-        .send(api_versions_request())
-        .await
-        .expect("ApiVersions over the controller listener");
-    connection.close();
+        let response = connection
+            .send(api_versions_request())
+            .await
+            .expect("ApiVersions over the controller listener");
+        connection.close();
 
-    let expected = expected_admin_versions();
-    let advertised: std::collections::BTreeMap<i16, (i16, i16)> = response
-        .api_keys
-        .iter()
-        .filter(|api| expected.contains_key(&api.api_key))
-        .map(|api| (api.api_key, (api.min_version, api.max_version)))
-        .collect();
-
-    check!(advertised == expected);
-    // Tagged `broker` only in Kafka, so a Kafka controller does not offer it.
-    check!(
-        !response
+        let expected = expected_admin_versions(true);
+        let advertised: std::collections::BTreeMap<i16, (i16, i16)> = response
             .api_keys
             .iter()
-            .any(|api| api.api_key
-                == krabka_protocol::owned::describe_client_quotas_request::API_KEY)
-    );
-    broker.shutdown().await;
+            .filter(|api| expected.contains_key(&api.api_key))
+            .map(|api| (api.api_key, (api.min_version, api.max_version)))
+            .collect();
+
+        check!(
+            advertised == expected_admin_versions(trunk),
+            "trunk {trunk}"
+        );
+        // Tagged `broker` only in Kafka, so a Kafka controller does not offer it.
+        check!(
+            !response.api_keys.iter().any(|api| api.api_key
+                == krabka_protocol::owned::describe_client_quotas_request::API_KEY),
+            "trunk {trunk}"
+        );
+        broker.shutdown().await;
+    }
 }
 
 /// The whole key set the controller listener advertises, measured against the
@@ -253,23 +297,38 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
 /// is exactly [`KAFKA_CONTROLLER_LISTENER_KEYS`].
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_advertises_no_key_kafka_does_not() {
-    let (broker, _dir) = start_broker().await;
-    let connection = dial_controller(&broker).await;
+    for trunk in [false, true] {
+        let (broker, _dir) = if trunk {
+            start_trunk_broker().await
+        } else {
+            start_broker().await
+        };
+        let connection = dial_controller(&broker).await;
 
-    let response = connection
-        .send(api_versions_request())
-        .await
-        .expect("ApiVersions over the controller listener");
-    connection.close();
+        let response = connection
+            .send(api_versions_request())
+            .await
+            .expect("ApiVersions over the controller listener");
+        connection.close();
 
-    let advertised: std::collections::BTreeSet<i16> =
-        response.api_keys.iter().map(|api| api.api_key).collect();
-    let kafka: std::collections::BTreeSet<i16> =
-        KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
+        let advertised: std::collections::BTreeSet<i16> =
+            response.api_keys.iter().map(|api| api.api_key).collect();
+        let mut kafka: std::collections::BTreeSet<i16> =
+            KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
+        if trunk {
+            kafka.extend(KAFKA_TRUNK_CONTROLLER_LISTENER_KEYS);
+        }
 
-    check!(advertised.difference(&kafka).copied().collect::<Vec<_>>() == Vec::<i16>::new());
-    check!(kafka.difference(&advertised).copied().collect::<Vec<_>>() == Vec::<i16>::new());
-    broker.shutdown().await;
+        check!(
+            advertised.difference(&kafka).copied().collect::<Vec<_>>() == Vec::<i16>::new(),
+            "trunk {trunk}"
+        );
+        check!(
+            kafka.difference(&advertised).copied().collect::<Vec<_>>() == Vec::<i16>::new(),
+            "trunk {trunk}"
+        );
+        broker.shutdown().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -601,6 +660,85 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
     broker.shutdown().await;
 }
 
+/// Kafka trunk's `UnregisterController` (94) over the controller listener: a
+/// registered controller id is dropped from the image, and an unknown one is
+/// `CONTROLLER_ID_NOT_REGISTERED`. The cluster is first moved to trunk's
+/// 4.4-IV2 (33), the level the RPC needs, through `UpdateFeatures` on the
+/// same listener. Both are trunk's, so the node runs with Kafka's two
+/// `unstable.*.enable` settings on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_unregister_controller() {
+    const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
+
+    let (broker, _dir) = start_trunk_broker().await;
+    broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ControllerRegistration(
+            krabka_metadata::ControllerRegistrationRecord {
+                node_id: NodeId(7),
+                incarnation_id: uuid::Uuid::from_u128(7),
+                zk_migration_ready: false,
+                endpoints: Vec::new(),
+                features: std::collections::BTreeMap::from([(
+                    "metadata.version".to_owned(),
+                    (7, krabka_metadata::metadata_version::METADATA_VERSION_MAX),
+                )]),
+            },
+        ))
+        .await
+        .expect("seed the registration");
+    let connection = dial_controller(&broker).await;
+    let upgraded = connection
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "metadata.version".into(),
+                max_version_level:
+                    krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                upgrade_type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures over the controller listener");
+    check!(upgraded.error_code == 0, "{upgraded:?}");
+
+    let mut answers = Vec::new();
+    for controller_id in [7, 9] {
+        answers.push(
+            connection
+                .send(UnregisterControllerRequest {
+                    controller_id,
+                    ..Default::default()
+                })
+                .await
+                .expect("UnregisterController over the controller listener"),
+        );
+    }
+    connection.close();
+
+    check!(
+        answers
+            == vec![
+                UnregisterControllerResponse {
+                    error_message: Some(String::new()),
+                    ..Default::default()
+                },
+                UnregisterControllerResponse {
+                    error_code: CONTROLLER_ID_NOT_REGISTERED,
+                    error_message: Some("Controller ID 9 is not currently registered.".into()),
+                    ..Default::default()
+                },
+            ]
+    );
+    check!(
+        broker
+            .controller_image_for_test()
+            .controller(NodeId(7))
+            .is_none()
+    );
+    broker.shutdown().await;
+}
+
 /// KIP-919 puts `CreateTopics` and `CreatePartitions` on the controller
 /// listener, so a controller-only node answers both -- and it hosts no
 /// replicas. `process.roles` without `broker` means `register_broker` skips it,
@@ -614,7 +752,7 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 /// metadata nothing can ever serve.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_only_node_places_no_replica_on_itself() {
-    let (broker, _dir) = start_node(&[NodeRole::Controller]).await;
+    let (broker, _dir) = start_node(&[NodeRole::Controller], |_| {}).await;
     let connection = dial_controller(&broker).await;
 
     let created = connection

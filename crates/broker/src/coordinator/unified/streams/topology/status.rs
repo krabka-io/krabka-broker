@@ -10,3 +10,7 @@ pub const INCORRECTLY_PARTITIONED_TOPICS: i8 = 2;
 pub const MISSING_INTERNAL_TOPICS: i8 = 3;
 pub const SHUTDOWN_APPLICATION: i8 = 4;
 pub const ASSIGNMENT_DELAYED: i8 = 5;
+/// Kafka trunk: a member did not send a tag key that
+/// `streams.rack.aware.assignment.tags` names. Sent only at request version 1
+/// and above.
+pub const MISSING_CLIENT_TAGS: i8 = 6;

@@ -10,9 +10,7 @@ use krabka_raft::{
     BootstrapMode, ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity,
     MetadataRaftFetchMax, NodeId,
 };
-use krabka_units::{
-    Time, bytes, convert::TimeExt, hours, kibibytes, mebibytes, millis, minutes, secs,
-};
+use krabka_units::{Time, convert::TimeExt, hours, kibibytes, mebibytes, millis, minutes, secs};
 
 use crate::{
     config::{
@@ -116,8 +114,6 @@ impl BrokerConfig {
             sendfile_min: kibibytes(4),
             socket_send_buffer: mebibytes(1),
             socket_receive_buffer: mebibytes(1),
-            acl_max_principal: bytes(256),
-            acl_max_resource_name: bytes(256),
             record_decompression_max_ratio: record_decompression.max_ratio(),
             record_decompression_output_floor: record_decompression.output_floor(),
             record_decompression_output_ceiling: record_decompression.output_ceiling(),
@@ -164,6 +160,7 @@ impl BrokerConfig {
             advertised_listener: "127.0.0.1:0".into(),
             log_dir,
             extra_log_dirs: Vec::new(),
+            cordoned_log_dirs: None,
             log_config: LogConfig::default(),
             stamp_source: None,
             node_id: NodeId(1),
@@ -377,7 +374,7 @@ mod tests {
 
     use super::*;
 
-    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 26] {
+    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 24] {
         [
             config.self_registration_max_attempts.to_string(),
             config.observer_fetch_max.bytes_u64().to_string(),
@@ -396,8 +393,6 @@ mod tests {
             config.sendfile_min.bytes_u64().to_string(),
             config.socket_send_buffer.bytes_u64().to_string(),
             config.socket_receive_buffer.bytes_u64().to_string(),
-            config.acl_max_principal.bytes_u64().to_string(),
-            config.acl_max_resource_name.bytes_u64().to_string(),
             config.inter_broker_server_name,
             config.producer_id_expiration.millis_i64().to_string(),
             config
@@ -437,8 +432,6 @@ mod tests {
                     "4096",
                     "1048576",
                     "1048576",
-                    "256",
-                    "256",
                     "localhost",
                     "86400000",
                     "600000",

@@ -145,6 +145,7 @@ pub(crate) async fn handle(
             .tx
             .send(StreamsGroupActorMessage::Heartbeat {
                 request: Box::new(req),
+                version,
                 client_id: ctx.client_id.to_owned(),
                 client_host: ctx.client_host(),
                 reply: tx,
@@ -262,6 +263,10 @@ mod tests {
     /// row joins one member with a changelog topic on a one-broker cluster,
     /// waits until the creation ends, heartbeats again, and compares the
     /// created topic and the status details.
+    ///
+    /// A topology that sets no replication factor sends -1, as Kafka 4.3.1's
+    /// `InternalTopicManager.toCreatableTopic` does, which `CreateTopics`
+    /// resolves to `default.replication.factor` (1).
     #[tokio::test]
     async fn handle_creates_the_internal_topics_through_create_topics() {
         use krabka_protocol::owned::common::streams_group_heartbeat_request::{
@@ -269,7 +274,13 @@ mod tests {
         };
 
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.streams_group.enable = true;
+            cfg.default_replication_factor = 1;
+        })
+        .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
         let principal = principal();
@@ -939,6 +950,85 @@ mod tests {
                 )
         );
         assert!(refused.acceptable_recovery_lag == -1 && !refused.topology_description_required);
+        broker_handle.shutdown().await;
+    }
+
+    /// #972: a member that sends none of the tag keys that
+    /// `group.streams.rack.aware.assignment.tags` (or the group's
+    /// `streams.rack.aware.assignment.tags` override) names gets Kafka trunk's
+    /// `MISSING_CLIENT_TAGS` status at version 1, after every other status,
+    /// and not at version 0. Each row joins one member of a fresh group and
+    /// compares the whole response with the version 0 answer of the same join.
+    #[tokio::test]
+    async fn handle_sends_missing_client_tags_at_version_1_only() {
+        use krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status;
+
+        use crate::coordinator::unified::streams::{
+            config::KEY_RACK_AWARE_ASSIGNMENT_TAGS, topology::status,
+        };
+
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.streams_group.rack_aware_assignment_tags = vec!["zone".into()];
+        })
+        .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1GroupConfig(
+                krabka_metadata::GroupConfigRecord {
+                    group_id: "overridden-v1".into(),
+                    configs: maplit::btreemap! {
+                        KEY_RACK_AWARE_ASSIGNMENT_TAGS.to_owned() => "rack, zone".to_owned(),
+                    },
+                },
+            )])
+            .await
+            .expect("store the group override");
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+        let heartbeat = |group_id: &str, version: i16| {
+            let bytes = crate::test_support::encode_request(&request(group_id), version);
+            let broker = &broker;
+            let ctx = &ctx;
+            async move {
+                let resp = handle(broker, version, 1, &bytes, ctx)
+                    .await
+                    .expect("handle");
+                crate::test_support::decode_response::<StreamsGroupHeartbeatResponse>(
+                    &resp, version,
+                )
+            }
+        };
+        let v0 = heartbeat("baseline-v0", 0).await;
+        assert!(v0.error_code == codes::NONE, "{v0:?}");
+
+        for (group_id, missing) in [
+            ("broker-default-v1", "[zone]"),
+            ("overridden-v1", "[rack, zone]"),
+        ] {
+            let v1 = heartbeat(group_id, 1).await;
+            let mut statuses = v0.status.clone().unwrap_or_default();
+            statuses.push(Status {
+                status_code: status::MISSING_CLIENT_TAGS,
+                status_detail: format!(
+                    "Missing required client tags for rack-aware standby assignment: {missing}. \
+                     Configure them via 'client.tag.<tagKey>' in your Streams config."
+                ),
+                ..Default::default()
+            });
+            assert!(
+                v1 == StreamsGroupHeartbeatResponse {
+                    acceptable_recovery_lag: broker.config.streams_group.acceptable_recovery_lag,
+                    status: Some(statuses),
+                    ..v0.clone()
+                },
+                "{group_id}"
+            );
+        }
         broker_handle.shutdown().await;
     }
 

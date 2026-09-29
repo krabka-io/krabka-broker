@@ -6,7 +6,10 @@ use krabka_metadata::MetadataRecord;
 use krabka_protocol::owned::create_topics_request::{CreatableReplicaAssignment, CreatableTopic};
 use krabka_raft::NodeId;
 
-use super::{codes, manual_replicas, resolve_assignments, round_robin_replicas, site_broker_views};
+use super::{
+    automatic_placement_exclusions, codes, manual_replicas, resolve_assignments,
+    round_robin_replicas, site_broker_views,
+};
 use crate::config_keys::resolve_preferred_leader_site;
 
 /// One broker in each of the sites `a`, `b`, and `c`.
@@ -473,4 +476,59 @@ fn an_impossible_request_gives_no_assignment() {
     let unleadable = resolve_assignments(&auto_topic(1, 3), &views, None).expect("no error code");
 
     assert!(unleadable.is_empty());
+}
+
+/// KIP-1066, as a live `apache/kafka:4.3.1` answers it: the automatic placement
+/// leaves out a broker whose log directories are all cordoned, and with every
+/// broker so cordoned the placement cannot be met, which the handler reports
+/// as `INVALID_REPLICATION_FACTOR` with "All brokers are currently fenced, or
+/// have all their log directories cordoned.". A broker with one uncordoned
+/// directory, or one that has not reported yet, stays a candidate, and an
+/// unavailable broker is left out as before.
+#[test]
+fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
+    let dir = |n: u128| uuid::Uuid::from_u128(n);
+    let mut image = stretch_image(&[(1, None), (2, None), (3, None), (4, None)], &[], None);
+    for (node, cordoned) in [
+        (1, Some(vec![dir(10), dir(11)])),
+        (2, Some(vec![dir(20)])),
+        (3, None),
+        (4, Some(vec![])),
+    ] {
+        let mut registration = image.broker(NodeId(node)).expect("registered").clone();
+        registration.log_dirs = vec![dir(u128::from(node) * 10), dir(u128::from(node) * 10 + 1)];
+        registration.cordoned_log_dirs = cordoned;
+        image.apply(&MetadataRecord::V1BrokerRegistration(registration));
+    }
+    let cases = [
+        (
+            "no broker unavailable",
+            vec![],
+            vec![NodeId(2), NodeId(3), NodeId(4)],
+        ),
+        ("broker 4 unavailable", vec![4], vec![NodeId(2), NodeId(3)]),
+    ];
+    for (label, unavailable, want) in cases {
+        let excluded = automatic_placement_exclusions(&image, &unavailable.into_iter().collect());
+        let views = site_broker_views(&image, Some(NodeId(1)), &excluded);
+        assert!(
+            views.iter().map(|view| view.node_id).collect::<Vec<_>>() == want,
+            "{label}"
+        );
+    }
+
+    let mut all_cordoned = stretch_image(&[(1, None)], &[], None);
+    let mut registration = all_cordoned.broker(NodeId(1)).expect("registered").clone();
+    registration.log_dirs = vec![dir(10)];
+    registration.cordoned_log_dirs = Some(vec![dir(10)]);
+    all_cordoned.apply(&MetadataRecord::V1BrokerRegistration(registration));
+    let excluded = automatic_placement_exclusions(&all_cordoned, &std::collections::HashSet::new());
+    let views = site_broker_views(&all_cordoned, Some(NodeId(1)), &excluded);
+    assert!(views.is_empty());
+    assert!(resolve_assignments(&auto_topic(1, 1), &views, None) == Ok(Vec::new()));
+    assert!(
+        super::placement_failure_message(1, views.len())
+            == "Unable to replicate the partition 1 time(s): All brokers are currently fenced, \
+                or have all their log directories cordoned."
+    );
 }

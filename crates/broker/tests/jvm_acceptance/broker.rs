@@ -18,6 +18,18 @@ pub(crate) async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfil
     start_host_broker_with(|_| {}).await
 }
 
+/// [`start_host_broker`] with krabka's legacy request versions enabled
+/// (`[runtime] legacy_request_versions_enable`). The pre-4.0 clients of the
+/// legacy suite send the Fetch, `ListOffsets` and Produce versions Kafka 4.x
+/// refuses, which strict 4.3.1 mode refuses too.
+pub(crate) async fn start_legacy_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+    start_host_broker_with(|config| {
+        config.features.legacy_request_versions =
+            krabka_broker::api_catalog::LegacyRequestVersions::Enabled;
+    })
+    .await
+}
+
 /// [`start_host_broker`], letting the caller adjust the config first.
 ///
 /// A suite that drives one of the coordinators needs its internal topic to be

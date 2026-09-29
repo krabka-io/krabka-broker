@@ -38,7 +38,10 @@ use crate::{
         partitioner::{GroupRoutingError, local_partition_for_group},
         persistence::OffsetCommitValue,
         unified::{
-            actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, validate_offset_commit},
+            actor::{
+                CommitFence, CommitRequest, GroupActorHandle, GroupActorMessage, GroupKindTag,
+                validate_commit,
+            },
             classic_state::OffsetEntry,
             streams::actor::validate_streams_group_offset_commit,
         },
@@ -251,9 +254,11 @@ async fn commit_rows(
 
     let now_ms = now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
-    let handle = validate(broker, req, version).await?;
-
+    // Kafka's `commitOffset` runs the per-partition validator only on the
+    // partitions whose metadata fits, so split them out first.
     let (valid, rows) = split_oversized_metadata(req, broker.config.offset_metadata_max_bytes);
+    let handle = validate(broker, req, &committed_partitions(&valid, &image), version).await?;
+
     if valid
         .topics
         .iter()
@@ -376,6 +381,7 @@ fn now_ms() -> i64 {
 async fn validate(
     broker: &Broker,
     req: &OffsetCommitRequest,
+    partitions: &[(WireUuid, i32)],
     version: i16,
 ) -> Result<Arc<GroupActorHandle>, i16> {
     let coordinator = &broker.group_coordinator;
@@ -383,12 +389,17 @@ async fn validate(
     let code = if let Some(streams) = coordinator.find_streams(&req.group_id) {
         validate_streams_group_offset_commit(&streams, &req.member_id, generation, version).await
     } else if let Some(handle) = coordinator.find(&req.group_id) {
-        let code = validate_offset_commit(
+        let code = validate_commit(
             &handle,
-            &req.member_id,
-            generation,
-            req.group_instance_id.as_deref(),
-            version,
+            CommitRequest {
+                member_id: req.member_id.clone(),
+                group_instance_id: req.group_instance_id.clone(),
+                generation_or_epoch: generation,
+                fence: CommitFence::Offset {
+                    api_version: version,
+                },
+                partitions: partitions.to_vec(),
+            },
         )
         .await;
         return code.map_or(Ok(handle), Err);
@@ -403,6 +414,29 @@ async fn validate(
         Some(code) => Err(code),
         None => Ok(coordinator.get_or_create_group(&req.group_id, GroupKindTag::Classic)),
     }
+}
+
+/// The `(topic id, partition)` of every partition `req` commits, with the
+/// topic id the image holds for the topic name. The handler has already
+/// dropped every topic the image does not hold, and Kafka's
+/// `KafkaApis.handleOffsetCommitRequest` resolves the same id before the
+/// group coordinator validates each partition.
+fn committed_partitions(
+    req: &OffsetCommitRequest,
+    image: &krabka_metadata::MetadataImage,
+) -> Vec<(WireUuid, i32)> {
+    req.topics
+        .iter()
+        .flat_map(|topic| {
+            let topic_id = image
+                .topic(&topic.name)
+                .map_or(WireUuid::ZERO, |t| WireUuid(t.topic_id.into_bytes()));
+            topic
+                .partitions
+                .iter()
+                .map(move |partition| (topic_id, partition.partition_index))
+        })
+        .collect()
 }
 
 /// One commit's two halves: the `__consumer_offsets` records for every

@@ -40,6 +40,8 @@ fn registry_registers_raw_context_handlers() {
         ApiKey::DescribeTransactions as i16,
         ApiKey::ListTransactions as i16,
         ApiKey::UnregisterBroker as i16,
+        ApiKey::UnregisterController as i16,
+        ApiKey::StreamsGroupTopologyDescriptionUpdate as i16,
         ApiKey::DescribeTopicPartitions as i16,
         ApiKey::ListConfigResources as i16,
         ApiKey::DescribeQuorum as i16,
@@ -162,22 +164,40 @@ fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
         .map(|api| api.api_key)
         .collect();
 
-    let floor = crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR;
-    let registered_kafka: BTreeSet<ApiKeyCode> = registered
+    // A key with a generated schema is in the catalog: every Kafka key, and
+    // `GetReplicaLogInfo` (1020), the one krabka-private key that has a
+    // schema in krabka-protocol.
+    let registered_with_schema: BTreeSet<ApiKeyCode> = registered
         .iter()
         .copied()
-        .filter(|key| *key < floor)
+        .filter(|key| ApiKey::from_i16(*key).is_some())
         .collect();
 
-    // Every dispatched key is registered, and every registered Kafka key is
-    // dispatched. The krabka-private keys are deliberately absent from the
-    // catalog: advertising them would put UNKNOWN(1010) rows into
-    // kafka-broker-api-versions output, a visible divergence from a real
-    // broker, and a client that does not find a key negotiates (0, 0),
-    // which is right for a MIN = MAX = 0 request.
+    // Every dispatched key is registered, and every registered key with a
+    // generated schema is dispatched. The other krabka-private keys are
+    // deliberately absent from the catalog: advertising them would put
+    // UNKNOWN(1010) rows into kafka-broker-api-versions output, a visible
+    // divergence from a real broker, and a client that does not find a key
+    // negotiates (0, 0), which is right for a MIN = MAX = 0 request.
     assert!(dispatched.is_subset(&registered));
-    assert!(registered_kafka == dispatched);
-    assert!(dispatched.iter().all(|key| *key < floor));
+    assert!(registered_with_schema == dispatched);
+}
+
+/// The only krabka-private key in the catalog is `GetReplicaLogInfo` (1020),
+/// and it is inter-broker only, so no listener a client can reach advertises
+/// it and `kafka-broker-api-versions` never prints an `UNKNOWN(1020)` row.
+#[test]
+fn the_only_catalogued_krabka_private_key_is_inter_broker_only() {
+    let floor = crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR;
+    let private: Vec<ApiKeyCode> = crate::api_catalog::dispatched_apis()
+        .into_iter()
+        .map(|api| api.api_key)
+        .filter(|key| *key >= floor)
+        .collect();
+
+    assert!(private == vec![ApiKey::GetReplicaLogInfo as i16]);
+    assert!(ApiKey::GetReplicaLogInfo as i16 == 1020);
+    assert!(crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&1020));
 }
 
 #[test]
@@ -253,8 +273,9 @@ fn api_versions_is_a_self_accounted_context_dispatch() {
 /// exempts only the apis it answers through `sendResponseExemptThrottle` and
 /// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`
 /// and `ApiVersions` charge it in their handler. Kafka defines no
-/// krabka-private api, so those are exempt. Every other registered api is
-/// charged by the dispatch loop.
+/// krabka-private api, so the ones in the private table are exempt. Every
+/// other registered api, `GetReplicaLogInfo` included, is charged by the
+/// dispatch loop.
 #[test]
 fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
     use std::collections::BTreeMap;
@@ -283,7 +304,11 @@ fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
             let policy = if self_accounted.iter().any(|api| *api as i16 == api_key) {
                 RequestQuotaPolicy::SelfAccounted
             } else if exempt.iter().any(|api| *api as i16 == api_key)
-                || api_key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR
+                // The krabka-private apis registered through the private
+                // table. `GetReplicaLogInfo` (1020) is in the private range,
+                // but it is registered like a Kafka api and stays charged.
+                || (api_key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR
+                    && ApiKey::from_i16(api_key).is_none())
             {
                 RequestQuotaPolicy::InlineExempt
             } else {

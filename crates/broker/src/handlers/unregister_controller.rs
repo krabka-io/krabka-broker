@@ -1,0 +1,212 @@
+//! `UnregisterController` (`api_key` 94, KIP-1312, Kafka trunk).
+//!
+//! An operator removes a controller from the voter set, shuts it down, and
+//! then drops its `ControllerRegistration` with this RPC, as
+//! `kafka-cluster unregister-controller` and `kafka-metadata-quorum
+//! remove-controller --unregister` do. The controller writes an
+//! `UnregisterControllerRecord`, and the image forgets the registration.
+//!
+//! Kafka trunk tags the request `broker` and `controller`, and `ApiKeys` marks
+//! it forwardable. The controller listener answers it in place, as
+//! `ControllerApis.handleUnregisterController` does. A broker listener
+//! forwards it to the active controller in a KIP-590 `Envelope`, as
+//! `KafkaApis` does with `forwardToController`. The `forward` submodule holds
+//! that half.
+//!
+//! The checks run in trunk's order:
+//!
+//! 1. `Alter` on the cluster, or `CLUSTER_AUTHORIZATION_FAILED` (31).
+//! 2. This node is the active controller, or `NOT_CONTROLLER` (41). This is
+//!    `ControllerWriteEvent.run`.
+//! 3. The id is not a current voter, or `INVALID_REQUEST` (42). This is
+//!    `QuorumController.unregisterController`.
+//! 4. `metadata.version` is at least `4.4-IV2`, or `UNSUPPORTED_VERSION` (35).
+//! 5. The id has a registration, or `CONTROLLER_ID_NOT_REGISTERED` (136).
+//!    Checks 4 and 5 are `ClusterControlManager.unregisterController`.
+//!
+//! Each refusal carries the message of the exception trunk throws, because
+//! `UnregisterControllerRequest.getErrorResponse` copies `e.getMessage()`. A
+//! success carries the generated empty-string `ErrorMessage`.
+
+use bytes::Bytes;
+use krabka_metadata::{MetadataRecord, NodeId, UnregisterControllerRecord};
+use krabka_protocol::{
+    Decode,
+    owned::{
+        unregister_controller_request::UnregisterControllerRequest,
+        unregister_controller_response::UnregisterControllerResponse,
+    },
+};
+use krabka_raft::RaftError;
+
+use crate::{
+    broker::Broker,
+    codes,
+    controller_admin::CONTROLLER_ADMIN_CONNECTION_ID,
+    error::BrokerError,
+    features::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+    handlers::{RequestContext, cluster_alter_denied},
+};
+
+mod forward;
+
+#[cfg(test)]
+mod tests;
+
+/// The message of the `ClusterAuthorizationException` trunk's
+/// `AuthHelper.authorizeClusterOperation` throws. Kafka names the JVM
+/// `toString` of the channel request, and krabka names the API in its place.
+const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request UnregisterController needs ALTER permission.";
+
+/// Trunk's `ClusterControlManager.unregisterController` message below
+/// `4.4-IV2`.
+const UNSUPPORTED_METADATA_VERSION_MESSAGE: &str =
+    "The current MetadataVersion is too old to support controller unregistration.";
+
+#[tracing::instrument(
+    name = "handle_unregister_controller",
+    level = "info",
+    skip_all,
+    fields(api = "UnregisterController", version, req_bytes = req_bytes.len()),
+    err,
+)]
+pub(crate) async fn handle(
+    broker: &Broker,
+    version: i16,
+    _correlation_id: i32,
+    req_bytes: &[u8],
+    ctx: &RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    let mut cur: &[u8] = req_bytes;
+    let req = UnregisterControllerRequest::decode(&mut cur, version)?;
+    let image = broker.controller.current_image();
+
+    // A broker listener forwards the request untouched, and the controller
+    // authorizes the principal the `Envelope` names. A node that is itself
+    // the active controller has nowhere to forward to and answers in place.
+    if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
+        && let Some(answer) = forward::to_active_controller(broker, req_bytes, version, ctx).await
+    {
+        return answer;
+    }
+    if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return encode(
+            version,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            Some(CLUSTER_ALTER_DENIED_MESSAGE),
+        );
+    }
+
+    let leader = *broker.controller.watch_leader().borrow();
+    if leader != Some(broker.config.node_id) {
+        return encode(
+            version,
+            codes::NOT_CONTROLLER,
+            Some(&wrong_controller_message(leader)),
+        );
+    }
+
+    let (error_code, message) = match refusal(&image, req.controller_id) {
+        Some(refused) => refused,
+        None => submit(broker, req.controller_id).await,
+    };
+    if error_code == codes::NONE {
+        crate::handlers::audit_admin_success(
+            broker.audit_log.as_ref(),
+            ctx,
+            "UnregisterController",
+            vec![crate::handlers::audit_resource(
+                "Controller",
+                req.controller_id.to_string(),
+            )],
+        );
+    }
+    encode(version, error_code, message.as_deref())
+}
+
+/// The refusal trunk's `QuorumController.unregisterController` and
+/// `ClusterControlManager.unregisterController` answer for `controller_id`
+/// against `image`, in their order, or `None` when the record may be written.
+fn refusal(
+    image: &krabka_metadata::MetadataImage,
+    controller_id: i32,
+) -> Option<(i16, Option<String>)> {
+    let node_id = u64::try_from(controller_id).ok().map(NodeId);
+    if node_id.is_some_and(|id| image.voters().contains(id)) {
+        return Some((
+            codes::INVALID_REQUEST,
+            Some(format!(
+                "Cannot unregister controller {controller_id} because it is part of the voter set."
+            )),
+        ));
+    }
+    if image
+        .finalized_metadata_version()
+        .is_none_or(|level| level < CONTROLLER_UNREGISTRATION_MIN_LEVEL)
+    {
+        return Some((
+            codes::UNSUPPORTED_VERSION,
+            Some(UNSUPPORTED_METADATA_VERSION_MESSAGE.to_owned()),
+        ));
+    }
+    if node_id.is_none_or(|id| image.controller(id).is_none()) {
+        return Some(not_registered(controller_id));
+    }
+    None
+}
+
+/// Writes the `UnregisterControllerRecord` and reports how it went.
+async fn submit(broker: &Broker, controller_id: i32) -> (i16, Option<String>) {
+    let Ok(node_id) = u64::try_from(controller_id).map(NodeId) else {
+        return not_registered(controller_id);
+    };
+    let record = MetadataRecord::V1UnregisterController(UnregisterControllerRecord { node_id });
+    match broker.controller.submit_change(vec![record]).await {
+        Ok(_) => (codes::NONE, Some(String::new())),
+        Err(RaftError::NotLeader { current_leader }) => (
+            codes::NOT_CONTROLLER,
+            Some(wrong_controller_message(current_leader)),
+        ),
+        Err(RaftError::LeaderUnknown | RaftError::UncommittedTail) => {
+            (codes::NOT_CONTROLLER, Some(wrong_controller_message(None)))
+        }
+        // The image refuses the record only when the registration went away
+        // between the check above and the append.
+        Err(RaftError::Metadata(_)) => not_registered(controller_id),
+        Err(error) => (codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+    }
+}
+
+/// Trunk's `ControllerIdNotRegisteredException` for `controller_id`.
+fn not_registered(controller_id: i32) -> (i16, Option<String>) {
+    (
+        codes::CONTROLLER_ID_NOT_REGISTERED,
+        Some(format!(
+            "Controller ID {controller_id} is not currently registered."
+        )),
+    )
+}
+
+/// `ControllerExceptions.newWrongControllerException`'s message.
+fn wrong_controller_message(leader: Option<NodeId>) -> String {
+    leader.map_or_else(
+        || "No controller appears to be active.".to_owned(),
+        |leader| format!("The active controller appears to be node {leader}."),
+    )
+}
+
+fn response(error_code: i16, error_message: Option<&str>) -> UnregisterControllerResponse {
+    UnregisterControllerResponse {
+        error_code,
+        error_message: error_message.map(str::to_owned),
+        ..Default::default()
+    }
+}
+
+fn encode(
+    version: i16,
+    error_code: i16,
+    error_message: Option<&str>,
+) -> Result<Bytes, BrokerError> {
+    crate::handlers::encode_response(&response(error_code, error_message), version)
+}

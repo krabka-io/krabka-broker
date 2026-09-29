@@ -52,7 +52,9 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
         &std::fs::read(log_dir.join("meta.properties.json")).expect("meta.properties.json"),
     )
     .expect("meta.properties.json is JSON");
-    check!(meta["cluster_id"] == serde_json::json!(cluster_id.to_string()));
+    check!(
+        meta["cluster_id"] == serde_json::json!(krabka_format::ClusterId(cluster_id).to_string())
+    );
 
     // `bootstrap.records.bin` is a length-prefixed stream of
     // `serde_wincode::SerdeCompat<MetadataRecord>` payloads (see

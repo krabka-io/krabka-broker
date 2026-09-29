@@ -20,8 +20,9 @@ use crate::coordinator::unified::{
     consumer_state::{GroupState, MemberState},
     offsets_log::OffsetsLog,
     persistence_next_gen::{
-        ClassicMemberMetadata, CurrentMemberAssignmentValue, GroupMetadataValue,
-        MemberMetadataValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+        ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
+        GroupMetadataValue, MemberMetadataValue, TargetAssignmentMemberValue,
+        TargetAssignmentMetadataValue,
     },
 };
 
@@ -51,28 +52,42 @@ fn member_metadata_value(member: &MemberState) -> MemberMetadataValue {
     }
 }
 
+/// Projects one of the member's partition maps into the k8
+/// `TopicPartitions`, with the assignment epoch of every partition, as
+/// Kafka's `GroupCoordinatorRecordHelpers.toTopicPartitions` writes it.
+fn current_topic_partitions(
+    member: &MemberState,
+    partitions: &HashMap<Uuid, Vec<i32>>,
+) -> Vec<CurrentTopicPartitions> {
+    partitions
+        .iter()
+        .map(|(topic_id, partitions)| CurrentTopicPartitions {
+            topic_id: *topic_id,
+            partitions: partitions.clone(),
+            assignment_epochs: Some(
+                partitions
+                    .iter()
+                    .map(|&partition| {
+                        member
+                            .assignment_epoch(topic_id, partition)
+                            .unwrap_or_else(|| member.member_epoch.max(0))
+                    })
+                    .collect(),
+            ),
+        })
+        .collect()
+}
+
 pub(super) fn current_assignment_value(member: &MemberState) -> CurrentMemberAssignmentValue {
-    use crate::coordinator::unified::persistence_next_gen::AssignedTopicPartitions;
     CurrentMemberAssignmentValue {
         member_epoch: member.member_epoch,
         previous_member_epoch: member.previous_member_epoch,
         state: member.assignment_state,
-        assigned_partitions: member
-            .assigned_partitions
-            .iter()
-            .map(|(topic_id, partitions)| AssignedTopicPartitions {
-                topic_id: *topic_id,
-                partitions: partitions.clone(),
-            })
-            .collect(),
-        partitions_pending_revocation: member
-            .partitions_pending_revocation
-            .iter()
-            .map(|(topic_id, partitions)| AssignedTopicPartitions {
-                topic_id: *topic_id,
-                partitions: partitions.clone(),
-            })
-            .collect(),
+        assigned_partitions: current_topic_partitions(member, &member.assigned_partitions),
+        partitions_pending_revocation: current_topic_partitions(
+            member,
+            &member.partitions_pending_revocation,
+        ),
     }
 }
 

@@ -70,7 +70,7 @@ async fn on_leadership_wake(
         liveness
             .seed_term(
                 controller.current_controller_epoch(),
-                crate::heartbeat::controller_state::replicated_fences(&image),
+                crate::heartbeat::controller_state::replicated_registrations(&image),
             )
             .await;
     }
@@ -128,6 +128,7 @@ pub(super) fn start_liveness_services(
     log_dirs: (
         &crate::log_dir_status::LogDirRegistry,
         &crate::log_dir_id::LogDirIds,
+        &crate::cordoned_log_dirs::CordonedLogDirs,
     ),
 ) -> LivenessStartup {
     let (metrics, audit_log) = observability;
@@ -161,6 +162,7 @@ pub(super) fn start_liveness_services(
             log_dir_ids: log_dirs.1.clone(),
             all_log_dirs: config.all_log_dirs(),
             supervisor_shutdown: shutdown.clone(),
+            cordoned_log_dirs: log_dirs.2.clone(),
         },
     ));
     let unclean_recovery = crate::unclean_recovery::UncleanRecoveryManager::spawn(

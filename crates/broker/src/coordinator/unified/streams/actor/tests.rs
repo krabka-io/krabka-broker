@@ -87,11 +87,25 @@ async fn heartbeat_result(
     handle: &StreamsGroupActorHandle,
     req: StreamsGroupHeartbeatRequest,
 ) -> StreamsHeartbeatResult {
+    heartbeat_result_at(
+        handle,
+        req,
+        krabka_protocol::owned::streams_group_heartbeat_request::MAX_VERSION,
+    )
+    .await
+}
+
+async fn heartbeat_result_at(
+    handle: &StreamsGroupActorHandle,
+    req: StreamsGroupHeartbeatRequest,
+    version: i16,
+) -> StreamsHeartbeatResult {
     let (tx, rx) = oneshot::channel();
     handle
         .tx
         .send(StreamsGroupActorMessage::Heartbeat {
             request: Box::new(req),
+            version,
             client_id: "client".into(),
             client_host: "/127.0.0.1".into(),
             reply: tx,
@@ -1926,6 +1940,169 @@ fn validate_offset_commit_follows_kafka_streams_group() {
         check!(
             validate_offset_commit(state, member_id, member_epoch, fence) == expected,
             "{row}"
+        );
+    }
+}
+
+/// #972: Kafka trunk's `MISSING_CLIENT_TAGS` (`streamsGroupHeartbeat`, after
+/// the shutdown status). A heartbeat at version 1 or above from a member that
+/// has not sent every tag key of `streams.rack.aware.assignment.tags` carries
+/// the status, naming the missing keys in the configured order; version 0
+/// never does, and neither does a leave. A heartbeat that sends no client tags
+/// keeps the member's earlier ones. Each row runs its heartbeats on a fresh
+/// ready group and compares the whole status list of the last response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1() {
+    use krabka_protocol::owned::common::{
+        streams_group_heartbeat_request::key_value::KeyValue,
+        streams_group_heartbeat_response::status::Status,
+    };
+
+    use crate::{
+        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
+    };
+
+    /// One heartbeat of member `m1`: its request version, whether it joins,
+    /// heartbeats at its epoch or leaves, and the client tags it sends.
+    #[derive(Clone, Copy)]
+    enum Beat {
+        Join(i16, Option<&'static [&'static str]>),
+        Heartbeat(i16, Option<&'static [&'static str]>),
+        Leave(i16),
+    }
+    struct Row {
+        name: &'static str,
+        tags: &'static [&'static str],
+        beats: &'static [Beat],
+        status: Option<&'static str>,
+    }
+    let rows = [
+        Row {
+            name: "version 0 never gets the status",
+            tags: &["zone"],
+            beats: &[Beat::Join(0, None)],
+            status: None,
+        },
+        Row {
+            name: "version 1 names the missing tag",
+            tags: &["zone"],
+            beats: &[Beat::Join(1, None)],
+            status: Some("[zone]"),
+        },
+        Row {
+            name: "the missing tags follow the configured order",
+            tags: &["zone", "cell", "rack"],
+            beats: &[Beat::Join(1, Some(&["cell"]))],
+            status: Some("[zone, rack]"),
+        },
+        Row {
+            name: "a member that sends every tag gets no status",
+            tags: &["zone", "rack"],
+            beats: &[Beat::Join(1, Some(&["rack", "zone", "extra"]))],
+            status: None,
+        },
+        Row {
+            name: "no configured tag gives no status",
+            tags: &[],
+            beats: &[Beat::Join(1, None)],
+            status: None,
+        },
+        Row {
+            name: "a heartbeat without tags keeps the member's tags",
+            tags: &["zone"],
+            beats: &[Beat::Join(1, Some(&["zone"])), Beat::Heartbeat(1, None)],
+            status: None,
+        },
+        Row {
+            name: "a heartbeat without tags keeps the member missing them",
+            tags: &["zone"],
+            beats: &[Beat::Join(0, None), Beat::Heartbeat(1, None)],
+            status: Some("[zone]"),
+        },
+        Row {
+            name: "a heartbeat that sends the tag clears the status",
+            tags: &["zone"],
+            beats: &[Beat::Join(1, None), Beat::Heartbeat(1, Some(&["zone"]))],
+            status: None,
+        },
+        Row {
+            name: "a leave carries no status",
+            tags: &["zone"],
+            beats: &[Beat::Join(1, None), Beat::Leave(1)],
+            status: None,
+        },
+    ];
+
+    for row in rows {
+        let log = Arc::new(InMemoryOffsetsLog::default());
+        let metadata: Arc<dyn MetadataProvider> = Arc::new(EmptyMetadata);
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            metadata,
+            log,
+            StreamsGroupConfig {
+                rack_aware_assignment_tags: row.tags.iter().map(|tag| (*tag).to_owned()).collect(),
+                ..undelayed()
+            },
+        ));
+        coord.set_metadata_source(Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 1)]))
+                .build(),
+        ));
+        let handle = coord.get_or_create_streams("g");
+        let mut epoch = 0;
+        let mut last = None;
+        for beat in row.beats {
+            let (version, member_epoch, tags, topology) = match *beat {
+                Beat::Join(version, tags) => (version, 0, tags, Some(one_subtopology(false))),
+                Beat::Heartbeat(version, tags) => (version, epoch, tags, None),
+                Beat::Leave(version) => (version, -1, None, None),
+            };
+            let resp = heartbeat_result_at(
+                &handle,
+                StreamsGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch,
+                    rebalance_timeout_ms: 1_000,
+                    client_tags: tags.map(|keys| {
+                        keys.iter()
+                            .map(|key| KeyValue {
+                                key: (*key).into(),
+                                value: "v".into(),
+                                ..Default::default()
+                            })
+                            .collect()
+                    }),
+                    topology,
+                    ..Default::default()
+                },
+                version,
+            )
+            .await
+            .response;
+            check!(resp.error_code == codes::NONE, "{}: {resp:?}", row.name);
+            epoch = resp.member_epoch;
+            last = Some(resp);
+        }
+        let expected: Vec<Status> = row
+            .status
+            .map(|missing| Status {
+                status_code: status::MISSING_CLIENT_TAGS,
+                status_detail: format!(
+                    "Missing required client tags for rack-aware standby assignment: {missing}. \
+                     Configure them via 'client.tag.<tagKey>' in your Streams config."
+                ),
+                ..Default::default()
+            })
+            .into_iter()
+            .collect();
+        check!(
+            last.and_then(|resp| resp.status) == Some(expected),
+            "{}",
+            row.name
         );
     }
 }

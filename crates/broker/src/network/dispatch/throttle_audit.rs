@@ -371,6 +371,11 @@ fn probes() -> BTreeMap<ApiKeyCode, Probe> {
             delete_share_group_offsets_response,
             DeleteShareGroupOffsetsResponse
         ),
+        probe!(
+            streams_group_topology_description_update_response,
+            StreamsGroupTopologyDescriptionUpdateResponse
+        ),
+        probe!(unregister_controller_response, UnregisterControllerResponse),
         no_throttle_probe!(get_replica_log_info_response, GetReplicaLogInfoResponse),
     ]
     .into_iter()

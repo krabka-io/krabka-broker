@@ -72,11 +72,44 @@ pub(super) async fn last_fetchable_offset(
     partition: &crate::partition::Partition,
     bound: FetchBound,
 ) -> Option<i64> {
+    fetchable_offsets(partition, bound)
+        .await
+        .map(|offsets| offsets.last_fetchable)
+}
+
+/// The bound a request is measured against, and the high watermark read in
+/// the same pass.
+///
+/// `Partition.fetchOffsetForTimestamp` needs both. The bound decides which
+/// resolved offsets a client may be handed, while KIP-207's
+/// `maybeOffsetsError` compares the leader epoch's start offset against the
+/// high watermark whatever the isolation level, so a `read_committed` client
+/// is not fenced merely because an open transaction holds its last stable
+/// offset below the epoch start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FetchableOffsets {
+    /// Kafka's `lastFetchableOffset` for the request's [`FetchBound`].
+    pub(super) last_fetchable: i64,
+    /// The partition's high watermark.
+    pub(super) high_watermark: i64,
+}
+
+/// Reads the [`FetchableOffsets`] of `partition` for `bound`, or `None` when
+/// an offset is malformed. See [`last_fetchable_offset`] for the bound.
+pub(super) async fn fetchable_offsets(
+    partition: &crate::partition::Partition,
+    bound: FetchBound,
+) -> Option<FetchableOffsets> {
     let high_watermark = partition.high_watermark().await;
     let last_stable = partition.last_stable_offset(high_watermark).0;
     let high_watermark = high_watermark.0;
     let log_end = partition.log_end_offset().0;
-    checked_bound(bound, log_end, high_watermark, last_stable)
+    checked_bound(bound, log_end, high_watermark, last_stable).map(|last_fetchable| {
+        FetchableOffsets {
+            last_fetchable,
+            high_watermark,
+        }
+    })
 }
 
 fn checked_bound(

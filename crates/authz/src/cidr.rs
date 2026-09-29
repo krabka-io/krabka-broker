@@ -53,9 +53,14 @@ impl Cidr {
     /// `2001:db8::/32`), never an IPv4-mapped IPv6 literal, so a mismatched
     /// pair here is a genuine address-family mismatch and answers `false`,
     /// the same as a literal host comparison would.
+    ///
+    /// An IPv4 range never contains `0.0.0.0`, even `0.0.0.0/0`: commons-net
+    /// `SubnetUtils.SubnetInfo.isInRange(int)` refuses the zero address before
+    /// it compares. `SubnetUtils6` has no such rule, so `::/0` contains `::`.
     #[must_use]
     pub fn contains(&self, ip: IpAddr) -> bool {
         match (self.ip, ip.to_canonical()) {
+            (IpAddr::V4(_), IpAddr::V4(candidate)) if candidate.is_unspecified() => false,
             (IpAddr::V4(range), IpAddr::V4(candidate)) => {
                 let mask = v4_mask(self.prefix_len);
                 u32::from(range) & mask == u32::from(candidate) & mask
@@ -302,5 +307,31 @@ mod tests {
 
         let v6_any = Cidr::parse("::/0").unwrap();
         check!(v6_any.contains(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    /// commons-net `SubnetUtils.SubnetInfo.isInRange(int)` answers `false`
+    /// for the zero address in every IPv4 range, including one that holds it
+    /// numerically. `SubnetUtils6.SubnetInfo.isInRange` has no such rule.
+    #[test]
+    fn unspecified_address_matches_only_ipv6_ranges() {
+        let cases: &[(&str, IpAddr, bool)] = &[
+            ("0.0.0.0/0", IpAddr::V4(Ipv4Addr::UNSPECIFIED), false),
+            ("0.0.0.0/8", IpAddr::V4(Ipv4Addr::UNSPECIFIED), false),
+            ("0.0.0.0/32", IpAddr::V4(Ipv4Addr::UNSPECIFIED), false),
+            ("0.0.0.0/8", IpAddr::V4(Ipv4Addr::new(0, 0, 0, 1)), true),
+            (
+                "0.0.0.0/0",
+                IpAddr::V6(Ipv4Addr::UNSPECIFIED.to_ipv6_mapped()),
+                false,
+            ),
+            ("::/0", IpAddr::V6(Ipv6Addr::UNSPECIFIED), true),
+            ("::/128", IpAddr::V6(Ipv6Addr::UNSPECIFIED), true),
+        ];
+        for (cidr, ip, expected) in cases {
+            check!(
+                Cidr::parse(cidr).unwrap().contains(*ip) == *expected,
+                "{cidr} contains {ip}"
+            );
+        }
     }
 }

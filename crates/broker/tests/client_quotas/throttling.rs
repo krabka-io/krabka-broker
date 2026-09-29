@@ -748,11 +748,16 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
     };
 
     // The handler set the field on the typed response, so nothing else moved:
-    // the advertised table and the feature rows are the baseline's.
+    // the advertised table and the feature rows are the baseline's. The
+    // finalized features epoch is the metadata offset, as Kafka's
+    // `KRaftMetadataCache.features` reports it, so the quota record written in
+    // between moves it on.
+    assert!(throttled.finalized_features_epoch > baseline.finalized_features_epoch);
     assert!(
         throttled
             == ApiVersionsResponse {
                 throttle_time_ms: throttled.throttle_time_ms,
+                finalized_features_epoch: throttled.finalized_features_epoch,
                 ..baseline
             }
     );

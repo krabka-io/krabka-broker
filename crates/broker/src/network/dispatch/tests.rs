@@ -246,59 +246,25 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
 enum Outcome {
     /// The connection closes with no response frame.
     Closed,
-    /// An `ApiVersions` v0 body carrying `UNSUPPORTED_VERSION` and the
-    /// listener's supported ranges.
+    /// An `ApiVersions` v0 body carrying `UNSUPPORTED_VERSION` and the one
+    /// `ApiVersions` range.
     ApiVersionsV0(krabka_protocol::owned::api_versions_response::ApiVersionsResponse),
 }
 
-/// #844: Kafka's `Processor.parseRequestHeader` throws
-/// `UnsupportedVersionException` for a version outside an API's range and
-/// `SocketServer` closes the channel on it. `ApiVersions` is the one
-/// exception (`ApiKeys.isVersionEnabled`): `KafkaApis` answers it with a v0
-/// `UNSUPPORTED_VERSION` body. Table-driven over every dispatched API, one
-/// connection per row, at the version above its maximum and at the version
-/// below its minimum; an unknown api key closes the connection too.
-#[tokio::test]
-async fn unsupported_versions_close_the_connection_except_api_versions() {
+/// Sends each `(api_key, version)` frame on its own connection to a broker
+/// started from `cfg` and returns what the serve loop did with it, and the
+/// broker's metrics once every connection is done.
+async fn drive_one_frame_per_connection(
+    cfg: crate::config::BrokerConfig,
+    requests: &[(i16, i16)],
+) -> (Vec<Outcome>, crate::metrics::BrokerMetrics) {
     use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
 
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
     let handle = Broker::start(cfg).await.expect("start broker");
     let broker = handle.broker_arc_for_test();
     let metrics = broker.metrics.clone();
     let registry = crate::handlers::registry::build_registry();
-
-    // The `PLAINTEXT` listener is the only one this broker binds, so it is
-    // also the one `inter_broker_listener_name` names and it carries client
-    // and inter-broker traffic together
-    // (`ListenerKind::ClientAndInterBroker`).
-    let api_versions_v0 = ApiVersionsResponse {
-        error_code: codes::UNSUPPORTED_VERSION,
-        api_keys: crate::api_catalog::supported_apis(
-            crate::api_catalog::ListenerKind::ClientAndInterBroker,
-            crate::api_catalog::ClientMetricsReceiver::Absent,
-        ),
-        ..Default::default()
-    };
-    let mut cases: Vec<(i16, i16, Outcome)> = Vec::new();
-    for api in crate::api_catalog::dispatched_apis() {
-        let outcome = || {
-            if api.api_key == API_VERSIONS_KEY {
-                Outcome::ApiVersionsV0(api_versions_v0.clone())
-            } else {
-                Outcome::Closed
-            }
-        };
-        let above = api
-            .max_version
-            .checked_add(1)
-            .expect("maximum API version has a successor");
-        cases.push((api.api_key, above, outcome()));
-        cases.push((api.api_key, api.min_version - 1, outcome()));
-    }
-    cases.push((i16::MAX, 0, Outcome::Closed));
-    let connections = cases.len();
+    let connections = requests.len();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -320,7 +286,8 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
         }
     });
 
-    for (correlation_id, (api_key, version, expected)) in cases.into_iter().enumerate() {
+    let mut outcomes = Vec::with_capacity(connections);
+    for (correlation_id, &(api_key, version)) in requests.iter().enumerate() {
         let correlation_id = i32::try_from(correlation_id).expect("correlation id");
         let flexible = registry
             .get(api_key)
@@ -337,7 +304,7 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
         );
         framed.send(frame.freeze()).await.expect("send request");
 
-        let actual = match framed.next().await {
+        outcomes.push(match framed.next().await {
             None => Outcome::Closed,
             Some(response) => {
                 let response = response.expect("response frame decode");
@@ -352,18 +319,184 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
                         .expect("v0 ApiVersions body"),
                 )
             }
-        };
-        check!(actual == expected, "api_key {api_key} at version {version}");
+        });
     }
 
     server
         .await
         .expect("serve loop joins after every connection");
+    handle.shutdown().await;
+    (outcomes, metrics)
+}
+
+/// #844: Kafka's `Processor.parseRequestHeader` throws
+/// `UnsupportedVersionException` for a version outside an API's range and
+/// `SocketServer` closes the channel on it. `ApiVersions` is the one
+/// exception (`ApiKeys.isVersionEnabled`): `KafkaApis` answers it with a v0
+/// `UNSUPPORTED_VERSION` body. #842: that body carries exactly one entry, the
+/// `ApiVersions` range, as `ApiVersionsRequest.getErrorResponse` builds it,
+/// whatever listener it arrives on. Table-driven over every dispatched API,
+/// one connection per row, at the version above its maximum and at the
+/// version below its minimum; an unknown api key closes the connection too.
+#[tokio::test]
+async fn unsupported_versions_close_the_connection_except_api_versions() {
+    use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
+
+    let api_versions_v0 = ApiVersionsResponse {
+        error_code: codes::UNSUPPORTED_VERSION,
+        api_keys: vec![ApiVersion {
+            api_key: API_VERSIONS_KEY,
+            min_version: 0,
+            max_version: krabka_raft::api_versions_max_version(
+                crate::api_catalog::UnstableApiVersions::Disabled,
+            ),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut cases: Vec<(i16, i16, Outcome)> = Vec::new();
+    for api in crate::api_catalog::dispatched_apis() {
+        let outcome = || {
+            if api.api_key == API_VERSIONS_KEY {
+                Outcome::ApiVersionsV0(api_versions_v0.clone())
+            } else {
+                Outcome::Closed
+            }
+        };
+        let above = api
+            .max_version
+            .checked_add(1)
+            .expect("maximum API version has a successor");
+        cases.push((api.api_key, above, outcome()));
+        cases.push((api.api_key, api.min_version - 1, outcome()));
+    }
+    cases.push((i16::MAX, 0, Outcome::Closed));
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let requests: Vec<(i16, i16)> = cases
+        .iter()
+        .map(|(key, version, _)| (*key, *version))
+        .collect();
+    let (outcomes, metrics) = drive_one_frame_per_connection(cfg, &requests).await;
+    for ((api_key, version, expected), actual) in cases.into_iter().zip(outcomes) {
+        check!(actual == expected, "api_key {api_key} at version {version}");
+    }
+
     let unknown = crate::metrics::ApiKeyLabel {
         api_key: crate::metrics::UNKNOWN_LABEL.into(),
     };
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
-    handle.shutdown().await;
+}
+
+/// #646, #784: under Kafka's `unstable.api.versions.enable` and krabka's
+/// `legacy_request_versions_enable`, both off by default, the broker closes a
+/// connection that sends a version or an api key Kafka 4.3.1 does not serve,
+/// as `Processor.parseRequestHeader` does (`InvalidRequestException`, no
+/// response): `InitProducerId` v6, trunk's `TxnOffsetCommit` v6, streams v1,
+/// api keys 93 and 94, and the pre-4.0 `Produce`, `Fetch` and `ListOffsets`
+/// versions. `ApiVersions` v5 is answered `UNSUPPORTED_VERSION` with the v0-v4
+/// range instead. Turning the matching switch on dispatches the request. A
+/// dispatched request with an empty body fails to decode and closes as well,
+/// so the rows tell "refused before dispatch" from "dispatched" by the
+/// unsupported-request metric.
+#[tokio::test]
+async fn a_gated_version_is_refused_unless_its_switch_is_on() {
+    use crate::api_catalog::{
+        LegacyRequestVersions::{self, Disabled as NoLegacy, Enabled as Legacy},
+        UnstableApiVersions::{self, Disabled as Strict, Enabled as Trunk},
+    };
+
+    let cases: &[(
+        i16,
+        &str,
+        i16,
+        UnstableApiVersions,
+        LegacyRequestVersions,
+        bool,
+    )] = &[
+        (22, "InitProducerId", 6, Strict, NoLegacy, true),
+        (22, "InitProducerId", 5, Strict, NoLegacy, false),
+        (22, "InitProducerId", 6, Trunk, NoLegacy, false),
+        (28, "TxnOffsetCommit", 6, Strict, NoLegacy, true),
+        (28, "TxnOffsetCommit", 6, Trunk, NoLegacy, false),
+        (88, "StreamsGroupHeartbeat", 1, Strict, NoLegacy, true),
+        (88, "StreamsGroupHeartbeat", 1, Trunk, NoLegacy, false),
+        (89, "StreamsGroupDescribe", 1, Strict, NoLegacy, true),
+        (
+            93,
+            "StreamsGroupTopologyDescriptionUpdate",
+            0,
+            Strict,
+            NoLegacy,
+            true,
+        ),
+        (
+            93,
+            "StreamsGroupTopologyDescriptionUpdate",
+            0,
+            Trunk,
+            NoLegacy,
+            false,
+        ),
+        (94, "UnregisterController", 0, Strict, NoLegacy, true),
+        (94, "UnregisterController", 0, Trunk, NoLegacy, false),
+        (0, "Produce", 2, Strict, NoLegacy, true),
+        (0, "Produce", 0, Trunk, NoLegacy, true),
+        (0, "Produce", 2, Strict, Legacy, false),
+        (1, "Fetch", 3, Strict, NoLegacy, true),
+        (1, "Fetch", 3, Strict, Legacy, false),
+        (2, "ListOffsets", 0, Strict, NoLegacy, true),
+        (2, "ListOffsets", 0, Strict, Legacy, false),
+    ];
+    for &(api_key, name, frame_version, unstable, legacy, refused) in cases {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        cfg.features.unstable_api_versions = unstable;
+        cfg.features.legacy_request_versions = legacy;
+        let (outcomes, metrics) =
+            drive_one_frame_per_connection(cfg, &[(api_key, frame_version)]).await;
+        let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
+        check!(outcomes == vec![Outcome::Closed], "{label}");
+        let metric = crate::metrics::ApiKeyLabel {
+            api_key: name.into(),
+        };
+        check!(
+            (metrics
+                .unsupported_api_requests
+                .get_or_create(&metric)
+                .get()
+                == 1)
+                == refused,
+            "{label}"
+        );
+    }
+}
+
+/// #784: `ApiVersions` v5 is Kafka trunk's KIP-1242 version. With
+/// `unstable.api.versions.enable` off the broker answers it as Kafka 4.3.1
+/// answers a version it does not know: `UNSUPPORTED_VERSION` in a v0 body
+/// naming v0-v4.
+#[tokio::test]
+async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled() {
+    use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let (outcomes, _) = drive_one_frame_per_connection(cfg, &[(API_VERSIONS_KEY, 5)]).await;
+    check!(
+        outcomes
+            == vec![Outcome::ApiVersionsV0(ApiVersionsResponse {
+                error_code: codes::UNSUPPORTED_VERSION,
+                api_keys: vec![ApiVersion {
+                    api_key: API_VERSIONS_KEY,
+                    min_version: 0,
+                    max_version: 4,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })]
+    );
 }
 
 /// Boots a broker, serves exactly one connection on a listener of `protocol`

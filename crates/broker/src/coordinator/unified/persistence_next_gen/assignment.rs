@@ -18,20 +18,25 @@
 //! - Current: `MemberEpoch` (int32), `PreviousMemberEpoch` (int32), `State`
 //!   (int8), `AssignedPartitions` and `PartitionsPendingRevocation`, both
 //!   `[]TopicPartitions{TopicId uuid, Partitions []int32}` with a tagged
-//!   `AssignmentEpochs` (tag 0, nullable, default null) the broker does not
-//!   set.
+//!   `AssignmentEpochs` (tag 0, nullable `[]int32`, default null). The
+//!   broker always writes it, one epoch per partition, as Kafka's
+//!   `GroupCoordinatorRecordHelpers.toTopicPartitions` does (KIP-1251).
 //!
 //! A `uuid` is sixteen raw bytes with no length prefix, arrays are compact, and
 //! each element struct as well as the message carries a tagged-field trailer.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use krabka_protocol::{ProtocolError, primitives::uuid::Uuid};
+use krabka_protocol::{
+    ProtocolError,
+    primitives::{array, fixed, uuid::Uuid},
+};
 
 use crate::{
     coordinator::unified::persistence::{
         flex::{
             get_compact_array_len, get_i32_array, get_uuid, put_compact_array_len,
-            put_empty_tagged_fields, put_i32_array, put_uuid, skip_tagged_fields,
+            put_empty_tagged_fields, put_i32_array, put_tagged_fields, put_uuid, read_tagged,
+            skip_tagged_fields,
         },
         get_i16, get_i32,
     },
@@ -93,13 +98,52 @@ impl MemberAssignmentState {
     }
 }
 
+/// The `TopicPartitions` struct of `ConsumerGroupCurrentMemberAssignmentValue`:
+/// the partitions of one topic and, in its tag 0, the epoch at which each was
+/// assigned to the member (KIP-1251).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentTopicPartitions {
+    pub topic_id: Uuid,
+    pub partitions: Vec<i32>,
+    /// The tagged `AssignmentEpochs`, of the same length as `partitions`.
+    /// `None` is the schema's null default, which the encoder omits.
+    pub assignment_epochs: Option<Vec<i32>>,
+}
+
+impl CurrentTopicPartitions {
+    /// The assignment epoch of each partition, as Kafka's
+    /// `Utils.assignmentFromTopicPartitions` reads them: from
+    /// `assignment_epochs` when it has one epoch per partition, and otherwise
+    /// `default_epoch`, raised to 0, for every partition.
+    #[must_use]
+    pub fn epochs(&self, default_epoch: i32) -> Vec<(i32, i32)> {
+        match &self.assignment_epochs {
+            Some(epochs) if epochs.len() == self.partitions.len() => self
+                .partitions
+                .iter()
+                .copied()
+                .zip(epochs.iter().copied())
+                .collect(),
+            _ => self
+                .partitions
+                .iter()
+                .map(|&partition| (partition, default_epoch.max(0)))
+                .collect(),
+        }
+    }
+}
+
+/// The tag of `AssignmentEpochs` in the current assignment's
+/// `TopicPartitions`.
+const TAG_ASSIGNMENT_EPOCHS: u32 = 0;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentMemberAssignmentValue {
     pub member_epoch: i32,
     pub previous_member_epoch: i32,
     pub state: MemberAssignmentState,
-    pub assigned_partitions: Vec<AssignedTopicPartitions>,
-    pub partitions_pending_revocation: Vec<AssignedTopicPartitions>,
+    pub assigned_partitions: Vec<CurrentTopicPartitions>,
+    pub partitions_pending_revocation: Vec<CurrentTopicPartitions>,
 }
 
 impl CurrentMemberAssignmentValue {
@@ -110,8 +154,8 @@ impl CurrentMemberAssignmentValue {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
-        encode_topic_partitions(&mut buf, &self.assigned_partitions);
-        encode_topic_partitions(&mut buf, &self.partitions_pending_revocation);
+        encode_current_topic_partitions(&mut buf, &self.assigned_partitions);
+        encode_current_topic_partitions(&mut buf, &self.partitions_pending_revocation);
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
@@ -127,8 +171,8 @@ impl CurrentMemberAssignmentValue {
             )));
         }
         let state = MemberAssignmentState::from_i8(buf.get_i8())?;
-        let assigned_partitions = decode_topic_partitions(&mut buf)?;
-        let partitions_pending_revocation = decode_topic_partitions(&mut buf)?;
+        let assigned_partitions = decode_current_topic_partitions(&mut buf)?;
+        let partitions_pending_revocation = decode_current_topic_partitions(&mut buf)?;
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
             member_epoch,
@@ -162,6 +206,58 @@ fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<AssignedTopicPartition
         });
     }
     Ok(out)
+}
+
+fn encode_current_topic_partitions(buf: &mut BytesMut, items: &[CurrentTopicPartitions]) {
+    put_compact_array_len(buf, items.len());
+    for tp in items {
+        put_uuid(buf, tp.topic_id.0);
+        put_i32_array(buf, &tp.partitions);
+        let mut tags = Vec::new();
+        if let Some(epochs) = &tp.assignment_epochs {
+            let mut payload = BytesMut::new();
+            put_i32_array(&mut payload, epochs);
+            tags.push((TAG_ASSIGNMENT_EPOCHS, payload.freeze()));
+        }
+        put_tagged_fields(buf, tags);
+    }
+}
+
+fn decode_current_topic_partitions(
+    buf: &mut &[u8],
+) -> Result<Vec<CurrentTopicPartitions>, BrokerError> {
+    let n = get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let topic_id = Uuid(get_uuid(buf)?);
+        let partitions = get_i32_array(buf)?;
+        let mut assignment_epochs = None;
+        read_tagged(buf, |tag, payload| {
+            if tag != TAG_ASSIGNMENT_EPOCHS {
+                return Ok(false);
+            }
+            assignment_epochs = get_nullable_i32_array(payload)?;
+            Ok(true)
+        })?;
+        out.push(CurrentTopicPartitions {
+            topic_id,
+            partitions,
+            assignment_epochs,
+        });
+    }
+    Ok(out)
+}
+
+/// Reads a compact nullable `[]int32`.
+fn get_nullable_i32_array(buf: &mut &[u8]) -> Result<Option<Vec<i32>>, ProtocolError> {
+    let Some(n) = array::get_nullable_array_len(buf, true)? else {
+        return Ok(None);
+    };
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push(fixed::get_i32(buf)?);
+    }
+    Ok(Some(out))
 }
 
 #[cfg(test)]
@@ -207,11 +303,16 @@ mod tests {
             member_epoch: 5,
             previous_member_epoch: 4,
             state: MemberAssignmentState::UnrevokedPartitions,
-            assigned_partitions: vec![AssignedTopicPartitions {
+            assigned_partitions: vec![CurrentTopicPartitions {
                 topic_id: Uuid([2; 16]),
-                partitions: vec![7],
+                partitions: vec![7, 8],
+                assignment_epochs: Some(vec![3, 5]),
             }],
-            partitions_pending_revocation: vec![],
+            partitions_pending_revocation: vec![CurrentTopicPartitions {
+                topic_id: Uuid([3; 16]),
+                partitions: vec![1],
+                assignment_epochs: None,
+            }],
         };
         let mut want: Vec<u8> = Vec::new();
         want.extend_from_slice(b"\x00\x00");
@@ -220,27 +321,87 @@ mod tests {
         want.push(0x01); // MemberState.UNREVOKED_PARTITIONS
         want.push(0x02); // one assigned TopicPartitions
         want.extend_from_slice(&[2u8; 16]);
-        want.push(0x02); // one partition
+        want.push(0x03); // two partitions
         want.extend_from_slice(&7i32.to_be_bytes());
-        want.push(0x00); // TopicPartitions tagged fields
-        want.push(0x01); // empty PartitionsPendingRevocation
+        want.extend_from_slice(&8i32.to_be_bytes());
+        want.push(0x01); // one tagged field
+        want.push(0x00); // tag 0, AssignmentEpochs
+        want.push(0x09); // payload size: 1 + 2 * 4
+        want.push(0x03); // two epochs
+        want.extend_from_slice(&3i32.to_be_bytes());
+        want.extend_from_slice(&5i32.to_be_bytes());
+        want.push(0x02); // one pending TopicPartitions
+        want.extend_from_slice(&[3u8; 16]);
+        want.push(0x02); // one partition
+        want.extend_from_slice(&1i32.to_be_bytes());
+        want.push(0x00); // null AssignmentEpochs is omitted
         want.push(0x00); // message tagged fields
-        assert!(&v.encode()[..] == &want[..]);
+        let encoded = v.encode();
+        assert!(&encoded[..] == &want[..]);
+        assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == v);
     }
 
+    /// Kafka's `Utils.assignmentFromTopicPartitions`: the stored epochs when
+    /// there is one per partition, and otherwise the member epoch raised to 0.
     #[test]
-    fn current_member_assignment_roundtrip() {
-        let v = CurrentMemberAssignmentValue {
-            member_epoch: 5,
-            previous_member_epoch: 4,
-            state: MemberAssignmentState::Stable,
-            assigned_partitions: vec![AssignedTopicPartitions {
-                topic_id: Uuid([2; 16]),
+    fn assignment_epochs_fall_back_to_the_member_epoch() {
+        type Row = (Option<Vec<i32>>, i32, Vec<(i32, i32)>);
+        let rows: [Row; 4] = [
+            (Some(vec![2, 4]), 6, vec![(0, 2), (1, 4)]),
+            (None, 6, vec![(0, 6), (1, 6)]),
+            (Some(vec![2]), 6, vec![(0, 6), (1, 6)]),
+            (None, -2, vec![(0, 0), (1, 0)]),
+        ];
+        let mut actual = Vec::new();
+        for (assignment_epochs, member_epoch, _) in &rows {
+            let tp = CurrentTopicPartitions {
+                topic_id: Uuid([1; 16]),
                 partitions: vec![0, 1],
+                assignment_epochs: assignment_epochs.clone(),
+            };
+            actual.push((
+                assignment_epochs.clone(),
+                *member_epoch,
+                tp.epochs(*member_epoch),
+            ));
+        }
+        assert!(actual == rows);
+    }
+
+    /// A null `AssignmentEpochs` written with the tag present decodes as
+    /// absent, and an unknown tag is skipped.
+    #[test]
+    fn current_topic_partitions_tag_decoding() {
+        let mut encoded = BytesMut::new();
+        encoded.put_i16(0);
+        encoded.put_i32(1);
+        encoded.put_i32(0);
+        encoded.put_i8(0);
+        encoded.put_u8(0x02); // one assigned TopicPartitions
+        encoded.extend_from_slice(&[4u8; 16]);
+        encoded.put_u8(0x02);
+        encoded.put_i32(0);
+        encoded.put_u8(0x02); // two tagged fields
+        encoded.put_u8(0x00); // tag 0
+        encoded.put_u8(0x01); // size 1
+        encoded.put_u8(0x00); // null array
+        encoded.put_u8(0x05); // unknown tag 5
+        encoded.put_u8(0x01);
+        encoded.put_u8(0x7f);
+        encoded.put_u8(0x01); // empty pending
+        encoded.put_u8(0x00);
+        let want = CurrentMemberAssignmentValue {
+            member_epoch: 1,
+            previous_member_epoch: 0,
+            state: MemberAssignmentState::Stable,
+            assigned_partitions: vec![CurrentTopicPartitions {
+                topic_id: Uuid([4; 16]),
+                partitions: vec![0],
+                assignment_epochs: None,
             }],
             partitions_pending_revocation: vec![],
         };
-        assert!(CurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
+        assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == want);
     }
 
     #[test]

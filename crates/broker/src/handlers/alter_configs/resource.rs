@@ -184,6 +184,7 @@ pub(super) async fn process_resource(
             &resource,
             image,
             krabka_metadata::NodeId(broker.config.node_id.0),
+            &broker.config.broker_log_dirs(),
         ) {
             Ok(records) => records,
             Err((code, message)) => {
@@ -192,7 +193,11 @@ pub(super) async fn process_resource(
                 return out;
             }
         },
-        RESOURCE_TYPE_GROUP => match group_config_record(&resource, &broker.config.streams_group) {
+        RESOURCE_TYPE_GROUP => match group_config_record(
+            &resource,
+            &broker.config.streams_group,
+            broker.config.features.unstable_api_versions,
+        ) {
             Ok(record) => vec![record],
             Err((code, message)) => {
                 out.error_code = code;

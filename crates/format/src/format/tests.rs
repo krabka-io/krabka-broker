@@ -476,3 +476,36 @@ async fn a_failed_format_is_not_mistaken_for_a_finished_one() {
     check!(log_dir.join("bootstrap.records.bin").is_file());
     check!(checkpoint_len(&log_dir) > 0, "the voter set must be seeded");
 }
+
+/// A directory whose `meta.properties.json` does not read is skipped with
+/// Kafka's message and the others are formatted, unless it is the metadata
+/// log directory, which Kafka refuses to continue without.
+#[tokio::test]
+async fn an_unreadable_marker_is_skipped_unless_it_is_the_metadata_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (meta_dir, data_dir) = (tmp.path().join("meta"), tmp.path().join("data"));
+    let unreadable = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir).expect("mkdir");
+        std::fs::write(dir.join(super::META_PROPERTIES), b"not json").expect("write");
+    };
+    let run = |first: &std::path::Path, second: &std::path::Path| {
+        crate::run_from_args([
+            "krabka-format".to_owned(),
+            "--log-dir".to_owned(),
+            first.display().to_string(),
+            "--log-dir".to_owned(),
+            second.display().to_string(),
+        ])
+    };
+
+    unreadable(&data_dir);
+    check!(run(&meta_dir, &data_dir).await == EXIT_OK);
+    check!(meta_dir.join(super::META_PROPERTIES).is_file());
+    check!(
+        std::fs::read(data_dir.join(super::META_PROPERTIES)).expect("left alone") == b"not json"
+    );
+
+    let other = tmp.path().join("other");
+    check!(run(&data_dir, &other).await == EXIT_DIRTY_LOG_DIR);
+    check!(!other.exists());
+}

@@ -175,15 +175,17 @@ pub fn partition_batches(batches: &[Vec<MetadataRecord>]) -> Vec<Vec<MetadataRec
         .collect()
 }
 
-/// The `(broker, fenced)` pairs of the registration changes a liveness tick
-/// published, in submission order.
-pub fn fencing_updates(batches: &[Vec<MetadataRecord>]) -> Vec<(u64, bool)> {
+/// The `(broker, fencing change)` pairs of the registration changes a liveness
+/// tick published, in submission order.
+pub fn fencing_updates(
+    batches: &[Vec<MetadataRecord>],
+) -> Vec<(u64, krabka_metadata::FencingChange)> {
     batches
         .iter()
         .flatten()
         .filter_map(|record| match record {
-            MetadataRecord::V1BrokerRegistration(registration) => {
-                Some((registration.node_id.0, registration.fenced))
+            MetadataRecord::V1BrokerRegistrationChange(change) => {
+                Some((change.node_id.0, change.fenced))
             }
             _ => None,
         })

@@ -75,6 +75,14 @@ pub struct RuntimeFileConfig {
     /// starts no telemetry handshake the broker has nowhere to forward. A
     /// configured `[telemetry]` OTLP endpoint turns them on without this key.
     pub client_metrics_enable: Option<bool>,
+    /// Whether the broker serves the request versions Kafka 4.x removed:
+    /// `Fetch` v0-v3, `ListOffsets` v0 and `Produce` v0-v2. krabka-only, with
+    /// no Kafka equivalent. The default is `false`, which advertises and
+    /// accepts exactly Kafka 4.3.1's minimums (`Fetch` v4, `ListOffsets` v1,
+    /// and `Produce` v3 though it is still advertised from v0, KAFKA-18659)
+    /// and closes a connection that sends an older version, as a 4.3.1 broker
+    /// does. `true` keeps a pre-0.11 client working.
+    pub legacy_request_versions_enable: Option<bool>,
     /// Cadence at which the KIP-714 client-metrics cache evicts entries.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
@@ -381,14 +389,6 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub socket_receive_buffer: Option<ByteSize>,
-    /// Maximum encoded ACL principal length.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub acl_max_principal: Option<ByteSize>,
-    /// Maximum encoded ACL resource-name length.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub acl_max_resource_name: Option<ByteSize>,
     /// Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`,
     /// Kafka's `max.request.partition.size.limit`.
     pub max_request_partition_size_limit: Option<i32>,
@@ -470,6 +470,27 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub share_cold_partition_snapshot_interval: Option<Time>,
+    /// Codec of the batches the share coordinator appends to
+    /// `__share_group_state`, Kafka's
+    /// `share.coordinator.state.topic.compression.codec`, as Kafka's codec
+    /// id: 0 none (the default), 1 gzip, 2 snappy, 3 lz4 or 4 zstd.
+    pub share_state_compression_codec: Option<i32>,
+    /// Kafka's `share.coordinator.threads`, at least 1. Accepted and has no
+    /// effect: the share coordinator runs as tasks on the broker's shared
+    /// async runtime rather than on a thread pool of its own.
+    pub share_coordinator_threads: Option<i32>,
+    /// Kafka's `share.coordinator.append.linger.ms`, a whole number of
+    /// milliseconds, or -1 (the default) for an adaptive linger. Accepted and
+    /// has no effect: each share-state write is its own append, and the
+    /// partition writer groups concurrent appends without waiting for more.
+    pub share_coordinator_append_linger_ms: Option<i32>,
+    /// Kafka's `share.coordinator.cached.buffer.max.bytes`, at least 512KiB,
+    /// default 1MiB plus 12 bytes. Accepted and has no effect: the share
+    /// coordinator encodes each record into a new buffer and keeps no buffer
+    /// for reuse.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub share_coordinator_cached_buffer_max_bytes: Option<ByteSize>,
     /// Partition count of the `__consumer_offsets` internal topic, Kafka's
     /// `offsets.topic.num.partitions`.
     pub offsets_topic_num_partitions: Option<i32>,
@@ -683,29 +704,80 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub share_group_heartbeat_interval: Option<Time>,
+    /// Lower bound on the share-group session timeout, and on a group's
+    /// `share.session.timeout.ms`, Kafka's
+    /// `group.share.min.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_group_min_session_timeout: Option<Time>,
+    /// Upper bound on the share-group session timeout, and on a group's
+    /// `share.session.timeout.ms`, Kafka's
+    /// `group.share.max.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_group_max_session_timeout: Option<Time>,
+    /// Lower bound on the share-group heartbeat interval, and on a group's
+    /// `share.heartbeat.interval.ms`, Kafka's
+    /// `group.share.min.heartbeat.interval.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_group_min_heartbeat_interval: Option<Time>,
+    /// Upper bound on the share-group heartbeat interval, and on a group's
+    /// `share.heartbeat.interval.ms`, Kafka's
+    /// `group.share.max.heartbeat.interval.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_group_max_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one share group, Kafka's
-    /// `group.share.max.size`.
+    /// `group.share.max.size`: from 1 to 1000.
     pub share_group_max_size: Option<usize>,
     /// How long an acquired share record stays locked before it is released
-    /// for redelivery, Kafka's `group.share.record.lock.duration.ms`.
+    /// for redelivery, Kafka's `group.share.record.lock.duration.ms`: a whole
+    /// number of milliseconds from 1s to 1h, within the minimum and maximum
+    /// below.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub share_group_record_lock_duration: Option<Time>,
-    /// Number of times a share record may be delivered before it is archived,
-    /// Kafka's `group.share.delivery.count.limit`.
-    pub share_group_max_delivery_attempts: Option<i16>,
+    /// Lower bound on the record lock duration, and on a group's
+    /// `share.record.lock.duration.ms`, Kafka's
+    /// `group.share.min.record.lock.duration.ms`: from 1s to 30s.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_group_min_record_lock_duration: Option<Time>,
+    /// Upper bound on the record lock duration, and on a group's
+    /// `share.record.lock.duration.ms`, Kafka's
+    /// `group.share.max.record.lock.duration.ms`: from 30s to 1h.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_group_max_record_lock_duration: Option<Time>,
+    /// The delivery count at which a share record is archived, Kafka's
+    /// `group.share.delivery.count.limit`: from 2 to 10, within the minimum
+    /// and maximum below.
+    pub share_group_delivery_count_limit: Option<i16>,
+    /// Lower bound on the delivery count limit, and on a group's
+    /// `share.delivery.count.limit`, Kafka's
+    /// `group.share.min.delivery.count.limit`: from 2 to 5.
+    pub share_group_min_delivery_count_limit: Option<i16>,
+    /// Upper bound on the delivery count limit, and on a group's
+    /// `share.delivery.count.limit`, Kafka's
+    /// `group.share.max.delivery.count.limit`: from 5 to 25.
+    pub share_group_max_delivery_count_limit: Option<i16>,
     /// Maximum records a share partition may hold in flight, Kafka's
-    /// `group.share.partition.max.record.locks`.
-    pub share_group_max_inflight_records: Option<i32>,
+    /// `group.share.partition.max.record.locks`: from 100 to 10000, within
+    /// the minimum and maximum below.
+    pub share_group_partition_max_record_locks: Option<i32>,
+    /// Lower bound on the record lock limit, and on a group's
+    /// `share.partition.max.record.locks`, Kafka's
+    /// `group.share.min.partition.max.record.locks`: from 100 to 2000.
+    pub share_group_min_partition_max_record_locks: Option<i32>,
+    /// Upper bound on the record lock limit, and on a group's
+    /// `share.partition.max.record.locks`, Kafka's
+    /// `group.share.max.partition.max.record.locks`: from 2000 to 10000.
+    pub share_group_max_partition_max_record_locks: Option<i32>,
     /// Cadence of the share-group backlog poll.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub share_group_backlog_poll_interval: Option<Time>,
-    /// Transaction isolation for share-group reads, Kafka's
-    /// `share.group.isolation.level`. Either `read-uncommitted`, which reads
-    /// up to the high watermark, or `read-committed`, which clamps reads to
-    /// the last stable offset.
-    pub share_group_isolation_level: Option<String>,
     /// Whether the broker serves KIP-1071 streams groups.
     pub streams_group_enable: Option<bool>,
     /// Default streams-group session timeout, the group's
@@ -723,6 +795,11 @@ pub struct RuntimeFileConfig {
     /// Number of standby replicas the assignor places for each task, the
     /// group's `streams.num.standby.replicas`.
     pub streams_group_num_standby_replicas: Option<i32>,
+    /// Client tag keys every streams-group member must send, Kafka's
+    /// `group.streams.rack.aware.assignment.tags` and the default of a
+    /// group's `streams.rack.aware.assignment.tags`. A repeated or an empty
+    /// tag key is refused.
+    pub streams_group_rack_aware_assignment_tags: Option<Vec<String>>,
     /// Maximum number of warm-up replicas the assignor may move at once, the
     /// group's `streams.num.warmup.replicas`.
     pub streams_group_num_warmup_replicas: Option<i32>,

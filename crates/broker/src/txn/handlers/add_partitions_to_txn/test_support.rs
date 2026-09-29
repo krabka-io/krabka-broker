@@ -68,3 +68,65 @@ pub(super) async fn seed_topic(broker: &crate::broker::Broker, topic: &str, part
         .await
         .unwrap_or_else(|error| panic!("seed topic {topic}: {error}"));
 }
+
+/// A broker that coordinates every transactional id, with topics `a` and `b`
+/// of one partition each, both led by this broker.
+///
+/// `transaction_state_num_partitions = 1` puts every transactional id on
+/// `__transaction_state-0`, and this returns once that partition is loaded,
+/// so [`seed_transaction`] and the handler both see a coordinator.
+pub(super) async fn start_coordinator(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = authorizer;
+        cfg.transaction_state_num_partitions = 1;
+        cfg.transaction_state_replication_factor = 1;
+    })
+    .await;
+    let broker = handle.broker_arc_for_test();
+    handle.wait_until_controller_leader().await;
+    handle.wait_until_brokers_registered(1).await;
+    handle.wait_until_transaction_coordinator_ready().await;
+    seed_topic(&broker, "a", 1).await;
+    seed_topic(&broker, "b", 1).await;
+    (handle, dir)
+}
+
+/// Opens an empty transaction for `tid` under `producer_id` at producer epoch
+/// 2 on a broker [`start_coordinator`] started.
+pub(super) async fn seed_transaction(broker: &crate::broker::Broker, tid: &str, producer_id: i64) {
+    let txnv = crate::txn::version::resolve_txn_version(&broker.controller.current_image());
+    broker
+        .txn_coordinator
+        .put(
+            crate::txn::state::TxnEntry::new_empty(
+                tid.to_owned(),
+                krabka_log::ProducerId(producer_id),
+                2,
+                30_000,
+                0,
+            ),
+            txnv,
+        )
+        .await
+        .expect("seed the open transaction");
+}
+
+/// The `(topic, partition)` pairs `tid`'s transaction holds.
+pub(super) async fn enlisted(
+    broker: &crate::broker::Broker,
+    tid: &str,
+) -> std::collections::BTreeSet<(String, i32)> {
+    broker
+        .txn_coordinator
+        .get(tid)
+        .expect("open transaction")
+        .lock()
+        .await
+        .partitions
+        .iter()
+        .map(|tp| (tp.topic.clone(), tp.partition.get()))
+        .collect()
+}

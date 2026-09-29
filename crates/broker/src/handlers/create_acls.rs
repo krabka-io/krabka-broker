@@ -17,7 +17,6 @@ use krabka_metadata::MetadataRecord;
 use krabka_protocol::owned::{
     create_acls_request::CreateAclsRequest, create_acls_response::AclCreationResult,
 };
-use krabka_units::convert::ByteSizeExt as _;
 
 mod audit;
 mod response;
@@ -123,19 +122,14 @@ pub(crate) async fn handle(
     // a single time and passes it into `validateNewAcl` for every creation.
     // `require_feature` is deliberately not used here: it passes any
     // unfinalized metadata.version, whereas `cidr_hosts_supported` compares
-    // this binary's own highest level against the CIDR floor.
+    // the bootstrap level, 4.3-IV0, against the CIDR floor.
     let cidr_hosts_supported = crate::features::cidr_hosts_supported(&image);
 
     let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());
     let mut to_submit: Vec<(usize, MetadataRecord)> = Vec::with_capacity(req.creations.len());
 
     for c in &req.creations {
-        match validate(
-            c,
-            broker.config.acl_max_principal.bytes_usize(),
-            broker.config.acl_max_resource_name.bytes_usize(),
-            cidr_hosts_supported,
-        ) {
+        match validate(c, cidr_hosts_supported) {
             Ok(entry) => {
                 let idx = results.len();
                 results.push(acl_success_result());

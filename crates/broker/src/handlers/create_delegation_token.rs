@@ -4,6 +4,10 @@
 //! `allowTokenRequests`, and
 //! `DelegationTokenControlManager.createDelegationToken`, in their order:
 //!
+//! 0. An owner name with a null owner type cannot be built into a
+//!    `KafkaPrincipal`. Kafka answers `UNKNOWN_SERVER_ERROR` (-1) with
+//!    `ANONYMOUS` as owner and requester, from
+//!    `CreateDelegationTokenRequest.getErrorResponse`.
 //! 1. `allowTokenRequests` refuses a caller that is not securely
 //!    authenticated, or that authenticated with a delegation token, with
 //!    `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64). KIP-48 forbids a token
@@ -103,7 +107,13 @@ pub(crate) async fn handle(
     let requester = auth
         .principal()
         .map_or_else(anonymous_principal, krabka_security::Principal::to_kafka);
-    let owner = resolve_owner(req, &requester);
+    // Kafka resolves the owner before any check. When the constructor throws,
+    // `KafkaApis.handle` answers through `getErrorResponse`, which names
+    // ANONYMOUS as both principals.
+    let Some(owner) = resolve_owner(req, &requester) else {
+        let anonymous = anonymous_principal();
+        return broker_refusal(crate::codes::UNKNOWN_SERVER_ERROR, &anonymous, &anonymous);
+    };
 
     if auth.token_api_admission(TokenApi::Create) == TokenApiAdmission::Reject {
         return broker_refusal(

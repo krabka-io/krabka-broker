@@ -34,6 +34,10 @@ use crate::partition::Partition;
 pub(crate) struct PartitionRegistry {
     inner: DashMap<Arc<str>, DashMap<PartitionIndex, Arc<Partition>>>,
     preferred_log_dirs: DashMap<(uuid::Uuid, PartitionIndex), std::path::PathBuf>,
+    /// KIP-1066: the log directories this broker holds cordoned, which new
+    /// partition directories avoid. It lives beside the preferred directories
+    /// because both decide where a partition this broker opens goes.
+    cordoned_log_dirs: crate::cordoned_log_dirs::CordonedLogDirs,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 }
 
@@ -52,8 +56,25 @@ impl PartitionRegistry {
         Self {
             inner: DashMap::new(),
             preferred_log_dirs: DashMap::new(),
+            cordoned_log_dirs: crate::cordoned_log_dirs::CordonedLogDirs::default(),
             stamp_source,
         }
+    }
+
+    /// Hold `cordoned` as the set of cordoned log directories.
+    #[must_use]
+    pub(crate) fn with_cordoned_log_dirs(
+        mut self,
+        cordoned: crate::cordoned_log_dirs::CordonedLogDirs,
+    ) -> Self {
+        self.cordoned_log_dirs = cordoned;
+        self
+    }
+
+    /// The log directories this broker holds cordoned.
+    #[must_use]
+    pub(crate) fn cordoned_log_dirs(&self) -> &crate::cordoned_log_dirs::CordonedLogDirs {
+        &self.cordoned_log_dirs
     }
 
     /// Return the source to install on a newly opened partition log.

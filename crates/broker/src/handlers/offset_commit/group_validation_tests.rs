@@ -17,15 +17,21 @@ use krabka_protocol::owned::{
     },
 };
 
-use super::handle;
+use super::{WireUuid, handle};
 use crate::{
     authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::{Broker, BrokerHandle},
     codes,
     coordinator::unified::{
+        GroupSeed,
         actor::{GroupActorMessage, GroupKindTag},
         classic_state::{ClassicGroup, GroupState, Member},
         group::{CoordinatorGroup, GroupKind},
+        persistence_next_gen::{
+            AssignedTopicPartitions, ClassicMemberMetadata, CurrentMemberAssignmentValue,
+            CurrentTopicPartitions, MemberAssignmentState, MemberMetadataValue,
+            TargetAssignmentMemberValue,
+        },
     },
     test_support::{
         decode_response, dispatch_context, encode_request, peer, principal, request_context,
@@ -59,14 +65,22 @@ struct Case {
     error_code: i16,
 }
 
+/// The partitions of `TOPIC` in the KIP-1251 test: partition 2 exists but is
+/// assigned to no member.
+const KIP_1251_TOPIC_PARTITIONS: i32 = 3;
+
 async fn create_topic(broker: &Broker) {
+    create_topic_with_partitions(broker, 1).await;
+}
+
+async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
     let admin = principal("admin");
     let address = peer();
     let ctx = request_context(&admin, &address, "group-validation-admin");
     let request = CreateTopicsRequest {
         topics: vec![CreatableTopic {
             name: TOPIC.to_string(),
-            num_partitions: 1,
+            num_partitions,
             replication_factor: 1,
             ..Default::default()
         }],
@@ -413,5 +427,233 @@ async fn oversized_metadata_is_refused_through_the_handler() {
         ..Default::default()
     };
     assert!((response, committed.is_empty()) == (expected, true));
+    broker.shutdown().await;
+}
+
+/// The consumer group that one KIP-1251 row commits to: `native` and
+/// `classic` at member epoch 5, each assigned partition 0 at epoch 3 and
+/// partition 1 at epoch 5, restored from records as a coordinator failover
+/// restores them.
+fn consumer_group_seed(topic_id: WireUuid) -> GroupSeed {
+    let metadata = |classic: bool| MemberMetadataValue {
+        instance_id: None,
+        rack_id: None,
+        client_id: "client".into(),
+        client_host: "/127.0.0.1".into(),
+        subscribed_topic_names: vec![TOPIC.into()],
+        subscribed_topic_regex: None,
+        server_assignor: None,
+        rebalance_timeout_ms: 60_000,
+        classic: classic.then(|| ClassicMemberMetadata {
+            session_timeout_ms: 45_000,
+            supported_protocols: vec![("range".into(), bytes::Bytes::new())],
+        }),
+    };
+    let current = CurrentMemberAssignmentValue {
+        member_epoch: 5,
+        previous_member_epoch: 4,
+        state: MemberAssignmentState::Stable,
+        assigned_partitions: vec![CurrentTopicPartitions {
+            topic_id,
+            partitions: vec![0, 1],
+            assignment_epochs: Some(vec![3, 5]),
+        }],
+        partitions_pending_revocation: vec![],
+    };
+    let target = TargetAssignmentMemberValue {
+        topic_partitions: vec![AssignedTopicPartitions {
+            topic_id,
+            partitions: vec![0, 1],
+        }],
+    };
+    GroupSeed {
+        group_epoch: 5,
+        target_epoch: 5,
+        members: [
+            ("native".to_string(), metadata(false)),
+            ("classic".to_string(), metadata(true)),
+        ]
+        .into(),
+        target_per_member: [
+            ("native".to_string(), target.clone()),
+            ("classic".to_string(), target),
+        ]
+        .into(),
+        current_per_member: [
+            ("native".to_string(), current.clone()),
+            ("classic".to_string(), current),
+        ]
+        .into(),
+    }
+}
+
+/// Issue #800's table through the `OffsetCommit` handler at v9: Kafka 4.3.1's
+/// `ConsumerGroup.validateOffsetCommit` with the KIP-1251 per-partition
+/// assignment-epoch validator. A refusal answers every committed row.
+#[tokio::test]
+async fn consumer_group_commit_follows_kip_1251() {
+    struct Row {
+        member_id: &'static str,
+        epoch: i32,
+        version: i16,
+        partitions: &'static [i32],
+        error_code: i16,
+    }
+    let rows = [
+        // Native member.
+        Row {
+            member_id: "native",
+            epoch: 5,
+            version: 9,
+            partitions: &[0, 1],
+            error_code: codes::NONE,
+        },
+        Row {
+            member_id: "native",
+            epoch: 6,
+            version: 9,
+            partitions: &[0],
+            error_code: codes::STALE_MEMBER_EPOCH,
+        },
+        Row {
+            member_id: "native",
+            epoch: 4,
+            version: 9,
+            partitions: &[0],
+            error_code: codes::NONE,
+        },
+        Row {
+            member_id: "native",
+            epoch: 4,
+            version: 9,
+            partitions: &[1],
+            error_code: codes::STALE_MEMBER_EPOCH,
+        },
+        Row {
+            member_id: "native",
+            epoch: 4,
+            version: 9,
+            partitions: &[2],
+            error_code: codes::STALE_MEMBER_EPOCH,
+        },
+        Row {
+            member_id: "native",
+            epoch: 5,
+            version: 8,
+            partitions: &[0],
+            error_code: codes::UNSUPPORTED_VERSION,
+        },
+        // Classic-protocol member.
+        Row {
+            member_id: "classic",
+            epoch: 6,
+            version: 9,
+            partitions: &[0],
+            error_code: codes::ILLEGAL_GENERATION,
+        },
+        Row {
+            member_id: "classic",
+            epoch: 4,
+            version: 9,
+            partitions: &[0],
+            error_code: codes::NONE,
+        },
+        Row {
+            member_id: "classic",
+            epoch: 4,
+            version: 9,
+            partitions: &[1],
+            error_code: codes::ILLEGAL_GENERATION,
+        },
+        Row {
+            member_id: "classic",
+            epoch: 4,
+            version: 8,
+            partitions: &[0],
+            error_code: codes::NONE,
+        },
+    ];
+    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let shared = broker.broker_arc_for_test();
+    create_topic_with_partitions(&shared, KIP_1251_TOPIC_PARTITIONS).await;
+    for partition in 0..KIP_1251_TOPIC_PARTITIONS {
+        broker.wait_until_partition_present(TOPIC, partition).await;
+    }
+    let topic_id = WireUuid(
+        shared
+            .controller
+            .current_image()
+            .topic(TOPIC)
+            .expect("topic")
+            .topic_id
+            .into_bytes(),
+    );
+    let user = principal("consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "consumer-client");
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let group_id = format!("kip-1251-{i}");
+        let actor = shared.group_coordinator.get_or_create_consumer(&group_id);
+        actor
+            .tx
+            .send(GroupActorMessage::Seed(consumer_group_seed(topic_id)))
+            .await
+            .expect("seed");
+        let request = OffsetCommitRequest {
+            group_id,
+            generation_id_or_member_epoch: row.epoch,
+            member_id: row.member_id.into(),
+            topics: vec![OffsetCommitRequestTopic {
+                name: TOPIC.into(),
+                partitions: row
+                    .partitions
+                    .iter()
+                    .map(|&partition_index| OffsetCommitRequestPartition {
+                        partition_index,
+                        committed_offset: 42,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let bytes = handle(
+            &shared,
+            row.version,
+            7,
+            &encode_request(&request, row.version),
+            &ctx,
+        )
+        .await
+        .expect("handle offset commit");
+        let response: OffsetCommitResponse = decode_response(&bytes, row.version);
+        actual.push((row.member_id, row.epoch, row.version, response));
+        expected.push((
+            row.member_id,
+            row.epoch,
+            row.version,
+            OffsetCommitResponse {
+                topics: vec![OffsetCommitResponseTopic {
+                    name: TOPIC.into(),
+                    partitions: row
+                        .partitions
+                        .iter()
+                        .map(|&partition_index| OffsetCommitResponsePartition {
+                            partition_index,
+                            error_code: row.error_code,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ));
+    }
+    assert!(actual == expected);
     broker.shutdown().await;
 }

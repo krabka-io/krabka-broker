@@ -444,7 +444,16 @@ mod tests {
         use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
 
         let image = MetadataImage::new(Uuid::nil());
-        let av = api_versions_response_body(4, &image, None);
+        let av = api_versions_response_body(
+            4,
+            crate::server::api_versions::ApiVersionsView {
+                image: &image,
+                metadata_offset: -1,
+                admin_router: None,
+                unstable: crate::UnstableApiVersions::Disabled,
+                unstable_features: crate::UnstableFeatureVersions::Disabled,
+            },
+        );
         let mut cur = &av[..];
         let avr = ApiVersionsResponse::decode(&mut cur, 4).unwrap();
         check!(avr.api_keys.iter().any(|k| k.api_key == 60));

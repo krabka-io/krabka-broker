@@ -57,12 +57,16 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
 /// Parse one `--initial-controllers` entry: `id@host:port:directory-id`.
 ///
 /// The directory uuid is the trailing colon-delimited field, so we split
-/// it off the right first, then peel `host:port` off the remainder.
+/// it off the right first, then peel `host:port` off the remainder. It is in
+/// Kafka's base64 form, as `kafka-storage format` takes it, or the hyphenated
+/// form.
 fn parse_initial_controller(spec: &str) -> Result<Voter, String> {
     let (id_part, rest) = spec.split_once('@').ok_or("missing '@'")?;
     let id = krabka_metadata::NodeId(id_part.parse::<u64>().map_err(|_| "bad id")?);
     let (host_port, dir_part) = rest.rsplit_once(':').ok_or("missing directory uuid")?;
-    let dir: Uuid = dir_part.parse().map_err(|_| "bad directory uuid")?;
+    let dir: Uuid = DirectoryId::parse_cli(dir_part)
+        .map_err(|_| "bad directory uuid")?
+        .into();
     if dir.is_nil() {
         return Err("directory uuid must not be nil".into());
     }
@@ -179,6 +183,14 @@ mod tests {
                 kraft_version: KRaftVersionRange { min: 0, max: 1 },
             }
         );
+    }
+
+    /// The directory id takes Kafka's base64 form too, which is what
+    /// `kafka-storage format --initial-controllers` takes.
+    #[test]
+    fn parses_initial_controller_spec_with_a_kafka_directory_id() {
+        let v = parse_initial_controller("3@host:9093:AAAAAAAAAAAAAAAAAAAAAw").unwrap();
+        assert2::assert!(v.directory_id == Uuid::from_u128(3));
     }
 
     #[test]

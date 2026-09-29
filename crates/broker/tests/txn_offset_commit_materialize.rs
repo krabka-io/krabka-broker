@@ -215,6 +215,8 @@ async fn begin_and_commit_offsets(
 
     // TxnOffsetCommit: empty member_id + generation_id -1 = simple consumer (no
     // membership fencing). Appends a transactional offset record + buffers it.
+    // The client negotiates v6 (KIP-1319), which names the topic by id only.
+    let topic_id = topic_id_for(client).await;
     let toc = client
         .send(TxnOffsetCommitRequest {
             transactional_id: tid.into(),
@@ -225,6 +227,7 @@ async fn begin_and_commit_offsets(
             member_id: String::new(),
             topics: vec![TxnOffsetCommitRequestTopic {
                 name: TOPIC.into(),
+                topic_id,
                 partitions: vec![TxnOffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: offset,

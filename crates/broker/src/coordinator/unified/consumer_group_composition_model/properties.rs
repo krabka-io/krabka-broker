@@ -208,7 +208,7 @@ impl Model for CgcModel {
             ),
             // The real OffsetCommit epoch fence agrees with the independent oracle
             // is enforced as a per-transition equality assertion in the Commit arm (a
-            // divergence is a real `validate_commit_decision` regression). The
+            // divergence is a real `validate_offset_commit` regression). The
             // value here is the COMPOSITION: the epochs that fence drives are set
             // by the real reconciliation, so a zombie from before a rebalance is
             // rejected — see the `member_epoch_advanced` witness.
@@ -224,6 +224,16 @@ impl Model for CgcModel {
             // zombie scenario: a stale commit after a rebalance bumped the epoch).
             Property::sometimes("member_epoch_advanced", |_, s: &CgcState| {
                 s.members.iter().any(|m| m.member_epoch >= 2)
+            }),
+            // KIP-1251: a member holds a partition from an epoch older than its
+            // current one, so a `Stale` commit of that partition is accepted
+            // and the per-partition half of the fence is exercised.
+            Property::sometimes("stale_epoch_partition_witness", |_, s: &CgcState| {
+                s.members.iter().any(|m| {
+                    m.assignment_epochs
+                        .iter()
+                        .any(|&(_, assigned_at)| assigned_at < m.member_epoch)
+                })
             }),
             // A handoff state: a partition is in one member's target while another
             // member currently owns it (the baton is mid-pass).

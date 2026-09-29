@@ -2,9 +2,12 @@
 //! defaults and broker synonyms, and `GroupConfig.validate` for the keys
 //! krabka's coordinators apply.
 //!
-//! Kafka trunk defines 27 group keys. krabka's streams coordinator applies
-//! the seven `streams.*` keys it runs with, and its share partitions apply
-//! `share.auto.offset.reset`. The streams coordinator reads a group's whole
+//! Kafka trunk defines 27 group keys, seven of which Kafka 4.3.1 does not
+//! have ([`KAFKA_TRUNK_GROUP_KEYS`]). Those seven are reported and accepted
+//! only under `unstable.api.versions.enable`; otherwise the group resource is
+//! 4.3.1's, and naming one in an alter is refused as 4.3.1 refuses an unknown
+//! key. krabka's streams coordinator applies the eight `streams.*` keys it
+//! runs with, and its share partitions apply `share.auto.offset.reset`. The streams coordinator reads a group's whole
 //! stored override map and ignores it all when one key is foreign to it, so
 //! an alter that stored any other group key would silently drop the streams
 //! overrides beside it. Those keys are therefore reported by
@@ -205,9 +208,35 @@ pub(crate) const KAFKA_GROUP_KEYS: &[GroupKey] = {
     ]
 };
 
-/// The row for one Kafka group key.
-pub(crate) fn kafka_group_key(name: &str) -> Option<&'static GroupKey> {
-    KAFKA_GROUP_KEYS.iter().find(|key| key.name == name)
+/// The group keys Kafka trunk's `GroupConfig` defines and Kafka 4.3.1's does
+/// not.
+pub(crate) const KAFKA_TRUNK_GROUP_KEYS: &[&str] = &[
+    "errors.deadletterqueue.copy.record.enable",
+    "errors.deadletterqueue.topic.name",
+    "streams.acceptable.recovery.lag",
+    "streams.assignor.name",
+    "streams.num.warmup.replicas",
+    "streams.rack.aware.assignment.tags",
+    "streams.task.offset.interval.ms",
+];
+
+/// The group keys a broker serves under `unstable`: Kafka 4.3.1's
+/// `GroupConfig` by default, trunk's with unstable api versions enabled.
+pub(crate) fn served_group_keys(
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> impl Iterator<Item = &'static GroupKey> {
+    KAFKA_GROUP_KEYS.iter().filter(move |key| {
+        unstable == crate::api_catalog::UnstableApiVersions::Enabled
+            || !KAFKA_TRUNK_GROUP_KEYS.contains(&key.name)
+    })
+}
+
+/// The row for one group key served under `unstable`.
+pub(crate) fn kafka_group_key(
+    name: &str,
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> Option<&'static GroupKey> {
+    served_group_keys(unstable).find(|key| key.name == name)
 }
 
 /// A registry-shaped row for a Kafka group key that has none of its own:
@@ -244,7 +273,9 @@ fn millis(duration: std::time::Duration) -> i32 {
 }
 
 /// Kafka's `GroupConfig.validate` over a group's resulting override map,
-/// with the broker bounds `streams` runs under.
+/// with the broker bounds `streams` runs under. A key the broker does not
+/// serve under `unstable` is `Unknown group config name`, Kafka's
+/// `GroupConfig.validateNames` text.
 ///
 /// # Errors
 /// Returns Kafka's `InvalidConfigurationException` or `ConfigException`
@@ -252,9 +283,10 @@ fn millis(duration: std::time::Duration) -> i32 {
 pub(crate) fn validate_group_configs(
     overrides: &BTreeMap<String, String>,
     streams: &StreamsGroupConfig,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<(), String> {
     for name in overrides.keys() {
-        if kafka_group_key(name).is_none() {
+        if kafka_group_key(name, unstable).is_none() {
             return Err(format!("Unknown group config name: {name}"));
         }
         if !GROUP_CONFIG_KEYS.contains(&name.as_str()) {
@@ -359,6 +391,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
+    use crate::api_catalog::UnstableApiVersions;
 
     #[test]
     fn group_overrides_are_validated_with_kafkas_rules_and_messages() {
@@ -411,10 +444,51 @@ mod tests {
         for ((key, value), want) in cases {
             let overrides = BTreeMap::from([(key.to_owned(), value.to_owned())]);
             check!(
-                validate_group_configs(&overrides, &StreamsGroupConfig::default()) == want,
+                validate_group_configs(
+                    &overrides,
+                    &StreamsGroupConfig::default(),
+                    UnstableApiVersions::Enabled,
+                ) == want,
                 "{key}={value}"
             );
         }
+    }
+
+    /// #784: with `unstable.api.versions.enable` off a group resource is
+    /// Kafka 4.3.1's, so each Kafka trunk group key is refused with 4.3.1's
+    /// `GroupConfig.validateNames` text, and accepted when it is on.
+    #[test]
+    fn trunk_group_keys_need_unstable_api_versions() {
+        for key in KAFKA_TRUNK_GROUP_KEYS {
+            let value = match *key {
+                KEY_TASK_OFFSET_INTERVAL_MS => "15000",
+                KEY_ASSIGNOR_NAME => "sticky",
+                "errors.deadletterqueue.copy.record.enable" => "false",
+                _ => "1",
+            };
+            let overrides = BTreeMap::from([((*key).to_owned(), value.to_owned())]);
+            let streams = StreamsGroupConfig::default();
+            check!(
+                validate_group_configs(&overrides, &streams, UnstableApiVersions::Disabled)
+                    == Err(format!("Unknown group config name: {key}")),
+                "{key}"
+            );
+            let supported = GROUP_CONFIG_KEYS.contains(key);
+            check!(
+                validate_group_configs(&overrides, &streams, UnstableApiVersions::Enabled).is_ok()
+                    == supported,
+                "{key}"
+            );
+        }
+        let strict: Vec<&str> = served_group_keys(UnstableApiVersions::Disabled)
+            .map(|key| key.name)
+            .collect();
+        check!(strict.len() == 20);
+        check!(
+            !strict
+                .iter()
+                .any(|name| KAFKA_TRUNK_GROUP_KEYS.contains(name))
+        );
     }
 
     #[test]
@@ -426,7 +500,7 @@ mod tests {
         let overrides =
             BTreeMap::from([(KEY_HEARTBEAT_INTERVAL_MS.to_owned(), "45000".to_owned())]);
         check!(
-            validate_group_configs(&overrides, &streams)
+            validate_group_configs(&overrides, &streams, UnstableApiVersions::Enabled)
                 == Err(
                     "streams.session.timeout.ms must be greater than streams.heartbeat.interval.ms"
                         .to_owned()
@@ -442,7 +516,10 @@ mod tests {
         sorted.sort_unstable();
         check!(names == sorted);
         for key in GROUP_CONFIG_KEYS {
-            check!(kafka_group_key(key).is_some(), "{key}");
+            check!(
+                kafka_group_key(key, UnstableApiVersions::Enabled).is_some(),
+                "{key}"
+            );
         }
     }
 }

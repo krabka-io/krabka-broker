@@ -93,10 +93,10 @@ pub(crate) async fn handle(
     // `BROKER_ID_NOT_REGISTERED` with Kafka's message. It runs before the
     // break-glass gate so that a typo in the id does not spend an approval
     // that a real unregistration still needs.
-    let Some(node_id) = u64::try_from(req.broker_id)
+    let Some((node_id, broker_epoch)) = u64::try_from(req.broker_id)
         .ok()
         .map(NodeId)
-        .filter(|id| image.broker(*id).is_some())
+        .and_then(|id| Some((id, image.broker_epoch(id)?)))
     else {
         let resp = response(
             codes::BROKER_ID_NOT_REGISTERED,
@@ -110,7 +110,13 @@ pub(crate) async fn handle(
 
     // KFC-9: the two-person rule, and the records it makes this append carry.
     let target = broker_target(node_id);
-    let records = match unregister_records(&image, &broker.config.break_glass, node_id, now_ms()) {
+    let records = match unregister_records(
+        &image,
+        &broker.config.break_glass,
+        node_id,
+        broker_epoch,
+        now_ms(),
+    ) {
         Ok(records) => records,
         Err(denial) => {
             let message = denial.to_string();

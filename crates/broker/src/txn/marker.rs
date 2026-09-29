@@ -30,36 +30,100 @@ impl MarkerType {
     }
 }
 
-/// How the `EndTxn` marker fan-out should react to one partition's marker
-/// write failing.
-///
-/// Kafka's `TransactionMarkerRequestCompletionHandler` classifies every
-/// per-partition `WriteTxnMarkers` code this way: a retriable code goes back
-/// into the retry queue for that partition alone, and a fencing code cancels
-/// the whole fan-out for this producer generation (a newer generation has
-/// already superseded it, so retrying cannot succeed and must not corrupt
-/// state). Every other outcome -- including a code this broker does not
-/// otherwise recognize -- is treated as retriable, since retrying is always
-/// safe (`append_marker_and_materialize` is idempotent per generation) while
-/// giving up early is not (#882).
+/// `UNSUPPORTED_FOR_MESSAGE_FORMAT` (43). Nothing in this broker raises it,
+/// so it has no constant in [`codes`]; the marker classification still has to
+/// name it.
+const UNSUPPORTED_FOR_MESSAGE_FORMAT: i16 = 43;
+
+/// What the `EndTxn` marker fan-out does with one partition's
+/// `WriteTxnMarkers` answer, one variant per branch of Kafka's
+/// `TransactionMarkerRequestCompletionHandler.onComplete`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MarkerCodeClass {
+    /// `NONE`: the marker is written, and the partition leaves the pending
+    /// set.
+    Written,
+    /// `UNSUPPORTED_FOR_MESSAGE_FORMAT` or `UNSUPPORTED_VERSION`: the producer
+    /// could not have written to the partition either, so it leaves the
+    /// pending set without a marker.
+    Dropped,
+    /// `UNKNOWN_TOPIC_OR_PARTITION`, `NOT_LEADER_OR_FOLLOWER`,
+    /// `NOT_ENOUGH_REPLICAS`, `NOT_ENOUGH_REPLICAS_AFTER_APPEND`,
+    /// `REQUEST_TIMED_OUT` or `KAFKA_STORAGE_ERROR`: retry this partition.
+    Retriable,
+    /// `INVALID_PRODUCER_EPOCH` or `TRANSACTION_COORDINATOR_FENCED`: a newer
+    /// producer or coordinator generation superseded this fan-out, so it is
+    /// cancelled.
+    Fenced,
+    /// Any other code. Kafka names `CORRUPT_MESSAGE`, `MESSAGE_TOO_LARGE`,
+    /// `RECORD_LIST_TOO_LARGE` and `INVALID_REQUIRED_ACKS` as fatal and
+    /// throws `IllegalStateException` for them and for every code it does not
+    /// list. The throw ends the completion handler without re-enqueuing a
+    /// marker or writing the completion, so the transaction stays prepared
+    /// until the coordinator reloads its partition and sends the markers
+    /// again.
+    Unexpected,
+}
+
+/// Classify one partition's `WriteTxnMarkers` error code the way Kafka's
+/// `TransactionMarkerRequestCompletionHandler` does.
+pub(crate) fn classify_marker_code(code: i16) -> MarkerCodeClass {
+    match code {
+        codes::NONE => MarkerCodeClass::Written,
+        UNSUPPORTED_FOR_MESSAGE_FORMAT | codes::UNSUPPORTED_VERSION => MarkerCodeClass::Dropped,
+        codes::UNKNOWN_TOPIC_OR_PARTITION
+        | codes::NOT_LEADER_OR_FOLLOWER
+        | codes::NOT_ENOUGH_REPLICAS
+        | codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND
+        | codes::REQUEST_TIMED_OUT
+        | codes::KAFKA_STORAGE_ERROR => MarkerCodeClass::Retriable,
+        codes::INVALID_PRODUCER_EPOCH | codes::TRANSACTION_COORDINATOR_FENCED => {
+            MarkerCodeClass::Fenced
+        }
+        _ => MarkerCodeClass::Unexpected,
+    }
+}
+
+/// How the `EndTxn` marker fan-out reacts to one partition's marker write
+/// failing. A [`MarkerCodeClass::Written`] or [`MarkerCodeClass::Dropped`]
+/// answer is not a failure, so it has no variant here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MarkerFailureClass {
     /// Retry this partition; the fan-out has not been superseded.
     Retriable,
     /// A newer producer or coordinator generation has fenced this fan-out.
     /// Retrying cannot succeed, so the fan-out must stop.
-    Fatal,
+    Fenced,
+    /// The leader answered a code Kafka's completion handler treats as an
+    /// illegal state. The fan-out stops, and the transaction waits in its
+    /// `Prepare*` state for the coordinator's next load to resend it.
+    Unexpected,
 }
 
-/// Classify one marker-write failure by the wire code it maps to.
+impl MarkerFailureClass {
+    /// Whether this failure ends the fan-out instead of queueing a retry.
+    pub(crate) fn stops_fan_out(self) -> bool {
+        match self {
+            MarkerFailureClass::Retriable => false,
+            MarkerFailureClass::Fenced | MarkerFailureClass::Unexpected => true,
+        }
+    }
+}
+
+/// Classify one marker-write failure.
 ///
 /// Both the local append path
 /// ([`append_marker_and_materialize`](crate::txn::handlers::write_txn_markers::append_marker_and_materialize),
 /// via [`BrokerError::ProducerEpochFenced`] / [`BrokerError::CoordinatorEpochFenced`])
 /// and the remote `WriteTxnMarkers` RPC (via [`BrokerError::MarkerWriteRefused`])
-/// go through this one classification, so a fenced producer or coordinator
+/// go through [`classify_marker_code`], so a fenced producer or coordinator
 /// generation cancels the fan-out the same way whether the failing partition
 /// is local or remote.
+///
+/// Every other error carries no wire code: the leader could not be reached,
+/// its response did not name the partition, or the local append failed on
+/// the way. Kafka re-enqueues every marker of a request whose connection
+/// dropped, so those retry.
 pub(crate) fn classify_marker_failure(error: &BrokerError) -> MarkerFailureClass {
     let code = match error {
         BrokerError::ProducerEpochFenced { .. } => codes::INVALID_PRODUCER_EPOCH,
@@ -67,11 +131,14 @@ pub(crate) fn classify_marker_failure(error: &BrokerError) -> MarkerFailureClass
         BrokerError::MarkerWriteRefused { code, .. } => *code,
         _ => return MarkerFailureClass::Retriable,
     };
-    match code {
-        codes::INVALID_PRODUCER_EPOCH | codes::TRANSACTION_COORDINATOR_FENCED => {
-            MarkerFailureClass::Fatal
+    match classify_marker_code(code) {
+        MarkerCodeClass::Fenced => MarkerFailureClass::Fenced,
+        MarkerCodeClass::Retriable => MarkerFailureClass::Retriable,
+        // A written or dropped partition is never recorded as a failure, so
+        // reaching here with one of their codes is itself an illegal state.
+        MarkerCodeClass::Written | MarkerCodeClass::Dropped | MarkerCodeClass::Unexpected => {
+            MarkerFailureClass::Unexpected
         }
-        _ => MarkerFailureClass::Retriable,
     }
 }
 
@@ -124,8 +191,67 @@ mod tests {
 
     use super::*;
 
+    /// `RECORD_LIST_TOO_LARGE` (18), one of the codes Kafka's completion
+    /// handler names as fatal. Nothing in this broker raises it, so it has no
+    /// constant in [`codes`].
+    const RECORD_LIST_TOO_LARGE: i16 = 18;
+
+    /// One row per branch of Kafka's
+    /// `TransactionMarkerRequestCompletionHandler.onComplete` error match.
     #[test]
-    fn classifies_fenced_generations_as_fatal_and_everything_else_as_retriable() {
+    fn classifies_every_write_txn_markers_code_as_kafka_does() {
+        let cases = [
+            (codes::NONE, MarkerCodeClass::Written),
+            (UNSUPPORTED_FOR_MESSAGE_FORMAT, MarkerCodeClass::Dropped),
+            (codes::UNSUPPORTED_VERSION, MarkerCodeClass::Dropped),
+            (
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                MarkerCodeClass::Retriable,
+            ),
+            (codes::NOT_LEADER_OR_FOLLOWER, MarkerCodeClass::Retriable),
+            (codes::NOT_ENOUGH_REPLICAS, MarkerCodeClass::Retriable),
+            (
+                codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+                MarkerCodeClass::Retriable,
+            ),
+            (codes::REQUEST_TIMED_OUT, MarkerCodeClass::Retriable),
+            (codes::KAFKA_STORAGE_ERROR, MarkerCodeClass::Retriable),
+            (codes::INVALID_PRODUCER_EPOCH, MarkerCodeClass::Fenced),
+            (
+                codes::TRANSACTION_COORDINATOR_FENCED,
+                MarkerCodeClass::Fenced,
+            ),
+            (codes::CORRUPT_MESSAGE, MarkerCodeClass::Unexpected),
+            (codes::MESSAGE_TOO_LARGE, MarkerCodeClass::Unexpected),
+            (RECORD_LIST_TOO_LARGE, MarkerCodeClass::Unexpected),
+            (codes::INVALID_REQUIRED_ACKS, MarkerCodeClass::Unexpected),
+            (codes::UNKNOWN_SERVER_ERROR, MarkerCodeClass::Unexpected),
+            (
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                MarkerCodeClass::Unexpected,
+            ),
+            (codes::NOT_COORDINATOR, MarkerCodeClass::Unexpected),
+            (
+                codes::COORDINATOR_LOAD_IN_PROGRESS,
+                MarkerCodeClass::Unexpected,
+            ),
+            (codes::INVALID_TXN_STATE, MarkerCodeClass::Unexpected),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (code, class) in cases {
+            actual.push((code, classify_marker_code(code)));
+            expected.push((code, class));
+        }
+        assert!(actual == expected);
+    }
+
+    #[test]
+    fn classifies_marker_failures_by_the_code_they_carry() {
+        let refused = |code| BrokerError::MarkerWriteRefused {
+            code,
+            message: "refused".into(),
+        };
         let cases: &[(BrokerError, MarkerFailureClass)] = &[
             (
                 BrokerError::ProducerEpochFenced {
@@ -133,50 +259,50 @@ mod tests {
                     current: 3,
                     requested: 1,
                 },
-                MarkerFailureClass::Fatal,
+                MarkerFailureClass::Fenced,
             ),
             (
                 BrokerError::CoordinatorEpochFenced {
                     current: 9,
                     requested: 3,
                 },
-                MarkerFailureClass::Fatal,
+                MarkerFailureClass::Fenced,
             ),
             (
-                BrokerError::MarkerWriteRefused {
-                    code: codes::INVALID_PRODUCER_EPOCH,
-                    message: "fenced".into(),
-                },
-                MarkerFailureClass::Fatal,
+                refused(codes::INVALID_PRODUCER_EPOCH),
+                MarkerFailureClass::Fenced,
             ),
             (
-                BrokerError::MarkerWriteRefused {
-                    code: codes::TRANSACTION_COORDINATOR_FENCED,
-                    message: "fenced".into(),
-                },
-                MarkerFailureClass::Fatal,
+                refused(codes::TRANSACTION_COORDINATOR_FENCED),
+                MarkerFailureClass::Fenced,
             ),
             (
-                BrokerError::MarkerWriteRefused {
-                    code: codes::NOT_LEADER_OR_FOLLOWER,
-                    message: "retry".into(),
-                },
+                refused(codes::NOT_LEADER_OR_FOLLOWER),
                 MarkerFailureClass::Retriable,
             ),
             (
-                BrokerError::MarkerWriteRefused {
-                    code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    message: "retry".into(),
-                },
+                refused(codes::UNKNOWN_TOPIC_OR_PARTITION),
                 MarkerFailureClass::Retriable,
             ),
             (
-                BrokerError::MarkerWriteRefused {
-                    code: codes::REQUEST_TIMED_OUT,
-                    message: "retry".into(),
-                },
+                refused(codes::REQUEST_TIMED_OUT),
                 MarkerFailureClass::Retriable,
             ),
+            (
+                refused(codes::CORRUPT_MESSAGE),
+                MarkerFailureClass::Unexpected,
+            ),
+            (
+                refused(codes::UNKNOWN_SERVER_ERROR),
+                MarkerFailureClass::Unexpected,
+            ),
+            // Neither code is ever recorded as a failure.
+            (refused(codes::NONE), MarkerFailureClass::Unexpected),
+            (
+                refused(codes::UNSUPPORTED_VERSION),
+                MarkerFailureClass::Unexpected,
+            ),
+            // No wire code: an unreachable leader, which Kafka re-enqueues.
             (
                 BrokerError::Txn("connect failed".into()),
                 MarkerFailureClass::Retriable,
@@ -184,6 +310,18 @@ mod tests {
         ];
         for (error, expected) in cases {
             assert!(classify_marker_failure(error) == *expected, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn only_fenced_and_unexpected_failures_stop_the_fan_out() {
+        let cases = [
+            (MarkerFailureClass::Retriable, false),
+            (MarkerFailureClass::Fenced, true),
+            (MarkerFailureClass::Unexpected, true),
+        ];
+        for (class, stops) in cases {
+            assert!(class.stops_fan_out() == stops, "{class:?}");
         }
     }
 

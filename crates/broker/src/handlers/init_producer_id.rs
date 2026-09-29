@@ -180,13 +180,32 @@ pub(crate) async fn handle(
             let txnv = crate::txn::version::resolve_txn_version(&image);
 
             // ── KIP-939 two-phase-commit gate ───────────────────────────
-            // Validated before the coordinator-ness check, like Kafka's
-            // `handleInitProducerId`. A cluster with 2PC disabled answers
-            // TRANSACTIONAL_ID_AUTHORIZATION_FAILED (not an UNSUPPORTED_*), so a
-            // client can't probe the feature flag. The `TwoPhaseCommit` ACL is
-            // checked in the preamble above.
-            if req.enable2_pc && !broker.config.features.transaction_two_phase_commit_enable {
+            // Kafka's `TransactionCoordinator.handleInitProducerId` gates 2PC
+            // on the broker config `transaction.two.phase.commit.enable`, and
+            // `KafkaApis` on the `TwoPhaseCommit` ACL, checked in the preamble
+            // above. No `transaction.version` level is involved: Kafka's
+            // `TransactionVersion` stops at `TV_2`. These checks run before the
+            // coordinator-ness check, in Kafka's order. A cluster with 2PC
+            // disabled answers TRANSACTIONAL_ID_AUTHORIZATION_FAILED (not an
+            // UNSUPPORTED_*), so a client can't probe the config.
+            let two_phase_commit = broker.config.features.transaction_two_phase_commit_enable;
+            if req.enable2_pc && !two_phase_commit {
                 return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+            }
+            // Kafka 4.3.1's `TransactionCoordinator.handleInitProducerId`
+            // answers every `keepPreparedTxn` with UNSUPPORTED_VERSION, after
+            // the 2PC gate above, because it has not implemented the recovery
+            // (trunk still has not). krabka does implement it, and serves it
+            // only where the operator opted into both 2PC and Kafka's unstable
+            // api versions; otherwise the answer is Kafka's. Without
+            // `unstable.api.versions.enable` the v6 request cannot reach this
+            // handler at all, so the second condition only matters to a
+            // future path that does.
+            let prepared_txn_recovery = two_phase_commit
+                && broker.config.features.unstable_api_versions
+                    == crate::api_catalog::UnstableApiVersions::Enabled;
+            if req.keep_prepared_txn && !prepared_txn_recovery {
+                return encode_err(version, codes::UNSUPPORTED_VERSION);
             }
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {
                 return encode_err(version, codes::INVALID_REQUEST);
@@ -201,9 +220,6 @@ pub(crate) async fn handle(
                 Ok(timeout) => timeout,
                 Err(error_code) => return encode_err(version, error_code),
             };
-            if (req.enable2_pc || req.keep_prepared_txn) && !txnv.two_phase() {
-                return encode_err(version, codes::UNSUPPORTED_VERSION);
-            }
             drop(coord.refresh_leader_partitions(&image).await);
             let txn_partition = coord.partition_for(tid);
             if coord.load_status(txn_partition).await == Some(LoadStatus::Pending) {

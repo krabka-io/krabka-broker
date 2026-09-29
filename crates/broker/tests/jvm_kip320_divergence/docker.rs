@@ -27,7 +27,7 @@ pub const KAFKA_IMAGE_MODERN: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.5.0"
 /// mixed metadata quorum (same image as `jvm_static_quorum_spike.rs`).
 pub const KAFKA_IMAGE_KRAFT: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 /// Newer CLI image used only as an `AdminClient`. Its `kafka-features.sh`
-/// exposes the explicit safe/unsafe downgrade commands used by KIP-1155.
+/// exposes the explicit safe and unsafe `metadata.version` downgrade commands.
 pub const KAFKA_IMAGE_FEATURES: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 
 /// Kafka encodes a 16-byte UUID cluster id as URL-safe base64 with no

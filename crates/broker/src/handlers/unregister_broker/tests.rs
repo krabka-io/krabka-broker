@@ -153,6 +153,8 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
 
 const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 const DOOMED: NodeId = NodeId(7);
+/// The epoch of the registration an unregistration of [`DOOMED`] removes.
+const DOOMED_EPOCH: i64 = 42;
 
 fn gated_config() -> BreakGlassConfig {
     BreakGlassConfig {
@@ -191,7 +193,7 @@ const NOW_MS: i64 = 60_000;
 fn an_unregistration_with_no_proposal_appends_nothing() {
     let image = image_of(&[]);
 
-    let denial = unregister_records(&image, &gated_config(), DOOMED, NOW_MS)
+    let denial = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect_err("no proposal covers broker 7");
 
     check!(denial.action == BreakGlassAction::UnregisterBroker);
@@ -207,7 +209,7 @@ fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
     let proposal = approved_proposal("7");
     let image = image_of(std::slice::from_ref(&proposal));
 
-    let records = unregister_records(&image, &gated_config(), DOOMED, NOW_MS)
+    let records = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect("the proposal authorizes the unregistration");
 
     let expected = vec![
@@ -215,7 +217,10 @@ fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
             consumed_at_ms: NOW_MS,
             ..proposal
         }),
-        MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord { node_id: DOOMED }),
+        MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
+            node_id: DOOMED,
+            broker_epoch: DOOMED_EPOCH,
+        }),
     ];
     assert!(records == expected);
 }
@@ -224,7 +229,7 @@ fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
 fn a_proposal_for_another_broker_does_not_cover_this_one() {
     let image = image_of(&[approved_proposal("8")]);
 
-    let denial = unregister_records(&image, &gated_config(), DOOMED, NOW_MS)
+    let denial = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect_err("a proposal for broker 8 authorizes nothing about broker 7");
 
     check!(denial.proposal_id() == None);
@@ -232,13 +237,20 @@ fn a_proposal_for_another_broker_does_not_cover_this_one() {
 
 #[test]
 fn a_broker_with_no_approver_set_gates_nothing() {
-    let records = unregister_records(&image_of(&[]), &BreakGlassConfig::default(), DOOMED, NOW_MS)
-        .expect("an ungated broker unregisters with no proposal");
+    let records = unregister_records(
+        &image_of(&[]),
+        &BreakGlassConfig::default(),
+        DOOMED,
+        DOOMED_EPOCH,
+        NOW_MS,
+    )
+    .expect("an ungated broker unregisters with no proposal");
 
     assert!(
         records
             == vec![MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
-                node_id: DOOMED
+                node_id: DOOMED,
+                broker_epoch: DOOMED_EPOCH,
             })]
     );
 }

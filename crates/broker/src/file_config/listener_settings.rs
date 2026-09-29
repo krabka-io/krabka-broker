@@ -69,13 +69,26 @@ fn boolean_property(
     }
 }
 
+/// Kafka's internal `ServerConfigs.UNSTABLE_API_VERSIONS_ENABLE_CONFIG`.
+const UNSTABLE_API_VERSIONS_ENABLE: &str = "unstable.api.versions.enable";
+
+/// Kafka's internal `ServerConfigs.UNSTABLE_FEATURE_VERSIONS_ENABLE_CONFIG`.
+const UNSTABLE_FEATURE_VERSIONS_ENABLE: &str = "unstable.feature.versions.enable";
+
 /// The static boolean broker keys Kafka reads at startup:
 /// `delete.topic.enable` and `auto.create.topics.enable`, each recorded as
-/// operator-supplied when named.
+/// operator-supplied when named, and the internal
+/// `unstable.api.versions.enable` and `unstable.feature.versions.enable`.
 fn apply_boolean_properties(
     properties: &std::collections::BTreeMap<String, String>,
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
+    if let Some(enabled) = boolean_property(properties, UNSTABLE_API_VERSIONS_ENABLE)? {
+        cfg.features.unstable_api_versions = enabled.into();
+    }
+    if let Some(enabled) = boolean_property(properties, UNSTABLE_FEATURE_VERSIONS_ENABLE)? {
+        cfg.features.unstable_feature_versions = enabled.into();
+    }
     if let Some(enabled) = boolean_property(properties, crate::config_keys::DELETE_TOPIC_ENABLE)? {
         cfg.delete_topic_enable = enabled;
         cfg.static_config_origins.topic_admin.delete_topic_enable = true;
@@ -89,6 +102,20 @@ fn apply_boolean_properties(
             .auto_create_topics_enable = true;
     }
     Ok(())
+}
+
+/// KIP-1066 `cordoned.log.dirs` under its Kafka name. A value already set by
+/// another source wins. `crate::BrokerConfig::validate` checks it against the
+/// log directories once they are all known.
+fn apply_cordoned_log_dirs(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) {
+    if cfg.cordoned_log_dirs.is_none()
+        && let Some(value) = properties.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS)
+    {
+        cfg.cordoned_log_dirs = Some(value.clone());
+    }
 }
 
 /// A positive integer `server_properties` value.
@@ -186,6 +213,7 @@ pub(super) fn apply_listener_settings(
     }
     apply_topic_creation_properties(&settings.server_properties, cfg)?;
     apply_boolean_properties(&settings.server_properties, cfg)?;
+    apply_cordoned_log_dirs(&settings.server_properties, cfg);
     let num_val = settings
         .server_properties
         .get("quota.window.num")
@@ -529,6 +557,84 @@ connections_max_idle = "5s"
         let mut cfg2 = BrokerConfig::default();
         absent.apply_to(&mut cfg2).unwrap();
         assert!(!cfg2.features.transaction_two_phase_commit_enable);
+    }
+
+    /// #646: Kafka's internal `unstable.api.versions.enable` under its own
+    /// name, off by default, refused unless it is a boolean.
+    #[test]
+    fn apply_to_reads_unstable_api_versions_enable_from_server_properties() {
+        use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig};
+
+        for (toml, expected) in [
+            ("broker_id = 0", Ok(UnstableApiVersions::Disabled)),
+            (
+                "[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n",
+                Ok(UnstableApiVersions::Enabled),
+            ),
+            (
+                "[server_properties]\n\"unstable.api.versions.enable\" = \"FALSE\"\n",
+                Ok(UnstableApiVersions::Disabled),
+            ),
+            (
+                "[server_properties]\n\"unstable.api.versions.enable\" = \"yes\"\n",
+                Err(
+                    "server_properties `unstable.api.versions.enable` must be `true` or \
+                     `false`, got `yes`"
+                        .to_string(),
+                ),
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| cfg.features.unstable_api_versions)
+                .map_err(|error| match error {
+                    crate::file_config::FileConfigError::InvalidConfig(message) => message,
+                    other => other.to_string(),
+                });
+            assert!(applied == expected, "{toml}");
+        }
+    }
+
+    /// #784: Kafka's internal `unstable.feature.versions.enable` under its own
+    /// name, off by default, refused unless it is a boolean.
+    #[test]
+    fn apply_to_reads_unstable_feature_versions_enable_from_server_properties() {
+        use krabka_raft::UnstableFeatureVersions;
+
+        use crate::config::BrokerConfig;
+
+        for (toml, expected) in [
+            ("broker_id = 0", Ok(UnstableFeatureVersions::Disabled)),
+            (
+                "[server_properties]\n\"unstable.feature.versions.enable\" = \"true\"\n",
+                Ok(UnstableFeatureVersions::Enabled),
+            ),
+            (
+                "[server_properties]\n\"unstable.feature.versions.enable\" = \"false\"\n",
+                Ok(UnstableFeatureVersions::Disabled),
+            ),
+            (
+                "[server_properties]\n\"unstable.feature.versions.enable\" = \"1\"\n",
+                Err(
+                    "server_properties `unstable.feature.versions.enable` must be `true` or \
+                     `false`, got `1`"
+                        .to_string(),
+                ),
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| cfg.features.unstable_feature_versions)
+                .map_err(|error| match error {
+                    crate::file_config::FileConfigError::InvalidConfig(message) => message,
+                    other => other.to_string(),
+                });
+            assert!(applied == expected, "{toml}");
+        }
     }
 
     #[test]

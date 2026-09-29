@@ -18,6 +18,104 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+### Added
+
+- `group.streams.rack.aware.assignment.tags` is the `[runtime]` key
+  `streams_group_rack_aware_assignment_tags`, with the flag
+  `--streams-group-rack-aware-assignment-tags`. It is the default of each
+  group's `streams.rack.aware.assignment.tags`, and it refuses an empty or a
+  repeated tag key with Kafka's messages.
+- Kafka's `share.coordinator.state.topic.compression.codec`,
+  `share.coordinator.threads`, `share.coordinator.append.linger.ms` and
+  `share.coordinator.cached.buffer.max.bytes` are accepted under `[runtime]`
+  (#939). Only the codec has an effect: it compresses every
+  `__share_group_state` batch.
+
+### Changed
+
+- **Strict Kafka 4.3.1 by default** (#784). With no opt-in, every listener,
+  the broker's and the controller's alike, advertises and accepts exactly what
+  a stock `apache/kafka:4.3.1` does. A version or api key only Kafka trunk
+  has closes the connection, as 4.3.1 closes it: `TxnOffsetCommit` v6,
+  `StreamsGroupHeartbeat` and `StreamsGroupDescribe` v1,
+  `StreamsGroupTopologyDescriptionUpdate` (93), `UnregisterController` (94),
+  and an `Envelope` that wraps one of them. `ApiVersions` v5 is answered
+  `UNSUPPORTED_VERSION` with the v0-v4 range. The pre-4.0 `Fetch` v0-v3,
+  `ListOffsets` v0 and `Produce` v0-v2 are refused too, and `Produce` is still
+  advertised from v0 (KAFKA-18659). `metadata.version` is supported only up
+  to `4.3-IV0` (30). That cap applies to `ApiVersions`, node registration,
+  `UpdateFeatures` (Kafka's `Local controller N only supports versions 7-30`)
+  and `krabka format`. CIDR ACL hosts (4.4-IV1) and controller unregistration
+  (4.4-IV2) are therefore unreachable by default. A group resource carries
+  4.3.1's 20 `GroupConfig` keys, and trunk's seven are `Unknown group config
+  name`. There are three opt-ins:
+  - `server_properties` `unstable.api.versions.enable = "true"`, Kafka's own
+    switch, serves the trunk versions, api keys and group keys above, plus
+    `InitProducerId` v6. With `transaction.two.phase.commit.enable` it also
+    serves krabka's KIP-939 `keepPreparedTxn` recovery, which 4.3.1 answers
+    `UNSUPPORTED_VERSION`.
+  - `server_properties` `unstable.feature.versions.enable = "true"`, Kafka's
+    own switch, supports `metadata.version` up to trunk's `4.4-IV2` (33).
+    `krabka format --unstable-feature-versions-enable` is the same setting
+    for a format.
+  - `[runtime] legacy_request_versions_enable = true`, krabka-only, serves the
+    pre-4.0 `Fetch`, `ListOffsets` and `Produce` versions again.
+- **Breaking, config.** In `[runtime]`, the share-group lock limit is
+  `share_group_partition_max_record_locks` and the delivery-attempt limit is
+  `share_group_delivery_count_limit`, after the Kafka keys they set.
+  `share_group_isolation_level`, `acl_max_principal`, `acl_max_resource_name`
+  and `streams_internal_topic_replication_factor` are gone, with their flags.
+  Kafka has none of them. A share group reads with its own
+  `share.isolation.level`, `read_uncommitted` by default. A streams internal
+  topic whose topology sets no replication factor gets
+  `default.replication.factor`.
+- **Breaking, on-disk format.** `krabka-format` writes the cluster id and the
+  directory ids in Kafka's 22-character base64 form, in
+  `meta.properties.json`, in `bootstrap.json` and on stdout, and the format
+  stamp is now version 3. The broker refuses a version 2 directory with
+  `unsupported meta.properties version`; run a fresh `krabka-format`.
+  `--cluster-id`, `--directory-id` and `--initial-controllers` accept Kafka's
+  form as `Uuid.fromString` does, and the hyphenated form.
+- `krabka-format` formats every directory of a node in one run: `--log-dir`
+  is repeatable and comma-separated, and the first directory is the metadata
+  log directory. `--ignore-formatted` skips the formatted directories and
+  formats the rest; without it, one formatted directory refuses the run with
+  Kafka's message. A run that fails partway can be run again without an
+  `rm -rf`. `docs/format-divergences.md` lists every difference from
+  `kafka-storage format`.
+- The broker share-group settings take Kafka 4.3.1's defaults, ranges and
+  minimum and maximum keys, and refuse an out-of-order triple with Kafka's
+  `require` messages (#959, #958). The record lock limit defaults to 2000.
+- `unstable.api.versions.enable`, read from `[server_properties]`, gates the
+  API versions Kafka marks unstable on both listeners. Off, its default, the
+  broker advertises only stable versions and closes a connection that sends
+  an unstable one (#646).
+
+### Fixed
+
+- ApiVersions matches Kafka 4.3.1 on the broker and controller listeners: the
+  unsupported-version answer, the api-key order, the supported and finalized
+  feature rows, and `finalized_features_epoch` (#842, #783). Produce keeps
+  serving v0 to v2 on purpose, and the KIP matrix records it (#863).
+- UpdateFeatures applies the whole request or none of it, validates each row
+  with Kafka's checks and messages, and decides a `metadata.version`
+  downgrade on Kafka's `didMetadataChange` table (#779, #780, #781).
+- ListOffsets fences as Kafka does while the high watermark trails the leader
+  epoch's start (KIP-207, #879).
+- WriteTxnMarkers retries, drops or cancels a partition by its error code as
+  Kafka's completion handler does (#882). An AddPartitionsToTxn v4+ request
+  that repeats a transactional id gets one result per entry (#883).
+- StreamsGroupHeartbeat v1 carries `MISSING_CLIENT_TAGS` when a member does
+  not send every configured rack-aware tag key (#972).
+- CreateAcls has no length limit on a resource name or a principal, an IPv4
+  CIDR ACL never matches `0.0.0.0`, and CreateDelegationToken with an owner
+  name and no owner type answers `UNKNOWN_SERVER_ERROR` (#772, #652, #765).
+- OffsetCommit and TxnOffsetCommit check an older member epoch against the
+  epoch at which each partition was assigned (KIP-1251, #800).
+- DescribeShareGroupOffsets answers an unknown topic, a failed share-state
+  read and an explicit topic list as Kafka 4.3.1 does, and takes the lag's
+  end offset from each partition's leader (#943).
+
 ## [0.6.1] - 2026-09-26
 
 A patch release that makes secured disaster recovery work on a diskless

@@ -1,8 +1,11 @@
 //! `UpdateFeatures` handler (`api_key` 57, KIP-584).
 //!
-//! This handler finalizes broker-supported features, at present only
-//! `metadata.version`, through a Raft-persisted `V1FeatureLevel` record.
-//! `Alter` on `Cluster("kafka-cluster")` gates it.
+//! This handler finalizes the features in the `krabka_metadata` registry
+//! through Raft-persisted `V1FeatureLevel` records, and hands a
+//! `kraft.version` upgrade to the Raft layer. It applies a request
+//! atomically, as Kafka's `FeatureControlManager.updateFeatures` does: the
+//! first feature that fails validation fails the whole request and nothing is
+//! written. `Alter` on `Cluster("kafka-cluster")` gates it.
 //!
 //! `network::dispatch` intercepts the request inline, as it does for
 //! `AlterUserScramCredentials`, so the handler receives the authenticated
@@ -15,6 +18,7 @@ use krabka_protocol::owned::{
 };
 use krabka_raft::RaftError;
 
+mod java_order;
 mod preconditions;
 mod response;
 mod upgrade_type;
@@ -26,14 +30,18 @@ mod test_support;
 mod tests;
 
 use self::{
-    response::{apply_request_wide, finalize, top_level_error},
-    validate::validate_updates,
+    response::{feature_error, success, top_level_error},
+    validate::{UpdateError, plan_updates},
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
 };
+
+/// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
+/// quorum leadership.
+const NOT_CONTROLLER_MESSAGE: &str = "This broker is not the active controller.";
 
 #[tracing::instrument(
     name = "handle_update_features",
@@ -65,87 +73,72 @@ pub(crate) async fn handle(
         return top_level_error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",
-            version,
         );
     }
 
-    if req.feature_updates.is_empty() {
-        return top_level_error(
-            codes::INVALID_REQUEST,
-            "Can not provide empty feature updates in the request.",
-            version,
-        );
-    }
-
-    let (results, mut records) = validate_updates(&req, &image, version);
-
-    // validate_only: never persist.
+    let local_controller = preconditions::LocalController {
+        node_id: broker.config.node_id,
+        unstable_features: broker.config.features.unstable_feature_versions,
+    };
+    let mut plan = match plan_updates(&req, &image, local_controller) {
+        Ok(plan) => plan,
+        Err(error) => return feature_error(&error),
+    };
     if req.validate_only {
-        return finalize(results, version);
+        return success(&req, version);
     }
     // KIP-966: turning ELR on writes its safety config records in the same
-    // batch, ahead of the feature record, as Kafka's controller does.
-    if validate::enables_elr(&req, &results) {
+    // batch, ahead of the feature record, as Kafka's
+    // `ConfigurationControlManager.updateFeatures` does.
+    if plan.enables_elr {
         let mut batch =
             validate::elr_safety_records(&image, broker.config.default_min_insync_replicas);
-        batch.append(&mut records);
-        records = batch;
+        batch.append(&mut plan.records);
+        plan.records = batch;
     }
 
-    // Activation must be derived from the validated row. Looking at the raw
-    // request here would let a duplicate or otherwise rejected kraft.version
-    // row activate the Raft feature despite its error response.
-    let kraft_upgrade = image.kraft_version() == 0
-        && req
-            .feature_updates
-            .iter()
-            .zip(&results)
-            .any(|(update, result)| {
-                update.feature == krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
-                    && result.error_code == codes::NONE
-            });
-    if kraft_upgrade {
-        match broker.controller.finalize_kraft_version(1).await {
+    if let Some(level) = plan.kraft_upgrade {
+        match broker.controller.finalize_kraft_version(level).await {
             Ok(krabka_raft::ReconfigOutcome::Committed) => {}
             Ok(krabka_raft::ReconfigOutcome::NotLeader { .. })
             | Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                return apply_request_wide(
-                    results,
-                    codes::NOT_CONTROLLER,
-                    "This broker is not the active controller.",
-                    version,
-                );
+                return top_level_error(codes::NOT_CONTROLLER, NOT_CONTROLLER_MESSAGE);
+            }
+            // `LeaderState.maybeAppendUpgradedKRaftVersion` refuses with an
+            // `InvalidUpdateVersionException`, which Kafka answers as the
+            // failed feature's error.
+            Err(
+                error @ (RaftError::InvalidVoterUpdate(_)
+                | RaftError::UnsupportedKraftVersion(_)
+                | RaftError::ReconfigInProgress
+                | RaftError::ReconfigRejected(_)),
+            ) => {
+                return feature_error(&UpdateError {
+                    code: codes::INVALID_UPDATE_VERSION,
+                    message: error.to_string(),
+                });
             }
             Err(error) => {
                 tracing::warn!(%error, "UpdateFeatures: kraft.version activation failed");
-                return apply_request_wide(
-                    results,
+                return top_level_error(
                     codes::FEATURE_UPDATE_FAILED,
                     "Failed to activate kraft.version.",
-                    version,
                 );
             }
         }
     }
 
-    if !records.is_empty() {
-        match broker.controller.submit_change(records).await {
+    if !plan.records.is_empty() {
+        match broker.controller.submit_change(plan.records).await {
             Ok(_) => {}
             Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                return apply_request_wide(
-                    results,
-                    codes::NOT_CONTROLLER,
-                    "This broker is not the active controller.",
-                    version,
-                );
+                return top_level_error(codes::NOT_CONTROLLER, NOT_CONTROLLER_MESSAGE);
             }
             Err(e) => {
                 tracing::warn!(error = %e, "UpdateFeatures: submit_change failed");
-                return apply_request_wide(
-                    results,
+                return top_level_error(
                     codes::FEATURE_UPDATE_FAILED,
                     "Failed to persist the feature update.",
-                    version,
                 );
             }
         }
@@ -155,12 +148,11 @@ pub(crate) async fn handle(
         broker.audit_log.as_ref(),
         ctx,
         "UpdateFeatures",
-        results
-            .iter()
-            .filter(|result| result.error_code == codes::NONE)
-            .map(|result| crate::handlers::audit_resource("Feature", result.feature.clone()))
+        plan.features
+            .into_iter()
+            .map(|feature| crate::handlers::audit_resource("Feature", feature))
             .collect(),
     );
 
-    finalize(results, version)
+    success(&req, version)
 }

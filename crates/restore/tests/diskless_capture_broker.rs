@@ -121,6 +121,7 @@ async fn create_diskless_topic(bootstrap: &str) -> Uuid {
                 partitions: 1,
                 replicas: 1,
                 configs: BTreeMap::from([("krabka.diskless".to_owned(), "true".to_owned())]),
+                replica_assignments: BTreeMap::new(),
             }],
             TopicMutationOptions::default(),
         )

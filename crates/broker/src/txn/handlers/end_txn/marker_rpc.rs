@@ -15,10 +15,9 @@ use krabka_protocol::owned::{
 
 use super::markers::{MarkerDispatchContext, MarkerFanOut};
 use crate::{
-    codes,
     error::BrokerError,
     txn::{
-        marker::MarkerType,
+        marker::{MarkerCodeClass, MarkerType, classify_marker_code},
         state::{TopicPartition, TxnEntry},
     },
 };
@@ -170,9 +169,13 @@ fn build_write_txn_markers_request(
     }
 }
 
-/// Splits the requested partitions into those whose marker the leader wrote
-/// and the most severe failure, per Kafka's
-/// `TransactionMarkerRequestCompletionHandler`.
+/// Splits the requested partitions into those that leave the transaction's
+/// pending set and the most severe failure, per Kafka's
+/// `TransactionMarkerRequestCompletionHandler`. A partition leaves when the
+/// leader wrote its marker, and also when the leader answered
+/// `UNSUPPORTED_FOR_MESSAGE_FORMAT` or `UNSUPPORTED_VERSION`: the producer
+/// could not have written there either, so Kafka calls
+/// `TransactionMetadata.removePartition` for it without a marker.
 fn validate_marker_response(
     entry: &TxnEntry,
     tps: &[TopicPartition],
@@ -207,7 +210,14 @@ fn validate_marker_response(
                 tp.topic,
                 tp.partition.get()
             ))),
-            Some(result) if result.error_code == codes::NONE => outcome.written.push(tp.clone()),
+            Some(result)
+                if matches!(
+                    classify_marker_code(result.error_code),
+                    MarkerCodeClass::Written | MarkerCodeClass::Dropped
+                ) =>
+            {
+                outcome.written.push(tp.clone());
+            }
             Some(result) => outcome.fail(BrokerError::MarkerWriteRefused {
                 code: result.error_code,
                 message: format!(
@@ -235,6 +245,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        codes,
         network::client::InterBrokerClient,
         txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps},
     };
@@ -279,9 +290,10 @@ mod tests {
         })
     }
 
-    /// #852: every partition the leader acknowledged is reported as written,
-    /// even when another partition in the same request is refused, so the
-    /// coordinator drops exactly those from the transaction.
+    /// #852, #882: every partition the leader acknowledged, or answered with a
+    /// code Kafka drops the partition for, is reported as written even when
+    /// another partition in the same request is refused, so the coordinator
+    /// removes exactly those from the transaction.
     #[test]
     fn marker_response_reports_each_acknowledged_partition() {
         let entry = marker_entry();
@@ -299,6 +311,33 @@ mod tests {
                 marker_response(&[(0, codes::NONE), (1, codes::NOT_LEADER_OR_FOLLOWER)]),
                 vec![partition(0)],
                 Some(codes::NOT_LEADER_OR_FOLLOWER),
+            ),
+            (
+                "one answered UNSUPPORTED_FOR_MESSAGE_FORMAT",
+                marker_response(&[(0, codes::NONE), (1, 43)]),
+                vec![partition(0), partition(1)],
+                None,
+            ),
+            (
+                "one answered UNSUPPORTED_VERSION",
+                marker_response(&[(0, codes::UNSUPPORTED_VERSION), (1, codes::NONE)]),
+                vec![partition(0), partition(1)],
+                None,
+            ),
+            (
+                "one dropped, one refused",
+                marker_response(&[
+                    (0, codes::UNSUPPORTED_VERSION),
+                    (1, codes::REQUEST_TIMED_OUT),
+                ]),
+                vec![partition(0)],
+                Some(codes::REQUEST_TIMED_OUT),
+            ),
+            (
+                "one answered an unexpected code",
+                marker_response(&[(0, codes::NONE), (1, codes::CORRUPT_MESSAGE)]),
+                vec![partition(0)],
+                Some(codes::CORRUPT_MESSAGE),
             ),
             (
                 "one omitted",

@@ -1,13 +1,33 @@
 //! What the handler reports about a log directory itself: its absolute path,
-//! its filesystem capacity, and the result entry an offline directory gets.
+//! its filesystem capacity, whether it is cordoned, and the result entry an
+//! offline directory gets.
 //!
-//! These three answers are about the directory rather than about the partitions
+//! These answers are about the directory rather than about the partitions
 //! inside it, and two of them are platform-specific, so they sit apart from the
 //! scan loop.
 
 use krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResult;
 
 use crate::codes;
+
+/// The directories `DescribeLogDirs` reports with `is_cordoned = true`.
+///
+/// Kafka's `ReplicaManager.describeLogDirs` reports the cordoned set only when
+/// `metadata.version` is at least `4.3-IV0`
+/// (`MetadataVersion.isCordonedLogDirsSupported`), and none below it.
+pub(super) fn cordoned_log_dirs_reported(
+    image: &krabka_metadata::MetadataImage,
+    cordoned: &crate::cordoned_log_dirs::CordonedLogDirs,
+) -> Vec<std::path::PathBuf> {
+    let supported = image.finalized_metadata_version().is_some_and(|level| {
+        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
+    });
+    if supported {
+        cordoned.cordoned()
+    } else {
+        Vec::new()
+    }
+}
 
 pub(super) fn offline_result(dir: &std::path::Path) -> DescribeLogDirsResult {
     DescribeLogDirsResult {

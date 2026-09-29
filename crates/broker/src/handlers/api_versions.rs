@@ -51,22 +51,18 @@ const CLIENT_INFO_MIN_VERSION: i16 = 3;
 /// First `ApiVersions` version that carries the KIP-1242 routing identity.
 const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 
-/// The v0 answer to an `ApiVersions` request at a version this broker does not
-/// serve. Kafka answers it with the same table the listener would otherwise
-/// advertise, so it is scoped to `listener_name` exactly as the accepted path
-/// is.
+/// The v0 body that answers an `ApiVersions` request at a version this broker
+/// does not serve.
+///
+/// Kafka's `ApiVersionsRequest.getErrorResponse` answers `UNSUPPORTED_VERSION`
+/// with exactly one `api_keys` entry, the range of `ApiVersions` itself
+/// (KIP-511), on every listener: the client reads it to pick the version it
+/// retries with, and nothing else. The controller listener answers with the
+/// same bytes, from the same `krabka_raft::unsupported_version_response`.
 pub(crate) fn unsupported_version_response(
-    broker: &Broker,
-    listener_name: &str,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<Bytes, BrokerError> {
-    let response = ApiVersionsResponse {
-        error_code: codes::UNSUPPORTED_VERSION,
-        api_keys: crate::api_catalog::supported_apis(
-            broker.config.listener_kind(listener_name),
-            broker.config.client_metrics_receiver(),
-        ),
-        ..Default::default()
-    };
+    let response = krabka_raft::unsupported_version_response(unstable);
     let mut body = BytesMut::with_capacity(response.encoded_len(0));
     response.encode(&mut body, 0)?;
     Ok(body.freeze())
@@ -123,6 +119,9 @@ pub(crate) fn handle<'a>(
         .config
         .listener_kind(context.connection_listener_name);
     let metrics = broker.metrics.clone();
+    // Read before the image, so the epoch never runs ahead of the features it
+    // stamps.
+    let metadata_offset = broker.controller.current_metadata_offset();
     let image = broker.controller.current_image();
     let expected_cluster_id = image.cluster_id();
     let expected_node_id = i32::try_from(broker.config.node_id.0).ok();
@@ -179,15 +178,21 @@ pub(crate) fn handle<'a>(
             api_keys: crate::api_catalog::supported_apis(
                 listener_kind,
                 broker.config.client_metrics_receiver(),
+                broker.config.features.version_gates(),
             ),
-            // KIP-584 write-side. `supported_features` advertises the
-            // broker's `crate::features` table; `finalized_features` + the
-            // epoch are read from the live metadata image. A fresh broker
-            // surfaces no finalized features and epoch `-1`
-            // (`MetadataVersion.UNKNOWN` to JVM clients) until
-            // `UpdateFeatures` (api_key 57) lands a `V1FeatureLevel` record.
-            supported_features: supported_feature_keys(version),
-            finalized_features_epoch: image.finalized_features_epoch(),
+            // KIP-584. `supported_features` advertises the broker's
+            // `crate::features` table the way Kafka's
+            // `BrokerFeatures.defaultSupportedFeatures` does, and
+            // `finalized_features` reads the live metadata image. The epoch
+            // is the offset of the last record that image contains, as
+            // `KRaftMetadataCache.features` reports
+            // `image.highestOffsetAndEpoch().offset()`: it rises with every
+            // metadata record, and is `-1` before the first.
+            supported_features: supported_feature_keys(
+                version,
+                broker.config.features.unstable_feature_versions,
+            ),
+            finalized_features_epoch: metadata_offset,
             finalized_features: finalized_feature_keys(&image),
             throttle_time_ms: charge_request_quota(broker, &image, context, handler_start),
             ..Default::default()

@@ -20,12 +20,19 @@ use crate::{
 /// registry lookup the rest of [`SUPPORTED_APIS`] shares.
 const ENVELOPE_API_KEY: ApiKeyCode = krabka_protocol::owned::envelope_request::API_KEY;
 
+/// The `RequestContext::connection_id` of every request this router hands a
+/// broker handler, whether it arrived on the controller listener directly or
+/// inside an `Envelope`. A handler that answers differently on the controller
+/// listener, as Kafka's `ControllerApis` does, reads it.
+pub(crate) const CONTROLLER_ADMIN_CONNECTION_ID: &str = "controller-admin";
+
 macro_rules! api_version {
     ($request:ident) => {
         ControllerApiVersion {
             api_key: krabka_protocol::owned::$request::API_KEY,
             min_version: krabka_protocol::owned::$request::MIN_VERSION,
             max_version: krabka_protocol::owned::$request::MAX_VERSION,
+            released_max: krabka_raft::kafka_4_3_1_max(krabka_protocol::owned::$request::API_KEY),
             flexible_min: krabka_protocol::owned::$request::FLEXIBLE_MIN,
         }
     };
@@ -37,7 +44,9 @@ macro_rules! api_version {
 /// and a controller's `ApiVersionManager` advertises exactly the ones tagged
 /// `controller`. A live `mirror.gcr.io/apache/kafka:4.3.1` controller answers
 /// `ApiVersions` with 1, 17-20, 29-33, 36-41, 43-46, 49-60, 62-64, 67, 70, 73
-/// and 80-82; 4.0.0's schemas carry the same tags.
+/// and 80-82; 4.0.0's schemas carry the same tags. Kafka trunk adds
+/// `UnregisterController` (94, KIP-1312), which krabka-protocol vendors, so it
+/// is routed here too.
 ///
 /// This table is that set minus the RPCs the controller listener already
 /// answers without a broker handler: `Fetch`, `SaslHandshake`, `ApiVersions`,
@@ -99,6 +108,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(unregister_broker_request),
     api_version!(allocate_producer_ids_request),
     api_version!(assign_replicas_to_dirs_request),
+    api_version!(unregister_controller_request),
 ];
 
 /// Late-bound bridge from the controller, which starts before the broker, to
@@ -258,7 +268,7 @@ async fn invoke_registered_handler(
                 principal,
                 peer,
                 client_id,
-                "controller-admin",
+                CONTROLLER_ADMIN_CONNECTION_ID,
                 false,
                 "CONTROLLER",
             );
@@ -406,6 +416,18 @@ fn unwrap_envelope(
     if !entry.supports_version(forwarded.api_version) {
         return Err(EnvelopeError::UnsupportedVersion);
     }
+    // An api key Kafka 4.3.1 does not have -- trunk's `UnregisterController`
+    // (94) while `unstable.api.versions.enable` is off -- fails
+    // `RequestHeader.parse` on a 4.3.1 controller, and `EnvelopeUtils` reports
+    // an unparseable embedded header as UNSUPPORTED_VERSION. The same
+    // answer covers a version the listener's gates disable.
+    if crate::api_catalog::is_disabled_version(
+        forwarded.api_key,
+        forwarded.api_version,
+        broker.config.features.version_gates(),
+    ) {
+        return Err(EnvelopeError::UnsupportedVersion);
+    }
 
     Ok(Unwrapped {
         forwarded,
@@ -444,7 +466,7 @@ mod tests {
         check!(
             keys == maplit::btreeset! {
                 19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 56, 57,
-                58, 62, 63, 64, 67, 73,
+                58, 62, 63, 64, 67, 73, 94,
             }
         );
     }
@@ -467,6 +489,7 @@ mod tests {
                     api_key: 58,
                     min_version: 0,
                     max_version: 0,
+                    released_max: Some(0),
                     flexible_min: 0,
                 })
         );

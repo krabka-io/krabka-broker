@@ -244,6 +244,28 @@ fn entry_matching_takes_only_null_as_any() {
     }
 }
 
+/// KIP-1276: `AccessControlEntryFilter.matches` compares a stored CIDR host
+/// as text, so only the same literal finds it. An address inside the range,
+/// or the same range written another way, does not.
+#[test]
+fn host_filter_compares_a_cidr_host_as_text() {
+    let entry = AclEntry {
+        host: "10.0.0.0/8".into(),
+        ..topic_acl("orders", PatternType::Literal)
+    };
+    let cases = [
+        ("10.0.0.0/8", true),
+        ("10.1.2.3", false),
+        ("10.0.0.0/08", false),
+        ("*", false),
+    ];
+    for (host, want) in cases {
+        let mut filter = any_filter();
+        filter.host = Some(host.into());
+        check!(filter.matches(&entry) == want, "host filter {host:?}");
+    }
+}
+
 /// KIP-373: an exact `USER` / `CREATE_TOKENS` filter finds the binding that
 /// `CreateAcls` stored, so `DescribeAcls` lists it and `DeleteAcls` revokes it.
 #[test]

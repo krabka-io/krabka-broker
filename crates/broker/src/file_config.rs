@@ -315,8 +315,23 @@ pub struct FileConfig {
     /// Raw Apache Kafka `server.properties` keys, for the settings krabka
     /// reads under their Kafka names rather than a dedicated TOML key. The
     /// broker consults `transaction.two.phase.commit.enable`,
-    /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and
-    /// `default.replication.factor`. Any other entry is accepted and ignored.
+    /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`,
+    /// `default.replication.factor`, `delete.topic.enable`,
+    /// `auto.create.topics.enable`, the KIP-1066 `cordoned.log.dirs`, and
+    /// Kafka's two internal switches. `unstable.api.versions.enable`
+    /// (default `false`) advertises and serves what krabka implements from
+    /// Kafka trunk beyond 4.3.1: `ApiVersions` v5 (KIP-1242),
+    /// `TxnOffsetCommit` v6 (KIP-1319), `StreamsGroupHeartbeat` and
+    /// `StreamsGroupDescribe` v1 (KIP-1331, KIP-1357),
+    /// `StreamsGroupTopologyDescriptionUpdate` (93) and `UnregisterController`
+    /// (94), `InitProducerId` v6 and with 2PC the KIP-939 `keepPreparedTxn`
+    /// recovery, and trunk's group config keys; while it is `false` every
+    /// listener serves exactly Kafka 4.3.1's API versions.
+    /// `unstable.feature.versions.enable` (default `false`) lets this node
+    /// support `metadata.version` past 4.3.1's `4.3-IV0` (30), up to trunk's
+    /// `4.4-IV2` (33), which the CIDR ACL hosts of KIP-1276 and the controller
+    /// unregistration of KIP-1312 need. Any other entry is accepted and
+    /// ignored.
     /// A key set here loses to the equivalent dedicated key, which is applied
     /// first.
     #[serde(default)]

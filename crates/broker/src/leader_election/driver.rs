@@ -102,7 +102,7 @@ pub(crate) async fn run_liveness_tick(
             liveness
                 .seed_term(
                     controller.current_controller_epoch(),
-                    crate::heartbeat::controller_state::replicated_fences(&image),
+                    crate::heartbeat::controller_state::replicated_registrations(&image),
                 )
                 .await;
         }

@@ -64,6 +64,9 @@ use crate::{
 pub enum StreamsGroupActorMessage {
     Heartbeat {
         request: Box<StreamsGroupHeartbeatRequest>,
+        /// The request's API version. The `MISSING_CLIENT_TAGS` status goes
+        /// out only at version 1 and above.
+        version: i16,
         client_id: String,
         client_host: String,
         reply: oneshot::Sender<StreamsHeartbeatResult>,
@@ -174,7 +177,7 @@ impl StreamsGroupActorHandle {
 ///
 /// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
 ///
-/// The shared `validate_group_commit` knows only about the classic and
+/// The shared `validate_commit` knows only about the classic and
 /// consumer `GroupActorHandle`. A streams-group consumer keeps its membership
 /// in the streams actor, not a classic one, so this function must validate it
 /// instead. Otherwise the broker fences the commit against an empty classic
@@ -544,6 +547,7 @@ async fn handle_message(
     match msg {
         StreamsGroupActorMessage::Heartbeat {
             request,
+            version,
             client_id,
             client_host,
             reply,
@@ -565,7 +569,14 @@ async fn handle_message(
                 Ok(response) if response.error_code != codes::NONE && actor.holds_nothing() => {
                     return Step::RefusedJoin(Box::new(DeferredReply { reply, response }));
                 }
-                Ok(response) => {
+                Ok(mut response) => {
+                    response::add_missing_client_tags(
+                        &mut response,
+                        &actor.state,
+                        config,
+                        &request,
+                        version,
+                    );
                     // Kafka answers the internal topics to create only with a
                     // response that the group accepted.
                     let creatable_topics = if response.error_code == codes::NONE {

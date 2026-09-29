@@ -123,6 +123,9 @@ async fn the_consume_and_the_transition_land_in_one_raft_append() {
         .expect("the approved proposal is in the image")
         .clone();
     check!(held.consumed_at_ms == 0);
+    let broker_epoch = image
+        .broker_epoch(NodeId(1))
+        .expect("broker 1 is registered before the unregistration");
 
     check!(unregister(&alice, BROKER_ID).await == codes::NONE);
     cluster
@@ -153,7 +156,10 @@ async fn the_consume_and_the_transition_land_in_one_raft_append() {
                     consumed_at_ms,
                     ..held
                 }),
-                MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord { node_id: NodeId(1) }),
+                MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
+                    node_id: NodeId(1),
+                    broker_epoch,
+                }),
             ],
         "the append is the consume followed by the transition, and nothing else"
     );

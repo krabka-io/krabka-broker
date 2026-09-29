@@ -166,9 +166,8 @@ mod tests {
             // Below TV_2 (Classic, Flexible): pid + epoch unchanged.
             (TxnVersion::Classic, (ProducerId(7), 3)),
             (TxnVersion::Flexible, (ProducerId(7), 3)),
-            // TV_2+ non-overflow: same pid, epoch + 1.
+            // TV_2 non-overflow: same pid, epoch + 1.
             (TxnVersion::Verified, (ProducerId(7), 4)),
-            (TxnVersion::TwoPhase, (ProducerId(7), 4)),
         ];
         for (version, want) in cases {
             assert!(
@@ -246,7 +245,7 @@ mod tests {
         entry.next_producer_id = ProducerId(7);
         entry.next_producer_epoch = 4;
 
-        prepare_completion_identities(&mut entry, TxnVersion::TwoPhase, &ids)
+        prepare_completion_identities(&mut entry, TxnVersion::Verified, &ids)
             .await
             .unwrap();
 
@@ -262,7 +261,7 @@ mod tests {
         entry.next_producer_id = ProducerId(11);
         entry.next_producer_epoch = i16::MAX - 1;
 
-        prepare_completion_identities(&mut entry, TxnVersion::TwoPhase, &ids)
+        prepare_completion_identities(&mut entry, TxnVersion::Verified, &ids)
             .await
             .unwrap();
 
@@ -270,7 +269,7 @@ mod tests {
         assert!(completion_producer_identity(&entry) == (ProducerId(11), i16::MAX));
 
         entry.next_producer_epoch = i16::MAX;
-        prepare_completion_identities(&mut entry, TxnVersion::TwoPhase, &ids)
+        prepare_completion_identities(&mut entry, TxnVersion::Verified, &ids)
             .await
             .unwrap();
         let (rotated_pid, rotated_epoch) = completion_producer_identity(&entry);

@@ -23,6 +23,8 @@
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `alter_replica_log_dirs/` directory, which keeps the parts out of `tests/`
 // where every `.rs` file would become another test binary.
+#[path = "alter_replica_log_dirs/cordoned.rs"]
+mod cordoned;
 #[path = "alter_replica_log_dirs/errors.rs"]
 mod errors;
 #[path = "alter_replica_log_dirs/harness.rs"]

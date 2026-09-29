@@ -115,7 +115,7 @@ pub(crate) async fn handle(
             .liveness
             .seed_term(
                 controller.current_controller_epoch(),
-                crate::heartbeat::controller_state::replicated_fences(&image),
+                crate::heartbeat::controller_state::replicated_registrations(&image),
             )
             .await;
         let active = broker.liveness.alive_snapshot().await;

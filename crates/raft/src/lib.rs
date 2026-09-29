@@ -78,7 +78,10 @@ mod wire;
 pub use config::{
     BootstrapMode, ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
     ControllerAdminRouter, ControllerApiVersion, ControllerConfig, ControllerFetchMissLimit,
-    MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter, ShardRouteFuture,
+    KAFKA_4_3_1_APIS, LATEST_PRODUCTION_METADATA_VERSION, MetadataRaftCommandQueueCapacity,
+    MetadataRaftFetchMax, RaftShardRouter, ReleasedApi, ShardRouteFuture, UnstableApiVersions,
+    UnstableFeatureVersions, kafka_4_3_1_api, kafka_4_3_1_max, supported_feature_range,
+    supported_feature_ranges,
 };
 pub use controller::{
     Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange, SnapshotSlice,
@@ -92,7 +95,11 @@ pub use handshake::{
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
-pub use server::{describe_quorum::describe_quorum, is_valid_client_info};
+pub use server::{
+    api_versions_max_version, describe_quorum::describe_quorum, finalized_feature_keys,
+    is_valid_client_info, supported_feature_key, supported_feature_keys,
+    unsupported_version_response,
+};
 pub use types::{
     AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,
     SubmitChangeResult,

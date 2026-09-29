@@ -122,7 +122,7 @@ async fn topic_id_for(
 
 #[tokio::test]
 async fn produce_v0_upconverts_and_is_readable_via_fetch() {
-    let p = support::start().await;
+    let p = support::start_legacy().await;
 
     // 1. Create topic "legacy_v0" with 1 partition using the typed client.
     let cr = p

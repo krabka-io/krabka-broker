@@ -28,7 +28,7 @@ use crate::{
 /// without violating Kafka's rule that clients cannot produce control batches.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_v3_drops_control_batch() {
-    let p = support::start().await;
+    let p = support::start_legacy().await;
     create_topic(&p.client, "legacy_fetch_ctrl").await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.

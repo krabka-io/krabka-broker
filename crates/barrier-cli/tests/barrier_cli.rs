@@ -77,6 +77,7 @@ async fn create_topic(bootstrap: &str, partitions: i32) {
                 partitions,
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
+                replica_assignments: std::collections::BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )

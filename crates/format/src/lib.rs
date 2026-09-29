@@ -1,9 +1,13 @@
-//! Formats a fresh krabka broker log directory.
+//! Formats the log directories of a krabka broker node.
 //!
 //! A `KRaft` node will not boot against an unformatted directory: the broker
 //! treats one as operator error and aborts startup. Formatting seeds
 //! `meta.properties.json`, the bootstrap records, and the singleton
 //! `VotersRecord`, and can provision seed SCRAM credentials at the same time.
+//! One run formats every directory of the node, as `kafka-storage format`
+//! does, and writes the cluster and directory ids in Kafka's 22-character
+//! base64 form. `docs/format-divergences.md` in the repository lists where
+//! the command differs from `kafka-storage format`, and why.
 //!
 //! [`run_with_records`] takes further [`MetadataRecord`]s from the caller and
 //! seeds them into the same stream. A restore tool that rebuilds a cluster from
@@ -22,9 +26,10 @@ mod format;
 mod ids;
 
 pub use format::{
-    FormatArgs, LATEST_PRODUCTION_METADATA_VERSION, ScramSpec, run, run_with_records,
+    FAIL_AFTER_ENV, FormatArgs, LATEST_PRODUCTION_METADATA_VERSION, META_PROPERTIES_VERSION,
+    ScramSpec, run, run_with_records,
 };
-pub use ids::{ClusterId, DirectoryId};
+pub use ids::{ClusterId, DirectoryId, KafkaUuidError};
 /// The seed record type [`run_with_records`] accepts, re-exported so a caller
 /// building a bootstrap stream does not have to name [`krabka_metadata`]
 /// itself.
@@ -38,7 +43,15 @@ pub use krabka_metadata::MetadataRecord;
 #[command(
     name = "krabka-format",
     version,
-    about = "Format a fresh log directory, with optional seed SCRAM credentials"
+    about = "Format the log directories of a node, with optional seed SCRAM credentials",
+    long_about = "Format the log directories of a node, with optional seed SCRAM credentials.\n\n\
+                  This is the counterpart of `kafka-storage format`. It takes no --config \
+                  file: krabka's broker does not read server.properties, so the directories \
+                  come from --log-dir, the first of which is the metadata log directory.\n\n\
+                  Exit codes: 0 success; 2 a SCRAM iteration count below 4096 or an invalid \
+                  command line; 3 a directory that is already formatted, holds foreign files, \
+                  or names another cluster; 4 a write failure or an invalid voter set; 5 an \
+                  invalid feature or quorum mode."
 )]
 pub struct Cli {
     /// The formatter's arguments, flattened so they are top-level flags.

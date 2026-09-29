@@ -47,7 +47,8 @@ use crate::{
     config_keys::resolve_preferred_leader_site,
     error::BrokerError,
     handlers::create_topics::{
-        automatic_leaderships, diskless_wal_placement_error, manual_leaderships, site_broker_views,
+        automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
+        manual_leaderships, site_broker_views,
     },
 };
 
@@ -160,19 +161,21 @@ pub(crate) async fn handle(
         let new_partition_indices: Vec<i32> = (existing..t.count).collect();
         let new_partition_count = new_partition_indices.len();
 
-        // The automatic placement never picks an unavailable broker. A manual
-        // assignment may name one, because Kafka checks only that the broker
-        // is registered, and the ISR below leaves it out.
+        // The automatic placement never picks an unavailable broker, nor one
+        // whose log directories are all cordoned (KIP-1066). A manual
+        // assignment may name either, because Kafka 4.3.1 checks only that the
+        // broker is registered, and the ISR below leaves an unavailable one out.
         let unavailable =
             crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
         let no_exclusion = std::collections::HashSet::new();
+        let unusable = automatic_placement_exclusions(&image, &unavailable);
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
             if t.assignments.is_some() {
                 &no_exclusion
             } else {
-                &unavailable
+                &unusable
             },
         );
         let rf = topic_rec.replication_factor;

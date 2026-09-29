@@ -34,6 +34,23 @@ fn to_map(parts: &[i32]) -> HashMap<Uuid, Vec<i32>> {
     }
 }
 
+fn epochs_of(map: &HashMap<Uuid, HashMap<i32, i32>>) -> Vec<(i32, i32)> {
+    let mut v: Vec<(i32, i32)> = map
+        .get(&TOPIC)
+        .map(|epochs| epochs.iter().map(|(&p, &e)| (p, e)).collect())
+        .unwrap_or_default();
+    v.sort_unstable();
+    v
+}
+
+fn epochs_to_map(epochs: &[(i32, i32)]) -> HashMap<Uuid, HashMap<i32, i32>> {
+    if epochs.is_empty() {
+        HashMap::new()
+    } else {
+        [(TOPIC, epochs.iter().copied().collect())].into()
+    }
+}
+
 pub(super) fn rebuild_group(s: &CgcState) -> GroupState {
     let mut g = GroupState::new("g");
     g.group_epoch = s.group_epoch;
@@ -60,6 +77,7 @@ pub(super) fn rebuild_group(s: &CgcState) -> GroupState {
             assignment_state: m.assignment_state,
             assigned_partitions: to_map(&m.assigned),
             partitions_pending_revocation: to_map(&m.pending_revocation),
+            assignment_epochs: epochs_to_map(&m.assignment_epochs),
             last_seen: now,
             classic: None,
         };
@@ -86,6 +104,7 @@ pub(super) fn project(
             assignment_state: m.assignment_state,
             assigned: parts_of(Some(&m.assigned_partitions)),
             pending_revocation: parts_of(Some(&m.partitions_pending_revocation)),
+            assignment_epochs: epochs_of(&m.assignment_epochs),
             target: parts_of(g.target.per_member.get(&m.member_id)),
         })
         .collect();

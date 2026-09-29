@@ -147,12 +147,6 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("socket_receive_buffer must be positive", |c| {
             c.socket_receive_buffer = <ByteSize as ByteSizeExt>::ZERO;
         }),
-        ("acl_max_principal must be positive", |c| {
-            c.acl_max_principal = <ByteSize as ByteSizeExt>::ZERO;
-        }),
-        ("acl_max_resource_name must be positive", |c| {
-            c.acl_max_resource_name = <ByteSize as ByteSizeExt>::ZERO;
-        }),
         ("producer_id_expiration must be positive", |c| {
             c.producer_id_expiration = <Time as TimeExt>::ZERO;
         }),

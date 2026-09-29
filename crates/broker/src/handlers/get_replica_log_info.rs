@@ -1,4 +1,4 @@
-//! `GetReplicaLogInfo` (`api_key` 93, KIP-966). This is an inter-broker RPC.
+//! `GetReplicaLogInfo` (`api_key` 1020, KIP-966). This is an inter-broker RPC.
 //! The controller asks this broker for the log-end-offset and the last-written
 //! leader epoch of the partitions that it hosts, which drives offset-aware
 //! unclean recovery. The handler table serves it on the inter-broker listener.

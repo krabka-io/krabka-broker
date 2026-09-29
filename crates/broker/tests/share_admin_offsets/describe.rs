@@ -1,6 +1,6 @@
 //! Tests for `DescribeShareGroupOffsets`, `api_key` 90.
 //!
-//! The module holds the two Describe request helpers that the Alter and Delete
+//! The module holds the Describe request helpers that the Alter and Delete
 //! surfaces also read their results through, and the tests that cover the
 //! reported SPSO and lag of an initialized partition, an unknown topic, and a
 //! broker with share groups disabled.
@@ -10,21 +10,27 @@ use std::time::Duration;
 use assert2::{assert, check};
 use krabka_broker::Broker;
 use krabka_client_core::Client;
-use krabka_protocol::owned::describe_share_group_offsets_request::{
-    DescribeShareGroupOffsetsRequest, DescribeShareGroupOffsetsRequestGroup,
-    DescribeShareGroupOffsetsRequestTopic,
+use krabka_protocol::{
+    owned::{
+        describe_share_group_offsets_request::{
+            DescribeShareGroupOffsetsRequest, DescribeShareGroupOffsetsRequestGroup,
+            DescribeShareGroupOffsetsRequestTopic,
+        },
+        describe_share_group_offsets_response::{
+            DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
+        },
+    },
+    primitives::uuid::Uuid,
 };
 
 use crate::harness::{
-    ACCEPT, NONE, ShareAck, UNKNOWN_TOPIC_OR_PARTITION, UNSUPPORTED_VERSION, acquired_count,
-    bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic,
-    fetch_until_acquired, join, produce_n, share_ack, topic_id, wait_for_share_init,
+    ACCEPT, NONE, ShareAck, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state,
+    broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, join,
+    produce_n, share_ack, topic_id, wait_for_share_init,
 };
 
-/// Sends `DescribeShareGroupOffsets` for one `(group, topic, partitions)`.
-///
-/// The function returns the single topic row. An empty `partitions` list means
-/// "all initialized".
+/// Sends `DescribeShareGroupOffsets` for one `(group, topic, partitions)`
+/// and returns the group row.
 pub async fn describe_offsets(
     client: &Client,
     group: &str,
@@ -32,15 +38,39 @@ pub async fn describe_offsets(
     partitions: Vec<i32>,
 ) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
 {
+    describe_group(
+        client,
+        group,
+        Some(vec![DescribeShareGroupOffsetsRequestTopic {
+            topic_name: topic.into(),
+            partitions,
+            ..Default::default()
+        }]),
+    )
+    .await
+}
+
+/// Sends `DescribeShareGroupOffsets` for every initialized partition of
+/// `group`, a request with no topic list, and returns the group row.
+pub async fn describe_all_offsets(
+    client: &Client,
+    group: &str,
+) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
+{
+    describe_group(client, group, None).await
+}
+
+async fn describe_group(
+    client: &Client,
+    group: &str,
+    topics: Option<Vec<DescribeShareGroupOffsetsRequestTopic>>,
+) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
+{
     let resp = client
         .send(DescribeShareGroupOffsetsRequest {
             groups: vec![DescribeShareGroupOffsetsRequestGroup {
                 group_id: group.into(),
-                topics: Some(vec![DescribeShareGroupOffsetsRequestTopic {
-                    topic_name: topic.into(),
-                    partitions,
-                    ..Default::default()
-                }]),
+                topics,
                 ..Default::default()
             }],
             ..Default::default()
@@ -79,7 +109,8 @@ pub async fn describe_until(
 
 /// Describe reflects the SPSO after a consume that Accepts all records.
 ///
-/// The SPSO advances to 3, and the locally-led partition reports lag 0.
+/// The SPSO advances to 3, and the lag, from the end offset the leader
+/// reports to `ListOffsets`, is 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_reflects_spso_after_consume() {
     let _permit = broker_test_permit().await;
@@ -133,15 +164,17 @@ async fn describe_reflects_spso_after_consume() {
         "SPSO must be 3 after Accept of 0..2, got {}",
         part.start_offset
     );
-    // HWM is 3 (3 produced), SPSO is 3, partition is local ⇒ lag 0.
+    // End offset 3 (3 produced), SPSO 3, 0 delivered past it ⇒ lag 0.
     check!(
         part.lag == 0,
-        "lag must be 0 (HWM 3 − SPSO 3), got {}",
+        "lag must be 0 (end offset 3 − SPSO 3), got {}",
         part.lag
     );
 }
 
-/// Describe of an unknown topic returns `UNKNOWN_TOPIC_OR_PARTITION` per partition.
+/// Describe of an unknown topic reports no data, not an error: start offset
+/// and lag -1, leader epoch 0 and error 0 per partition, the all-zero topic
+/// id, as Kafka's `GroupCoordinatorService.describeShareGroupOffsets`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_unknown_topic() {
     let _permit = broker_test_permit().await;
@@ -160,12 +193,20 @@ async fn describe_unknown_topic() {
         "group-level describe must succeed, got {}",
         group.error_code
     );
-    let part = &group.topics[0].partitions[0];
-    assert!(
-        part.error_code == UNKNOWN_TOPIC_OR_PARTITION,
-        "unknown topic must be UNKNOWN_TOPIC_OR_PARTITION (3), got {}",
-        part.error_code
-    );
+    let expected = vec![DescribeShareGroupOffsetsResponseTopic {
+        topic_name: "nonexistent".into(),
+        topic_id: Uuid::default(),
+        partitions: vec![DescribeShareGroupOffsetsResponsePartition {
+            partition_index: 0,
+            start_offset: -1,
+            leader_epoch: 0,
+            lag: -1,
+            error_code: NONE,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    assert!(group.topics == expected);
 }
 
 /// With `share_group.enable = false`, the admin offset RPCs are unavailable:

@@ -26,14 +26,13 @@ use krabka_protocol::owned::{
 
 use super::{
     handle,
-    test_support::{seed_topic, topic, topic_result},
+    test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
 };
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
     coordinator::bootstrap::OFFSETS_TOPIC,
     test_support::{decode_response, encode_request, peer, principal, request_context},
-    txn::state::TxnEntry,
 };
 
 /// A broker principal: `ClusterAction` on the cluster and nothing else.
@@ -258,20 +257,9 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
         },
     ];
 
-    let (handle_, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(Grants));
-        cfg.transaction_state_num_partitions = 1;
-        cfg.transaction_state_replication_factor = 1;
-    })
-    .await;
+    let (handle_, _dir) =
+        start_coordinator(Arc::new(crate::test_support::ControllerPeerAllowed(Grants))).await;
     let broker = handle_.broker_arc_for_test();
-    handle_.wait_until_controller_leader().await;
-    handle_.wait_until_brokers_registered(1).await;
-    handle_.wait_until_transaction_coordinator_ready().await;
-    seed_topic(&broker, "a", 1).await;
-    seed_topic(&broker, "b", 1).await;
-    let txnv = crate::txn::version::resolve_txn_version(&broker.controller.current_image());
 
     let address = peer();
     // The verify-only case reads the transaction that the case before it
@@ -282,20 +270,7 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
         if !case.verify_only {
             tid = format!("tid-{index}");
             producer_id = 100 + index;
-            broker
-                .txn_coordinator
-                .put(
-                    TxnEntry::new_empty(
-                        tid.clone(),
-                        krabka_log::ProducerId(producer_id),
-                        2,
-                        30_000,
-                        0,
-                    ),
-                    txnv,
-                )
-                .await
-                .expect("seed the open transaction");
+            seed_transaction(&broker, &tid, producer_id).await;
         }
         let user = principal(case.caller);
         let ctx = request_context(&user, &address, "add-partitions-authorization");
@@ -314,16 +289,7 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
             "{}",
             case.name
         );
-        let enlisted: BTreeSet<(String, i32)> = broker
-            .txn_coordinator
-            .get(&tid)
-            .expect("open transaction")
-            .lock()
-            .await
-            .partitions
-            .iter()
-            .map(|tp| (tp.topic.clone(), tp.partition.get()))
-            .collect();
+        let enlisted = enlisted(&broker, &tid).await;
         let want: BTreeSet<(String, i32)> = case
             .enlisted
             .iter()

@@ -23,6 +23,10 @@ use crate::{
 /// stops an approval from being spent twice across a crash: a broker that
 /// committed the transition has committed the consume with it.
 ///
+/// The unregister record carries `broker_epoch`, the epoch of the registration
+/// that it removes, as Kafka's `ReplicationControlManager.unregisterBroker`
+/// writes it. The image refuses an unregistration at any other epoch.
+///
 /// A broker whose `[break_glass]` names no approver gates nothing, and the
 /// answer is then the unregister record alone.
 ///
@@ -34,9 +38,13 @@ pub(super) fn unregister_records(
     image: &MetadataImage,
     config: &BreakGlassConfig,
     node_id: NodeId,
+    broker_epoch: i64,
     now_ms: i64,
 ) -> Result<Vec<MetadataRecord>, BreakGlassDenial> {
-    let record = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord { node_id });
+    let record = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
+        node_id,
+        broker_epoch,
+    });
     if !gate::is_gated(config) {
         return Ok(vec![record]);
     }

@@ -1,14 +1,19 @@
-//! Share fetches under `ShareIsolationLevel::ReadCommitted`. The acquire
-//! window is clamped to the last stable offset, so the records of an open
-//! transaction stay invisible until that transaction commits, and the broker
-//! surfaces them afterwards rather than losing them. The data of an aborted
-//! transaction is archived and never acquired.
+//! Share fetches of a group whose `share.isolation.level` is
+//! `read_committed`. The acquire window is clamped to the last stable offset,
+//! so the records of an open transaction stay invisible until that
+//! transaction commits, and the broker surfaces them afterwards rather than
+//! losing them. The data of an aborted transaction is archived and never
+//! acquired.
+//!
+//! Kafka has no broker isolation key, so each test sets the group override,
+//! and a group without one reads `read_uncommitted`.
 
 use std::{collections::BTreeSet, time::Duration};
 
 use assert2::assert;
-use krabka_broker::{Broker, coordinator::unified::share::config::ShareIsolationLevel};
+use krabka_broker::{Broker, BrokerHandle};
 use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 
 use crate::{
     harness::{
@@ -18,8 +23,33 @@ use crate::{
     share_rpc::{acquired_count, share_fetch},
 };
 
-/// F2 (`read_committed`): with `isolation_level = ReadCommitted`, a share fetch
-/// never surfaces records from an OPEN transaction (offsets past the LSO).
+/// Kafka's `GroupConfig.SHARE_ISOLATION_LEVEL_CONFIG` values.
+const READ_COMMITTED: &str = "read_committed";
+const READ_UNCOMMITTED: &str = "read_uncommitted";
+
+/// Sets the `share.isolation.level` of `group` in the metadata image, beside
+/// the `share.auto.offset.reset=earliest` that `bootstrap_share_state` sets,
+/// in the record `IncrementalAlterConfigs` writes for a group config.
+///
+/// The record replaces the group's whole override map, so it carries both
+/// keys, and it goes after `bootstrap_share_state`.
+async fn set_isolation_level(broker: &BrokerHandle, group: &str, level: &str) {
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+            group_id: group.into(),
+            configs: [
+                ("share.auto.offset.reset".to_owned(), "earliest".to_owned()),
+                ("share.isolation.level".to_owned(), level.to_owned()),
+            ]
+            .into(),
+        }))
+        .await
+        .expect("set share.isolation.level");
+}
+
+/// F2 (`read_committed`): with `share.isolation.level = read_committed`, a
+/// share fetch never surfaces records from an OPEN transaction (offsets past
+/// the LSO).
 ///
 /// A transactional producer begins a txn and sends 3 records but does NOT
 /// commit. The partition's HWM is then 3 while the LSO stays at 0. A
@@ -31,14 +61,15 @@ use crate::{
 async fn read_committed_skips_open_txn_then_sees_committed() {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.isolation_level = ShareIsolationLevel::ReadCommitted;
-    let broker = Broker::start(cfg).await.unwrap();
+    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
+        .await
+        .unwrap();
     let bootstrap = broker.listen_addr().to_string();
     let client = connect(&bootstrap).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
     bootstrap_share_state(&broker, &client, "g1").await;
+    set_isolation_level(&broker, "g1", READ_COMMITTED).await;
     // The krabka producer does not retry a `FindCoordinator` that answers
     // `COORDINATOR_NOT_AVAILABLE`, so the transaction coordinator must serve
     // before `init_transactions`.
@@ -143,7 +174,7 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
     let cases = [
         (
             "read_committed, commit",
-            ShareIsolationLevel::ReadCommitted,
+            Some(READ_COMMITTED),
             true,
             Seen {
                 acquired: BTreeSet::from([0, 1, 2, 4]),
@@ -152,7 +183,7 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
         ),
         (
             "read_committed, abort",
-            ShareIsolationLevel::ReadCommitted,
+            Some(READ_COMMITTED),
             false,
             Seen {
                 acquired: BTreeSet::from([4]),
@@ -161,7 +192,16 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
         ),
         (
             "read_uncommitted, abort",
-            ShareIsolationLevel::ReadUncommitted,
+            Some(READ_UNCOMMITTED),
+            false,
+            Seen {
+                acquired: BTreeSet::from([0, 1, 2, 4]),
+                values: ["a", "b", "c", "v0"].map(String::from).into(),
+            },
+        ),
+        (
+            "no override reads uncommitted, abort",
+            None,
             false,
             Seen {
                 acquired: BTreeSet::from([0, 1, 2, 4]),
@@ -179,17 +219,22 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
     assert!(actual == expected);
 }
 
-async fn transaction_then_record(isolation_level: ShareIsolationLevel, commit: bool) -> Seen {
+/// `isolation_level` is the group's `share.isolation.level`, or `None` for a
+/// group with no override.
+async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) -> Seen {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.isolation_level = isolation_level;
-    let broker = Broker::start(cfg).await.unwrap();
+    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
+        .await
+        .unwrap();
     let bootstrap = broker.listen_addr().to_string();
     let client = connect(&bootstrap).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
     bootstrap_share_state(&broker, &client, "g1").await;
+    if let Some(level) = isolation_level {
+        set_isolation_level(&broker, "g1", level).await;
+    }
     broker.wait_until_transaction_coordinator_ready().await;
 
     let producer = Producer::builder()

@@ -358,7 +358,7 @@ pub(super) fn encode_response(
 ///   in the arms below are exactly those boundaries.
 /// * No `ThrottleTimeMs` field at any version: `SaslHandshake` (17),
 ///   `WriteTxnMarkers` (27), `SaslAuthenticate` (36), `DescribeQuorum` (55),
-///   the share-coordinator state RPCs (83-87) and `GetReplicaLogInfo` (93).
+///   the share-coordinator state RPCs (83-87) and `GetReplicaLogInfo` (1020).
 ///   There is nothing to echo. `Vote` (52), `BeginQuorumEpoch` (53),
 ///   `EndQuorumEpoch` (54) and `Envelope` (58) are throttle-free as well, but
 ///   the broker does not advertise them, so the audit does not reach them.
@@ -425,7 +425,9 @@ pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion
         | ApiKey::StreamsGroupDescribe
         | ApiKey::DescribeShareGroupOffsets
         | ApiKey::AlterShareGroupOffsets
-        | ApiKey::DeleteShareGroupOffsets => true,
+        | ApiKey::DeleteShareGroupOffsets
+        | ApiKey::StreamsGroupTopologyDescriptionUpdate
+        | ApiKey::UnregisterController => true,
         // Moved to the front at v1.
         ApiKey::Fetch
         | ApiKey::FindCoordinator

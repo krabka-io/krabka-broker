@@ -405,8 +405,6 @@ mod tests {
             "sendfile_min",
             "socket_send_buffer",
             "socket_receive_buffer",
-            "acl_max_principal",
-            "acl_max_resource_name",
             "record_decompression_output_floor",
             "record_decompression_output_ceiling",
             // `message_max_bytes` is deliberately absent: Kafka declares it an

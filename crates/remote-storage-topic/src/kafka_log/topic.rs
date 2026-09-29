@@ -8,7 +8,10 @@
 
 use std::collections::BTreeMap;
 
-use krabka_client_admin::{AdminClient, CreateTopicSpec, IncrementalAlterOp, TopicMutationOptions};
+use krabka_client_admin::{
+    AdminClient, AlterConfigOp, ConfigResource, CreateTopicSpec, IncrementalAlterConfigsOptions,
+    TopicMutationOptions,
+};
 use krabka_client_core::ConnectionOptions;
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tracing::{debug, instrument, warn};
@@ -79,6 +82,7 @@ pub(super) async fn ensure_topic(
         partitions: cfg.num_partitions,
         replicas: cfg.replication,
         configs,
+        replica_assignments: BTreeMap::new(),
     };
     let outcomes = admin
         .create_topics(
@@ -123,16 +127,18 @@ pub(super) async fn ensure_topic(
 
 async fn ensure_compacted(admin: &mut AdminClient, topic: &str) -> Result<(), MetadataLogError> {
     let outcomes = admin
-        .incremental_alter_configs(&[IncrementalAlterOp::Set {
-            topic: topic.to_owned(),
-            key: "cleanup.policy".into(),
-            value: "compact".into(),
-        }])
+        .incremental_alter_configs(
+            &BTreeMap::from([(
+                ConfigResource::topic(topic),
+                vec![AlterConfigOp::set("cleanup.policy", "compact")],
+            )]),
+            IncrementalAlterConfigsOptions::default(),
+        )
         .await
         .map_err(|error| {
             MetadataLogError::Other(format!("set cleanup.policy=compact failed: {error}"))
         })?;
-    if let Some(error) = outcomes.into_iter().find_map(|outcome| outcome.error) {
+    if let Some(error) = outcomes.into_values().find_map(Result::err) {
         return Err(MetadataLogError::Other(format!(
             "set cleanup.policy=compact for {topic} failed: {error:?}"
         )));

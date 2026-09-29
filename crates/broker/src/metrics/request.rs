@@ -207,16 +207,17 @@ impl BrokerMetrics {
 
 /// Resolve a wire `api_key` to the name used as the metric label.
 ///
-/// A Kafka api key resolves to its `ApiKey` variant name. A krabka-private api
-/// key resolves through [`krabka_private_api_key_label_name`], because
-/// `ApiKey::from_i16` does not know that range. Anything else folds under
-/// [`UNKNOWN_LABEL`].
+/// An api key the generated `ApiKey` enum knows resolves to its variant name.
+/// That covers every Kafka key and `GetReplicaLogInfo` (1020), the one
+/// krabka-private key with a generated schema. Any other krabka-private api
+/// key resolves through [`krabka_private_api_key_label_name`]. Anything else
+/// folds under [`UNKNOWN_LABEL`].
 fn api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'static str {
-    if api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR {
-        return krabka_private_api_key_label_name(api_key);
-    }
     match krabka_protocol::api_key::ApiKey::from_i16(api_key) {
         Some(k) => k.into(),
+        None if api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR => {
+            krabka_private_api_key_label_name(api_key)
+        }
         None => UNKNOWN_LABEL,
     }
 }
@@ -365,8 +366,12 @@ mod tests {
                 crate::handlers::WRITE_BARRIER_MARKERS_API_KEY,
                 "WriteBarrierMarkers",
             ),
-            // A Kafka api key still resolves through the generated enum.
+            // A Kafka api key still resolves through the generated enum, and
+            // so does the one krabka-private key that has a generated schema.
             (0, "Produce"),
+            (1020, "GetReplicaLogInfo"),
+            // Kafka trunk's key 93 is no longer GetReplicaLogInfo.
+            (93, "StreamsGroupTopologyDescriptionUpdate"),
             // Garbage inside the krabka-private range, and outside it, both
             // fold under the sentinel.
             (crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR, UNKNOWN_LABEL),

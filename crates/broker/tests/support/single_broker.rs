@@ -16,9 +16,26 @@ pub struct InProcess {
 }
 
 pub async fn start() -> InProcess {
+    start_configured(|_| {}).await
+}
+
+/// [`start`] with `legacy_request_versions_enable` set, for the tests that
+/// drive the pre-4.0 `Fetch`, `ListOffsets` and `Produce` versions Kafka 4.x
+/// refuses and krabka serves only on request.
+pub async fn start_legacy() -> InProcess {
+    start_configured(|config| {
+        config.features.legacy_request_versions =
+            krabka_broker::api_catalog::LegacyRequestVersions::Enabled;
+    })
+    .await
+}
+
+/// [`start`] with `configure` applied to the `for_tests` config first.
+pub async fn start_configured(configure: impl FnOnce(&mut BrokerConfig)) -> InProcess {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     config.heartbeat_timeout = krabka_units::secs(30);
+    configure(&mut config);
     let broker = Broker::start(config).await.expect("broker start");
     broker.wait_until_broker_alive(1).await;
     let bootstrap = broker.listen_addr().to_string();

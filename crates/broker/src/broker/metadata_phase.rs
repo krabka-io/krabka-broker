@@ -184,6 +184,8 @@ async fn start_metadata_source(
             admin_router: admin_router
                 .clone()
                 .map(|router| router as Arc<dyn krabka_raft::ControllerAdminRouter>),
+            unstable_api_versions: config.features.unstable_api_versions,
+            unstable_feature_versions: config.features.unstable_feature_versions,
             max_bytes_between_snapshots: config.metadata_max_bytes_between_snapshots,
             max_snapshot_interval: config.metadata_max_snapshot_interval,
             snapshot_interval_records: config.metadata_snapshot_interval_records,

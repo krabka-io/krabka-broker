@@ -21,6 +21,7 @@ use crate::{
 pub(super) fn group_config_record(
     resource: &AlterConfigsResource,
     defaults: &StreamsGroupConfig,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
     if resource.resource_name.is_empty() {
         return Err((
@@ -33,7 +34,7 @@ pub(super) fn group_config_record(
         .iter()
         .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap_or_default()))
         .collect();
-    validate_group_configs(&overrides, defaults)
+    validate_group_configs(&overrides, defaults, unstable)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
         group_id: resource.resource_name.clone(),
@@ -59,6 +60,7 @@ mod tests {
                 )],
             ),
             &StreamsGroupConfig::default(),
+            crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect("valid group replacement");
 
@@ -77,6 +79,7 @@ mod tests {
         let error = group_config_record(
             &group_resource("streams-app", &[("bogus.key", "1")]),
             &StreamsGroupConfig::default(),
+            crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect_err("unknown group config key must be rejected");
         assert!(error.0 == codes::INVALID_CONFIG);
@@ -93,6 +96,7 @@ mod tests {
                 )],
             ),
             &StreamsGroupConfig::default(),
+            crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect_err("out-of-bounds session timeout must be rejected");
         assert!(error.0 == codes::INVALID_CONFIG);
@@ -100,8 +104,12 @@ mod tests {
 
     #[test]
     fn group_replacement_rejects_empty_group_id() {
-        let error = group_config_record(&group_resource("", &[]), &StreamsGroupConfig::default())
-            .expect_err("empty group id must be rejected");
+        let error = group_config_record(
+            &group_resource("", &[]),
+            &StreamsGroupConfig::default(),
+            crate::api_catalog::UnstableApiVersions::Enabled,
+        )
+        .expect_err("empty group id must be rejected");
         assert!(error.0 == codes::INVALID_REQUEST);
     }
 }

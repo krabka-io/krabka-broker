@@ -131,6 +131,33 @@ pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) ->
     chosen.join(&leaf)
 }
 
+/// [`place_partition_dir`] with KIP-1066 cordoned directories: an existing
+/// location in any of `log_dirs` still wins, and a new partition goes to the
+/// least-loaded directory `cordoned` leaves open, as Kafka's
+/// `LogManager.nextLogDirs` filters the cordoned ones out.
+#[must_use]
+pub(crate) fn place_partition_dir_avoiding(
+    log_dirs: &[PathBuf],
+    cordoned: &crate::cordoned_log_dirs::CordonedLogDirs,
+    topic: &str,
+    partition: i32,
+) -> PathBuf {
+    let existing = partition_dir_in(log_dirs, topic, partition);
+    existing.unwrap_or_else(|| {
+        place_partition_dir(&cordoned.placement_dirs(log_dirs), topic, partition)
+    })
+}
+
+/// The `<dir>/<topic>-<partition>` path of the first directory in `log_dirs`
+/// that already holds the partition.
+fn partition_dir_in(log_dirs: &[PathBuf], topic: &str, partition: i32) -> Option<PathBuf> {
+    let leaf = format!("{topic}-{partition}");
+    log_dirs
+        .iter()
+        .map(|dir| dir.join(&leaf))
+        .find(|candidate| candidate.exists())
+}
+
 /// Scans every directory in `log_dirs` and returns each discovered
 /// `(topic, partition, owning_dir)`.
 ///
@@ -165,7 +192,7 @@ pub fn scan_all(log_dirs: &[PathBuf]) -> Result<Vec<(String, i32, PathBuf)>, Bro
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use tempfile::tempdir;
 
     use super::*;
@@ -229,6 +256,35 @@ mod tests {
         std::fs::create_dir(a.path().join("t-0")).unwrap();
         std::fs::create_dir(a.path().join("t-1")).unwrap();
         assert!(place_partition_dir(&dirs, "t", 2) == b.path().join("t-2"));
+    }
+
+    /// A new partition skips a cordoned directory even when it is the least
+    /// loaded, and a partition that already lives in one stays there.
+    #[test]
+    fn placement_avoids_cordoned_dirs_but_keeps_existing_partitions() {
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        let dirs = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+        std::fs::create_dir(b.path().join("t-0")).unwrap();
+        let cordoned = crate::cordoned_log_dirs::CordonedLogDirs::new(
+            dirs.clone(),
+            Some(a.path().display().to_string()),
+        );
+        let cases = [
+            ("a new partition", 1, b.path().join("t-1")),
+            ("an existing partition", 0, b.path().join("t-0")),
+        ];
+        for (label, partition, want) in cases {
+            check!(
+                place_partition_dir_avoiding(&dirs, &cordoned, "t", partition) == want,
+                "{label}"
+            );
+        }
+        std::fs::create_dir(a.path().join("u-0")).unwrap();
+        let everything =
+            crate::cordoned_log_dirs::CordonedLogDirs::new(dirs.clone(), Some("*".into()));
+        check!(place_partition_dir_avoiding(&dirs, &everything, "u", 0) == a.path().join("u-0"));
+        check!(place_partition_dir_avoiding(&dirs, &everything, "t", 1) == a.path().join("t-1"));
     }
 
     #[test]

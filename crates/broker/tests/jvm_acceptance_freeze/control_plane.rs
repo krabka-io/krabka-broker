@@ -47,6 +47,7 @@ pub(super) async fn create_topics(
             partitions: 1,
             replicas: 1,
             configs: std::collections::BTreeMap::default(),
+            replica_assignments: std::collections::BTreeMap::new(),
         })
         .collect();
     let outcomes = admin

@@ -277,6 +277,7 @@ async fn process_resource(
                 &resource,
                 image,
                 krabka_metadata::NodeId(broker.config.node_id.0),
+                &broker.config.broker_log_dirs(),
                 &mut out,
                 &mut to_submit,
             );
@@ -307,6 +308,7 @@ async fn process_resource(
                 &resource,
                 image,
                 &broker.config.streams_group,
+                broker.config.features.unstable_api_versions,
                 &mut out,
                 &mut to_submit,
             );

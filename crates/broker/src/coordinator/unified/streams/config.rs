@@ -8,9 +8,10 @@ pub const KEY_NUM_WARMUP_REPLICAS: &str = "streams.num.warmup.replicas";
 pub const KEY_NUM_STANDBY_REPLICAS: &str = "streams.num.standby.replicas";
 pub const KEY_TASK_OFFSET_INTERVAL_MS: &str = "streams.task.offset.interval.ms";
 pub const KEY_ASSIGNOR_NAME: &str = "streams.assignor.name";
+pub const KEY_RACK_AWARE_ASSIGNMENT_TAGS: &str = "streams.rack.aware.assignment.tags";
 pub const KEY_SHARE_AUTO_OFFSET_RESET: &str = "share.auto.offset.reset";
 
-pub const GROUP_CONFIG_KEYS: [&str; 8] = [
+pub const GROUP_CONFIG_KEYS: [&str; 9] = [
     KEY_SESSION_TIMEOUT_MS,
     KEY_HEARTBEAT_INTERVAL_MS,
     KEY_ACCEPTABLE_RECOVERY_LAG,
@@ -18,6 +19,7 @@ pub const GROUP_CONFIG_KEYS: [&str; 8] = [
     KEY_NUM_STANDBY_REPLICAS,
     KEY_TASK_OFFSET_INTERVAL_MS,
     KEY_ASSIGNOR_NAME,
+    KEY_RACK_AWARE_ASSIGNMENT_TAGS,
     KEY_SHARE_AUTO_OFFSET_RESET,
 ];
 
@@ -307,6 +309,11 @@ pub struct StreamsGroupConfig {
     pub task_offset_interval: Duration,
     /// Server-side assignor selection.
     pub assignor: StreamsAssignorKind,
+    /// Kafka's `group.streams.rack.aware.assignment.tags`, which a group
+    /// overrides with `streams.rack.aware.assignment.tags`: the client tag
+    /// keys every member must send. A version 1 heartbeat of a member that
+    /// sends only some of them carries the `MISSING_CLIENT_TAGS` status.
+    pub rack_aware_assignment_tags: Vec<String>,
     /// KIP-932 share-partition start strategy for a group with no persisted
     /// share state.
     pub share_auto_offset_reset: ShareAutoOffsetReset,
@@ -333,6 +340,7 @@ impl Default for StreamsGroupConfig {
             acceptable_recovery_lag: 10_000,
             task_offset_interval: Duration::from_mins(1),
             assignor: StreamsAssignorKind::Auto,
+            rack_aware_assignment_tags: Vec::new(),
             share_auto_offset_reset: ShareAutoOffsetReset::Latest,
             actor_mailbox_capacity: 64,
         }
@@ -374,6 +382,9 @@ impl StreamsGroupConfig {
                     out.task_offset_interval = parse_positive_millis(key, value)?;
                 }
                 KEY_ASSIGNOR_NAME => out.assignor = StreamsAssignorKind::parse(value)?,
+                KEY_RACK_AWARE_ASSIGNMENT_TAGS => {
+                    out.rack_aware_assignment_tags = parse_tag_list(value)?;
+                }
                 KEY_SHARE_AUTO_OFFSET_RESET => {
                     out.share_auto_offset_reset = ShareAutoOffsetReset::parse(value)?;
                 }
@@ -410,8 +421,84 @@ impl StreamsGroupConfig {
         KEY_NUM_STANDBY_REPLICAS.into() => self.num_standby_replicas.to_string(),
         KEY_TASK_OFFSET_INTERVAL_MS.into() => self.task_offset_interval.as_millis().to_string(),
         KEY_ASSIGNOR_NAME.into() => self.assignor.config_name().into(),
+        KEY_RACK_AWARE_ASSIGNMENT_TAGS.into() => self.rack_aware_assignment_tags.join(","),
         KEY_SHARE_AUTO_OFFSET_RESET.into() => self.share_auto_offset_reset.config_value()}
     }
+}
+
+/// Kafka's broker-level `group.streams.rack.aware.assignment.tags`, the
+/// default of every group's [`KEY_RACK_AWARE_ASSIGNMENT_TAGS`].
+pub const BROKER_KEY_RACK_AWARE_ASSIGNMENT_TAGS: &str = "group.streams.rack.aware.assignment.tags";
+
+/// Parses the broker's `group.streams.rack.aware.assignment.tags`, given as
+/// the entries of the Kafka property value, which is those entries joined
+/// with commas.
+///
+/// Kafka checks the two failures in the reverse of the group order.
+/// `KafkaConfig`'s `ConfigDef` parse removes repeated entries and then refuses
+/// an empty one with `ValidList`'s message. After that,
+/// `GroupCoordinatorConfig` re-splits the raw value and refuses a repeated
+/// tag key.
+///
+/// # Errors
+///
+/// Returns Kafka's message for an empty or a repeated tag key.
+pub fn parse_broker_rack_aware_assignment_tags(entries: &[String]) -> Result<Vec<String>, String> {
+    let tags = split_tag_list(&entries.join(","));
+    if tags.iter().any(String::is_empty) {
+        return Err(empty_tag_message(BROKER_KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    if has_duplicate_tag(&tags) {
+        return Err(duplicate_tag_message(BROKER_KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    Ok(tags)
+}
+
+/// Parses `streams.rack.aware.assignment.tags` as Kafka's `GroupConfig`
+/// does. A repeated tag key is refused first
+/// (`validateNoDuplicateRackAwareAssignmentTags` reads the raw value), then an
+/// empty one (`ValidList.anyNonDuplicateValues(true, false)`).
+fn parse_tag_list(value: &str) -> Result<Vec<String>, String> {
+    let tags = split_tag_list(value);
+    if has_duplicate_tag(&tags) {
+        return Err(duplicate_tag_message(KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    if tags.iter().any(String::is_empty) {
+        return Err(empty_tag_message(KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    Ok(tags)
+}
+
+/// Splits a Kafka `LIST` value: the trimmed value split on commas, with the
+/// whitespace next to each comma removed. A blank value is the empty list.
+fn split_tag_list(value: &str) -> Vec<String> {
+    let trimmed = value.trim_matches(|c: char| c <= ' ');
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    trimmed
+        .split(',')
+        .map(|tag| {
+            tag.trim_matches([' ', '\t', '\n', '\u{b}', '\u{c}', '\r'])
+                .to_owned()
+        })
+        .collect()
+}
+
+fn has_duplicate_tag(tags: &[String]) -> bool {
+    let distinct: std::collections::BTreeSet<&String> = tags.iter().collect();
+    distinct.len() != tags.len()
+}
+
+/// The `require` message of Kafka's `GroupConfig` and
+/// `GroupCoordinatorConfig` for a repeated tag key.
+fn duplicate_tag_message(key: &str) -> String {
+    format!("{key} must not contain duplicate tag keys.")
+}
+
+/// `ValidList`'s message for an empty entry.
+fn empty_tag_message(key: &str) -> String {
+    format!("Configuration '{key}' values must not be empty.")
 }
 
 fn parse_positive_millis(key: &str, value: &str) -> Result<Duration, String> {
@@ -463,10 +550,51 @@ mod tests {
                     acceptable_recovery_lag: 10_000,
                     task_offset_interval: Duration::from_mins(1),
                     assignor: StreamsAssignorKind::Auto,
+                    rack_aware_assignment_tags: Vec::new(),
                     share_auto_offset_reset: ShareAutoOffsetReset::Latest,
                     actor_mailbox_capacity: 64,
                 }
         );
+    }
+
+    /// Kafka trunk's `GroupConfig` parses `streams.rack.aware.assignment.tags`
+    /// as a `LIST` and refuses a repeated or an empty tag key, and
+    /// `DescribeConfigs` reports the parsed list joined with commas.
+    #[test]
+    fn rack_aware_assignment_tags_parse_as_kafkas_group_config_does() {
+        const DUPLICATE: &str =
+            "streams.rack.aware.assignment.tags must not contain duplicate tag keys.";
+        const EMPTY: &str =
+            "Configuration 'streams.rack.aware.assignment.tags' values must not be empty.";
+        for (value, want) in [
+            ("", Ok((vec![], ""))),
+            ("  ", Ok((vec![], ""))),
+            ("zone", Ok((vec!["zone"], "zone"))),
+            (" zone ,\track ", Ok((vec!["zone", "rack"], "zone,rack"))),
+            ("rack,zone,rack", Err(DUPLICATE)),
+            ("zone, zone", Err(DUPLICATE)),
+            ("zone,,rack", Err(EMPTY)),
+            ("zone,", Err(EMPTY)),
+        ] {
+            let overrides =
+                maplit::btreemap! {KEY_RACK_AWARE_ASSIGNMENT_TAGS.into() => value.to_owned()};
+            let got = StreamsGroupConfig::default()
+                .with_group_overrides(&overrides)
+                .map(|config| {
+                    let reported =
+                        config.group_config_values()[KEY_RACK_AWARE_ASSIGNMENT_TAGS].clone();
+                    (config.rack_aware_assignment_tags, reported)
+                });
+            let want = want
+                .map(|(tags, reported): (Vec<&str>, &str)| {
+                    (
+                        tags.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                        reported.to_owned(),
+                    )
+                })
+                .map_err(str::to_owned);
+            assert!(got == want, "{value:?}");
+        }
     }
 
     #[test]

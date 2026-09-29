@@ -20,8 +20,8 @@ mod member;
 
 pub use self::{
     assignment::{
-        AssignedTopicPartitions, CurrentMemberAssignmentValue, MemberAssignmentState,
-        TargetAssignmentMemberValue,
+        AssignedTopicPartitions, CurrentMemberAssignmentValue, CurrentTopicPartitions,
+        MemberAssignmentState, TargetAssignmentMemberValue,
     },
     epochs::{GroupMetadataValue, TargetAssignmentMetadataValue},
     keys::{

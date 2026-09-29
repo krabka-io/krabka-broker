@@ -562,11 +562,7 @@ mod tests {
         entry.last_producer_epoch = 8;
         entry.client_transaction_version = 2;
 
-        for txnv in [
-            TxnVersion::Flexible,
-            TxnVersion::Verified,
-            TxnVersion::TwoPhase,
-        ] {
+        for txnv in [TxnVersion::Flexible, TxnVersion::Verified] {
             let decoded = decode_value(&encode_value(&entry, txnv), "tid".into()).expect("decode");
             assert!(decoded.last_producer_epoch == 8, "{txnv:?}");
             assert!(decoded.client_transaction_version == 2, "{txnv:?}");

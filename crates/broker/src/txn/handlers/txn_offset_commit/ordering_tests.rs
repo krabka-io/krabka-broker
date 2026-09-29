@@ -80,6 +80,8 @@ struct Case {
 }
 
 /// One response topic per row, which is the shape every case's request has.
+/// The rows are in response order: Kafka's response builder holds the topic
+/// sweep's rows before the coordinator's.
 fn expected_response(rows: &[(&str, i32, i16)]) -> TxnOffsetCommitResponse {
     TxnOffsetCommitResponse {
         throttle_time_ms: 0,
@@ -193,8 +195,8 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
             staged: false,
             member: Member::Simple,
             expected: vec![
-                ("a", 0, codes::NONE),
                 (DENIED, 0, codes::TOPIC_AUTHORIZATION_FAILED),
+                ("a", 0, codes::NONE),
             ],
             appended: vec![("a", 0)],
         },
@@ -232,8 +234,8 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
             staged: true,
             member: Member::Simple,
             expected: vec![
-                ("a", 0, codes::INVALID_TXN_STATE),
                 (DENIED, 0, codes::TOPIC_AUTHORIZATION_FAILED),
+                ("a", 0, codes::INVALID_TXN_STATE),
             ],
             appended: vec![],
         },
@@ -253,8 +255,8 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
             staged: false,
             member: Member::Simple,
             expected: vec![
-                ("a", 0, codes::NOT_COORDINATOR),
                 (DENIED, 0, codes::TOPIC_AUTHORIZATION_FAILED),
+                ("a", 0, codes::NOT_COORDINATOR),
             ],
             appended: vec![],
         },

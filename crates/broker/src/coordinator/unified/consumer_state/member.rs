@@ -102,6 +102,16 @@ pub struct MemberState {
     pub assignment_state: MemberAssignmentState,
     pub assigned_partitions: HashMap<Uuid, Vec<i32>>,
     pub partitions_pending_revocation: HashMap<Uuid, Vec<i32>>,
+    /// The epoch at which each partition the member holds was assigned to
+    /// it, by topic id and partition index (KIP-1251). The map covers
+    /// `assigned_partitions` and `partitions_pending_revocation`, which are
+    /// disjoint. A pending partition keeps the epoch it was assigned at, as
+    /// Kafka's `ConsumerGroupMember.pendingRevocationEpoch` does.
+    ///
+    /// Change it only through [`MemberState::stamp_assignment_epochs`] and
+    /// [`MemberState::reset_assignment_epochs`], after the partition maps
+    /// change.
+    pub assignment_epochs: HashMap<Uuid, HashMap<i32, i32>>,
     pub last_seen: Instant,
     /// Set if and only if this is a classic member hosted in an upgraded
     /// group.
@@ -169,6 +179,73 @@ impl MemberState {
     pub fn sync_regex_cache(&mut self) {
         let pattern = self.subscribed_topic_regex.take();
         self.set_regex(pattern);
+    }
+
+    /// `true` when the member holds `partition` of `topic_id`, as assigned or
+    /// as pending revocation.
+    #[must_use]
+    pub fn holds(&self, topic_id: &Uuid, partition: i32) -> bool {
+        [
+            &self.assigned_partitions,
+            &self.partitions_pending_revocation,
+        ]
+        .into_iter()
+        .any(|map| {
+            map.get(topic_id)
+                .is_some_and(|parts| parts.contains(&partition))
+        })
+    }
+
+    /// The epoch at which the member was assigned `partition` of `topic_id`.
+    /// This is Kafka's `ConsumerGroupMember.assignmentEpoch`, then
+    /// `pendingRevocationEpoch`. It returns `None` when the member does not
+    /// hold the partition.
+    #[must_use]
+    pub fn assignment_epoch(&self, topic_id: &Uuid, partition: i32) -> Option<i32> {
+        if !self.holds(topic_id, partition) {
+            return None;
+        }
+        self.assignment_epochs
+            .get(topic_id)
+            .and_then(|epochs| epochs.get(&partition))
+            .copied()
+    }
+
+    /// Brings `assignment_epochs` in line with the partitions the member
+    /// holds: a partition it no longer holds loses its epoch, and a partition
+    /// it holds with no epoch yet gets `epoch`.
+    ///
+    /// Kafka's `CurrentAssignmentBuilder.computeNextAssignment` stamps a newly
+    /// assigned partition with the target assignment epoch, which is the
+    /// member epoch the member moves to. A partition the member keeps, or
+    /// moves to pending revocation, keeps its epoch.
+    pub fn stamp_assignment_epochs(&mut self, epoch: i32) {
+        let mut stamped: HashMap<Uuid, HashMap<i32, i32>> = HashMap::new();
+        for (topic_id, parts) in self
+            .assigned_partitions
+            .iter()
+            .chain(&self.partitions_pending_revocation)
+        {
+            let previous = self.assignment_epochs.get(topic_id);
+            let epochs = stamped.entry(*topic_id).or_default();
+            for &partition in parts {
+                let at = previous
+                    .and_then(|previous| previous.get(&partition))
+                    .copied()
+                    .unwrap_or(epoch);
+                epochs.insert(partition, at);
+            }
+        }
+        stamped.retain(|_, epochs| !epochs.is_empty());
+        self.assignment_epochs = stamped;
+    }
+
+    /// Sets the epoch of every held partition to `epoch`, as Kafka's
+    /// `ConsumerGroupMember.Builder.resetAssignedPartitionsEpochsToZero` does
+    /// with 0 for a static member that leaves for a while.
+    pub fn reset_assignment_epochs(&mut self, epoch: i32) {
+        self.assignment_epochs.clear();
+        self.stamp_assignment_epochs(epoch);
     }
 
     /// The subscription regex that compiled successfully, if there is one. It

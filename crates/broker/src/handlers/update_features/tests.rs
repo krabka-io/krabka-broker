@@ -1,19 +1,52 @@
 //! End-to-end tests for the `UpdateFeatures` handler, which drive a live
 //! broker and so are kept out of the module root.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
-use krabka_protocol::owned::update_features_response::UpdatableFeatureResult;
+use krabka_protocol::{
+    UnknownTaggedFields, owned::update_features_response::UpdatableFeatureResult,
+};
 
 use super::*;
 use crate::{
     handlers::update_features::test_support::{
-        VERSION, apply_request, assert_ok_row, assert_row_error, call_with, context,
-        metadata_update, principal, start_broker, validate_only, wait_for_finalized_feature,
+        apply_request, call, call_with, metadata_update, named_update, start_broker, validate_only,
+        wait_for_finalized_feature,
     },
     test_support::DenyAll,
 };
+
+const PREFIX: &str =
+    "The update failed for all features since the following feature had an error: ";
+
+fn refused(message: &str) -> UpdateFeaturesResponse {
+    UpdateFeaturesResponse {
+        throttle_time_ms: 0,
+        error_code: codes::INVALID_UPDATE_VERSION,
+        error_message: Some(format!("{PREFIX}{message}")),
+        results: vec![],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    }
+}
+
+fn accepted(features: &[&str]) -> UpdateFeaturesResponse {
+    UpdateFeaturesResponse {
+        throttle_time_ms: 0,
+        error_code: codes::NONE,
+        error_message: None,
+        results: features
+            .iter()
+            .map(|&feature| UpdatableFeatureResult {
+                feature: feature.into(),
+                error_code: codes::NONE,
+                error_message: Some("NONE".into()),
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            })
+            .collect(),
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    }
+}
 
 #[tokio::test]
 async fn handle_denies_cluster_alter_with_top_level_error() {
@@ -29,252 +62,161 @@ async fn handle_denies_cluster_alter_with_top_level_error() {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         error_message: Some("Cluster authorization failed.".to_string()),
         results: vec![],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
+/// A self-bootstrapped broker finalizes `metadata.version` 30 (4.3-IV0),
+/// `group.version` 1 and `transaction.version` 2, and leaves
+/// `share.version`, `streams.version` and ELR off.
 #[tokio::test]
-async fn handle_rejects_empty_feature_updates() {
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        validate_only(Vec::new()),
-    ))
+async fn requests_apply_atomically_with_kafkas_response_shape() {
+    let group = "group.version";
+    let share = "share.version";
+    let cases = [
+        (
+            "a failing row fails the request, v1",
+            1,
+            vec![named_update(group, 0, 2), named_update(share, 9, 1)],
+            false,
+            refused(
+                "Invalid update version 9 for feature share.version. Local controller 1 only \
+                 supports versions 0-1",
+            ),
+            Some(1),
+        ),
+        (
+            "a failing row fails the request, v2",
+            2,
+            vec![named_update(group, 0, 2), named_update(share, 9, 1)],
+            false,
+            refused(
+                "Invalid update version 9 for feature share.version. Local controller 1 only \
+                 supports versions 0-1",
+            ),
+            Some(1),
+        ),
+        (
+            "success, v0",
+            0,
+            vec![named_update(group, 1, 1)],
+            false,
+            accepted(&[group]),
+            Some(1),
+        ),
+        (
+            "success, v1",
+            1,
+            vec![named_update(group, 0, 2)],
+            false,
+            accepted(&[group]),
+            None,
+        ),
+        (
+            "success, v2",
+            2,
+            vec![named_update(group, 0, 2)],
+            false,
+            accepted(&[]),
+            None,
+        ),
+        (
+            "validate_only, v2",
+            2,
+            vec![named_update(group, 0, 2)],
+            true,
+            accepted(&[]),
+            Some(1),
+        ),
+        (
+            "an empty request is a no-op",
+            1,
+            vec![],
+            false,
+            accepted(&[]),
+            Some(1),
+        ),
+        (
+            "a repeated name keeps its last row",
+            1,
+            vec![named_update(group, 9, 1), named_update(group, 0, 2)],
+            false,
+            accepted(&[group, group]),
+            None,
+        ),
+    ];
+    for (case, version, updates, validate, expected, group_after) in cases {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let req = UpdateFeaturesRequest {
+            feature_updates: updates,
+            validate_only: validate,
+            ..Default::default()
+        };
+        let resp = Box::pin(call(&broker_handle, req, version)).await;
+        assert!(resp == expected, "{case}");
+        // A write that lands turns group.version off, so wait for it before
+        // reading the level back; a refusal or a no-op has nothing to wait on.
+        let broker = broker_handle.broker_arc_for_test();
+        if group_after.is_none() {
+            wait_for_group_version_off(&broker).await;
+        }
+        assert!(
+            broker.controller.current_image().finalized_feature(group) == group_after,
+            "{case}"
+        );
+        broker_handle.shutdown().await;
+    }
+}
+
+async fn wait_for_group_version_off(broker: &crate::broker::Broker) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while broker
+            .controller
+            .current_image()
+            .finalized_feature("group.version")
+            .is_some()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("group.version turned off");
+}
+
+#[tokio::test]
+async fn handle_persists_a_lossless_metadata_downgrade() {
+    // 4.4-IV0 is a Kafka trunk level: the controller supports it only under
+    // `unstable.feature.versions.enable`.
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
+    })
     .await;
-
-    let expected = UpdateFeaturesResponse {
-        throttle_time_ms: 0,
-        error_code: codes::INVALID_REQUEST,
-        error_message: Some("Can not provide empty feature updates in the request.".to_string()),
-        results: vec![],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_accepts_validate_only_metadata_version_at_supported_max() {
-    let req = validate_only(vec![metadata_update(
-        crate::features::METADATA_VERSION_MAX,
+    let target = crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1;
+    // 4.3-IV0 changed metadata, so step up to 4.4-IV0 first and back down
+    // to 4.3-IV0, a downgrade across 4.4-IV0 alone.
+    let up = Box::pin(call(
+        &broker_handle,
+        apply_request(vec![metadata_update(target + 2, 1)]),
         1,
-    )]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
     ))
     .await;
-
-    let expected = UpdateFeaturesResponse {
-        throttle_time_ms: 0,
-        error_code: codes::NONE,
-        error_message: None,
-        results: vec![UpdatableFeatureResult {
-            feature: crate::features::METADATA_VERSION.to_string(),
-            error_code: codes::NONE,
-            error_message: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_persists_non_validate_feature_update() {
-    let version = VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    assert!(up == accepted(&[crate::features::METADATA_VERSION]));
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = context(&principal, &peer);
-    // A safe downgrade one level below the bootstrapped 4.3-IV0.
-    let req = apply_request(vec![metadata_update(
-        crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1,
-        2,
-    )]);
+    wait_for_finalized_feature(&broker, crate::features::METADATA_VERSION, target + 2).await;
 
-    let resp = handle(&broker, req, version, &ctx).await;
-
-    assert!(resp.error_code == codes::NONE, "{resp:?}");
-    assert_ok_row(&resp, crate::features::METADATA_VERSION);
-    wait_for_finalized_feature(
-        &broker,
-        crate::features::METADATA_VERSION,
-        crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1,
-    )
-    .await;
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_reports_duplicate_feature_on_second_row_only() {
-    let req = validate_only(vec![
-        metadata_update(crate::features::METADATA_VERSION_MAX, 1),
-        metadata_update(crate::features::METADATA_VERSION_MAX, 1),
-    ]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    let expected = UpdateFeaturesResponse {
-        throttle_time_ms: 0,
-        error_code: codes::NONE,
-        error_message: None,
-        results: vec![
-            UpdatableFeatureResult {
-                feature: crate::features::METADATA_VERSION.to_string(),
-                error_code: codes::NONE,
-                error_message: None,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
-            UpdatableFeatureResult {
-                feature: crate::features::METADATA_VERSION.to_string(),
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some(
-                    "Provided feature can not be updated more than once in the request."
-                        .to_string(),
-                ),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
-        ],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_rejects_negative_level_with_supported_range_message() {
-    let req = validate_only(vec![metadata_update(-1, 1)]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    assert_row_error(&resp, crate::features::METADATA_VERSION, "supported range");
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_rejects_level_above_supported_max_with_range_message() {
-    let req = validate_only(vec![metadata_update(
-        crate::features::METADATA_VERSION_MAX + 1,
+    let down = Box::pin(call(
+        &broker_handle,
+        apply_request(vec![metadata_update(target + 1, 2)]),
         1,
-    )]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
     ))
     .await;
 
-    assert_row_error(&resp, crate::features::METADATA_VERSION, "supported range");
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_accepts_lossless_safe_metadata_downgrade() {
-    let req = validate_only(vec![metadata_update(
-        krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
-        2,
-    )]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    assert!(resp.error_code == codes::NONE, "{resp:?}");
-    assert_ok_row(&resp, crate::features::METADATA_VERSION);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-/// Kafka's `FeatureControlManager.updateFeature` checks node support before
-/// the downgrade rules, so a level no registered node supports is refused for
-/// that reason first.
-async fn handle_rejects_metadata_downgrade_below_online_floor() {
-    let req = validate_only(vec![metadata_update(
-        crate::features::METADATA_VERSION_MIN - 1,
-        2,
-    )]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    assert_row_error(
-        &resp,
-        crate::features::METADATA_VERSION,
-        "does not support metadata.version level",
-    );
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_rejects_online_metadata_version_deletion() {
-    let req = validate_only(vec![metadata_update(0, 2)]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    assert_row_error(
-        &resp,
-        crate::features::METADATA_VERSION,
-        "does not support metadata.version level",
-    );
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_rejects_downgrade_without_downgrade_flag() {
-    // An UPGRADE-typed update one level below the bootstrapped 4.3-IV0.
-    let req = validate_only(vec![metadata_update(
-        crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1,
-        1,
-    )]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    assert_row_error(&resp, crate::features::METADATA_VERSION, "downgrade");
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_rejects_delete_zero_without_downgrade_flag() {
-    let req = validate_only(vec![metadata_update(0, 1)]);
-
-    let (resp, broker_handle, _dir) = Box::pin(call_with(
-        Arc::new(crate::authorizer::AllowAllAuthorizer),
-        req,
-    ))
-    .await;
-
-    // Level 0 is outside every node's supported range, which Kafka checks
-    // before the downgrade flag.
-    assert_row_error(
-        &resp,
-        crate::features::METADATA_VERSION,
-        "does not support metadata.version level",
-    );
+    assert!(down == accepted(&[crate::features::METADATA_VERSION]));
+    wait_for_finalized_feature(&broker, crate::features::METADATA_VERSION, target + 1).await;
     broker_handle.shutdown().await;
 }

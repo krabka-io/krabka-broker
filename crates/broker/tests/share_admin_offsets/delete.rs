@@ -14,7 +14,7 @@ use krabka_protocol::owned::delete_share_group_offsets_request::{
 };
 
 use crate::{
-    describe::{describe_offsets, describe_until},
+    describe::{describe_all_offsets, describe_until},
     harness::{
         NONE, bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic,
         fetch_until_acquired, join, leave, produce_n, topic_id, wait_for_share_init,
@@ -93,11 +93,10 @@ async fn delete_removes_topic() {
 /// The deleted topic is then gone from the initialized set of the group, and it
 /// STAYS gone after a restart, because the seed no longer lists it again.
 ///
-/// A describe with an explicit topic name but an EMPTY partitions list
-/// enumerates the *initialized* partitions of the group for that topic, read
-/// from the v14 metadata cache. Before the delete, that returns partition [0].
-/// After the delete rewrite, the topic has no initialized partitions, so the
-/// `partitions` list of the row is empty. This holds before AND after a
+/// A describe with no topic list enumerates the *initialized* partitions of
+/// the group, read from the v14 metadata cache. Before the delete, that
+/// returns partition [0] of "t". After the delete rewrite, "t" has no
+/// initialized partitions, so it has no row. This holds before AND after a
 /// restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_rewrites_metadata_topic_absent_after_restart() {
@@ -120,9 +119,9 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         wait_for_share_init(&broker, "g1", tid, 0).await;
         let _ = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
 
-        // Sanity: a describe with empty partitions enumerates the initialized
+        // Sanity: a describe with no topic list enumerates the initialized
         // partitions for "t" — partition [0] is present before the delete.
-        let before = describe_offsets(&client, "g1", "t", vec![]).await;
+        let before = describe_all_offsets(&client, "g1").await;
         let before_parts: Vec<i32> = before
             .topics
             .iter()
@@ -154,7 +153,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
             resp.responses[0].error_code
         );
 
-        // The describe-by-name with empty partitions no longer enumerates any
+        // The describe with no topic list no longer enumerates any
         // initialized partition for "t" (the v14 metadata record was rewritten).
         // This is a NEGATIVE condition (absence); no broker awaiter exists for
         // "metadata rewrite complete", so we poll until the absence is observed.
@@ -162,7 +161,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         // in-flight, not guessing arbitrary settle time.
         let mut absent = false;
         for _ in 0..40 {
-            let g = describe_offsets(&client, "g1", "t", vec![]).await;
+            let g = describe_all_offsets(&client, "g1").await;
             let parts: Vec<i32> = g
                 .topics
                 .iter()
@@ -198,12 +197,12 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         bootstrap_share_state(&broker, &client, "g1").await;
 
         // After restart, the v14 seed no longer lists "t" (the rewrite removed
-        // it), so the describe-by-name with empty partitions must STILL
+        // it), so the describe with no topic list must STILL
         // enumerate zero initialized partitions. Poll a window to let the
         // coordinator finish replaying state, asserting absence throughout.
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
         loop {
-            let g = describe_offsets(&client, "g1", "t", vec![]).await;
+            let g = describe_all_offsets(&client, "g1").await;
             let parts: Vec<i32> = g
                 .topics
                 .iter()

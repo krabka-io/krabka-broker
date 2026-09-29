@@ -95,7 +95,7 @@ only while a majority of the remaining voters is alive.
 
    ```
    krabka-format --log-dir /var/lib/krabka --node-id 3 \
-       --cluster-id 0d7e2f5a-9b1c-4c1e-8a3f-2b6d1e4c9f10 \
+       --cluster-id DX4vWpscTB6KPyttHkyfEA \
        --directory-id <new-dir-3> --no-initial-controllers
    ```
 

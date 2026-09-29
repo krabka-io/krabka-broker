@@ -185,6 +185,7 @@ mod tests {
             assignment_state: MemberAssignmentState::Stable,
             assigned_partitions: HashMap::new(),
             partitions_pending_revocation: HashMap::new(),
+            assignment_epochs: HashMap::new(),
             last_seen: Instant::now(),
             classic: None,
         });
@@ -232,6 +233,7 @@ mod tests {
             // target, not from this empty map.
             assigned_partitions: std::collections::HashMap::new(),
             partitions_pending_revocation: std::collections::HashMap::new(),
+            assignment_epochs: std::collections::HashMap::new(),
             last_seen: Instant::now(),
             classic: Some(ClassicMemberFacade {
                 generation_id: 7,

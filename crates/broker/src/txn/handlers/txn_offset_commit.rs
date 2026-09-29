@@ -8,18 +8,17 @@
 //! Versions 0 to 2 are non-flexible and carry no `generation_id` or
 //! `member_id` field. Versions 3 to 5 are flexible, carry tagged fields, and
 //! add `generation_id`, `member_id`, and `group_instance_id`. Version 6
-//! (KIP-1319) names each topic by `TopicId` instead of `Name`: an id the image
+//! (KIP-1319, Kafka trunk; 4.3.1 stops at 5) names each topic by `TopicId`
+//! instead of `Name`, in the request and in the response. An id the image
 //! does not hold, or the zero id, answers `UNKNOWN_TOPIC_ID (100)` on every
-//! row of that topic before the topic `Read` gate. At every version the
-//! committed offset records the topic's id, as Kafka trunk's `KafkaApis`
-//! hands it to the coordinator.
+//! row of that topic before the topic `Read` gate, and an id it holds is
+//! authorized and checked for existence under the topic's name. At every
+//! version the committed offset records the topic's id, as Kafka trunk's
+//! `KafkaApis` hands it to the coordinator. v6 also answers a missing group
+//! `GROUP_ID_NOT_FOUND` and a refused member epoch `STALE_MEMBER_EPOCH`,
+//! which older versions answer `ILLEGAL_GENERATION`.
 //!
-//! The broker does not advertise version 6 yet: krabka-client-rs' producer
-//! negotiates the highest shared version and fills only `Name`, which v6 does
-//! not carry, so its `sendOffsetsToTransaction` would answer
-//! `UNKNOWN_TOPIC_ID` against a broker that did.
-//!
-//! On v3 and above, the shared `validate_group_commit` validates the
+//! On v3 and above, the shared `validate_commit` validates the
 //! consumer-group metadata against the classic generation or the KIP-848
 //! next-gen member epoch. KIP-447 requires fencing that is "consistent with
 //! normal offset fencing".
@@ -50,10 +49,12 @@
 //!
 //! The denied and unknown rows keep their own codes on every later exit, as
 //! Kafka merges the group coordinator's answer into a response builder that
-//! already holds them (`KafkaApis.scala:2185`). When no row survives the
-//! sweep, the handler answers those rows and stops, as Kafka does not call
-//! `commitTransactionalOffsets` then (`KafkaApis.scala:2163-2165`): no routing
-//! check, no fencing code, no transaction registration. Otherwise the group
+//! already holds them (`KafkaApis.scala:2185`). The response lists the
+//! sweep's rows first, as that builder does; see [`response::build_response`].
+//! When no row survives the sweep, the handler answers those rows and stops,
+//! as Kafka does not call `commitTransactionalOffsets` then
+//! (`KafkaApis.scala:2163-2165`): no routing check, no fencing code, no
+//! transaction registration. Otherwise the group
 //! routing check runs first, so a client on the wrong broker gets the
 //! retriable `NOT_COORDINATOR` and a shard still replaying answers
 //! `COORDINATOR_LOAD_IN_PROGRESS`, then the staged producer identity gate, then
@@ -87,7 +88,10 @@ use crate::{
     coordinator::{
         partitioner::{GroupRoutingError, local_partition_for_group},
         unified::{
-            actor::{GroupActorMessage, GroupKindTag, TxnOffsetReservation, validate_group_commit},
+            actor::{
+                CommitFence, CommitRequest, GroupActorMessage, GroupKindTag, TxnOffsetReservation,
+                validate_commit,
+            },
             streams::actor::validate_streams_group_commit,
         },
     },
@@ -143,7 +147,7 @@ pub(crate) async fn handle(
     // ── KIP-1319: name every topic and give it its id ──────────
     // ── ACL preamble: per-topic Read ──────────────────────────
     // ── Existence check: authorized topic/partition must be in the image ──
-    let unresolved_ids = version >= FIRST_TOPIC_ID_VERSION;
+    let topic_ids = version >= FIRST_TOPIC_ID_VERSION;
     let (denied_topics, unknown_rows) = {
         let image = broker.controller.current_image();
         resolve_topics(&mut req, version, &image);
@@ -151,7 +155,7 @@ pub(crate) async fn handle(
             .topics
             .iter()
             .map(|t| t.name.as_str())
-            .filter(|name| !(unresolved_ids && name.is_empty()))
+            .filter(|name| !(topic_ids && name.is_empty()))
             .collect();
         let topic_decisions = authorize_topics(
             broker.config.authorizer.as_ref(),
@@ -182,7 +186,7 @@ pub(crate) async fn handle(
     let respond = |code: i16| {
         encode_resp(
             version,
-            &build_response(&req, code, unresolved_ids, &denied_topics, &unknown_rows),
+            &build_response(&req, code, topic_ids, &denied_topics, &unknown_rows),
         )
     };
 
@@ -256,12 +260,12 @@ pub(crate) async fn handle(
     //    A producer that supplies no metadata (empty member_id,
     //    generation_id_or_member_epoch = -1) is a simple consumer and is not
     //    fenced. The fields only exist on v3+, so older requests carry the
-    //    simple-consumer defaults and no-op. `validate_group_commit` dispatches
+    //    simple-consumer defaults and no-op. `validate_commit` dispatches
     //    on the actor's LIVE `group.kind`, so a KIP-848-flipped group is fenced
     //    against its current protocol, not the stale spawn-time `handle.kind`.
     // KIP-1071: a streams-group consumer's membership lives in the STREAMS
     // group actor, not the classic one. Route its fencing there (member_epoch
-    // check) — `validate_group_commit` only knows the classic/consumer actor,
+    // check) — `validate_commit` only knows the classic/consumer actor,
     // so validating a streams member against the freshly-created empty classic
     // actor would wrongly reject every EOS offset commit with UNKNOWN_MEMBER_ID.
     if version >= 3 {
@@ -273,11 +277,15 @@ pub(crate) async fn handle(
             )
             .await
         } else {
-            validate_group_commit(
+            validate_commit(
                 &handle,
-                &req.member_id,
-                req.generation_id_or_member_epoch,
-                req.group_instance_id.as_deref(),
+                CommitRequest {
+                    member_id: req.member_id.clone(),
+                    group_instance_id: req.group_instance_id.clone(),
+                    generation_or_epoch: req.generation_id_or_member_epoch,
+                    fence: CommitFence::Transactional,
+                    partitions: committed_partitions(&req, &reserved),
+                },
             )
             .await
         };
@@ -402,16 +410,11 @@ fn resolve_topics(
 /// (`validateTransactionalOffsetCommit`): the consumer and streams groups
 /// raise `StaleMemberEpochException` for an epoch that is not the member's,
 /// which v6 answers as `STALE_MEMBER_EPOCH` (KIP-1319) and older versions as
-/// `ILLEGAL_GENERATION`. The group actors answer a newer epoch with
-/// `FENCED_MEMBER_EPOCH`, which is the same Kafka exception here.
+/// `ILLEGAL_GENERATION`. The per-partition validator of
+/// `commitTransactionalOffset` maps its refusal the same way.
 fn fencing_code(code: i16, version: i16) -> i16 {
     match code {
-        codes::STALE_MEMBER_EPOCH | codes::FENCED_MEMBER_EPOCH
-            if version >= FIRST_TOPIC_ID_VERSION =>
-        {
-            codes::STALE_MEMBER_EPOCH
-        }
-        codes::STALE_MEMBER_EPOCH | codes::FENCED_MEMBER_EPOCH => codes::ILLEGAL_GENERATION,
+        codes::STALE_MEMBER_EPOCH if version < FIRST_TOPIC_ID_VERSION => codes::ILLEGAL_GENERATION,
         other => other,
     }
 }
@@ -432,6 +435,26 @@ fn reserved_keys(
                 let key = (topic.name.clone(), partition.partition_index);
                 (!unknown_rows.contains(&key)).then_some(key)
             })
+        })
+        .collect()
+}
+
+/// The `(topic id, partition)` of every `reserved` key, with the topic id
+/// [`resolve_topics`] gave its topic. These are the partitions Kafka's
+/// `commitTransactionalOffset` runs the per-partition validator on.
+fn committed_partitions(
+    req: &TxnOffsetCommitRequest,
+    reserved: &[(String, i32)],
+) -> Vec<(krabka_protocol::primitives::uuid::Uuid, i32)> {
+    reserved
+        .iter()
+        .map(|(name, partition)| {
+            let topic_id = req
+                .topics
+                .iter()
+                .find(|topic| &topic.name == name)
+                .map_or_else(Default::default, |topic| topic.topic_id);
+            (topic_id, *partition)
         })
         .collect()
 }
@@ -513,9 +536,8 @@ mod tests {
     fn member_epoch_refusals_map_by_version() {
         for (code, version, want) in [
             (codes::STALE_MEMBER_EPOCH, 5, codes::ILLEGAL_GENERATION),
-            (codes::FENCED_MEMBER_EPOCH, 5, codes::ILLEGAL_GENERATION),
             (codes::STALE_MEMBER_EPOCH, 6, codes::STALE_MEMBER_EPOCH),
-            (codes::FENCED_MEMBER_EPOCH, 6, codes::STALE_MEMBER_EPOCH),
+            (codes::FENCED_MEMBER_EPOCH, 5, codes::FENCED_MEMBER_EPOCH),
             (codes::UNKNOWN_MEMBER_ID, 5, codes::UNKNOWN_MEMBER_ID),
             (codes::UNKNOWN_MEMBER_ID, 6, codes::UNKNOWN_MEMBER_ID),
             (codes::ILLEGAL_GENERATION, 6, codes::ILLEGAL_GENERATION),

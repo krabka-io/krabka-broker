@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use assert2::check;
 use krabka_broker::{Broker, BrokerConfig, NodeId};
-use krabka_client_admin::{AdminClient, AdminError, CreateTopicSpec};
+use krabka_client_admin::{
+    AdminClient, AdminError, ConfigResource, CreateTopicSpec, DescribeConfigsOptions,
+};
 
 async fn start_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
@@ -36,6 +38,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
                 partitions: 1,
                 replicas: 1,
                 configs: BTreeMap::new(),
+                replica_assignments: BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
@@ -48,13 +51,17 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
         AdminClient::connect_controller(std::slice::from_ref(&controller_bootstrap))
             .await
             .unwrap();
+    let topic = ConfigResource::topic("controller-admin");
     let configs = controller_admin
-        .describe_configs(&["controller-admin"])
+        .describe_configs(
+            std::slice::from_ref(&topic),
+            DescribeConfigsOptions::default(),
+        )
         .await
         .unwrap();
 
-    check!(configs.len() == 1);
-    check!(configs[0].topic == "controller-admin");
+    check!(configs.keys().collect::<Vec<_>>() == vec![&topic]);
+    check!(configs[&topic].is_ok());
 
     let unsupported_reconciliation = controller_admin
         .reconcile_topic_replication_factor("controller-admin", 1, krabka_units::secs(5))
@@ -79,6 +86,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
                 partitions: 1,
                 replicas: 1,
                 configs: BTreeMap::new(),
+                replica_assignments: BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
@@ -102,10 +110,13 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
     // Kafka's KIP-919 error 115 is a local AdminClient preflight failure. The
     // same controller connection therefore remains usable after rejection.
     let configs = controller_admin
-        .describe_configs(&["controller-admin"])
+        .describe_configs(
+            std::slice::from_ref(&topic),
+            DescribeConfigsOptions::default(),
+        )
         .await
         .unwrap();
-    check!(configs.len() == 1);
+    check!(configs.keys().collect::<Vec<_>>() == vec![&topic]);
     broker.shutdown().await;
 }
 

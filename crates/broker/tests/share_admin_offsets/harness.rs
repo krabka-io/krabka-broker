@@ -39,7 +39,6 @@ use krabka_protocol::{
 };
 
 pub const NONE: i16 = 0;
-pub const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 pub const UNSUPPORTED_VERSION: i16 = 35;
 pub const NON_EMPTY_GROUP: i16 = 68;
 

@@ -44,7 +44,7 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
         rack: config.rack.clone(),
         endpoints,
         log_dirs: log_dir_ids,
-        features: krabka_metadata::supported_feature_ranges(),
+        features: krabka_raft::supported_feature_ranges(config.features.unstable_feature_versions),
     }
 }
 
@@ -120,7 +120,7 @@ fn self_controller_registration_record(
             port,
             protocol: config.controller_listener_protocol,
         }],
-        features: krabka_metadata::supported_feature_ranges(),
+        features: krabka_raft::supported_feature_ranges(config.features.unstable_feature_versions),
     }
 }
 

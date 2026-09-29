@@ -17,14 +17,18 @@ use uuid::Uuid;
 
 use crate::{network::OutboundDialer, types::NodeId};
 
+mod kafka_release;
 mod limits;
 mod routing;
 
 pub use self::{
+    kafka_release::{KAFKA_4_3_1_APIS, ReleasedApi, kafka_4_3_1_api, kafka_4_3_1_max},
     limits::{ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax},
     routing::{
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
-        ControllerAdminRouter, ControllerApiVersion, RaftShardRouter, ShardRouteFuture,
+        ControllerAdminRouter, ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION,
+        RaftShardRouter, ShardRouteFuture, UnstableApiVersions, UnstableFeatureVersions,
+        supported_feature_range, supported_feature_ranges,
     },
 };
 
@@ -134,6 +138,13 @@ pub struct ControllerConfig {
     /// registry here after construction, keeping controller and broker
     /// semantics on one implementation.
     pub admin_router: Option<Arc<dyn ControllerAdminRouter>>,
+    /// Kafka's internal `unstable.api.versions.enable`: whether the controller
+    /// listener advertises and accepts a `latestVersionUnstable` version.
+    pub unstable_api_versions: UnstableApiVersions,
+    /// Kafka's internal `unstable.feature.versions.enable`: whether the
+    /// controller listener advertises feature levels past the latest
+    /// production ones.
+    pub unstable_feature_versions: UnstableFeatureVersions,
     /// `metadata.log.max.record.bytes.between.snapshots` (default 20 MiB).
     pub max_bytes_between_snapshots: ByteSize,
     /// `metadata.log.max.snapshot.interval.ms` (default 1 h; 0 = disabled).
@@ -190,6 +201,8 @@ impl std::fmt::Debug for ControllerConfig {
             .field("handshake", &self.handshake.is_some())
             .field("shard_router", &self.shard_router.is_some())
             .field("admin_router", &self.admin_router.is_some())
+            .field("unstable_api_versions", &self.unstable_api_versions)
+            .field("unstable_feature_versions", &self.unstable_feature_versions)
             .field(
                 "max_bytes_between_snapshots",
                 &self.max_bytes_between_snapshots.human().to_string(),
@@ -247,6 +260,8 @@ impl ControllerConfig {
             handshake: None,
             shard_router: None,
             admin_router: None,
+            unstable_api_versions: UnstableApiVersions::Disabled,
+            unstable_feature_versions: UnstableFeatureVersions::Disabled,
             max_bytes_between_snapshots: DEFAULT_MAX_BYTES_BETWEEN_SNAPSHOTS,
             max_snapshot_interval: DEFAULT_MAX_SNAPSHOT_INTERVAL,
             snapshot_interval_records: 0,

@@ -866,6 +866,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         )
     },
     ConfigKey {
+        kip: Some("KIP-1066"),
+        ..key(
+            crate::cordoned_log_dirs::CORDONED_LOG_DIRS,
+            ConfigScope::Broker,
+            ConfigType::List,
+            Some(""),
+            crate::cordoned_log_dirs::CORDONED_LOG_DIRS_DOC,
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
         kip: Some("KIP-966"),
         ..key(
             UNCLEAN_RECOVERY_STRATEGY,
@@ -1158,6 +1169,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::String,
             None,
             "Server-side task assignor: `auto`, `sticky`, or `highly_available`.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_RACK_AWARE_ASSIGNMENT_TAGS,
+            ConfigScope::Group,
+            ConfigType::List,
+            Some(""),
+            "Client tag keys every member of this streams group must send. A version 1 heartbeat from a member that leaves one out carries the MISSING_CLIENT_TAGS status.",
             ValueCheck::Parsed,
         )
     },

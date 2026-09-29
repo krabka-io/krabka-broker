@@ -246,6 +246,19 @@ pub(crate) fn manual_leaderships(
     Ok(leaderships)
 }
 
+/// The brokers automatic placement leaves out: the `unavailable` ones and, as
+/// Kafka's `ClusterControlManager.usableBrokers` filters on
+/// `BrokerRegistration.hasUncordonedDirs`, every broker whose log directories
+/// are all cordoned (KIP-1066).
+pub(crate) fn automatic_placement_exclusions(
+    image: &krabka_metadata::MetadataImage,
+    unavailable: &std::collections::HashSet<u64>,
+) -> std::collections::HashSet<u64> {
+    let mut excluded = crate::cordoned_log_dirs::fully_cordoned_brokers(image);
+    excluded.extend(unavailable);
+    excluded
+}
+
 /// The registered brokers as the site-aware placement sees them, in node-id
 /// order.
 ///

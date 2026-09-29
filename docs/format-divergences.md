@@ -1,0 +1,65 @@
+# `krabka-format` and `kafka-storage format`
+
+This document lists every place where `krabka-format` differs from `kafka-storage format`, and why. It is the expected-difference list for a conformance comparison between the two commands: a difference named here is intended, and any other difference is a bug.
+
+The Kafka behaviour below was observed with `kafka-storage format` on the `apache/kafka:4.3.1` image, and read from `StorageTool.scala`, `Formatter.java`, and `MetaPropertiesEnsemble.java` at the `4.3.1` tag.
+
+## Design Goals
+
+- **An id moves unchanged.** A cluster id or a directory id that one tool prints is accepted by the other tool. An operator copies ids between krabka and the Kafka tools, such as `kafka-metadata-quorum`, so the string form has to be the same.
+- **One run formats the node.** A node with several disks is formatted by one command, and each directory gets the same cluster id and its own directory id.
+- **A rerun is safe.** An init container runs the formatter on every pod start. A run over formatted directories changes nothing, and a run after a failed run finishes the job.
+- **Differences are deliberate.** Where krabka keeps its own behaviour, this document says why.
+
+## Architecture Overview
+
+`kafka-storage format` reads `log.dirs` and `metadata.log.dir` from the `server.properties` file that `--config` names. It loads the `meta.properties` of every directory, checks that the set agrees, and then writes the bootstrap files and `meta.properties` into each directory that has no `meta.properties`.
+
+`krabka-format` has the same structure. It takes the directories from `--log-dir`, reads every `meta.properties.json`, applies Kafka's consistency checks, and writes each unformatted directory. The first `--log-dir` is the metadata log directory, which gets the `__cluster_metadata` checkpoint of a dynamic KIP-853 format. Kafka's `metadata.log.dir` defaults to the first entry of `log.dirs`, so the choice is the same as Kafka's default.
+
+## Key Design Decisions
+
+### The divergence table
+
+| Topic | `kafka-storage format` | `krabka-format` | Reason |
+| :--- | :--- | :--- | :--- |
+| Cluster id form | Writes and prints the id as given. `Uuid.randomUuid` output is 22 characters of unpadded base64url. | Writes and prints Kafka's 22-character base64url form. Accepts that form, which `Uuid.fromString` accepts, and the hyphenated form. | **Matches** for every id Kafka generates. Kafka stores any string as `cluster.id`, for example `-t foo`. Krabka's broker holds the cluster id as 16 bytes, so it accepts only a string that decodes to 16 bytes, and normalises the hyphenated form to the base64 form. |
+| Reserved cluster ids | Accepted: `-t AAAAAAAAAAAAAAAAAAAAAA` succeeds. | Accepted. | **Matches.** Only `Uuid.randomUuid` avoids the reserved ids, and so does `krabka-format` when it generates one. |
+| `--cluster-id` required | Required. | Optional. Without it, the id of an already formatted directory in the set is kept, else a new id is generated. | A single-node format is one command. `kafka-storage random-uuid` is not needed first. |
+| Directory ids | `directory.id` in base64url, generated per directory, never reserved or starting with `-`. The voter directory takes its id from `--initial-controllers`. | The same, in `meta.properties.json`. `--initial-controllers` takes either id form. | **Matches.** |
+| `--directory-id` | No such flag. | Sets the metadata log directory's id. | An orchestrator that checks the node incarnation before readiness has to know the id before the format runs. |
+| `--config` | Required. Names the `server.properties` that supplies `node.id`, `process.roles`, `log.dirs`, `metadata.log.dir`, `controller.listener.names`, and `controller.quorum.voters`. | Not supported. | Krabka's broker is configured by flags, environment variables, and a TOML file. It does not read `server.properties`, so a `--config` would be a second configuration format that only the formatter reads. The values that `kafka-storage format` takes from the file are flags here: `--log-dir`, `--node-id`, `--controller-listener`, and the quorum-mode flags. `--help` states this. |
+| `unstable.feature.versions.enable` | Read from `--config`. Off, `--release-version 4.4` is `Unknown metadata.version '4.4'. Supported metadata.version are: 3.3-IV3, ..., 4.3-IV0` and `--feature metadata.version=31` is `metadata.version 4.4-IV0 is not yet stable.`; on, the default release is `latestTesting`. | `--unstable-feature-versions-enable`, with the same messages and the same default. | Follows from `--config`. The node needs the same setting in its `server_properties` to support the level it was formatted at. |
+| Log directories | `log.dirs` and `metadata.log.dir` from `--config`. | `--log-dir`, repeated or comma-separated. The first is the metadata log directory. | Follows from `--config`. The broker's `--log-dir` and `--extra-log-dirs` name the same directories, in the same order. |
+| Directory with foreign files and no `meta.properties` | Formatted. | Refused, exit 3. A directory with only the files of an interrupted `krabka-format` run counts as empty. | A mistyped path would otherwise seed a directory full of another program's data. The exception for an interrupted run keeps a rerun safe. |
+| Already formatted, no `--ignore-formatted` | `Log directory <dir> is already formatted. Use --ignore-formatted to ignore this directory and format the others.`, exit 1. Nothing is written. | The same message on stderr, exit 3. Nothing is written. | **Matches**, except for the exit code (see below). |
+| `--ignore-formatted` over a mixed set | Formats the unformatted directories and exits 0. `All of the log directories are already formatted.` when none is left. | The same, and a line on stdout for each skipped directory. | **Matches.** |
+| Cluster id disagrees with a formatted directory | `Invalid cluster.id in: <dir>/meta.properties. Expected <x>, but read <y>`, raised as an uncaught exception, exit 1. | The same message on stderr, with `meta.properties.json` as the file name, exit 3. | **Matches** the message. Kafka prints a stack trace because it does not catch the exception; krabka prints only the message. |
+| `meta.properties` file | Java properties file: `cluster.id`, `directory.id`, `node.id`, `version=1`. | JSON `meta.properties.json`: `cluster_id`, `directory_id`, `version: 3`. No `node.id`. | The broker reads JSON with serde, and the file name keeps a Kafka tool from reading it as a `meta.properties` of a format it does not know. The node id is a broker flag and is not persisted. Both ids use Kafka's string form, so the values are the same as Kafka's. |
+| Bootstrap metadata | `bootstrap.checkpoint`, a KRaft snapshot of the bootstrap records, in every directory. | `bootstrap.json`, a readable manifest, and `bootstrap.records.bin`, the same records as length-prefixed `serde_wincode` payloads, in every directory. | Kafka has no equivalent of these two files. The broker loads the bootstrap records from `bootstrap.records.bin`, and `bootstrap.json` lets an operator inspect them. |
+| Dynamic quorum snapshot | `__cluster_metadata-0/00000000000000000000-0000000000.checkpoint` in the metadata log directory. | `__cluster_metadata/@metadata-0/00000000000000000000-0000000000.checkpoint` in the metadata log directory. | Krabka's metadata log directory layout. The snapshot holds the same `KRaftVersionRecord` and `VotersRecord`. |
+| Write order | Bootstrap files, then `meta.properties`, written to `meta.properties.tmp` and renamed. | Checkpoint, bootstrap files, then `meta.properties.json`, written to `meta.properties.json.tmp`, synced, and renamed. A rerun removes what an interrupted run left. | **Matches** the marker-last order. The cleanup is what lets a rerun succeed without an `rm -rf`. |
+| Progress output | `Bootstrap metadata: ...`, then `Formatting <type> <dir> with metadata.version <v>.` per directory. | `Formatting <type> <dir> with metadata.version <v>.` per directory, then a summary line with the cluster id. | The directory lines match. Kafka's `Bootstrap metadata` line prints Java `toString` output, which has no krabka equivalent. |
+| Exit codes | 0 on success, 1 on every failure. | 0 on success; 2 for an iteration count below 4096 or a command line that does not parse; 3 for a formatted, foreign, or inconsistent directory; 4 for a write failure or an invalid voter set; 5 for an invalid feature or quorum mode. | An orchestrator acts on the cause. Exit 3 means an operator has to look at the disk, and exit 4 can be a fault that a retry fixes. The codes predate this document, and scripts depend on them. |
+
+### The cluster id form
+
+Kafka's `Uuid.toString` is unpadded base64url of the 16 bytes. `Uuid.fromString` refuses a string longer than 24 characters and a string that does not decode to 16 bytes, but it accepts a trailing `==` and ignores the unused low bits of the last character. `krabka-format` accepts the same strings, so `AQIDBAUGBwgJCgsMDQ4PEB` and `AQIDBAUGBwgJCgsMDQ4PEA==` both name the cluster `AQIDBAUGBwgJCgsMDQ4PEA`. The hyphenated form is also accepted on the command line, because krabka's earlier releases printed it, but it is never written. The broker reads `meta.properties.json` in the base64 form only. Krabka is undeployed, so a directory in the old form is formatted again rather than read.
+
+### Re-running after a failure
+
+A run writes `meta.properties.json` last, and publishes it with a rename, so its presence means that a run finished in that directory. A directory with no `meta.properties.json` whose only contents are the files a run writes before it -- `bootstrap.json`, `bootstrap.records.bin`, `meta.properties.json.tmp`, and the offset-zero checkpoint -- is the result of an interrupted run. The next run removes those files and formats the directory. A directory that holds anything else is refused, so the cleanup cannot delete data that `krabka-format` did not write.
+
+## Integration
+
+The broker reads `meta.properties.json` from its `--log-dir` on every boot, with the id types of `krabka-format`, and refuses a format stamp other than version 3. It reads the directory id of each `--extra-log-dirs` entry through the same parser, and writes a new one in the same form for a disk that was added without a format. `krabka-restore` formats its target through `krabka_format::run_from_args_with_records`.
+
+## Kafka / KIP Compliance
+
+- [KIP-853](https://cwiki.apache.org/confluence/display/KAFKA/KIP-853%3A+KRaft+Controller+Membership+Changes): `--standalone`, `--initial-controllers`, and `--no-initial-controllers`, and the directory id of the voter directory.
+- [KIP-858](https://cwiki.apache.org/confluence/display/KAFKA/KIP-858%3A+Handle+JBOD+broker+disk+failure+in+KRaft): a directory id per log directory, never one of the reserved ids.
+- [KIP-1022](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1022%3A+Formatting+and+Updating+Features): `--release-version` and `--feature`.
+
+## Testing
+
+`crates/format/tests/kafka_storage_parity.rs` runs the binary for each row that says **Matches**: the id round trip for each accepted and refused input form, a multi-directory format, `--ignore-formatted` over a mixed set and its rerun, and a run interrupted after each file it writes. The interruption uses `KRABKA_FORMAT_FAIL_AFTER`, a test seam that makes a run fail after it writes the named file.

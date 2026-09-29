@@ -17,8 +17,8 @@ const MAX_DEPTH: usize = 80;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 2_386;
-pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 17_191;
+pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 5_986;
+pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 30_421;
 
 pub(super) fn run(model: CgcModel, label: &str, pinned_unique_states: usize) {
     let checker = model
