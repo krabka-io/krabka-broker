@@ -95,6 +95,22 @@ pub(super) fn drain_followers_with(
     }
 }
 
+/// Kafka's `onUnloaded`: every parked `JoinGroup` and `SyncGroup` answers
+/// `NOT_COORDINATOR`, and the joiner keeps its member id.
+pub(super) fn drain_parked_for_unload(
+    joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
+    followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
+) {
+    for (member_id, sender) in joiners.drain() {
+        let _ = sender.send(JoinResult {
+            error_code: codes::NOT_COORDINATOR,
+            member_id,
+            ..JoinResult::default()
+        });
+    }
+    drain_followers_with(followers, codes::NOT_COORDINATOR);
+}
+
 /// Kafka's `replaceStaticMember` fence: the old member id's parked
 /// `JoinGroup` and `SyncGroup` get `FENCED_INSTANCE_ID`.
 pub(super) fn fence_replaced_classic_member(
