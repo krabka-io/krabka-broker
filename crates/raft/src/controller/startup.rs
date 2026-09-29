@@ -176,10 +176,12 @@ impl Controller {
             config.handshake.clone(),
             config.shard_router.clone(),
             config.admin_router.clone(),
-            server::Unstable {
-                api_versions: config.unstable_api_versions,
-                feature_versions: config.unstable_feature_versions,
-            },
+            (
+                server::Unstable {
+                    api_versions: config.unstable_api_versions,
+                },
+                config.listener_limits,
+            ),
         ));
         tokio::spawn(stop_on_unsupported_feature_level(
             engine.clone(),

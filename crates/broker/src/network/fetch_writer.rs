@@ -1,7 +1,7 @@
 //! Zero-copy fetch response writer (Increments C + D).
 //!
 //! The generic dispatch loop writes every response with
-//! `Framed<S, LengthDelimitedCodec>::send`, which copies the whole body into
+//! `Framed<S, KafkaCodec>::send`, which copies the whole body into
 //! the codec's write buffer. `encode_response` already copied that body once
 //! to prepend the correlation header. For a 100 KB+ fetch that is hundreds of
 //! KB of avoidable `memcpy` per request.
@@ -136,7 +136,6 @@ pub fn build_fetch_plan<F>(
     version: i16,
     correlation_id: i32,
     body_flexible: bool,
-    max_frame_bytes: usize,
     mut resolve_records: F,
 ) -> Result<Vec<WriteOp>, BrokerError>
 where
@@ -155,13 +154,13 @@ where
     let proto_plan = fetch_response_write_plan(resp, version)?;
     let body_len: usize = proto_plan.iter().map(FetchWriteOp::len).sum();
     let frame_body_len = header_len + body_len;
-    codec::validate_frame_length(frame_body_len, max_frame_bytes)?;
+    let size_prefix = codec::response_frame_length(frame_body_len)?;
 
     let mut ops: Vec<WriteOp> = Vec::with_capacity(proto_plan.len() + 1);
 
     // First inline op: 4-byte frame length + correlation header.
     let mut head = BytesMut::with_capacity(4 + header_len);
-    head.put_u32(u32::try_from(frame_body_len).expect("checked against configured frame maximum"));
+    head.put_u32(size_prefix);
     head.put_i32(correlation_id);
     if header_v1 {
         head.put_u8(0); // empty response-header tagged fields

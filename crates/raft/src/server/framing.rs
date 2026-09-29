@@ -68,9 +68,16 @@ fn request_is_flexible(
     flexible_min.is_some_and(|minimum| version >= minimum)
 }
 
+/// Reads one request frame and parses its header.
+///
+/// A size prefix that is negative, or above `max_request_bytes`
+/// (`socket.request.max.bytes`), fails before the frame is read, as Kafka's
+/// `NetworkReceive.readFrom` throws `InvalidReceiveException` on it. The caller
+/// closes the connection, and no allocation is sized from the peer's number.
 pub(super) async fn read_one_request<S>(
     stream: &mut S,
     admin_router: Option<&dyn crate::ControllerAdminRouter>,
+    max_request_bytes: usize,
 ) -> Result<
     (
         ApiKey,
@@ -89,8 +96,14 @@ where
 
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await.map_err(io_err)?;
-    let raw_len = i32::from_be_bytes(len_buf);
-    let len = usize::try_from(raw_len.max(0)).unwrap_or(0);
+    let len = usize::try_from(i32::from_be_bytes(len_buf))
+        .ok()
+        .filter(|len| *len <= max_request_bytes)
+        .ok_or(RaftError::Protocol(
+            krabka_protocol::ProtocolError::InvalidValue(
+                "request frame size is negative or over socket.request.max.bytes",
+            ),
+        ))?;
     let mut frame = vec![0u8; len];
     stream.read_exact(&mut frame).await.map_err(io_err)?;
 
@@ -194,6 +207,44 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    /// `socket.request.max.bytes` for the tests that do not probe it.
+    const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
+
+    /// A size prefix over `socket.request.max.bytes`, or negative, is refused
+    /// before the frame is read, and one at the limit is read. The stream
+    /// carries the prefix alone, so a reader that tried to fill the frame
+    /// would report end of input instead of the size error.
+    #[tokio::test]
+    async fn read_one_request_refuses_a_size_prefix_over_the_limit() {
+        let limit = 64_usize;
+        let cases = [
+            ("at the limit", 64_i32, false),
+            ("one over the limit", 65, true),
+            ("a gigabyte over a 64-byte limit", 1 << 30, true),
+            ("i32::MAX", i32::MAX, true),
+            ("negative", -1, true),
+            ("i32::MIN", i32::MIN, true),
+        ];
+        for (case, size, refused) in cases {
+            let (mut client, mut server) = tokio::io::duplex(128);
+            client.write_all(&size.to_be_bytes()).await.unwrap();
+            drop(client);
+
+            let err = super::read_one_request(&mut server, None, limit)
+                .await
+                .expect_err("the stream holds no frame");
+
+            check!(
+                matches!(
+                    err,
+                    super::RaftError::Protocol(krabka_protocol::ProtocolError::InvalidValue(_))
+                ) == refused,
+                "{case}: {err}"
+            );
+            check!(super::is_eof(&err) == !refused, "{case}: {err}");
+        }
+    }
 
     /// A request is flexible from its API's own `FLEXIBLE_MIN` upward, and an
     /// API nobody declares is not flexible at any version.
@@ -355,7 +406,7 @@ mod tests {
             });
 
             let (api_key, api_version, correlation_id, client_id, body, flexible) =
-                super::read_one_request(&mut server, None)
+                super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
                     .await
                     .expect("decode");
 
@@ -424,7 +475,7 @@ mod tests {
                 client.write_all(&frame).await.unwrap();
             });
 
-            let err = super::read_one_request(&mut server, None)
+            let err = super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
                 .await
                 .expect_err("short frame");
 
@@ -453,9 +504,10 @@ mod tests {
             client.write_all(&frame).await.unwrap();
         });
 
-        let (_, _, _, _, body, flexible) = super::read_one_request(&mut server, None)
-            .await
-            .expect("decode");
+        let (_, _, _, _, body, flexible) =
+            super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
+                .await
+                .expect("decode");
 
         assert2::assert!(body.as_ref() == &[1, b'p', b'a', b'y']);
         assert2::assert!(!flexible);
@@ -557,7 +609,7 @@ mod tests {
             });
 
             let (api_key, api_version, correlation_id, decoded_client_id, body, flexible) =
-                super::read_one_request(&mut server, Some(&router))
+                super::read_one_request(&mut server, Some(&router), MAX_REQUEST_BYTES)
                     .await
                     .expect("decode");
 

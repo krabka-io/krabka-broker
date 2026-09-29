@@ -6,13 +6,14 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
 use krabka_ids::PartitionIndex;
+use krabka_raft::ConnectionLimiter;
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     broker::{
-        Broker, BrokerHandle, ConnectionLimiter, DisklessRuntime,
+        Broker, BrokerHandle, DisklessRuntime,
         diskless_index::{DisklessFlusherStartup, bootstrap_diskless_index_log},
         listeners::{ListenerStartup, bind_listeners_and_recover_moves, spawn_listener_tasks},
         rlmm::{KafkaSwapKickoff, bootstrap_topic_rlmm},

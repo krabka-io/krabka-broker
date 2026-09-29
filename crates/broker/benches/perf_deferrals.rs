@@ -3,7 +3,7 @@
 //! on a measured payoff and not only on an estimated price.
 //!
 //! **Response framing.** `encode_response` copies a handler's body to prepend
-//! the 4- or 5-byte response header, and `LengthDelimitedCodec::encode` copies
+//! the 4- or 5-byte response header, and `KafkaCodec::encode` copies
 //! the result again into the codec's write buffer. The deferred alternative is
 //! a chained `bytes::Buf` written with one vectored write, which copies the
 //! body zero times but needs a custom `Encoder<impl Buf>` and reaches every
@@ -43,16 +43,19 @@ use assert2::assert;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures_util::SinkExt as _;
-use krabka_broker::{replicate_hot_path::ReplicaSeam, response_framing};
+use krabka_broker::{
+    replicate_hot_path::ReplicaSeam,
+    response_framing::{self, KafkaCodec},
+};
 use krabka_protocol::{
     api_key::ApiKey,
     records::{Record, RecordBatch},
 };
 use tokio::{io::AsyncWrite, runtime::Runtime};
-use tokio_util::codec::{Encoder as _, Framed, LengthDelimitedCodec};
+use tokio_util::codec::{Encoder as _, Framed};
 
-/// Kafka's default `socket.request.max.bytes`, which is what the broker
-/// validates a framed response against.
+/// Kafka's default `socket.request.max.bytes`, the request limit the broker
+/// builds its codec with.
 const MAX_FRAME_BYTES: usize = 100 * 1024 * 1024;
 
 /// The response shape both framing paths carry.
@@ -192,16 +195,11 @@ fn frame_prefix(body_len: usize) -> Bytes {
 }
 
 /// Frame one response the way the dispatch loop does and hand it to `framed`.
-fn copy_send(framed: &mut Framed<NullSink, LengthDelimitedCodec>, payload: &Bytes) -> Duration {
+fn copy_send(framed: &mut Framed<NullSink, KafkaCodec>, payload: &Bytes) -> Duration {
     let start = Instant::now();
-    let response = response_framing::encode_response(
-        API_KEY,
-        CORRELATION_ID,
-        BODY_FLEXIBLE,
-        payload,
-        MAX_FRAME_BYTES,
-    )
-    .expect("a bench body is well under the frame maximum");
+    let response =
+        response_framing::encode_response(API_KEY, CORRELATION_ID, BODY_FLEXIBLE, payload)
+            .expect("a bench body is well under the frame maximum");
     // `Framed::send` is `start_send` plus `poll_flush`, which is the pair the
     // dispatch loop drives per response.
     drive(framed.send(response)).expect("NullSink never fails");
@@ -231,14 +229,9 @@ async fn write_vectored(sink: &mut NullSink, slices: &[IoSlice<'_>]) -> usize {
 
 /// The bytes the copy path puts on the wire, taken from the real codec.
 fn copy_path_wire(payload: &Bytes) -> BytesMut {
-    let response = response_framing::encode_response(
-        API_KEY,
-        CORRELATION_ID,
-        BODY_FLEXIBLE,
-        payload,
-        MAX_FRAME_BYTES,
-    )
-    .expect("a bench body is well under the frame maximum");
+    let response =
+        response_framing::encode_response(API_KEY, CORRELATION_ID, BODY_FLEXIBLE, payload)
+            .expect("a bench body is well under the frame maximum");
     let mut wire = BytesMut::new();
     response_framing::codec(MAX_FRAME_BYTES)
         .encode(response, &mut wire)

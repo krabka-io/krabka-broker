@@ -29,6 +29,8 @@ mod oauthbearer_sessions;
 mod oauthbearer_tokens;
 #[path = "auth_handlers/plain.rs"]
 mod plain;
+#[path = "auth_handlers/pre_auth_limits.rs"]
+mod pre_auth_limits;
 #[path = "auth_handlers/scram.rs"]
 mod scram;
 mod support;

@@ -128,6 +128,20 @@ impl KraftController {
             .await
     }
 
+    /// Run the leader-side checks of [`Self::finalize_kraft_version`] and
+    /// append nothing.
+    ///
+    /// # Errors
+    /// Returns the error `finalize_kraft_version` would return for the same
+    /// request.
+    pub async fn validate_kraft_version(
+        &self,
+        version: u16,
+    ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
+        self.reconfigure(crate::reconfig::VoterChange::ValidateKraftVersion(version))
+            .await
+    }
+
     /// A structured snapshot of consensus state for the broker's
     /// `DescribeQuorum` admin view.
     ///

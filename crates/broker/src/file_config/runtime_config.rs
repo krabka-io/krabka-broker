@@ -367,6 +367,19 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub socket_request_max: Option<ByteSize>,
+    /// Largest request frame a connection may send before it finishes
+    /// authenticating on a SASL listener, Kafka's
+    /// `sasl.server.max.receive.size`. It replaces `socket_request_max` for
+    /// that stretch, and a larger frame fails the authentication.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub sasl_server_max_receive: Option<ByteSize>,
+    /// How long a failed SASL authentication holds its response and the close
+    /// that follows, Kafka's `connection.failed.authentication.delay.ms`. Zero
+    /// closes at once.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub connection_failed_authentication_delay: Option<Time>,
     /// Maximum number of queued requests allowed in the broker dispatch queue,
     /// Kafka's `queued.max.requests`.
     pub queued_max_requests: Option<usize>,

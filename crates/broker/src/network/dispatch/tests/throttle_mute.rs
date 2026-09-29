@@ -27,10 +27,13 @@ use krabka_protocol::{
 };
 use krabka_units::{Time, convert::TimeExt as _, millis};
 use tokio::net::TcpStream;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::Framed;
 
 use super::{super::test_support::DEFAULT_MAX_FRAME_BYTES, request_frame};
-use crate::{broker::Broker, network::codec};
+use crate::{
+    broker::Broker,
+    network::codec::{self, KafkaCodec},
+};
 
 /// `Produce` wire `api_key`.
 const PRODUCE_KEY: i16 = 0;
@@ -129,10 +132,7 @@ async fn seed_anonymous_quotas(handle: &crate::broker::BrokerHandle, quotas: &[(
 /// against it.
 async fn connect_to_serve_loop(
     handle: &crate::broker::BrokerHandle,
-) -> (
-    tokio::task::JoinHandle<()>,
-    Framed<TcpStream, LengthDelimitedCodec>,
-) {
+) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
     let broker = handle.broker_arc_for_test();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -157,10 +157,7 @@ async fn connect_to_serve_loop(
 
 /// Writes a v0 `ApiVersions` request, the cheapest frame that still reaches a
 /// real handler through the whole serve loop.
-async fn send_api_versions(
-    framed: &mut Framed<TcpStream, LengthDelimitedCodec>,
-    correlation_id: i32,
-) {
+async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlation_id: i32) {
     let frame = request_frame(super::API_VERSIONS_KEY, 0, correlation_id, None, None, &[]).freeze();
     framed.send(frame).await.expect("send ApiVersions");
 }
@@ -168,7 +165,7 @@ async fn send_api_versions(
 /// Writes a flexible request frame — a v2 request header, with its trailing
 /// tagged-fields byte — carrying an encoded `body`.
 async fn send_request(
-    framed: &mut Framed<TcpStream, LengthDelimitedCodec>,
+    framed: &mut Framed<TcpStream, KafkaCodec>,
     api_key: i16,
     version: i16,
     correlation_id: i32,
@@ -261,7 +258,7 @@ fn decode_response_body<T: Decode<'static>>(frame: &BytesMut, version: i16) -> T
 /// It first pins the mute down: nothing may be served for `CLIENT_TIMEOUT`,
 /// which is far shorter than every window configured here.
 async fn read_after_mute(
-    framed: &mut Framed<TcpStream, LengthDelimitedCodec>,
+    framed: &mut Framed<TcpStream, KafkaCodec>,
     muted_at: Instant,
 ) -> (BytesMut, Duration) {
     check!(

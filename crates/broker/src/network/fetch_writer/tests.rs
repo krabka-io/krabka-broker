@@ -1,11 +1,11 @@
 //! Unit tests for the framed plan the module root builds: the golden
 //! comparison against the copying `encode_response` path, the frame-length
-//! accounting of the leading prefix, and the configured frame maximum.
+//! accounting of the leading prefix.
 
 use krabka_protocol::Encode;
 
 use super::{
-    test_support::{DEFAULT_MAX_FRAME_BYTES, inline_bytes, sample_response},
+    test_support::{inline_bytes, sample_response},
     *,
 };
 
@@ -27,7 +27,6 @@ fn build_fetch_plan_matches_legacy_encode_path() {
             version,
             correlation_id,
             body_flexible,
-            DEFAULT_MAX_FRAME_BYTES,
             resolve_records_inline,
         )
         .unwrap();
@@ -75,15 +74,8 @@ fn plan_total_len_matches_frame_prefix() {
     // following it (header + body). Off-by-one here corrupts every frame.
     for version in [4i16, 12, 18] {
         let resp = sample_response(version);
-        let ops = build_fetch_plan(
-            &resp,
-            version,
-            1,
-            version >= 12,
-            DEFAULT_MAX_FRAME_BYTES,
-            resolve_records_inline,
-        )
-        .unwrap();
+        let ops =
+            build_fetch_plan(&resp, version, 1, version >= 12, resolve_records_inline).unwrap();
         // First op is [u32 len][header]; the declared length must equal the
         // sum of the remaining bytes of op0 (the header) + all later ops.
         let head = inline_bytes(&ops[0]);
@@ -92,41 +84,6 @@ fn plan_total_len_matches_frame_prefix() {
         let tail_len: usize = ops[1..].iter().map(WriteOp::body_len).sum();
         assert2::assert!((declared) == (header_after_len + tail_len));
     }
-}
-
-#[test]
-fn build_fetch_plan_honors_nondefault_max_frame_length() {
-    let response = sample_response(12);
-    let unconstrained =
-        build_fetch_plan(&response, 12, 1, true, usize::MAX, resolve_records_inline)
-            .expect("unconstrained plan");
-    let head = inline_bytes(&unconstrained[0]);
-    let frame_body_len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
-
-    assert2::assert!(
-        build_fetch_plan(
-            &response,
-            12,
-            1,
-            true,
-            frame_body_len,
-            resolve_records_inline,
-        )
-        .is_ok(),
-        "a frame equal to the configured maximum must be accepted"
-    );
-    assert2::assert!(
-        build_fetch_plan(
-            &response,
-            12,
-            1,
-            true,
-            frame_body_len - 1,
-            resolve_records_inline,
-        )
-        .is_err(),
-        "a frame above the configured maximum must be rejected"
-    );
 }
 
 /// The whole body a partition with nothing to serve puts on the wire, at the
@@ -277,15 +234,9 @@ fn a_plan_for_idle_partitions_carries_no_empty_ops() {
     for version in [4i16, 12, 18] {
         for records in [None, Some(RecordsPayload::Raw(Bytes::new()))] {
             let response = test_support::one_partition_response(version, records);
-            let ops = build_fetch_plan(
-                &response,
-                version,
-                1,
-                version >= 12,
-                DEFAULT_MAX_FRAME_BYTES,
-                resolve_records_inline,
-            )
-            .unwrap();
+            let ops =
+                build_fetch_plan(&response, version, 1, version >= 12, resolve_records_inline)
+                    .unwrap();
             assert2::assert!(
                 ops.iter().all(|op| op.body_len() > 0),
                 "the plan carries an empty op at version {version}"

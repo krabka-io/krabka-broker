@@ -619,6 +619,7 @@ async fn a_denied_request_never_reaches_the_engine() {
                 authenticated_via_token: false,
                 grants: Grants::of(grants),
                 unstable: crate::server::Unstable::default(),
+                limits: crate::ListenerLimits::default(),
             },
         ));
 

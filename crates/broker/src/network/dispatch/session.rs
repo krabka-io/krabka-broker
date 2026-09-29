@@ -24,7 +24,9 @@
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::Framed;
+
+use crate::network::codec::KafkaCodec;
 
 /// Process-lifetime ANONYMOUS principal.
 ///
@@ -103,16 +105,63 @@ pub(super) fn initial_connection_auth(
     }
 }
 
+/// The largest request frame a connection may send.
+///
+/// Kafka reads every frame of the authentication exchange under
+/// `sasl.server.max.receive.size` (`SaslServerAuthenticator` holds its own
+/// `NetworkReceive`), and every frame after it under
+/// `socket.request.max.bytes`. A re-authentication starts on the larger limit,
+/// since its `SaslHandshake` reaches the channel while it is still
+/// authenticated.
+#[derive(Clone, Copy)]
+pub(super) struct RequestLimits {
+    /// `socket.request.max.bytes`: the limit once authenticated.
+    request_max: usize,
+    /// `sasl.server.max.receive.size`: the limit until then.
+    pre_auth_max: usize,
+}
+
+impl RequestLimits {
+    pub(super) fn of(config: &crate::config::BrokerConfig) -> Self {
+        use krabka_units::convert::ByteSizeExt as _;
+
+        Self {
+            request_max: config.socket_request_max.bytes_usize(),
+            pre_auth_max: config.sasl_server_max_receive.bytes_usize(),
+        }
+    }
+
+    /// The limit for the next frame of a connection in state `auth`.
+    pub(super) fn for_auth(self, auth: &crate::network::auth::ConnectionAuth) -> usize {
+        if auth.is_authenticated() {
+            self.request_max
+        } else {
+            self.pre_auth_max
+        }
+    }
+
+    /// The limit of an authenticated connection.
+    pub(super) fn request_max(self) -> usize {
+        self.request_max
+    }
+}
+
 /// What the connection is held to while it waits for its next frame: the
 /// listener's idle window, the peer it belongs to, and the metrics handle the
 /// close is counted on.
 ///
 /// The idle window is `None` when the listener expires no connection, which is
 /// what a non-positive `connections.max.idle.ms` asks for.
+///
+/// A peer that has not finished authenticating and sends a frame over
+/// `sasl.server.max.receive.size` fails its authentication, which is counted
+/// and audited, and closes only after `failed_authentication_delay`.
 pub(super) struct FrameWaitPolicy {
     pub(super) idle: Option<std::time::Duration>,
     pub(super) peer: std::net::SocketAddr,
     pub(super) metrics: crate::metrics::BrokerMetrics,
+    pub(super) audit_log: std::sync::Arc<krabka_audit::AuditLog>,
+    pub(super) failed_authentication_delay: std::time::Duration,
 }
 
 /// Reads the next request frame, after honouring any KIP-219 mute window.
@@ -130,7 +179,7 @@ pub(super) struct FrameWaitPolicy {
 /// request that arrives past it, which the dispatch loop does with
 /// `ConnectionAuth::expired_for_request`.
 pub(super) async fn next_connection_frame<S>(
-    framed: &mut Framed<S, LengthDelimitedCodec>,
+    framed: &mut Framed<S, KafkaCodec>,
     auth: &crate::network::auth::ConnectionAuth,
     mute_until: Option<tokio::time::Instant>,
     policy: &FrameWaitPolicy,
@@ -173,6 +222,21 @@ where
             policy
                 .metrics
                 .record_connection_close(ConnectionCloseReason::DecodeError);
+            if crate::network::codec::is_invalid_receive(&error) && !auth.is_authenticated() {
+                // Kafka's `SaslServerAuthenticator.authenticate` turns the
+                // `InvalidReceiveException` of a receive read during the
+                // exchange into a `SaslAuthenticationException`, so the
+                // failure is counted like any other and its close is delayed.
+                super::sasl::record_refused_authentication(
+                    (&policy.metrics, &policy.audit_log),
+                    auth,
+                    &policy.peer,
+                    "invalid receive size",
+                );
+                if !policy.failed_authentication_delay.is_zero() {
+                    tokio::time::sleep(policy.failed_authentication_delay).await;
+                }
+            }
             None
         }
         None => {

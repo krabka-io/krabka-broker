@@ -384,6 +384,7 @@ impl BrokerConfig {
             ),
             ("barrier_recovery_read_max", self.barrier_recovery_read_max),
             ("socket_request_max", self.socket_request_max),
+            ("sasl_server_max_receive", self.sasl_server_max_receive),
             ("sendfile_min", self.sendfile_min),
             ("socket_send_buffer", self.socket_send_buffer),
             ("socket_receive_buffer", self.socket_receive_buffer),

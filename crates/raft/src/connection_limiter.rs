@@ -18,7 +18,7 @@ use dashmap::DashMap;
 /// `Arc`-wrapped internally, so every listener accept loop and every
 /// [`ConnectionGuard`] account against one set of totals.
 #[derive(Clone)]
-pub(crate) struct ConnectionLimiter {
+pub struct ConnectionLimiter {
     /// Global ceiling. `usize::MAX` means unlimited.
     max_connections: usize,
     /// Per-IP ceiling. `usize::MAX` means unlimited.
@@ -32,13 +32,14 @@ pub(crate) struct ConnectionLimiter {
 
 /// The connection ceiling that refused an inbound connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ConnectionLimit {
+pub enum ConnectionLimit {
     Global,
     PerIp,
 }
 
 impl ConnectionLimiter {
-    pub(super) fn new(max_connections: usize, max_connections_per_ip: usize) -> Self {
+    #[must_use]
+    pub fn new(max_connections: usize, max_connections_per_ip: usize) -> Self {
         Self {
             max_connections,
             max_connections_per_ip,
@@ -49,9 +50,13 @@ impl ConnectionLimiter {
 
     /// Try to reserve a connection slot for `ip`. On success returns a
     /// [`ConnectionGuard`] that releases both the global and per-IP slot
-    /// on drop. Returns `Err(ConnectionLimit)`, and reserves nothing, when either
-    /// the global or the per-IP cap is already reached.
-    pub(super) fn try_acquire(&self, ip: IpAddr) -> Result<ConnectionGuard, ConnectionLimit> {
+    /// on drop.
+    ///
+    /// # Errors
+    /// Returns the [`ConnectionLimit`] that refused the connection, and
+    /// reserves nothing, when either the global or the per-IP cap is already
+    /// reached.
+    pub fn try_acquire(&self, ip: IpAddr) -> Result<ConnectionGuard, ConnectionLimit> {
         // Global cap. `fetch_update` keeps the increment atomic so two
         // concurrent accepts can't both slip past the ceiling.
         let global_ok = self
@@ -79,9 +84,9 @@ impl ConnectionLimiter {
         })
     }
 
-    /// Test/diagnostic accessor: current global live-connection count.
-    #[cfg(test)]
-    pub(super) fn total(&self) -> usize {
+    /// Diagnostic accessor: current global live-connection count.
+    #[must_use]
+    pub fn total(&self) -> usize {
         self.total.load(Ordering::Acquire)
     }
 
@@ -97,7 +102,7 @@ impl ConnectionLimiter {
 /// close, error, panic, or task abort. On drop it decrements the
 /// global counter and the per-IP counter, and it removes the per-IP map
 /// entry when that count reaches 0.
-pub(crate) struct ConnectionGuard {
+pub struct ConnectionGuard {
     limiter: ConnectionLimiter,
     ip: IpAddr,
 }

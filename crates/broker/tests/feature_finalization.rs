@@ -38,7 +38,7 @@ async fn start_with_unstable_features() -> support::InProcess {
 }
 
 /// #784: by default a node supports `metadata.version` only up to 4.3.1's
-/// latest production level, so trunk's 4.4-IV2 is refused with the text a
+/// latest production level, so trunk's 4.5-IV0 is refused with the text a
 /// Kafka 4.3.1 controller answers (`QuorumFeatures.reasonNotSupported`) and the
 /// supported range `ApiVersions` advertises stops at 30.
 #[tokio::test]
@@ -52,9 +52,12 @@ async fn an_unstable_metadata_version_is_refused_by_default() {
     assert!(
         resp.error_message.as_deref()
             == Some(
-                "The update failed for all features since the following feature had an error: \
-                 Invalid update version 33 for feature metadata.version. Local controller 1 \
-                 only supports versions 7-30"
+                format!(
+                    "The update failed for all features since the following feature had an \
+                     error: Invalid update version {METADATA_VERSION_MAX} for feature \
+                     metadata.version. Local controller 1 only supports versions 7-30"
+                )
+                .as_str()
             ),
         "{resp:?}"
     );

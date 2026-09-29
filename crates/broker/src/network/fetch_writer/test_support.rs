@@ -16,8 +16,6 @@ crate::sendfile_cfg! {
     use krabka_protocol::records::FileRegion;
 }
 
-pub(super) const DEFAULT_MAX_FRAME_BYTES: usize = 100 * 1024 * 1024;
-
 pub(super) fn raw_batch(base: i64) -> Bytes {
     let rb = RecordBatch {
         base_offset: base,

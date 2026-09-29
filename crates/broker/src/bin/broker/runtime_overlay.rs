@@ -163,6 +163,8 @@ impl RuntimeArgs {
             self,
             runtime,
             socket_request_max,
+            sasl_server_max_receive,
+            connection_failed_authentication_delay,
             queued_max_requests,
             queued_max_request_bytes,
             sendfile_min,

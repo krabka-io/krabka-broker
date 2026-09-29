@@ -70,7 +70,7 @@ impl From<bool> for UnstableApiVersions {
 /// `latestProduction` level unless it is set, and `kafka-storage format`
 /// refuses an unstable `metadata.version`. In Kafka 4.3.1 the one feature that
 /// has such levels is `metadata.version`, whose latest production level is
-/// `4.3-IV0` (30); krabka also knows trunk's `4.4-IV0` to `4.4-IV2` (31-33).
+/// `4.3-IV0` (30); krabka also knows trunk's `4.4-IV0` to `4.5-IV0` (31-34).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum UnstableFeatureVersions {
     /// Support each feature up to its latest production level.

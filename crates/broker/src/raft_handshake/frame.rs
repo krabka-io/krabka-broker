@@ -28,6 +28,11 @@ use super::{API_KEY_API_VERSIONS, API_KEY_SASL_AUTHENTICATE, SASL_AUTHENTICATE_F
 ///   client_id i16-length-prefixed bytes`.
 /// - v2, flexible, which `SaslAuthenticate v2+` and `ApiVersions v3+` use:
 ///   the v1 layout plus a tagged-fields section.
+///
+/// A size prefix over `max_frame_bytes` fails before the frame is read.
+/// Kafka's `SaslServerAuthenticator` turns the `InvalidReceiveException` of
+/// that read into a `SaslAuthenticationException`, so the failure is a SASL
+/// one.
 pub(super) async fn read_kafka_request(
     stream: &mut dyn ClientDuplex,
     max_frame_bytes: usize,
@@ -35,8 +40,9 @@ pub(super) async fn read_kafka_request(
     let mut size_buf = [0u8; 4];
     stream.read_exact(&mut size_buf).await?;
     let size = u32::from_be_bytes(size_buf) as usize;
-    crate::network::codec::validate_frame_length(size, max_frame_bytes)
-        .map_err(|e| RaftHandshakeError::Protocol(e.to_string()))?;
+    crate::network::codec::validate_frame_length(size, max_frame_bytes).map_err(|_| {
+        RaftHandshakeError::Sasl("Failing SASL authentication due to invalid receive size".into())
+    })?;
     let mut frame = vec![0u8; size];
     stream.read_exact(&mut frame).await?;
     let [api_key_hi, api_key_lo, api_version_hi, api_version_lo, ..] = frame.as_slice() else {
@@ -262,13 +268,41 @@ mod tests {
         truncated_client.extend_from_slice(b"xy");
 
         let missing_tag = request_frame(36, 2, 44, Some(b"c"), false, b"");
-        let oversized = 4097u32.to_be_bytes().to_vec();
 
-        for frame in [short, truncated_client, missing_tag, oversized] {
+        for frame in [short, truncated_client, missing_tag] {
             let got = read_request_from_frame(frame).await;
             assert!(
                 matches!(got, Err(RaftHandshakeError::Protocol(_))),
                 "want protocol error, got {got:?}"
+            );
+        }
+    }
+
+    /// A size prefix over the limit fails as a SASL failure, before any of the
+    /// frame is read: the stream holds the four size bytes and nothing else, so
+    /// a reader that tried to fill the frame would fail with an I/O error. The
+    /// limit is inclusive, and a prefix that reads as a negative Kafka int is
+    /// over it.
+    #[tokio::test]
+    async fn read_kafka_request_refuses_a_frame_over_the_sasl_receive_limit() {
+        for (size, refused) in [
+            (4096_u32, false),
+            (4097, true),
+            (u32::MAX, true),
+            (i32::MIN.cast_unsigned(), true),
+        ] {
+            let (mut client, mut server) = tokio::io::duplex(64);
+            client
+                .write_all(&size.to_be_bytes())
+                .await
+                .expect("write the size prefix");
+            // Closing the writer ends the stream, so a reader that goes on to
+            // fill an admitted frame fails at once instead of waiting.
+            drop(client);
+            let got = read_kafka_request(&mut server, 4096).await;
+            assert!(
+                matches!(got, Err(RaftHandshakeError::Sasl(_))) == refused,
+                "a {size}-byte frame: {got:?}"
             );
         }
     }

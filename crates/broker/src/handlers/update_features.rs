@@ -43,6 +43,41 @@ use crate::{
 /// quorum leadership.
 const NOT_CONTROLLER_MESSAGE: &str = "This broker is not the active controller.";
 
+/// The answer that refuses a `kraft.version` upgrade the Raft layer would not
+/// take, or `None` when it would. The real upgrade and its `validate_only`
+/// dry run share this mapping, so a dry run reports what the request would.
+fn kraft_upgrade_refusal(
+    outcome: Result<krabka_raft::ReconfigOutcome, RaftError>,
+) -> Option<UpdateFeaturesResponse> {
+    match outcome {
+        Ok(krabka_raft::ReconfigOutcome::Committed) => None,
+        Ok(krabka_raft::ReconfigOutcome::NotLeader { .. })
+        | Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => Some(top_level_error(
+            codes::NOT_CONTROLLER,
+            NOT_CONTROLLER_MESSAGE,
+        )),
+        // `LeaderState.maybeAppendUpgradedKRaftVersion` refuses with an
+        // `InvalidUpdateVersionException`, which Kafka answers as the failed
+        // feature's error.
+        Err(
+            error @ (RaftError::InvalidVoterUpdate(_)
+            | RaftError::UnsupportedKraftVersion(_)
+            | RaftError::ReconfigInProgress
+            | RaftError::ReconfigRejected(_)),
+        ) => Some(feature_error(&UpdateError {
+            code: codes::INVALID_UPDATE_VERSION,
+            message: error.to_string(),
+        })),
+        Err(error) => {
+            tracing::warn!(%error, "UpdateFeatures: kraft.version activation failed");
+            Some(top_level_error(
+                codes::FEATURE_UPDATE_FAILED,
+                "Failed to activate kraft.version.",
+            ))
+        }
+    }
+}
+
 #[tracing::instrument(
     name = "handle_update_features",
     level = "info",
@@ -85,6 +120,16 @@ pub(crate) async fn handle(
         Err(error) => return feature_error(&error),
     };
     if req.validate_only {
+        // Kafka's `FeatureControlManager.updateFeature` asks the KRaft layer to
+        // upgrade `kraft.version` with `validateOnly` set, and
+        // `LeaderState.maybeAppendUpgradedKRaftVersion` runs every one of its
+        // checks and skips only the append.
+        if let Some(level) = plan.kraft_upgrade
+            && let Some(refusal) =
+                kraft_upgrade_refusal(broker.controller.validate_kraft_version(level).await)
+        {
+            return refusal;
+        }
         return success(&req, version);
     }
     // KIP-966: turning ELR on writes its safety config records in the same
@@ -97,35 +142,11 @@ pub(crate) async fn handle(
         plan.records = batch;
     }
 
-    if let Some(level) = plan.kraft_upgrade {
-        match broker.controller.finalize_kraft_version(level).await {
-            Ok(krabka_raft::ReconfigOutcome::Committed) => {}
-            Ok(krabka_raft::ReconfigOutcome::NotLeader { .. })
-            | Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                return top_level_error(codes::NOT_CONTROLLER, NOT_CONTROLLER_MESSAGE);
-            }
-            // `LeaderState.maybeAppendUpgradedKRaftVersion` refuses with an
-            // `InvalidUpdateVersionException`, which Kafka answers as the
-            // failed feature's error.
-            Err(
-                error @ (RaftError::InvalidVoterUpdate(_)
-                | RaftError::UnsupportedKraftVersion(_)
-                | RaftError::ReconfigInProgress
-                | RaftError::ReconfigRejected(_)),
-            ) => {
-                return feature_error(&UpdateError {
-                    code: codes::INVALID_UPDATE_VERSION,
-                    message: error.to_string(),
-                });
-            }
-            Err(error) => {
-                tracing::warn!(%error, "UpdateFeatures: kraft.version activation failed");
-                return top_level_error(
-                    codes::FEATURE_UPDATE_FAILED,
-                    "Failed to activate kraft.version.",
-                );
-            }
-        }
+    if let Some(level) = plan.kraft_upgrade
+        && let Some(refusal) =
+            kraft_upgrade_refusal(broker.controller.finalize_kraft_version(level).await)
+    {
+        return refusal;
     }
 
     if !plan.records.is_empty() {

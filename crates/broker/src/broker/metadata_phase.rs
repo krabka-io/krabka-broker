@@ -61,7 +61,8 @@ fn prepare_raft_transport(
         protocol: config.controller_listener_protocol,
         controller: Arc::clone(&controller_cell),
         audit_log: Arc::clone(&audit_cell),
-        max_frame_bytes: config.socket_request_max.bytes_usize(),
+        sasl_max_receive_bytes: config.sasl_server_max_receive.bytes_usize(),
+        failed_authentication_delay: config.failed_authentication_delay(),
         authorizer: Arc::clone(&config.authorizer),
         principal_mapper: config.tls_principal_mapper.clone(),
     }) as Arc<dyn krabka_raft::RaftListenerHandshake>);
@@ -186,6 +187,16 @@ async fn start_metadata_source(
                 .map(|router| router as Arc<dyn krabka_raft::ControllerAdminRouter>),
             unstable_api_versions: config.features.unstable_api_versions,
             unstable_feature_versions: config.features.unstable_feature_versions,
+            // Kafka's `ControllerServer` gives its `SocketServer` the same
+            // settings a broker listener gets, with the idle window of the
+            // controller listener's own name.
+            listener_limits: krabka_raft::ListenerLimits {
+                max_request_size: config.socket_request_max,
+                max_idle: config
+                    .connections_max_idle_for(crate::controller_endpoint::CONTROLLER_LISTENER_NAME),
+                max_connections: config.max_connections,
+                max_connections_per_ip: config.max_connections_per_ip,
+            },
             max_bytes_between_snapshots: config.metadata_max_bytes_between_snapshots,
             max_snapshot_interval: config.metadata_max_snapshot_interval,
             snapshot_interval_records: config.metadata_snapshot_interval_records,

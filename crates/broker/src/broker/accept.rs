@@ -126,10 +126,10 @@ pub(super) async fn accept_loop(
                             Ok(guard) => guard,
                             Err(limit) => {
                                 let reason = match limit {
-                                    crate::broker::connection_limiter::ConnectionLimit::Global => {
+                                    krabka_raft::ConnectionLimit::Global => {
                                         crate::metrics::ConnectionCloseReason::MaxConnections
                                     }
-                                    crate::broker::connection_limiter::ConnectionLimit::PerIp => {
+                                    krabka_raft::ConnectionLimit::PerIp => {
                                         crate::metrics::ConnectionCloseReason::MaxConnectionsPerIp
                                     }
                                 };

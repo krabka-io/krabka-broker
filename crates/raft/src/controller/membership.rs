@@ -156,6 +156,18 @@ impl ControllerHandle {
     ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
         self.engine.finalize_kraft_version(version).await
     }
+
+    /// Run the checks of [`Self::finalize_kraft_version`] and write nothing.
+    ///
+    /// # Errors
+    /// Returns the error `finalize_kraft_version` would return for the same
+    /// request.
+    pub async fn validate_kraft_version(
+        &self,
+        version: u16,
+    ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
+        self.engine.validate_kraft_version(version).await
+    }
 }
 
 #[cfg(test)]

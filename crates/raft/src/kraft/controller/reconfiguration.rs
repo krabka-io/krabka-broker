@@ -153,7 +153,8 @@ impl Engine {
             },
         };
         let requested_version = match &change {
-            VoterChange::FinalizeKraftVersion(version) => *version,
+            VoterChange::FinalizeKraftVersion(version)
+            | VoterChange::ValidateKraftVersion(version) => *version,
             VoterChange::Add(_)
             | VoterChange::CheckAdd(_)
             | VoterChange::Remove(_)
@@ -224,7 +225,7 @@ impl Engine {
                 0,
             ),
             // A finalization names no voter; the kernel does not read these.
-            VoterChange::FinalizeKraftVersion(_) => (
+            VoterChange::FinalizeKraftVersion(_) | VoterChange::ValidateKraftVersion(_) => (
                 VoterChangeKind::FinalizeKraftVersion,
                 None,
                 TargetVoter {
@@ -264,6 +265,11 @@ impl Engine {
             }
         };
 
+        if matches!(change, VoterChange::ValidateKraftVersion(_)) {
+            let _ = reply.send(Ok(ReconfigOutcome::Committed));
+            return;
+        }
+
         let (next, ack_when_committed, removed_local_leader) = match change {
             VoterChange::Add(request) | VoterChange::CheckAdd(request) => (
                 current.with_voter(request.voter),
@@ -276,7 +282,9 @@ impl Engine {
                 request.id == self.me,
             ),
             VoterChange::Update(request) => (current.with_voter(request.voter), true, false),
-            VoterChange::FinalizeKraftVersion(_) => (current.clone(), true, false),
+            VoterChange::FinalizeKraftVersion(_) | VoterChange::ValidateKraftVersion(_) => {
+                (current.clone(), true, false)
+            }
         };
         if next.len() != plan.next_voter_count {
             let _ = reply.send(Err(RaftError::ReconfigRejected(

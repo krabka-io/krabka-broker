@@ -85,6 +85,9 @@ impl MetadataSource for ControllerHandle {
     async fn finalize_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::finalize_kraft_version(self, version).await
     }
+    async fn validate_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
+        ControllerHandle::validate_kraft_version(self, version).await
+    }
     async fn forward_raw(
         &self,
         api_key: i16,

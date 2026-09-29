@@ -178,11 +178,13 @@ mod tests {
                 DeletableGroupResult {
                     group_id: "group-a".to_string(),
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    error_message: None,
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 },
                 DeletableGroupResult {
                     group_id: "group-b".to_string(),
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    error_message: None,
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 },
             ],
@@ -281,11 +283,56 @@ mod tests {
             results: vec![DeletableGroupResult {
                 group_id: "missing".to_string(),
                 error_code: codes::GROUP_ID_NOT_FOUND,
+                error_message: None,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// Trunk's v3 (KIP-1331) gives each group result a nullable
+    /// `ErrorMessage`. krabka has no topology description plugin, so it never
+    /// answers `GROUP_DELETION_FAILED` and the message is always null: the
+    /// v3 answer is the v2 answer with one null string per result.
+    #[tokio::test]
+    async fn handle_answers_v3_with_a_null_error_message_per_group() {
+        use krabka_protocol::{Decode as _, Encode as _};
+
+        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("alice");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let req = request(&["group-a", "group-b"]);
+
+        let mut answers = Vec::new();
+        for version in [2_i16, 3] {
+            let mut body = bytes::BytesMut::new();
+            req.encode(&mut body, version).expect("encode request");
+            let bytes = handle(&broker, version, 123, &body, &ctx)
+                .await
+                .expect("handle");
+            let decoded =
+                DeleteGroupsResponse::decode(&mut &bytes[..], version).expect("decode response");
+            answers.push((version, bytes.len(), decoded));
+        }
+
+        let denied = |group_id: &str| DeletableGroupResult {
+            group_id: group_id.to_string(),
+            error_code: codes::GROUP_AUTHORIZATION_FAILED,
+            error_message: None,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        let expected = DeleteGroupsResponse {
+            results: vec![denied("group-a"), denied("group-b")],
+            ..Default::default()
+        };
+        assert!(answers[0].2 == expected);
+        assert!(answers[1].2 == expected);
+        // One compact null string, a single 0 byte, for each of the two results.
+        assert!(answers[1].1 == answers[0].1 + 2);
         broker_handle.shutdown().await;
     }
 }

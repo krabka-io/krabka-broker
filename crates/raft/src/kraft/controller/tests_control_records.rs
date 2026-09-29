@@ -760,3 +760,58 @@ async fn a_replica_keeps_its_progress_across_joining_and_leaving_the_voter_set()
     check!(leader.observers[&key] == as_observer);
     check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
 }
+
+/// The `validate_only` half of a `kraft.version` upgrade runs every check the
+/// real upgrade runs and writes nothing, as Kafka's
+/// `LeaderState.maybeAppendUpgradedKRaftVersion` skips only the append.
+///
+/// Each case runs both requests on identically built engines: a refusal must
+/// be the same one for both, and an upgrade the checks admit must leave the
+/// log as it was when validated and grow it when finalized.
+#[test]
+fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    /// What the request left behind: the reply if it was immediate, and
+    /// whether the log grew.
+    fn run(elect: bool, change: VoterChange) -> (Option<Result<ReconfigOutcome, RaftError>>, bool) {
+        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        if elect {
+            elect_single_voter_engine(&mut engine);
+        }
+        let before = engine.log.log_end_offset();
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_reconfigure(change, reply);
+        (rx.try_recv().ok(), engine.log.log_end_offset() != before)
+    }
+
+    // A follower redirects, whichever request it gets.
+    let (validated, grew) = run(false, VoterChange::ValidateKraftVersion(1));
+    let (finalized, _) = run(false, VoterChange::FinalizeKraftVersion(1));
+    check!(matches!(
+        (&validated, &finalized),
+        (
+            Some(Ok(ReconfigOutcome::NotLeader { .. })),
+            Some(Ok(ReconfigOutcome::NotLeader { .. }))
+        )
+    ));
+    check!(!grew);
+
+    // A version nobody supports is refused the same way by both.
+    let (validated, grew) = run(true, VoterChange::ValidateKraftVersion(9));
+    let (finalized, _) = run(true, VoterChange::FinalizeKraftVersion(9));
+    check!(matches!(validated, Some(Err(_))), "{validated:?}");
+    check!(
+        format!("{validated:?}") == format!("{finalized:?}"),
+        "{validated:?} against {finalized:?}"
+    );
+    check!(!grew);
+
+    // An upgrade the checks admit: validating answers at once and leaves the
+    // log alone, while finalizing appends the version and the voter set.
+    let (validated, grew) = run(true, VoterChange::ValidateKraftVersion(1));
+    check!(matches!(validated, Some(Ok(ReconfigOutcome::Committed))));
+    check!(!grew, "a validated upgrade must append nothing");
+    let (_, grew) = run(true, VoterChange::FinalizeKraftVersion(1));
+    check!(grew, "the real upgrade appends");
+}

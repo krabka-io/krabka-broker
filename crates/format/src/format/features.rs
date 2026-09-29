@@ -104,7 +104,7 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<(String, i16), String> {
 /// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`.
 ///
 /// The levels above it that the feature table carries, `4.4-IV0` to
-/// `4.4-IV2`, are Kafka trunk's unstable versions. A stock 4.3 node or tool
+/// `4.5-IV0`, are Kafka trunk's unstable versions. A stock 4.3 node or tool
 /// does not know them, so a format names one only under
 /// `--unstable-feature-versions-enable`, Kafka's
 /// `unstable.feature.versions.enable`.
@@ -590,14 +590,14 @@ mod tests {
                 None,
                 vec![mv(6)],
                 trunk,
-                no_metadata_version(6, 33),
+                no_metadata_version(6, 34),
             ),
             (
                 "past the table, unstable",
                 None,
-                vec![mv(34)],
+                vec![mv(35)],
                 trunk,
-                no_metadata_version(34, 33),
+                no_metadata_version(35, 34),
             ),
             // Order: the release first, then names, then levels.
             (
@@ -645,7 +645,7 @@ mod tests {
         }
     }
 
-    /// #784: a Kafka trunk `metadata.version` (4.4-IV0 to 4.4-IV2) is
+    /// #784: a Kafka trunk `metadata.version` (4.4-IV0 to 4.5-IV0) is
     /// refused with Kafka 4.3.1's `kafka-storage format` messages unless
     /// unstable feature versions are enabled, and the default release is
     /// `latestTesting` when they are.
@@ -661,20 +661,37 @@ mod tests {
         let mv = |level| vec![("metadata.version".to_string(), level)];
         let cases: Vec<Case<'_>> = vec![
             (None, vec![], STRICT, Ok(30)),
-            (None, vec![], trunk, Ok(33)),
+            (None, vec![], trunk, Ok(34)),
             (Some("4.4"), vec![], STRICT, Err(unknown_release("4.4"))),
             (Some("4.4-IV0"), vec![], trunk, Ok(31)),
             (Some("4.4"), vec![], trunk, Ok(33)),
+            (Some("4.5-IV0"), vec![], trunk, Ok(34)),
+            (Some("4.5"), vec![], trunk, Ok(34)),
+            (Some("4.5-IV0"), vec![], STRICT, Err(unknown_release("4.5-IV0"))),
             (
                 None,
                 mv(31),
                 STRICT,
                 Err("metadata.version 4.4-IV0 is not yet stable.".to_owned()),
             ),
+            // 4.3.1's table ends at 4.4-IV0, so the trunk levels do not exist.
+            (
+                None,
+                mv(33),
+                STRICT,
+                Err("No MetadataVersion with feature level 33. Valid feature levels are from 7 to 31.".to_owned()),
+            ),
+            (
+                None,
+                mv(34),
+                STRICT,
+                Err("No MetadataVersion with feature level 34. Valid feature levels are from 7 to 31.".to_owned()),
+            ),
             (None, mv(30), STRICT, Ok(30)),
             (None, mv(31), trunk, Ok(31)),
             (None, mv(32), trunk, Ok(32)),
             (None, mv(33), trunk, Ok(33)),
+            (None, mv(34), trunk, Ok(34)),
         ];
         for (release, features, unstable, want) in cases {
             check!(

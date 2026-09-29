@@ -112,13 +112,13 @@ mod tests {
                 "a feature above its range",
                 vec![("share.version", 5)],
                 Enabled,
-                Some(refusal("share.version", 5, "0-1")),
+                Some(refusal("share.version", 5, "0-2")),
             ),
             (
                 "a level below the range",
                 vec![("metadata.version", 3)],
                 Enabled,
-                Some(refusal("metadata.version", 3, "7-33")),
+                Some(refusal("metadata.version", 3, "7-34")),
             ),
             (
                 "the first of two refused features",

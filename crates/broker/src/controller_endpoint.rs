@@ -14,7 +14,7 @@
 
 /// The listener name a controller advertises for the RPCs its peers address
 /// to it.
-const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
+pub(crate) const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
 
 /// One voter's controller-listener endpoint, by the same convention
 /// `krabka_raft::Node::controller_addr` uses to dial a raft peer: the endpoint
