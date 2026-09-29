@@ -38,8 +38,10 @@ pub struct FormatArgs {
     /// is generated.
     #[arg(long, value_parser = ClusterId::parse_cli)]
     pub(super) cluster_id: Option<ClusterId>,
-    /// Bootstrap `metadata.version` (KIP-778), e.g. `4.0` or `4.0-IV3`.
-    /// Defaults to Kafka 4.3's latest production level, `4.3-IV0`, when
+    /// Bootstrap `metadata.version` (KIP-778), e.g. `4.0` or `4.0-IV3`. A
+    /// string with more than two dot-separated segments keeps the first two,
+    /// as Kafka's `MetadataVersion.fromVersionString` does, so `4.3.1` is
+    /// `4.3`. Defaults to Kafka 4.3's latest production level, `4.3-IV0`, when
     /// omitted.
     #[arg(long)]
     pub(super) release_version: Option<String>,

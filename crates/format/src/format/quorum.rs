@@ -34,7 +34,7 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
         }
         if !(0..=1).contains(level) {
             return Err(format!(
-                "feature kraft.version={level} is outside the supported range 0..=1"
+                "No feature:kraft.version with feature level {level}"
             ));
         }
     }
@@ -201,6 +201,30 @@ mod tests {
     #[test]
     fn rejects_initial_controller_bad_uuid() {
         assert2::assert!(parse_initial_controller("3@host:9093:not-a-uuid").is_err());
+    }
+
+    /// A `kraft.version` level the feature does not define gets Kafka's
+    /// `Feature.fromFeatureLevel` text.
+    #[test]
+    fn a_kraft_version_level_out_of_range_is_kafkas_no_feature_error() {
+        use clap::Parser as _;
+
+        for level in ["2", "-1", "9"] {
+            let cli = crate::Cli::try_parse_from([
+                "krabka-format",
+                "--log-dir",
+                "/data",
+                "--feature",
+                &format!("kraft.version={level}"),
+            ])
+            .expect("parse");
+            assert2::assert!(
+                is_dynamic_format(&cli.args)
+                    == Err(format!(
+                        "No feature:kraft.version with feature level {level}"
+                    ))
+            );
+        }
     }
 
     #[test]
