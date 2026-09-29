@@ -404,6 +404,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
         dir.path().to_path_buf(),
         NodeId(1),
         uuid::Uuid::nil(),
+        uuid::Uuid::nil(),
         voter_set(&[NodeId(1)]),
         TEST_ELECTION_TIMEOUT,
         None,

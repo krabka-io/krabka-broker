@@ -66,6 +66,9 @@ impl MetadataSource for ControllerHandle {
     async fn add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::add_voter(self, req).await
     }
+    async fn check_add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
+        ControllerHandle::check_add_voter(self, req).await
+    }
     async fn remove_voter(&self, req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::remove_voter(self, req).await
     }

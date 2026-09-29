@@ -90,6 +90,14 @@ pub trait MetadataSource: Send + Sync {
     /// snapshot.
     async fn trigger_snapshot(&self) -> Result<(), RaftError>;
     async fn add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError>;
+    /// Run the leader-local checks of `AddVoterHandler` (pending change, high
+    /// watermark, `kraft.version`, uncommitted voters record, duplicate id)
+    /// for `req` without contacting the candidate or appending anything.
+    /// Only a controller can evaluate them; every other source is not the
+    /// leader.
+    async fn check_add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
+        Ok(ReconfigOutcome::NotLeader { leader: None })
+    }
     async fn remove_voter(&self, req: RemoveVoter) -> Result<ReconfigOutcome, RaftError>;
     async fn update_voter(&self, req: UpdateVoter) -> Result<ReconfigOutcome, RaftError>;
     async fn finalize_kraft_version(&self, _version: u16) -> Result<ReconfigOutcome, RaftError> {

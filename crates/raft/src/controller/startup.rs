@@ -130,6 +130,7 @@ impl Controller {
             data_dir.clone(),
             config.node_id,
             cluster_id,
+            config.directory_id,
             voters.clone(),
             config.election_timeout,
             config.heartbeat_interval,

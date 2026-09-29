@@ -13,7 +13,7 @@ use crate::{
     error::RaftError,
     kraft::{
         event::Event,
-        types::{Epoch, NodeId},
+        types::{Epoch, NodeId, ReplicaKey},
     },
 };
 
@@ -116,6 +116,9 @@ pub enum Command {
     MetadataFetch {
         fetch_offset: i64,
         max_size: krabka_units::ByteSize,
+        /// The observer that asked, when it is a replica. A leader tracks its
+        /// progress under this key.
+        replica: Option<ReplicaKey>,
         reply: oneshot::Sender<MetadataFetchSlice>,
     },
     /// Test-only: append a metadata batch to the log, the same way the
@@ -172,6 +175,22 @@ pub enum TimerTick {
     CheckQuorum,
 }
 
+/// One observer row of `DescribeQuorum`: a replica the leader has seen fetch
+/// that is not a voter, with what the leader tracks for it. A timestamp is -1
+/// while the leader has not recorded that event, as in Kafka.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObserverReplica {
+    pub id: NodeId,
+    /// The observer's directory id, nil when its fetches carry none.
+    pub directory_id: uuid::Uuid,
+    /// The offset of the observer's last valid fetch.
+    pub log_end_offset: i64,
+    /// Wall-clock milliseconds of its last valid fetch.
+    pub last_fetch_ms: i64,
+    /// Wall-clock milliseconds it was last caught up with the leader's log.
+    pub last_caught_up_ms: i64,
+}
+
 /// A structured, node-local snapshot of consensus state for the handle, which
 /// serves the broker's `DescribeQuorum` admin view.
 ///
@@ -198,17 +217,16 @@ pub struct QuorumStateSnapshot {
     pub voters: krabka_metadata::VoterSet,
     /// Directory identity voted for in the current epoch, if any.
     pub voted_directory_id: Option<uuid::Uuid>,
-    /// Replicas that have fetched from the leader but are not current voters.
-    pub observers: Vec<NodeId>,
-    /// Per-replica fetch offset, populated on the leader for voters and
-    /// observers.
+    /// The replicas that fetch from this leader without holding a vote and
+    /// fetched within the last five minutes (Kafka's `observerStates`), one per
+    /// `(id, directory id)` key. Empty unless this node leads.
+    pub observers: Vec<ObserverReplica>,
+    /// Per-voter fetch offset, populated on the leader.
     pub per_replica_fetch_offset: std::collections::BTreeMap<NodeId, i64>,
-    /// Per-replica last fetch timestamp in wall-clock milliseconds.
+    /// Per-voter last fetch timestamp in wall-clock milliseconds.
     pub per_replica_last_fetch_ms: std::collections::BTreeMap<NodeId, i64>,
-    /// Per-replica last caught-up timestamp in wall-clock milliseconds.
+    /// Per-voter last caught-up timestamp in wall-clock milliseconds.
     pub per_replica_last_caught_up_ms: std::collections::BTreeMap<NodeId, i64>,
-    /// Discovered directory identities for observer replicas.
-    pub observer_directory_ids: std::collections::BTreeMap<NodeId, uuid::Uuid>,
     /// Whether this node currently leads the metadata quorum.
     pub is_leader: bool,
     /// Raft consensus state name (leader, follower, candidate, observer).

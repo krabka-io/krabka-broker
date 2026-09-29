@@ -9,7 +9,7 @@
 use super::QuorumStateMachine;
 use crate::{
     action::{Action, TimerKind},
-    role::Role,
+    role::{ReplicaProgress, Role},
     types::{Epoch, LogOffsetMetadata, LogView, NodeId, SimInstant},
 };
 
@@ -64,11 +64,7 @@ impl QuorumStateMachine {
         if let Role::Leader { replicas, .. } = &mut self.role
             && let Some(progress) = replicas.get_mut(&from)
         {
-            progress.fetch_offset = fetch_offset;
-            progress.last_fetch = now;
-            if fetch_offset >= log_end {
-                progress.last_caught_up = now;
-            }
+            progress.record_fetch(now, fetch_offset, log_end);
         }
         let new_hwm = self.recompute_high_watermark(log_end);
         if let Role::Leader { high_watermark, .. } = &mut self.role
@@ -150,6 +146,19 @@ impl QuorumStateMachine {
             return Vec::new();
         }
         self.transition_to_resigned(now)
+    }
+
+    /// Give the voter `id` the progress it had while it was an observer, as
+    /// Kafka does when a replica joins the voter set
+    /// (`LeaderState.updateVoterAndObserverStates` reuses its `ReplicaState`).
+    /// Nothing happens unless this replica leads and `id` is another voter.
+    pub fn adopt_replica_progress(&mut self, id: NodeId, progress: ReplicaProgress) {
+        if id != self.me
+            && self.state.voters.contains(id)
+            && let Role::Leader { replicas, .. } = &mut self.role
+        {
+            replicas.insert(id, progress);
+        }
     }
 
     /// The other current voters, most caught up first by the fetch offsets this

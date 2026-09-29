@@ -72,6 +72,7 @@ async fn restart_recovers_image() {
         victim_dir,
         victim,
         cid,
+        uuid::Uuid::nil(),
         voter_set(&ids),
         timeouts[usize::try_from(victim.0 - 1).unwrap()],
         None,

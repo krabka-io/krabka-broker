@@ -25,7 +25,10 @@ use super::{
 use crate::{
     NodeId,
     error::RaftError,
-    kraft::{role::Role, types::Epoch},
+    kraft::{
+        role::Role,
+        types::{Epoch, ReplicaKey},
+    },
     reconfig::ReconfigOutcome,
 };
 
@@ -134,6 +137,9 @@ impl Engine {
     ) {
         use crate::reconfig::VoterChange;
 
+        // A check-only add takes the facts about the candidate as given, so it
+        // runs the same checks and stops before the append.
+        let check_only = matches!(change, VoterChange::CheckAdd(_));
         let current = self.controls.committed_voters.clone();
         let current_version = self.controls.committed_version;
         let leadership = ReconfigurationLeadership {
@@ -148,9 +154,10 @@ impl Engine {
         };
         let requested_version = match &change {
             VoterChange::FinalizeKraftVersion(version) => *version,
-            VoterChange::Add(_) | VoterChange::Remove(_) | VoterChange::Update(_) => {
-                current_version
-            }
+            VoterChange::Add(_)
+            | VoterChange::CheckAdd(_)
+            | VoterChange::Remove(_)
+            | VoterChange::Update(_) => current_version,
         };
         let voters = CurrentVoterSet {
             voter_count: current.len(),
@@ -162,13 +169,16 @@ impl Engine {
                 .all(|voter| voter_supports_version(voter, requested_version)),
         };
         let (kind, target_id, target, lag) = match &change {
-            VoterChange::Add(request) => {
+            VoterChange::Add(request) | VoterChange::CheckAdd(request) => {
                 let leader_end = self.log.log_end_offset().0;
-                let observer_end = self
-                    .replica_fetch_offsets
-                    .get(&request.voter.id)
-                    .copied()
-                    .unwrap_or(0);
+                // Kafka's `isReplicaCaughtUp` reads the observer state of this
+                // exact `(id, directory id)` key. It is the last of the checks,
+                // so a check-only request skips it and the range check.
+                let progress = self.observers.get(&ReplicaKey {
+                    id: request.voter.id,
+                    directory_id: request.voter.directory_id,
+                });
+                let observer_end = progress.map_or(0, |progress| progress.fetch_offset);
                 (
                     VoterChangeKind::Add,
                     Some(request.voter.id),
@@ -178,8 +188,10 @@ impl Engine {
                             request.voter.id,
                             request.voter.directory_id,
                         ),
-                        version_compatible: voter_supports_version(&request.voter, current_version),
-                        caught_up: observer_end >= leader_end,
+                        version_compatible: check_only
+                            || voter_supports_version(&request.voter, current_version),
+                        caught_up: check_only
+                            || progress.is_some_and(|progress| progress.is_caught_up(self.now())),
                     },
                     u64::try_from(leader_end.saturating_sub(observer_end)).unwrap_or(u64::MAX),
                 )
@@ -234,6 +246,10 @@ impl Engine {
             target,
         );
         let plan = match decision {
+            VoterReconfigurationDecision::Admit(_) if check_only => {
+                let _ = reply.send(Ok(ReconfigOutcome::Committed));
+                return;
+            }
             VoterReconfigurationDecision::Admit(plan) => plan,
             rejected => {
                 let _ = reply.send(rejected_reconfiguration(
@@ -249,7 +265,7 @@ impl Engine {
         };
 
         let (next, ack_when_committed, removed_local_leader) = match change {
-            VoterChange::Add(request) => (
+            VoterChange::Add(request) | VoterChange::CheckAdd(request) => (
                 current.with_voter(request.voter),
                 request.ack_when_committed,
                 false,
@@ -274,7 +290,7 @@ impl Engine {
             // VotersRecord may be written yet.
             self.controls.committed_voters = next.clone();
             self.controls.voter_history.insert(-1, next.clone());
-            let actions = self.core.apply_voter_set(next.clone(), self.now());
+            let actions = self.apply_voter_set(next.clone());
             self.peers.update_voters(&next);
             self.execute(actions);
             self.publish_leader();
@@ -354,7 +370,7 @@ impl Engine {
         }
         let latest = self.controls.latest_voters().clone();
         if latest != previous {
-            let actions = self.core.apply_voter_set(latest.clone(), self.now());
+            let actions = self.apply_voter_set(latest.clone());
             self.peers.update_voters(&latest);
             self.execute(actions);
         }
@@ -366,7 +382,7 @@ impl Engine {
         self.controls.truncate_to(offset);
         let latest = self.controls.latest_voters().clone();
         if latest != previous {
-            let actions = self.core.apply_voter_set(latest.clone(), self.now());
+            let actions = self.apply_voter_set(latest.clone());
             self.peers.update_voters(&latest);
             self.execute(actions);
         }

@@ -14,9 +14,9 @@ use crate::{
     error::RaftError,
     kraft::KraftController,
     voter_requests::{
-        Refusal, add_voter_refusal, candidate_kraft_version_refusal, candidate_unavailable_refusal,
-        reconfiguration_refusal, remove_voter_refusal, update_voter_current_leader,
-        update_voter_refusal,
+        Refusal, VoterOperation, add_voter_refusal, candidate_kraft_version_refusal,
+        candidate_unavailable_refusal, reconfiguration_refusal, remove_voter_refusal,
+        update_voter_current_leader, update_voter_refusal,
     },
 };
 
@@ -94,19 +94,41 @@ pub(super) async fn add_raft_voter_response(
     let request = AddRaftVoterRequest::decode(&mut &body[..], version)?;
     let image = engine.current_image();
     let quorum = engine.quorum_state().await?;
+    let (voter_id, directory_id) = (request.voter_id, request.voter_directory_id);
+    let ack_when_committed = add_voter_ack_when_committed(version, request.ack_when_committed);
     let refusal = match add_voter_refusal(&request, &image.cluster_id().to_string(), &quorum) {
         Some(refusal) => Some(refusal),
-        None if image.kraft_version() >= 1 => {
-            probe_voter_candidate(&request, image.kraft_version(), engine)
+        // `AddVoterHandler` answers from the leader's own state (a pending
+        // change, the high watermark, `kraft.version`, an uncommitted voters
+        // record, a duplicate id) before it sends the candidate anything, so
+        // a retried or refused add never probes an unreachable candidate.
+        None => match reconfiguration_refusal(
+            engine
+                .reconfigure(crate::reconfig::VoterChange::CheckAdd(
+                    crate::reconfig::AddVoter {
+                        voter: requested_voter(
+                            voter_id,
+                            directory_id,
+                            [],
+                            krabka_metadata::KRaftVersionRange::default(),
+                        ),
+                        ack_when_committed,
+                    },
+                ))
+                .await,
+            VoterOperation::Add,
+            voter_id,
+            directory_id,
+        ) {
+            (0, _) => probe_voter_candidate(&request, image.kraft_version(), engine)
                 .await
-                .err()
-        }
-        None => None,
+                .err(),
+            refusal => Some(refusal),
+        },
     };
     let (error_code, error_message) = if let Some(refusal) = refusal {
         refusal
     } else {
-        let (voter_id, directory_id) = (request.voter_id, request.voter_directory_id);
         let voter = requested_voter(
             voter_id,
             directory_id,
@@ -125,13 +147,11 @@ pub(super) async fn add_raft_voter_response(
                 .reconfigure(crate::reconfig::VoterChange::Add(
                     crate::reconfig::AddVoter {
                         voter,
-                        ack_when_committed: add_voter_ack_when_committed(
-                            version,
-                            request.ack_when_committed,
-                        ),
+                        ack_when_committed,
                     },
                 ))
                 .await,
+            VoterOperation::Add,
             voter_id,
             directory_id,
         )
@@ -175,6 +195,7 @@ pub(super) async fn remove_raft_voter_response(
                         },
                     ))
                     .await,
+                VoterOperation::Remove,
                 request.voter_id,
                 request.voter_directory_id,
             )
@@ -233,6 +254,7 @@ pub(super) async fn update_raft_voter_response(
                     crate::reconfig::UpdateVoter { voter },
                 ))
                 .await,
+            VoterOperation::Update,
             voter_id,
             directory_id,
         )

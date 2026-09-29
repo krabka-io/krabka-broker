@@ -3,18 +3,21 @@
 //! and `FetchSnapshot` serve paths and the Fetch long poll.
 
 use krabka_ids::Offset;
+use krabka_metadata::VoterSet;
 use tokio::{sync::oneshot, time::Instant};
 
 use super::{
     Engine,
+    queries::observer_session_expired,
     quorum_requests::{INCONSISTENT_CLUSTER_ID, INVALID_REQUEST, NOT_LEADER_OR_FOLLOWER},
     replication::should_serve_fetch_records,
 };
 use crate::kraft::{
     action::Action,
     event::Event,
+    role::Role,
     transport::{Inbound, wire},
-    types::{Epoch, LogView as _, NodeId},
+    types::{Epoch, LogView as _, NodeId, ReplicaKey},
 };
 
 /// The fields of one validated Fetch partition that answering it needs, kept
@@ -258,31 +261,40 @@ impl Engine {
         }
         let fetch_epoch = wire::epoch_from_wire(fetch.last_fetched_epoch);
         let fetch_offset = fetch.fetch_offset;
-        let diverging = match u64::try_from(fetch.replica_id) {
-            Ok(replica) => self.run_replica_fetch(
-                NodeId(replica),
-                fetch_epoch,
-                fetch_offset,
-                fetch.replica_directory_id,
-            ),
-            Err(_) => self.non_replica_divergence(fetch_epoch, fetch_offset),
+        // If the follower's fetch offset is below our pruned log-start, it
+        // cannot replicate from the log -- point it at the latest snapshot
+        // instead (KIP-630). `fetch_offset` arrives raw on the KIP-595 wire;
+        // wrap it into the `KraftLog` offset domain to compare against log
+        // bounds.
+        let log_start = self.log.log_start_offset();
+        let fetch_offset_in_log = Offset(fetch_offset);
+        let snapshot_id = if fetch_offset_in_log >= 0 && fetch_offset_in_log < log_start {
+            self.latest_snapshot_id()
+        } else {
+            None
+        };
+        // Only a fetch that validates against the log is replica progress:
+        // `tryCompleteFetchRequest` calls `updateReplicaState` in its VALID
+        // branch and nowhere else, so a snapshot redirect moves nothing here.
+        let diverging = if snapshot_id.is_some() {
+            None
+        } else {
+            match u64::try_from(fetch.replica_id) {
+                Ok(replica) => self.run_replica_fetch(
+                    NodeId(replica),
+                    fetch_epoch,
+                    fetch_offset,
+                    fetch.replica_directory_id,
+                ),
+                Err(_) => self.non_replica_divergence(fetch_epoch, fetch_offset),
+            }
         };
         // Serve the follower the batch bytes it is missing: every batch
         // at/after its `fetch_offset` up to our log end (KRaft replicates up
         // to the leader's log end, not just the HWM -- the HWM rides
         // separately in the response). A divergent fetch sends none (the
-        // follower truncates first, then re-fetches). If the follower's fetch
-        // offset is below our pruned log-start, it cannot replicate from the
-        // log -- point it at the latest snapshot instead (KIP-630).
-        // `fetch_offset` arrives raw on the KIP-595 wire; wrap it into the
-        // `KraftLog` offset domain to compare against log bounds.
-        let log_start = self.log.log_start_offset();
-        let fetch_offset = Offset(fetch_offset);
-        let snapshot_id = if fetch_offset >= 0 && fetch_offset < log_start {
-            self.latest_snapshot_id()
-        } else {
-            None
-        };
+        // follower truncates first, then re-fetches).
+        let fetch_offset = fetch_offset_in_log;
         let records = if should_serve_fetch_records(
             snapshot_id.is_some(),
             diverging.is_some(),
@@ -305,9 +317,25 @@ impl Engine {
         }
     }
 
-    /// Runs a replica's fetch through the core, which records its progress,
-    /// scores it for check-quorum and may advance the high watermark. Returns
-    /// the divergence the core found, if any.
+    /// Whether `key` names a current voter, as Kafka's
+    /// `LeaderState.ReplicaState.matchesKey` does: the ids are equal and either
+    /// the voter records no directory id, or the fetcher's is the same. A
+    /// replica that fetches with the id of a voter but another directory is an
+    /// observer.
+    fn names_current_voter(&self, key: ReplicaKey) -> bool {
+        self.core
+            .quorum_state()
+            .voters
+            .get(key.id)
+            .is_some_and(|voter| {
+                voter.directory_id.is_nil() || voter.directory_id == key.directory_id
+            })
+    }
+
+    /// Runs a replica's fetch. A voter's goes through the core, which records
+    /// its progress, scores it for check-quorum and may advance the high
+    /// watermark; any other replica's is tracked as an observer. Returns the
+    /// divergence found, if any.
     fn run_replica_fetch(
         &mut self,
         from: NodeId,
@@ -315,10 +343,16 @@ impl Engine {
         fetch_offset: i64,
         replica_directory_id: uuid::Uuid,
     ) -> Option<crate::kraft::types::LogOffsetMetadata> {
-        self.replica_fetch_offsets.insert(from, fetch_offset);
-        if replica_directory_id != uuid::Uuid::nil() {
-            self.replica_directory_ids
-                .insert(from, replica_directory_id);
+        let key = ReplicaKey {
+            id: from,
+            directory_id: replica_directory_id,
+        };
+        if !self.names_current_voter(key) {
+            let diverging = self.non_replica_divergence(fetch_epoch, fetch_offset);
+            if diverging.is_none() {
+                self.record_observer_fetch(key, fetch_offset);
+            }
+            return diverging;
         }
         let now = self.now();
         let prev_role = self.core.role().name();
@@ -346,7 +380,8 @@ impl Engine {
     }
 
     /// The divergence check of Kafka's `RaftLog.validateOffsetAndEpoch` for a
-    /// fetcher that is not a replica, which the core does not track.
+    /// fetcher the core does not track: one that is not a replica, or an
+    /// observer.
     fn non_replica_divergence(
         &self,
         fetch_epoch: Epoch,
@@ -357,6 +392,74 @@ impl Engine {
         }
         let end = self.log.end_offset_for_epoch(fetch_epoch);
         (end.epoch != fetch_epoch || end.offset < fetch_offset).then_some(end)
+    }
+
+    /// Record a valid fetch by the observer `key` at `fetch_offset`, as
+    /// `LeaderState.updateReplicaState` does for a replica that is not a voter,
+    /// and drop the observers that have gone quiet. Only the leader tracks
+    /// observers.
+    pub(super) fn record_observer_fetch(&mut self, key: ReplicaKey, fetch_offset: i64) {
+        if !self.core.role().is_leader() {
+            return;
+        }
+        let now = self.now();
+        let leader_log_end = self.log.log_end_offset().0;
+        self.observers
+            .entry(key)
+            .or_default()
+            .record_fetch(now, fetch_offset, leader_log_end);
+        self.observers
+            .retain(|_, progress| !observer_session_expired(progress, now));
+    }
+
+    /// Track a broker-only observer's `MetadataFetch` (1004) as the Fetch it
+    /// stands in for. The request carries no epoch, so it is valid when it lies
+    /// within the log, where `RaftLog.validateOffsetAndEpoch` says VALID: not
+    /// below the log start, which a snapshot answers, and not past the end. A
+    /// voter's progress comes only from its own Fetch.
+    pub(super) fn record_metadata_fetch(&mut self, key: ReplicaKey, fetch_offset: i64) {
+        let within_log =
+            (self.log.log_start_offset().0..=self.log.log_end_offset().0).contains(&fetch_offset);
+        if within_log && !self.names_current_voter(key) {
+            self.record_observer_fetch(key, fetch_offset);
+        }
+    }
+
+    /// Apply `voters` to the core, and when this node leads, move replicas
+    /// between the voter and observer maps as Kafka's
+    /// `LeaderState.updateVoterAndObserverStates` does: a replica that became a
+    /// voter keeps the progress it had as an observer, and a voter that left the
+    /// set becomes an observer with the progress it had as a voter.
+    pub(super) fn apply_voter_set(&mut self, voters: VoterSet) -> Vec<Action> {
+        let now = self.now();
+        let Role::Leader { replicas, .. } = self.core.role() else {
+            return self.core.apply_voter_set(voters, now);
+        };
+        let voter_progress = replicas.clone();
+        let old_voters = self.core.quorum_state().voters.clone();
+        let actions = self.core.apply_voter_set(voters, now);
+        let voters = self.core.quorum_state().voters.clone();
+        for (id, progress) in voter_progress {
+            if let (None, Some(voter)) = (voters.get(id), old_voters.get(id)) {
+                let key = ReplicaKey {
+                    id,
+                    directory_id: voter.directory_id,
+                };
+                self.observers.entry(key).or_insert(progress);
+            }
+        }
+        let joined: Vec<ReplicaKey> = self
+            .observers
+            .keys()
+            .filter(|key| self.names_current_voter(**key))
+            .copied()
+            .collect();
+        for key in joined {
+            if let Some(progress) = self.observers.remove(&key) {
+                self.core.adopt_replica_progress(key.id, progress);
+            }
+        }
+        actions
     }
 
     /// Run an inbound `ReceiveVoteRequest` and return whether the vote was

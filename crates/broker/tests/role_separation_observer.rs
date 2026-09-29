@@ -615,3 +615,77 @@ async fn broker_only_node_forwards_describe_quorum_to_controller() {
 
     cluster.shutdown().await;
 }
+
+/// Every broker-only node fetches `__cluster_metadata` from the controller, so
+/// the controller's `DescribeQuorum` lists each one as an observer under its
+/// node id, with the time of its last fetch. Kafka lists a broker the same way,
+/// and `kafka-metadata-quorum describe --replication` shows them under
+/// `Observer`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn broker_only_nodes_are_described_as_quorum_observers() {
+    use krabka_protocol::owned::describe_quorum_request::{
+        DescribeQuorumRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
+    };
+
+    support::init_tracing();
+
+    let cluster = start_role_separated(2).await;
+    let broker_ids: BTreeSet<i32> = cluster
+        .brokers
+        .iter()
+        .map(|broker| i32::try_from(broker.node_id()).expect("small node id"))
+        .collect();
+    let client = Client::builder()
+        .bootstrap(cluster.brokers[0].listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    let request = || DescribeQuorumRequest {
+        topics: vec![ReqTopicData {
+            topic_name: "__cluster_metadata".into(),
+            partitions: vec![ReqPartitionData {
+                partition_index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    // The observers appear once each has completed a fetch, so poll for them.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observers = loop {
+        let resp = client.send(request()).await.unwrap();
+        let partition = &resp.topics[0].partitions[0];
+        let listed: BTreeSet<i32> = partition
+            .observers
+            .iter()
+            .map(|observer| observer.replica_id)
+            .collect();
+        if partition.error_code == 0 && listed == broker_ids {
+            break partition.observers.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the brokers never appeared as observers: {:?}",
+            partition.observers
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    for observer in &observers {
+        assert!(
+            observer.last_fetch_timestamp > 1_700_000_000_000,
+            "observer {} has a real fetch time, got {}",
+            observer.replica_id,
+            observer.last_fetch_timestamp
+        );
+        assert!(
+            observer.log_end_offset >= 0,
+            "observer {} has a fetch offset",
+            observer.replica_id
+        );
+    }
+
+    cluster.shutdown().await;
+}

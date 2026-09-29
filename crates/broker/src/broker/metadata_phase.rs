@@ -214,6 +214,7 @@ async fn start_metadata_source(
             client_id: format!("krabka-broker-{}-observer", config.broker_id),
             cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
             node_id: config.node_id,
+            directory_id: config.directory_id,
             // The metadata log directory. The observer keeps its checkpoints
             // in a subdirectory of their own beside the controller's, never in
             // it: an observer checkpoint carries no KIP-853 control state and

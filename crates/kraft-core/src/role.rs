@@ -4,7 +4,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::{NodeId, SimInstant};
 
-/// Per-follower replication progress that a leader tracks for the HWM.
+/// How recently a replica must have fetched for `AddRaftVoter` to call it
+/// caught up: Kafka's `LeaderState.isReplicaCaughtUp` window of one hour.
+const CAUGHT_UP_FETCH_WINDOW_MS: u64 = 3_600_000;
+
+/// Per-replica replication progress that a leader tracks: a voter's for the HWM
+/// and any replica's for `DescribeQuorum` and the `AddRaftVoter` catch-up check.
+///
+/// A zero instant means the leader has not recorded that event, as Kafka's -1
+/// timestamps do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct ReplicaProgress {
     /// Highest offset the follower has acknowledged, that is, its fetch offset.
@@ -13,6 +21,42 @@ pub struct ReplicaProgress {
     pub last_fetch: SimInstant,
     /// Logical instant this follower was known to be caught up with the leader's log end.
     pub last_caught_up: SimInstant,
+    /// The leader's log end offset when this follower last fetched: the offset
+    /// the next fetch has to reach for the follower to count as having kept
+    /// pace with the appends in between.
+    pub last_fetch_leader_log_end: i64,
+}
+
+impl ReplicaProgress {
+    /// Record a valid fetch at `fetch_offset` while the leader's log ended at
+    /// `leader_log_end`, as Kafka's `ReplicaState.updateFollowerState` does.
+    ///
+    /// A fetch at or past the leader's log end is caught up now. A fetch short
+    /// of it still counts as caught up as of the previous fetch when it reaches
+    /// the log end that fetch saw, so a follower that keeps pace under
+    /// continuous appends does not look stale. The caught-up time is settled
+    /// before `last_fetch` moves, because the second case reads the old one.
+    pub fn record_fetch(&mut self, now: SimInstant, fetch_offset: i64, leader_log_end: i64) {
+        if fetch_offset >= leader_log_end {
+            self.last_caught_up = self.last_caught_up.max(now);
+        } else if self.last_fetch_leader_log_end > 0
+            && fetch_offset >= self.last_fetch_leader_log_end
+        {
+            self.last_caught_up = self.last_caught_up.max(self.last_fetch);
+        }
+        self.last_fetch_leader_log_end = leader_log_end;
+        self.last_fetch = self.last_fetch.max(now);
+        self.fetch_offset = fetch_offset;
+    }
+
+    /// Kafka's `LeaderState.isReplicaCaughtUp`: the replica has been caught up
+    /// at some point and fetched within the last hour.
+    #[must_use]
+    pub fn is_caught_up(&self, now: SimInstant) -> bool {
+        self.last_caught_up > SimInstant(0)
+            && self.last_fetch > SimInstant(0)
+            && self.last_fetch.0 > now.0.saturating_sub(CAUGHT_UP_FETCH_WINDOW_MS)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -114,6 +158,111 @@ mod tests {
         // Distinct, not merely non-empty: a single constant would satisfy the
         // latter for every variant.
         assert2::assert!(names[0] != names[1]);
+    }
+
+    /// `ReplicaState.updateFollowerState`: a fetch at or past the leader's log
+    /// end is caught up now, and one short of it is caught up as of the
+    /// previous fetch when it reaches the log end that fetch saw.
+    #[test]
+    fn a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {
+        /// A run of fetches, each `(now, fetch offset, leader log end)`, and
+        /// the progress the last of them leaves.
+        struct Case {
+            label: &'static str,
+            fetches: &'static [(u64, i64, i64)],
+            expected: ReplicaProgress,
+        }
+        let progress =
+            |fetch_offset, last_fetch, last_caught_up, last_fetch_leader_log_end| ReplicaProgress {
+                fetch_offset,
+                last_fetch: SimInstant(last_fetch),
+                last_caught_up: SimInstant(last_caught_up),
+                last_fetch_leader_log_end,
+            };
+        let cases = [
+            Case {
+                label: "a first fetch short of the end",
+                fetches: &[(100, 5, 10)],
+                expected: progress(5, 100, 0, 10),
+            },
+            Case {
+                label: "a first fetch at the end",
+                fetches: &[(100, 10, 10)],
+                expected: progress(10, 100, 100, 10),
+            },
+            Case {
+                label: "keeping pace under appends is caught up as of the previous fetch",
+                fetches: &[(100, 5, 10), (200, 10, 20)],
+                expected: progress(10, 200, 100, 20),
+            },
+            Case {
+                label: "still short of the previous end stays not caught up",
+                fetches: &[(100, 5, 10), (200, 9, 20)],
+                expected: progress(9, 200, 0, 20),
+            },
+            Case {
+                label: "catching up to the current end is caught up now",
+                fetches: &[(100, 5, 10), (200, 10, 20), (300, 20, 20)],
+                expected: progress(20, 300, 300, 20),
+            },
+        ];
+        for Case {
+            label,
+            fetches,
+            expected,
+        } in cases
+        {
+            let mut actual = ReplicaProgress::default();
+            for &(now, fetch_offset, log_end) in fetches {
+                actual.record_fetch(SimInstant(now), fetch_offset, log_end);
+            }
+            assert2::assert!(actual == expected, "{label}");
+        }
+    }
+
+    /// `LeaderState.isReplicaCaughtUp`: caught up at some point, and fetched
+    /// within the last hour.
+    #[test]
+    fn caught_up_needs_a_caught_up_time_and_a_fetch_within_the_hour() {
+        const HOUR: u64 = 3_600_000;
+        let now = SimInstant(10 * HOUR);
+        let progress = |last_fetch: u64, last_caught_up: u64| ReplicaProgress {
+            last_fetch: SimInstant(last_fetch),
+            last_caught_up: SimInstant(last_caught_up),
+            ..Default::default()
+        };
+        let cases = [
+            ("never fetched", progress(0, 0), false),
+            ("fetched but never caught up", progress(now.0 - 1, 0), false),
+            (
+                "caught up and fetching",
+                progress(now.0 - 1, now.0 - 1),
+                true,
+            ),
+            (
+                "caught up long ago, fetching now",
+                progress(now.0 - 1, now.0 - 5 * HOUR),
+                true,
+            ),
+            (
+                "caught up, last fetch just inside the hour",
+                progress(now.0 - HOUR + 1, now.0 - HOUR + 1),
+                true,
+            ),
+            (
+                "caught up, last fetch exactly an hour ago",
+                progress(now.0 - HOUR, now.0 - HOUR),
+                false,
+            ),
+            (
+                "caught up, silent for two hours",
+                progress(now.0 - 2 * HOUR, now.0 - 2 * HOUR),
+                false,
+            ),
+        ];
+        for (label, progress, expected) in cases {
+            assert2::assert!(progress.is_caught_up(now) == expected, "{label}");
+        }
     }
 
     #[test]

@@ -359,7 +359,11 @@ async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
             }))
     );
     // A refused fetch is no replica progress.
-    assert!(!leader.replica_fetch_offsets.contains_key(&NodeId(2)));
+    assert!(leader.observers.is_empty());
+    assert!(matches!(
+        leader.core.role(),
+        Role::Leader { replicas, .. } if replicas[&NodeId(2)] == ReplicaProgress::default()
+    ));
 }
 
 /// Kafka's `buildEndQuorumEpochRequest`: every other voter gets the cluster
@@ -1205,13 +1209,142 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
         reply: reply_obs,
     });
 
+    // The leader's log holds its `LeaderChange`, so a fetch at offset 0 is a
+    // valid fetch that has not reached the log end: the observer is listed with
+    // a real fetch time and no caught-up time yet.
+    assert2::assert!(engine.log.log_end_offset().0 > 0);
     let snap3 = engine.quorum_state_snapshot();
-    assert2::check!(snap3.observers == vec![NodeId(99)]);
-    assert2::check!(
-        snap3.observer_directory_ids.get(&NodeId(99)) == Some(&uuid::Uuid::from_u128(99))
+    let [observer] = snap3.observers.as_slice() else {
+        panic!("one observer, got {:?}", snap3.observers);
+    };
+    assert2::check!(observer.id == NodeId(99));
+    assert2::check!(observer.directory_id == uuid::Uuid::from_u128(99));
+    assert2::check!(observer.log_end_offset == 0);
+    assert2::check!(observer.last_fetch_ms > 1_700_000_000_000);
+    assert2::check!(observer.last_caught_up_ms == -1);
+}
+
+/// One `Fetch` of `fetch_offset` from `from`, which names `directory_id`,
+/// under the leader's own epoch and `fetch_epoch`.
+fn fetch_at(
+    engine: &mut Engine,
+    from: NodeId,
+    directory_id: uuid::Uuid,
+    fetch_epoch: u32,
+    fetch_offset: i64,
+) {
+    let (reply, _rx) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
+        req: wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
+            from,
+            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
+            fetch_epoch,
+            fetch_offset,
+            replica_directory_id: directory_id,
+        }
+        .encode(),
+        reply,
+    });
+}
+
+/// A single-voter leader whose clock started 50 ms ago, so a fetch is stamped
+/// with a nonzero time.
+fn leader_with_a_running_clock() -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    engine.clock_base = Instant::now() - StdDuration::from_millis(50);
+    (engine, dir)
+}
+
+/// Kafka's `LeaderState.observerStates` tracks a non-voter that fetches like a
+/// voter: the offset and time of each valid fetch, and the time it was last
+/// caught up, by the two-branch rule of `ReplicaState.updateFollowerState`.
+#[test]
+fn an_observer_is_tracked_with_kafkas_caught_up_rule() {
+    let (mut engine, _dir) = leader_with_a_running_clock();
+    let observer = NodeId(9);
+    let directory = uuid::Uuid::from_u128(9);
+    let epoch = engine.core.quorum_state().leader_epoch;
+    let first_end = engine.log.log_end_offset().0;
+    assert!(first_end > 0);
+    // The observer's row as (fetch offset, last fetch, last caught up).
+    let row = |engine: &Engine| {
+        let snapshot = engine.quorum_state_snapshot();
+        let [row] = snapshot.observers.as_slice() else {
+            panic!("one observer, got {:?}", snapshot.observers);
+        };
+        (row.log_end_offset, row.last_fetch_ms, row.last_caught_up_ms)
+    };
+
+    // Short of the log end on its first fetch: fetched, never caught up.
+    fetch_at(&mut engine, observer, directory, 0, 0);
+    let (offset, first_fetch, caught_up) = row(&engine);
+    assert!(offset == 0);
+    assert!(first_fetch > 0);
+    assert!(caught_up == -1);
+
+    // The log grows. A fetch that reaches the log end the previous fetch saw is
+    // caught up as of that previous fetch, though it is short of the log end
+    // now: a follower keeping pace under continuous appends is not stale.
+    engine.test_append_and_commit(&topic_record("grows"));
+    assert!(engine.log.log_end_offset().0 > first_end);
+    engine.clock_base -= StdDuration::from_millis(20);
+    fetch_at(&mut engine, observer, directory, epoch, first_end);
+    let (offset, second_fetch, caught_up) = row(&engine);
+    assert!(offset == first_end);
+    assert!(second_fetch > first_fetch);
+    assert!(caught_up == first_fetch);
+
+    // A fetch at the log end is caught up now.
+    engine.clock_base -= StdDuration::from_millis(20);
+    let end = engine.log.log_end_offset().0;
+    fetch_at(&mut engine, observer, directory, epoch, end);
+    let (_, third_fetch, caught_up) = row(&engine);
+    assert!(third_fetch > second_fetch);
+    assert!(caught_up == third_fetch);
+}
+
+/// `tryCompleteFetchRequest` moves replica state only for a fetch that
+/// validates against the log: one at an epoch the leader does not hold, or past
+/// its log end, is answered with a divergence and records nothing.
+#[test]
+fn a_diverging_observer_fetch_is_not_progress() {
+    let (mut engine, _dir) = leader_with_a_running_clock();
+    let end = engine.log.log_end_offset().0;
+    let epoch = engine.core.quorum_state().leader_epoch;
+
+    // Epoch 0 ends where the leader's log starts, short of the fetch offset.
+    fetch_at(&mut engine, NodeId(9), uuid::Uuid::from_u128(9), 0, end);
+    // The leader's own epoch ends at its log end, short of the fetch offset.
+    fetch_at(
+        &mut engine,
+        NodeId(8),
+        uuid::Uuid::from_u128(8),
+        epoch,
+        end + 5,
     );
-    assert2::check!(!snap3.observers.contains(&NodeId(1)));
-    assert2::check!(!snap3.observers.contains(&NodeId(2)));
+
+    assert!(engine.quorum_state_snapshot().observers.is_empty());
+    assert!(engine.observers.is_empty());
+}
+
+/// Kafka's `clearInactiveObservers` drops an observer whose last fetch is five
+/// minutes old, and leadership starts over with none.
+#[test]
+fn an_observer_silent_for_five_minutes_is_dropped() {
+    let (mut engine, _dir) = leader_with_a_running_clock();
+    let epoch = engine.core.quorum_state().leader_epoch;
+    fetch_at(&mut engine, NodeId(9), uuid::Uuid::from_u128(9), epoch, 0);
+    assert!(engine.quorum_state_snapshot().observers.len() == 1);
+
+    engine.clock_base -= StdDuration::from_secs(299);
+    assert!(engine.quorum_state_snapshot().observers.len() == 1);
+    engine.clock_base -= StdDuration::from_secs(2);
+    assert!(engine.quorum_state_snapshot().observers.is_empty());
 }
 
 #[tokio::test]
@@ -1224,7 +1357,7 @@ async fn kraft_controller_metadata_fetch_returns_slice() {
         .unwrap();
 
     let slice = ctrl
-        .metadata_fetch(0, krabka_units::prelude::bytes(1024))
+        .metadata_fetch(0, krabka_units::prelude::bytes(1024), None)
         .await
         .unwrap();
     assert2::check!(!slice.records.is_empty());

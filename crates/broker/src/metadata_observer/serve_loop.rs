@@ -43,6 +43,26 @@ fn voter_at(voters: &[(NodeId, String)], idx: usize) -> &(NodeId, String) {
     &voters[idx % voters.len()]
 }
 
+/// The index in `voters` the loop should move to, given the leader the last
+/// answer named.
+///
+/// Any controller serves the fetch, but only the leader records an observer's
+/// progress for `DescribeQuorum`, so an observer that landed on a follower
+/// moves to the leader that follower names, as a Kafka broker only ever fetches
+/// from the leader. It stays where it is when the hint names no other voter of
+/// the list, or the voter that just failed: a leader this node cannot reach
+/// would otherwise cost a failed dial on every second poll, for as long as the
+/// follower keeps naming it.
+fn leader_to_follow(
+    voters: &[(NodeId, String)],
+    target: NodeId,
+    leader_hint: Option<NodeId>,
+    failed: Option<NodeId>,
+) -> Option<usize> {
+    let leader = leader_hint.filter(|leader| *leader != target && Some(*leader) != failed)?;
+    voters.iter().position(|(id, _)| *id == leader)
+}
+
 /// Successive fetches that leave the image empty while the quorum has
 /// committed records before the loop warns about it. One such fetch is
 /// ordinary — a node that has just started has an empty image and no records
@@ -102,6 +122,9 @@ pub(super) async fn run_loop(
     let mut store = ObserverStore::open(&config.data_dir, config.snapshot_interval_records);
     let mut fetch_offset: u64 = resume(&config, &mut store, &observer);
     let mut target_idx: usize = 0;
+    // The voter whose fetch failed most recently, until one succeeds or a
+    // different leader is named.
+    let mut last_failed: Option<NodeId> = None;
     let mut empty_image = EmptyImageWatch::default();
     loop {
         if shutdown.is_cancelled() {
@@ -134,6 +157,15 @@ pub(super) async fn run_loop(
                 Ordering::Release,
             );
             let _ = observer.leader.send_replace(Some(target));
+            if last_failed == Some(target) {
+                last_failed = None;
+            }
+            if let Some(index) =
+                leader_to_follow(&config.voters, target, outcome.leader_hint, last_failed)
+            {
+                target_idx = index;
+                last_failed = None;
+            }
             // Every poll is answered and nothing is ever applied: the stall
             // shows up as a readiness lag this node can never close, with
             // nothing saying why. The responder's log start is what separates
@@ -162,6 +194,7 @@ pub(super) async fn run_loop(
                 store.maybe_checkpoint(&observer.current_image(), fetch_offset);
             }
         } else {
+            last_failed = Some(target);
             target_idx = target_idx.wrapping_add(1);
             tokio::select! {
                 () = shutdown.cancelled() => return,
@@ -290,6 +323,64 @@ mod tests {
         ];
         for (idx, expected_id) in cases {
             assert!(voter_at(&voters, idx).0 == expected_id, "idx {idx}");
+        }
+    }
+
+    /// The loop moves to the leader a follower names, so that the leader sees
+    /// this node fetch, and does not go back to a voter that has just failed.
+    #[test]
+    fn the_loop_follows_a_named_leader_unless_it_just_failed() {
+        let voters = vec![
+            (krabka_raft::NodeId(1), "a:9093".to_string()),
+            (krabka_raft::NodeId(2), "b:9093".to_string()),
+            (krabka_raft::NodeId(3), "c:9093".to_string()),
+        ];
+        let node = krabka_raft::NodeId;
+        // (label, target just fetched, leader it named, voter that failed last,
+        // index to move to)
+        let cases = [
+            (
+                "a follower names the leader",
+                node(1),
+                Some(node(3)),
+                None,
+                Some(2),
+            ),
+            (
+                "the target is the leader",
+                node(3),
+                Some(node(3)),
+                None,
+                None,
+            ),
+            ("no leader is known", node(1), None, None, None),
+            (
+                "the leader is not a configured voter",
+                node(1),
+                Some(node(9)),
+                None,
+                None,
+            ),
+            (
+                "the named leader is the one that just failed",
+                node(1),
+                Some(node(3)),
+                Some(node(3)),
+                None,
+            ),
+            (
+                "a different leader than the one that failed",
+                node(1),
+                Some(node(2)),
+                Some(node(3)),
+                Some(1),
+            ),
+        ];
+        for (label, target, hint, failed, expected) in cases {
+            assert!(
+                leader_to_follow(&voters, target, hint, failed) == expected,
+                "{label}"
+            );
         }
     }
 

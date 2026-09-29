@@ -46,6 +46,8 @@ async fn metadata_batches(
     krabka_raft::KrabkaMetadataFetchRequest {
         fetch_offset: from,
         max_bytes: 4 << 20,
+        replica_id: -1,
+        replica_directory_id: uuid::Uuid::nil(),
     }
     .encode_v0(&mut body);
     let raw = connection

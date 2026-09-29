@@ -172,6 +172,7 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
         data_dir,
         NodeId(1),
         uuid::Uuid::nil(),
+        uuid::Uuid::nil(),
         voter_set(&[NodeId(1)]),
         TEST_ELECTION_TIMEOUT,
         None,
@@ -250,6 +251,7 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         data_dir,
         NodeId(1),
         uuid::Uuid::nil(),
+        uuid::Uuid::nil(),
         voter_set(&[NodeId(1)]),
         TEST_ELECTION_TIMEOUT,
         None,
@@ -297,6 +299,7 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
     let result = KraftController::open(
         data_dir,
         NodeId(1),
+        uuid::Uuid::nil(),
         uuid::Uuid::nil(),
         voter_set(&[NodeId(1)]),
         TEST_ELECTION_TIMEOUT,

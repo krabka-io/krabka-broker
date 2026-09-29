@@ -72,6 +72,7 @@ pub(crate) fn build_engine_with_snapshot_interval(
         KraftConfig {
             me,
             cluster_id,
+            directory_id: uuid::Uuid::nil(),
             initial_state: QuorumState::bootstrap(cluster_id, voter_set(ids)),
             election_timeout,
             heartbeat_interval: None,
