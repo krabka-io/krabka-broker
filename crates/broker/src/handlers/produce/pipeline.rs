@@ -2,7 +2,7 @@
 //! through every gate in order and returns that partition's response row, or
 //! the high-watermark wait that still stands between it and one.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::owned::produce_response::{
@@ -85,7 +85,6 @@ pub(super) struct PartitionInput<'a> {
     /// The request fields of the KIP-890 transaction check.
     pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
-    pub(super) timeout: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -158,7 +157,6 @@ pub(super) struct AdmittedBatch {
     shared_topic: Arc<str>,
     delivery: Option<DeliveryGate>,
     acks: i16,
-    timeout: Duration,
     /// The request's `Produce` version.
     version: i16,
     /// The pre-append row, with the `UNKNOWN_LOG_APPEND_INFO` sentinel.
@@ -346,7 +344,6 @@ pub(super) async fn admit_partition(
         internal_topic_denied,
         transaction,
         acks,
-        timeout,
     } = input;
     // `shared_topic` is the owned handle the metric labels clone;
     // `topic_name` stays the borrowed view every gate and image lookup below
@@ -603,7 +600,6 @@ pub(super) async fn admit_partition(
         shared_topic,
         delivery,
         acks,
-        timeout,
         version: transaction.version,
         out,
         verification,
@@ -626,7 +622,6 @@ pub(super) async fn complete_partition(
         shared_topic,
         delivery,
         acks,
-        timeout,
         version,
         mut out,
         verification,
@@ -733,7 +728,6 @@ pub(super) async fn complete_partition(
             producer_state,
             partition_index: idx,
             acks,
-            timeout,
             leader_epoch,
             phases,
             producer_check,

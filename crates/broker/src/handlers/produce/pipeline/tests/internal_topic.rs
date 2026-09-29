@@ -6,7 +6,7 @@
 //! that once per topic beside the freeze and refuses each partition row
 //! before it parses the batch.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use assert2::check;
 use bytes::Bytes;
@@ -211,7 +211,6 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
                     producer_id_expiration_ms: 86_400_000,
                 },
                 acks: 1,
-                timeout: Duration::from_secs(5),
             },
             PartitionServices {
                 partitions: &partitions,

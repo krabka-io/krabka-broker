@@ -482,7 +482,6 @@ pub(crate) async fn handle(
                     internal_topic_denied,
                     transaction,
                     acks: req.acks,
-                    timeout,
                 },
                 services,
             )
