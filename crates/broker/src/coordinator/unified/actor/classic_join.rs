@@ -55,6 +55,12 @@ pub(super) async fn handle_classic_join_message(
     client_host: &str,
     reply: oneshot::Sender<JoinResult>,
 ) -> bool {
+    // Kafka's `JoinGroupRequest.maybeOverrideRebalanceTimeout`: v0 has no
+    // rebalance timeout field, so the session timeout stands in for it. The
+    // native and the hosted paths below then read the same value.
+    if version == 0 {
+        request.rebalance_timeout_ms = request.session_timeout_ms;
+    }
     if let Some(consumer) = group.as_consumer() {
         if consumer.members.is_empty() {
             // Kafka's `classicGroupJoin` sends a join to an empty consumer
@@ -340,6 +346,59 @@ mod tests {
         check!(join.protocol_name.as_deref() == Some("range"));
         let members: Vec<&str> = join.members.iter().map(|m| m.member_id.as_str()).collect();
         check!(members == [member_id.as_str()]);
+    }
+
+    /// Kafka's `JoinGroupRequest.maybeOverrideRebalanceTimeout`: a v0 request
+    /// has no rebalance timeout field, so its session timeout is the member's
+    /// rebalance timeout, and that is what the group persists. From v1 the
+    /// request's own rebalance timeout stands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn join_v0_takes_the_rebalance_timeout_from_the_session_timeout() {
+        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
+
+        // (version, rebalance timeout the request carries, the one persisted)
+        for (version, requested_ms, want_ms) in [(0, -1, 45_000), (1, 90_000, 90_000)] {
+            let (coord, log) = make_coordinator_with_config(NextGenConfig {
+                classic_initial_rebalance_delay: Duration::ZERO,
+                ..NextGenConfig::default()
+            });
+            let handle = coord.get_or_create_classic("g");
+            coord.mark_classic("g");
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle
+                .tx
+                .send(GroupActorMessage::ClassicJoin {
+                    req: JoinGroupRequest {
+                        group_id: "g".into(),
+                        session_timeout_ms: 45_000,
+                        rebalance_timeout_ms: requested_ms,
+                        protocol_type: "consumer".into(),
+                        protocols: vec![JoinGroupRequestProtocol {
+                            name: "range".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    version,
+                    client_id: "client-a".into(),
+                    client_host: "127.0.0.1".into(),
+                    reply: tx,
+                })
+                .await
+                .unwrap();
+            let joined = rx.await.unwrap();
+            check!(joined.error_code == codes::NONE, "v{version}");
+
+            let synced = rpc::classic_sync(&handle, &joined.member_id, joined.generation_id).await;
+            check!(synced.error_code == codes::NONE, "v{version}");
+
+            let persisted = last_classic_metadata(&log).await;
+            check!(persisted.members.len() == 1, "v{version}");
+            check!(
+                persisted.members[0].rebalance_timeout_ms == want_ms,
+                "v{version}"
+            );
+        }
     }
 
     /// A `Stable` group whose one member, `m1`, is the static member
