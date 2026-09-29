@@ -378,7 +378,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/file_config/listener.rs::apply_to_listener_parses_principal_mapping_rules",
             "crates/broker/tests/jvm_acceptance_tls/mtls_principal_mapping.rs",
         ],
-        note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
+        note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`. As in Kafka, the rules map the Subject DN on SSL listeners only, and patterns and replacements follow `java.util.regex`; a SASL_SSL listener takes its principal from the SASL exchange.",
     },
     KipAnnotation {
         key: "KIP-373",
@@ -1117,7 +1117,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/authz/src/simple/matching.rs",
             "crates/broker/src/handlers/create_acls/validate.rs",
         ],
-        note: "Matches Kafka trunk. `CreateAcls` accepts a CIDR host from `metadata.version` 4.4-IV1 (level 32), which a node supports only under `unstable.feature.versions.enable`; by default the cluster stays at 4.3-IV0 and a host containing `/` is refused with trunk's UNSUPPORTED_VERSION text.",
+        note: "Trunk behavior, behind `unstable.feature.versions.enable`. By default `CreateAcls` and the authorizer behave as Kafka 4.3.1 does: any host, an empty one or one containing `/` included, is stored and compared as text. Under the flag `CreateAcls` applies trunk's `validateHostPattern`, which accepts a CIDR host from `metadata.version` 4.4-IV1 (level 32) and answers UNSUPPORTED_VERSION below it, and the authorizer reads a stored host containing `/` as a range from that version.",
     },
     KipAnnotation {
         key: "KIP-1312",

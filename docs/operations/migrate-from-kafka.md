@@ -171,9 +171,11 @@ target.
 
 krabka runs the `allow_all` authorizer by default, which is not a decision
 point. Under that authorizer krabka answers `DescribeAcls`, `CreateAcls` and
-`DeleteAcls` with `SECURITY_DISABLED` (54) and the message
-`No Authorizer is configured on the broker`. Apache Kafka answers the same way
-when `authorizer.class.name` is unset, so the two brokers agree.
+`DeleteAcls` with `SECURITY_DISABLED` (54). The message is
+`No Authorizer is configured on the broker` for `DescribeAcls` and
+`No Authorizer is configured.` for `CreateAcls` and `DeleteAcls`. Apache Kafka
+answers the same way when `authorizer.class.name` is unset, so the two brokers
+agree.
 
 What you see depends on the source cluster.
 
