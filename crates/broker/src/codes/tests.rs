@@ -168,6 +168,11 @@ fn from_broker_error_maps_variants_to_wire_codes() {
             FENCED_LEADER_EPOCH, // 74
         ),
         (BrokerError::UnknownLeaderEpoch(2), UNKNOWN_LEADER_EPOCH), // 75
+        // `LocalLog.maybeHandleIOException`: a disk fault is a storage error.
+        (
+            BrokerError::Log(krabka_log::LogError::Io(std::io::Error::other("EIO"))),
+            KAFKA_STORAGE_ERROR, // 56
+        ),
         // Catch-all arm: internal variants map to the generic code.
         (BrokerError::Txn("test".into()), UNKNOWN_SERVER_ERROR), // -1
     ];

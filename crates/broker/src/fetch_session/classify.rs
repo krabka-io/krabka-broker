@@ -154,9 +154,8 @@ impl FetchSessionCache {
             // response reports no session, so the client falls back to a
             // sessionless fetch next time rather than keep re-polling an
             // empty one.
-            let privileged = session.privileged;
             guard.sessions.remove(&sid);
-            guard.order.remove(sid, privileged);
+            guard.order.remove(sid);
             self.num_sessions.fetch_sub(1, Ordering::Relaxed);
             return SessionDecision::Incremental {
                 session_id: INVALID_SESSION_ID,
@@ -173,16 +172,16 @@ impl FetchSessionCache {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let privileged = session.privileged;
 
-        // Mark the session most-recently-used. This is the only place a live
-        // session moves in the recency order, and it is O(1): the entry is
-        // unlinked and relinked at the head of its class's list. It happens
-        // after the `session` borrow above ends, because both halves of the
-        // cache live behind the one `guard`.
-        guard
-            .order
-            .touch(sid, privileged, self.clock.now().elapsed_since_origin());
+        // Kafka's `touch`: the session was used now, and holds the partitions
+        // the merge above left it. This is the only place a live session moves
+        // in the eviction index. It happens after the `session` borrow above
+        // ends, because both halves of the cache live behind the one `guard`.
+        guard.order.touch(
+            sid,
+            partitions_after,
+            self.clock.now().elapsed_since_origin(),
+        );
 
         SessionDecision::Incremental {
             session_id: sid,

@@ -25,7 +25,10 @@
 //!   * **occupancy** — the cache is pre-filled to 0%, 50% or 100% of
 //!     `max_incremental_fetch_session_cache_slots` before the measurement. At
 //!     100% every allocation evicts, which is the case that used to scan every
-//!     live session to pick its victim.
+//!     live session to pick its victim. The cache runs on a manual clock that
+//!     each turn moves past Kafka's two-minute staleness threshold, because
+//!     Kafka refuses a newcomer while every session is in use: without that
+//!     the 100% rows would time the refusal and not the eviction.
 //!   * **concurrency** — 1, 8 or 64 threads share one cache, which is what
 //!     puts the allocation on the critical path of everybody else's fetch.
 //!
@@ -61,6 +64,7 @@ use krabka_protocol::{
     owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     primitives::uuid::Uuid as WireUuid,
 };
+use qubit_clock::ManualMonotonicClock;
 
 /// Cache capacity, taken from the broker's own default so the bench measures
 /// the size a real broker runs at.
@@ -124,15 +128,21 @@ fn new_session_request() -> FetchRequest {
     }
 }
 
-/// A cache holding `occupancy` percent of [`SLOTS`] live consumer sessions.
-fn prefilled(occupancy: usize) -> FetchSessionCache {
-    let cache = FetchSessionCache::new(SLOTS);
+/// More than Kafka's two-minute staleness threshold, which the clock advances
+/// by before each turn so the least recently used session is always stale.
+const STALE: Duration = Duration::from_secs(121);
+
+/// A cache holding `occupancy` percent of [`SLOTS`] live consumer sessions,
+/// and the manual clock it stamps sessions from.
+fn prefilled(occupancy: usize) -> (FetchSessionCache, Arc<ManualMonotonicClock>) {
+    let clock = ManualMonotonicClock::new_shared();
+    let cache = FetchSessionCache::with_clock(SLOTS, clock.clone());
     let template = partition_set();
     for _ in 0..(SLOTS * occupancy / 100) {
         let id = cache.try_allocate(false, false, PRINCIPAL.to_string(), template.clone());
         assert!(id != INVALID_SESSION_ID, "prefill was refused a session");
     }
-    cache
+    (cache, clock)
 }
 
 /// Run `ops` session turns against `cache`, returning the time they took.
@@ -149,7 +159,7 @@ fn prefilled(occupancy: usize) -> FetchSessionCache {
 /// constant addition to every row, so the ratios this suite reports are
 /// unaffected.
 fn timed_session_turns(
-    cache: &FetchSessionCache,
+    (cache, clock): (&FetchSessionCache, &ManualMonotonicClock),
     request: &FetchRequest,
     template: &[(FetchSessionKey, CachedPartitionState)],
     close_explicitly: bool,
@@ -159,6 +169,7 @@ fn timed_session_turns(
     for _ in 0..ops {
         let partitions = template.to_vec();
         let principal = PRINCIPAL.to_string();
+        clock.advance(STALE).expect("manual time moves forward");
 
         let start = Instant::now();
         let decision = cache.classify(request, NAME_FETCH_VERSION);
@@ -184,7 +195,8 @@ fn timed_session_turns(
 /// thread spawn out of the measurement and makes `total / iters` the mean
 /// latency of one turn, contention included.
 fn timed_across_threads(occupancy: usize, threads: u32, iters: u64) -> Duration {
-    let cache = Arc::new(prefilled(occupancy));
+    let (cache, clock) = prefilled(occupancy);
+    let cache = Arc::new(cache);
     let request = new_session_request();
     let template = partition_set();
     let close_explicitly = occupancy < 100;
@@ -197,10 +209,11 @@ fn timed_across_threads(occupancy: usize, threads: u32, iters: u64) -> Duration 
                 // together run exactly `iters` turns.
                 let ops = iters / threads + u64::from(worker < iters % threads);
                 let cache = Arc::clone(&cache);
+                let clock = Arc::clone(&clock);
                 let request = &request;
                 let template = &template;
                 scope.spawn(move || {
-                    timed_session_turns(&cache, request, template, close_explicitly, ops)
+                    timed_session_turns((&cache, &clock), request, template, close_explicitly, ops)
                 })
             })
             .collect();

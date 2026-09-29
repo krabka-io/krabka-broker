@@ -333,30 +333,102 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
     }
 }
 
+/// Kafka answers a records field it cannot frame, or whose batch CRC does not
+/// match, with `CORRUPT_MESSAGE` (`CorruptRecordException`, which the JVM
+/// producer retries), and every other refusal with `INVALID_RECORD`.
+/// `ProduceRequest.validateRecords` frames the field before the log checks a
+/// CRC, so a second batch is `INVALID_RECORD` whatever the first one's CRC.
 #[test]
-fn fallback_on_corrupt_crc_slice() {
-    let b = plain_batch();
-    let mut wire = encode(&b).to_vec();
-    // Corrupt a body byte → CRC validation fails → owned fallback.
-    let hdr_len = krabka_protocol::records::HEADER_LEN;
-    wire[hdr_len] ^= 0xFF;
-    // A corrupt CRC also fails the owned `RecordBatch::decode`, so the
-    // fallback surfaces INVALID_RECORD (the prior decode-error code).
-    let m = crate::metrics::BrokerMetrics::new();
-    let err = prepare_batch(
-        PartitionPayload::Slice(Bytes::from(wire)),
-        None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &m,
-            policy: RecordDecompressionPolicy::default(),
+fn an_undecodable_slice_gets_the_code_kafka_gives_it() {
+    use crate::codes::{CORRUPT_MESSAGE, INVALID_RECORD};
+
+    struct Case {
+        name: &'static str,
+        wire: Vec<u8>,
+        error_code: i16,
+    }
+    let clean = encode(&plain_batch()).to_vec();
+    let with_size = |size: i32| {
+        let mut wire = clean.clone();
+        wire[8..12].copy_from_slice(&size.to_be_bytes());
+        wire
+    };
+    let with_magic = |magic: u8| {
+        let mut wire = clean.clone();
+        wire[16] = magic;
+        wire
+    };
+    let mut corrupt_crc = clean.clone();
+    corrupt_crc[HEADER_LEN] ^= 0xFF;
+    let followed_by_a_batch = |first: &[u8]| [first, &clean].concat();
+    let cases = [
+        Case {
+            name: "a CRC that does not match",
+            wire: corrupt_crc.clone(),
+            error_code: CORRUPT_MESSAGE,
         },
-        13,
-    )
-    .unwrap_err();
-    assert!(err == crate::codes::INVALID_RECORD);
+        Case {
+            name: "a CRC that does not match, then a second batch",
+            wire: followed_by_a_batch(&corrupt_crc),
+            error_code: INVALID_RECORD,
+        },
+        Case {
+            name: "two batches that check out",
+            wire: followed_by_a_batch(&clean),
+            error_code: INVALID_RECORD,
+        },
+        Case {
+            name: "a size field below any batch",
+            wire: with_size(13),
+            error_code: CORRUPT_MESSAGE,
+        },
+        Case {
+            name: "a negative size field",
+            wire: with_size(-1),
+            error_code: CORRUPT_MESSAGE,
+        },
+        Case {
+            name: "a batch shorter than a v2 header",
+            wire: with_size(20)[..32].to_vec(),
+            error_code: CORRUPT_MESSAGE,
+        },
+        Case {
+            name: "a magic above the current one",
+            wire: with_magic(3),
+            error_code: CORRUPT_MESSAGE,
+        },
+        Case {
+            name: "a magic with the sign bit set",
+            wire: with_magic(0xFF),
+            error_code: CORRUPT_MESSAGE,
+        },
+        Case {
+            name: "a body that stops short of its size field",
+            wire: clean[..clean.len() - 1].to_vec(),
+            error_code: INVALID_RECORD,
+        },
+        Case {
+            name: "less than a size field",
+            wire: clean[..11].to_vec(),
+            error_code: INVALID_RECORD,
+        },
+    ];
+    for case in cases {
+        let error_code = prepare_batch(
+            PartitionPayload::Slice(Bytes::from(case.wire)),
+            None,
+            TimestampPolicy::default(),
+            false,
+            DecodeEnv {
+                topic_name: &topic(),
+                metrics: &crate::metrics::BrokerMetrics::new(),
+                policy: RecordDecompressionPolicy::default(),
+            },
+            13,
+        )
+        .unwrap_err();
+        assert!(error_code == case.error_code, "{}", case.name);
+    }
 }
 
 #[test]

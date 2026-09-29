@@ -638,7 +638,6 @@ mod tests {
                     producer_id_expiration_ms: 86_400_000,
                 },
                 acks: -1,
-                timeout: Duration::from_millis(50),
             },
             PartitionServices {
                 schema_validator: None,
@@ -782,7 +781,6 @@ mod tests {
                             producer_id_expiration_ms: 86_400_000,
                         },
                         acks: 1,
-                        timeout: Duration::from_secs(5),
                     },
                     PartitionServices {
                         schema_validator: None,
@@ -1002,7 +1000,6 @@ mod tests {
                                 producer_id_expiration_ms: 86_400_000,
                             },
                             acks: 1,
-                            timeout: Duration::from_secs(5),
                         },
                         PartitionServices {
                             schema_validator: None,

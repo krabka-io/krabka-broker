@@ -210,7 +210,9 @@ pub(crate) async fn handle(
     let response_max_bytes = usize::try_from(req.max_bytes.max(0))
         .unwrap_or(usize::MAX)
         .min(quota_window_bytes);
-    let read = execute_pending_reads(
+    // A read that fails answers its own partition's row and never fails the
+    // fetch (see `do_read`), so this call has no error to return.
+    let (mut responses, cpu_micros_by_idx) = execute_pending_reads(
         broker,
         pending,
         req.min_bytes,
@@ -220,17 +222,6 @@ pub(crate) async fn handle(
         &phases,
     )
     .await;
-    let (mut responses, cpu_micros_by_idx) = match read {
-        Ok(read) => read,
-        Err(error) => {
-            // A read that failed still spent the time it had already charged,
-            // and a `?` here would throw that away on exactly the storage
-            // faults the phases exist to diagnose. The request never reached
-            // the quota, so its throttle is zero.
-            observe_unthrottled_fetch_phases(broker, &phases);
-            return Err(error);
-        }
-    };
     broker
         .metrics
         .observe_request_phases(FETCH_API_KEY, &phases);
@@ -316,10 +307,9 @@ pub(crate) async fn handle(
 }
 
 /// Observe all three phase families for a Fetch that ends before it reaches
-/// the quota: the routed KIP-595 answer, which is charged no client quota, and
-/// the read that failed, which never got that far. Neither applies a throttle,
-/// so the throttle phase takes an explicit zero and its `_count` stays equal
-/// to the local and remote counts for this api.
+/// the quota: the routed KIP-595 answer, which is charged no client quota. It
+/// applies no throttle, so the throttle phase takes an explicit zero and its
+/// `_count` stays equal to the local and remote counts for this api.
 fn observe_unthrottled_fetch_phases(broker: &Broker, phases: &crate::metrics::RequestPhases) {
     broker.metrics.observe_request_phases(FETCH_API_KEY, phases);
     broker

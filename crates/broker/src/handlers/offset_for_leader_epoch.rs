@@ -17,6 +17,12 @@
 //! Reference: KIP-101 (Alter Replication Protocol to use Leader Epoch
 //! rather than High Watermark for Truncation).
 //!
+//! Kafka's `ReplicaManager.lastOffsetForLeaderEpoch` first decides whether
+//! this broker hosts the partition at all, ahead of everything below: an
+//! offline log dir is `KAFKA_STORAGE_ERROR`, a partition the metadata holds
+//! but this broker does not is `NOT_LEADER_OR_FOLLOWER`, and one the metadata
+//! does not hold is `UNKNOWN_TOPIC_OR_PARTITION`.
+//!
 //! KIP-320 layers two more checks on top, in the order Kafka's
 //! `ReplicaManager.lastOffsetForLeaderEpoch` -> `Partition.getLocalLog`
 //! applies them, both ahead of the KIP-101 domain logic above:
@@ -167,13 +173,30 @@ pub(crate) fn handle(
                     ..Default::default()
                 };
 
+                // The three hosting outcomes of `ReplicaManager
+                // .lastOffsetForLeaderEpoch`, decided before the fence: a
+                // replica this broker does not host is `NOT_LEADER_OR_FOLLOWER`
+                // when the metadata still holds the partition (a reassignment
+                // moved it away, so the client refreshes its metadata) and
+                // `UNKNOWN_TOPIC_OR_PARTITION` when it does not, and a
+                // partition in an offline log dir is `KAFKA_STORAGE_ERROR`.
                 let Some(p) =
                     partitions.get(&topic.topic, krabka_ids::PartitionIndex(part.partition))
                 else {
-                    out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
+                    out.error_code = if acl_image.partition(&topic.topic, part.partition).is_some()
+                    {
+                        codes::NOT_LEADER_OR_FOLLOWER
+                    } else {
+                        codes::UNKNOWN_TOPIC_OR_PARTITION
+                    };
                     parts_out.push(out);
                     continue;
                 };
+                if broker.log_dir_status.is_offline(&p.log_dir.load()) {
+                    out.error_code = codes::KAFKA_STORAGE_ERROR;
+                    parts_out.push(out);
+                    continue;
+                }
 
                 // KIP-320 leader-epoch fence, ahead of the leader-only gate and
                 // the KIP-101 domain logic below, exactly as
@@ -759,6 +782,101 @@ mod tests {
         );
 
         drop(leader_topic);
+        broker.shutdown().await;
+    }
+
+    /// The three hosting outcomes of `ReplicaManager.lastOffsetForLeaderEpoch`
+    /// come before the epoch fence. A partition in an offline log dir is
+    /// `KAFKA_STORAGE_ERROR`, where the epoch checkpoint in memory would have
+    /// answered it with no error. A partition the metadata holds and this
+    /// broker does not host (a reassignment moved it away) is
+    /// `NOT_LEADER_OR_FOLLOWER`, the code that makes a client refresh its
+    /// metadata, and only a partition the metadata does not hold is
+    /// `UNKNOWN_TOPIC_OR_PARTITION`. Each request asserts a stale epoch, which
+    /// the fence would have refused with `FENCED_LEADER_EPOCH` had it run
+    /// first.
+    #[tokio::test]
+    async fn hosting_outcomes_are_decided_before_the_epoch_fence() {
+        use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+
+        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
+            config.audit_enabled = false;
+        })
+        .await;
+        let shared = broker.broker_arc_for_test();
+
+        let offline = seeded_topic(&broker, "ofle-offline", 1, 1, 3).await;
+        shared
+            .log_dir_status
+            .mark_offline(&offline.log_dir.load(), "test: EIO");
+
+        // Node 1 is not a replica of this partition, so it never hosts it.
+        broker
+            .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
+                name: "ofle-moved".into(),
+                topic_id: uuid::Uuid::from_u128(9),
+                partitions: 1,
+                replication_factor: 2,
+            }))
+            .await
+            .expect("submit topic record");
+        broker
+            .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
+                topic: "ofle-moved".into(),
+                partition: 0,
+                leader: krabka_audit::NodeId(2),
+                replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+                isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+                leader_epoch: krabka_metadata::LeaderEpoch(3),
+                adding_replicas: Vec::new(),
+                removing_replicas: Vec::new(),
+                directories: vec![uuid::Uuid::nil(); 2],
+                partition_epoch: 0,
+            }))
+            .await
+            .expect("submit partition record");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while shared
+                .controller
+                .current_image()
+                .partition("ofle-moved", 0)
+                .is_none()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the image holds the partition");
+
+        let refused = |error_code| EpochEndOffset {
+            partition: 0,
+            error_code,
+            leader_epoch: -1,
+            end_offset: -1,
+            ..Default::default()
+        };
+        let cases = [
+            (
+                "a partition in an offline log dir",
+                "ofle-offline",
+                codes::KAFKA_STORAGE_ERROR,
+            ),
+            (
+                "a partition the metadata holds and this broker does not host",
+                "ofle-moved",
+                codes::NOT_LEADER_OR_FOLLOWER,
+            ),
+            (
+                "a partition the metadata does not hold",
+                "ofle-missing",
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+            ),
+        ];
+        for (name, topic, error_code) in cases {
+            let got = ofle(&broker, VERSION, &ofle_request(topic, 3, 2));
+            assert!(got == refused(error_code), "{name}");
+        }
+
         broker.shutdown().await;
     }
 }

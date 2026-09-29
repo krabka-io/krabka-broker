@@ -2,7 +2,7 @@
 //! through every gate in order and returns that partition's response row, or
 //! the high-watermark wait that still stands between it and one.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::owned::produce_response::{
@@ -85,7 +85,6 @@ pub(super) struct PartitionInput<'a> {
     /// The request fields of the KIP-890 transaction check.
     pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
-    pub(super) timeout: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -158,7 +157,6 @@ pub(super) struct AdmittedBatch {
     shared_topic: Arc<str>,
     delivery: Option<DeliveryGate>,
     acks: i16,
-    timeout: Duration,
     /// The request's `Produce` version.
     version: i16,
     /// The pre-append row, with the `UNKNOWN_LOG_APPEND_INFO` sentinel.
@@ -346,7 +344,6 @@ pub(super) async fn admit_partition(
         internal_topic_denied,
         transaction,
         acks,
-        timeout,
     } = input;
     // `shared_topic` is the owned handle the metric labels clone;
     // `topic_name` stays the borrowed view every gate and image lookup below
@@ -603,11 +600,25 @@ pub(super) async fn admit_partition(
         shared_topic,
         delivery,
         acks,
-        timeout,
         version: transaction.version,
         out,
         verification,
     })))
+}
+
+/// Whether the batch, as the writer will store it, is larger than the
+/// partition's `segment.bytes`.
+///
+/// The limit is read off the partition's own log config, which is what the log
+/// rolls segments by, so it is the topic's effective `segment.bytes`
+/// whether the topic set it or inherited the broker's.
+fn exceeds_segment_size(prepared: &PreparedBatch, part: &crate::partition::Partition) -> bool {
+    let Ok(log) = part.log.lock() else {
+        return false;
+    };
+    let config = log.config_snapshot();
+    drop(log);
+    prepared.appended_len(config.compression_type) > config.segment_size.bytes_usize()
 }
 
 /// The coordinator's answer applied to an admitted batch, then every stage
@@ -626,7 +637,6 @@ pub(super) async fn complete_partition(
         shared_topic,
         delivery,
         acks,
-        timeout,
         version,
         mut out,
         verification,
@@ -667,6 +677,21 @@ pub(super) async fn complete_partition(
     let leader_epoch = part
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);
+
+    // ── segment.bytes ────────────────────────────────────────────────
+    // Kafka's `UnifiedLog.append` refuses a record set larger than the topic's
+    // `segment.bytes` with `RecordBatchTooLargeException`, which is
+    // `RECORD_LIST_TOO_LARGE`, and it does so ahead of the producer-state
+    // analysis: a duplicate that is too large is refused too. A batch is never
+    // split across segments, so the cap that keeps it out of a segment's
+    // roll decision is the segment's own size, and `max.message.bytes` above
+    // `segment.bytes` does not lift it. The log measures the whole record set
+    // it appends, and `out` already carries the -1 `base_offset` of a row that
+    // appended nothing.
+    if exceeds_segment_size(&prepared, &part) {
+        out.error_code = codes::RECORD_LIST_TOO_LARGE;
+        return Ok(PartitionOutcome::Done(out));
+    }
 
     // ── idempotent-producer dedup gate ───────────────────────
     match handle_duplicate(
@@ -733,7 +758,6 @@ pub(super) async fn complete_partition(
             producer_state,
             partition_index: idx,
             acks,
-            timeout,
             leader_epoch,
             phases,
             producer_check,

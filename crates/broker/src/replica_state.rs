@@ -371,6 +371,17 @@ impl ReplicaState {
         leo >= fetch_offset && log_start <= fetch_offset
     }
 
+    /// What the leader has recorded of `follower`'s progress, as Kafka's
+    /// `ReplicaManager.findPreferredReadReplica` reads it off `Replica
+    /// .stateSnapshot`: the follower's log end offset, and when its fetch
+    /// offset last reached the leader's log end, `None` when it never has.
+    /// A follower with no entry reads as [`Self::follower_can_serve`] reads it.
+    pub(crate) fn follower_progress(&self, follower: NodeId) -> (Offset, Option<Instant>) {
+        self.per_follower
+            .get(&follower)
+            .map_or((Offset(0), None), |stats| (stats.leo, stats.last_caught_up))
+    }
+
     /// Record one follower Fetch at `follower_leo` (its fetch offset),
     /// received at `now` while the leader's log ended at `leader_leo`, and
     /// recompute the high watermark.
@@ -567,6 +578,26 @@ mod tests {
         );
         assert!(s.per_follower.get(&NodeId(2)).map(|f| f.leo) == Some(o(50)));
         assert!(s.per_follower.get(&NodeId(3)).map(|f| f.leo) == Some(o(75)));
+    }
+
+    /// What `findPreferredReadReplica` reads of a follower: its fetch offset
+    /// as its log end, and the last time that offset reached the leader's log
+    /// end. A follower that never fetched from this leader has neither.
+    #[test]
+    fn follower_progress_reports_the_log_end_and_the_last_caught_up_time() {
+        let t0 = now();
+        let mut s = fresh();
+        s.install_isr(
+            &[NodeId(1), NodeId(2), NodeId(3)],
+            &[NodeId(1), NodeId(2), NodeId(3)],
+            NodeId(1),
+            t0,
+        );
+        let t1 = t0 + Duration::from_secs(1);
+        s.update_follower_leo(NodeId(2), o(100), o(100), t1);
+
+        check!(s.follower_progress(NodeId(2)) == (o(100), Some(t1)));
+        check!(s.follower_progress(NodeId(9)) == (o(0), None));
     }
 
     #[test]

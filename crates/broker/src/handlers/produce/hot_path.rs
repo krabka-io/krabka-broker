@@ -106,9 +106,13 @@ pub fn append_one_batch(
             env(),
             settings.version,
         )?,
-        PathChoice::ForceOwned => {
-            owned_fallback(records, settings.timestamps, false, env(), settings.version)?
-        }
+        PathChoice::ForceOwned => owned_fallback(
+            &records,
+            settings.timestamps,
+            false,
+            env(),
+            settings.version,
+        )?,
     };
     append_produce_data(build_produce_data(prepared, settings.leader_epoch), log)
 }
