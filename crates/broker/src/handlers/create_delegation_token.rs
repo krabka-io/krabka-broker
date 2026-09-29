@@ -209,6 +209,7 @@ pub(crate) async fn handle(
     let record = DelegationTokenRecord {
         token_id: token_id.clone(),
         owner: owner.clone(),
+        requester: requester.clone(),
         hmac: hmac.clone(),
         issue_timestamp_ms: now,
         expiry_timestamp_ms: deadlines.initial_expiry_ms,

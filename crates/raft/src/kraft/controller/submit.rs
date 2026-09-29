@@ -28,6 +28,7 @@ impl Engine {
         DelegationTokenRecord {
             token_id: token.token_id.clone(),
             owner: token.owner.clone(),
+            requester: token.requester.clone(),
             hmac: token.hmac.clone(),
             issue_timestamp_ms: token.issue_timestamp_ms,
             expiry_timestamp_ms: token.expiry_timestamp_ms,
@@ -57,6 +58,7 @@ impl Engine {
     ) -> bool {
         expected.token_id == replacement.token_id
             && expected.owner == replacement.owner
+            && expected.requester == replacement.requester
             && expected.hmac == replacement.hmac
             && expected.issue_timestamp_ms == replacement.issue_timestamp_ms
             && expected.max_timestamp_ms == replacement.max_timestamp_ms
@@ -916,6 +918,7 @@ mod tests {
         let t1 = DelegationTokenRecord {
             token_id: "tok1".into(),
             owner: principal("alice"),
+            requester: principal("alice"),
             hmac: vec![1, 2, 3],
             issue_timestamp_ms: 100,
             max_timestamp_ms: 200,
@@ -930,6 +933,10 @@ mod tests {
         t2 = t1.clone();
 
         t2.owner = principal("charlie");
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+        t2 = t1.clone();
+
+        t2.requester = principal("admin");
         assert2::check!(!Engine::token_generation_matches(&t1, &t2));
         t2 = t1.clone();
 
@@ -954,6 +961,7 @@ mod tests {
         let rec = DelegationTokenRecord {
             token_id: "my-token".into(),
             owner: principal("alice"),
+            requester: principal("alice"),
             hmac: vec![],
             issue_timestamp_ms: 0,
             max_timestamp_ms: 0,
@@ -1070,6 +1078,7 @@ mod tests {
         let t1 = DelegationTokenRecord {
             token_id: "tok1".into(),
             owner: principal("alice"),
+            requester: principal("alice"),
             hmac: vec![1, 2, 3],
             issue_timestamp_ms: 100,
             max_timestamp_ms: 200,
@@ -1099,6 +1108,7 @@ mod tests {
         let t2 = DelegationTokenRecord {
             token_id: "tok2".into(),
             owner: principal("bob"),
+            requester: principal("bob"),
             hmac: vec![],
             issue_timestamp_ms: 0,
             max_timestamp_ms: 0,

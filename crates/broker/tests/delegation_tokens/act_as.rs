@@ -5,12 +5,17 @@
 
 use assert2::{assert, check};
 use base64::Engine;
-use krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest;
+use krabka_protocol::owned::{
+    create_delegation_token_request::CreateDelegationTokenRequest,
+    describe_delegation_token_request::{
+        DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
+    },
+};
 
 use crate::{
     DELEGATION_TOKEN_AUTHORIZATION_FAILED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
     cluster::{start_broker_with_super_users, wait_for_token},
-    rpc::send_create_delegation_token,
+    rpc::{send_create_delegation_token, send_describe_delegation_token},
     wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate},
 };
 
@@ -84,6 +89,37 @@ async fn act_as_super_user_mints_token_owned_by_target() {
         let img_token = wait_for_token(&handle, &token_id).await;
         assert!(img_token.owner.principal_type == "User");
         assert!(img_token.owner.name == "alice");
+        // KIP-373: the image keeps the requester next to the owner.
+        assert!(img_token.requester.principal_type == "User");
+        assert!(img_token.requester.name == "admin");
+
+        // `owners=[admin]` finds the token by its requester, and the
+        // DescribeDelegationToken v3 row names admin as the requester, alice
+        // as the owner.
+        let described = send_describe_delegation_token(
+            &mut admin,
+            150,
+            &DescribeDelegationTokenRequest {
+                owners: Some(vec![DescribeDelegationTokenOwner {
+                    principal_type: "User".to_string(),
+                    principal_name: "admin".to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| format!("DescribeDelegationToken(admin, owners=[admin]): {e}"))?;
+        check!(described.error_code == 0);
+        assert!(
+            described.tokens.len() == 1,
+            "the requester must find the token it minted; got {} entries",
+            described.tokens.len()
+        );
+        check!(described.tokens[0].token_id == token_id);
+        check!(described.tokens[0].principal_name == "alice");
+        check!(described.tokens[0].token_requester_principal_type == "User");
+        check!(described.tokens[0].token_requester_principal_name == "admin");
 
         // (3) Open a second connection; SASL/SCRAM-SHA-256 with username =
         // token_id, password = base64(hmac). The token-fallback path

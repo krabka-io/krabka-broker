@@ -410,6 +410,9 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
         let expected_stored = krabka_metadata::DelegationToken {
             token_id: resp.token_id.clone(),
             owner,
+            // Kafka stores the connection principal as the token requester,
+            // whoever the owner is.
+            requester: user(requester),
             hmac: resp.hmac.to_vec(),
             issue_timestamp_ms: resp.issue_timestamp_ms,
             expiry_timestamp_ms: resp.expiry_timestamp_ms,

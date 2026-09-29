@@ -617,6 +617,10 @@ mod tests {
                 principal_type: "User".into(),
                 name: "alice".into(),
             },
+            requester: KafkaPrincipal {
+                principal_type: "User".into(),
+                name: "alice".into(),
+            },
             issue_timestamp_ms: 10,
             max_timestamp_ms: 20,
             expiry_timestamp_ms: 15,

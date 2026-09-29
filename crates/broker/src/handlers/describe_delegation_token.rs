@@ -15,8 +15,9 @@
 //!     filter".
 //!   - `filterToken` keeps a token only when the (possibly absent) owner
 //!     filter matches it — matching a filter entry against the token's
-//!     owner OR a listed renewer, not the owner alone — AND the caller is
-//!     that token's owner, a listed renewer, holds a `Describe` ACL on
+//!     owner, its requester (the principal that created it) OR a listed
+//!     renewer, not the owner alone — AND the caller is that token's owner,
+//!     its requester, a listed renewer, holds a `Describe` ACL on
 //!     `DelegationToken:<token_id>`, or holds KIP-373's `DescribeTokens` ACL
 //!     on `User:<owner>`. The `Describe` grant is named by the token's own
 //!     id, so it covers exactly one token; the `DescribeTokens` grant is
@@ -102,14 +103,13 @@ pub(crate) fn handle(
         .all_delegation_tokens()
         .filter(|t| {
             // Kafka's `TokenInformation.ownerOrRenewer`: a filter entry
-            // matches a token by being its owner OR a listed renewer, not
-            // only its owner.
-            let owner_filter_matches = candidate_owners.as_ref().is_none_or(|owners| {
-                owners
-                    .iter()
-                    .any(|o| t.owner == *o || t.renewers.contains(o))
-            });
+            // matches a token by being its owner, its requester OR a listed
+            // renewer, not only its owner.
+            let owner_filter_matches = candidate_owners
+                .as_ref()
+                .is_none_or(|owners| owners.iter().any(|o| owner_or_renewer(t, o)));
             let caller_is_owner = t.owner == caller;
+            let caller_is_requester = t.requester == caller;
             let caller_is_renewer = t.renewers.contains(&caller);
             let allowed = |resource_type, resource_name: &str, operation| {
                 authorizer.authorize(
@@ -141,6 +141,7 @@ pub(crate) fn handle(
             token_describe_visible(
                 owner_filter_matches,
                 caller_is_owner,
+                caller_is_requester,
                 caller_is_renewer,
                 acl_allows,
             )
@@ -154,4 +155,10 @@ pub(crate) fn handle(
         throttle_time_ms: 0,
         ..Default::default()
     }
+}
+
+/// Kafka's `TokenInformation.ownerOrRenewer`: `principal` is the token's
+/// owner, the requester that created it, or a listed renewer.
+fn owner_or_renewer(token: &krabka_metadata::DelegationToken, principal: &KafkaPrincipal) -> bool {
+    token.owner == *principal || token.requester == *principal || token.renewers.contains(principal)
 }

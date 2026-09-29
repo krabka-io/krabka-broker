@@ -131,6 +131,7 @@ fn token_to_record(token: &DelegationToken) -> DelegationTokenRecord {
     DelegationTokenRecord {
         token_id: token.token_id.clone(),
         owner: token.owner.clone(),
+        requester: token.requester.clone(),
         hmac: token.hmac.clone(),
         issue_timestamp_ms: token.issue_timestamp_ms,
         expiry_timestamp_ms: token.expiry_timestamp_ms,
@@ -214,6 +215,7 @@ mod tests {
         let rec = DelegationTokenRecord {
             token_id: token_id.into(),
             owner: kp("alice"),
+            requester: kp("minter"),
             hmac,
             issue_timestamp_ms: 0,
             expiry_timestamp_ms: expiry_ms,
@@ -312,6 +314,17 @@ mod tests {
             (
                 "super user",
                 authed("admin"),
+                true,
+                &live.0,
+                crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,
+                0,
+            ),
+            // `allowedToRenew` is the owner or a renewer. Unlike `filterToken`'s
+            // `ownerOrRenewer`, it leaves out the requester that created the
+            // token for another owner.
+            (
+                "requester of a token created for another owner",
+                authed("minter"),
                 true,
                 &live.0,
                 crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,

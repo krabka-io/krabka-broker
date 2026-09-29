@@ -83,6 +83,7 @@ fn token_to_record(token: &DelegationToken) -> DelegationTokenRecord {
     DelegationTokenRecord {
         token_id: token.token_id.clone(),
         owner: token.owner.clone(),
+        requester: token.requester.clone(),
         hmac: token.hmac.clone(),
         issue_timestamp_ms: token.issue_timestamp_ms,
         expiry_timestamp_ms: token.expiry_timestamp_ms,
@@ -146,6 +147,7 @@ mod tests {
         MetadataRecord::V1DelegationToken(DelegationTokenRecord {
             token_id: token_id.into(),
             owner: principal("User", "alice"),
+            requester: principal("User", "alice"),
             hmac: vec![0xAB; 32],
             issue_timestamp_ms: 0,
             expiry_timestamp_ms: expiry_ms,
