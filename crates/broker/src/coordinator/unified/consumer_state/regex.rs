@@ -142,6 +142,20 @@ impl GroupState {
             .flat_map(|resolved| resolved.topics.iter())
     }
 
+    /// `true` when `member` subscribes to the topic `name`, by name or through
+    /// the topics its regex resolved to. A pattern that is not resolved yet
+    /// matches no topic, as Kafka's `CurrentAssignmentBuilder.subscribedTopicIds`
+    /// treats it.
+    #[must_use]
+    pub(crate) fn member_subscribes_to(&self, member: &MemberState, name: &str) -> bool {
+        member.subscribed_topic_names.contains(name)
+            || member
+                .subscribed_topic_regex
+                .as_deref()
+                .and_then(|regex| self.resolved_regexes.get(regex))
+                .is_some_and(|resolved| resolved.topics.contains(name))
+    }
+
     /// `true` when a member subscribes to a regular expression that the group
     /// has not resolved, so the topics that the member subscribes to are not
     /// known yet.

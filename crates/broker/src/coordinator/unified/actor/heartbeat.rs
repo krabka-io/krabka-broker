@@ -288,7 +288,7 @@ pub(crate) fn step_heartbeat(
         // partitions, withholds those still held by others) and move it to the
         // target epoch before responding.
         let owned = reported_owned(req);
-        state.reconcile_member(&member_id, owned.as_ref(), true);
+        state.reconcile_member(&member_id, owned.as_ref(), true, metadata);
         state.track_rebalance_timeout(&member_id, now);
         let mut pending =
             snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);

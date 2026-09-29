@@ -223,10 +223,9 @@ impl GroupState {
     #[must_use]
     pub fn subscribes_to_any(&self, topics: &[String]) -> bool {
         self.members.values().any(|member| {
-            topics.iter().any(|topic| {
-                member.subscribed_topic_names.contains(topic)
-                    || self.regex_topics(member).any(|resolved| resolved == topic)
-            })
+            topics
+                .iter()
+                .any(|topic| self.member_subscribes_to(member, topic))
         })
     }
 
@@ -435,7 +434,7 @@ impl GroupState {
     pub fn state_name(&self) -> &'static str {
         if self.members.is_empty() {
             "Empty"
-        } else if self.group_epoch > self.target.epoch {
+        } else if self.group_epoch > self.target.epoch || self.dirty {
             "Assigning"
         } else if self.members.values().any(|m| {
             m.assignment_state != MemberAssignmentState::Stable
@@ -453,7 +452,9 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::test_support::member;
+    use crate::coordinator::unified::consumer_state::test_support::{
+        Topics, member, subscribed_member,
+    };
 
     #[test]
     fn state_name_follows_kafka_consumer_group_state() {
@@ -463,33 +464,53 @@ mod tests {
             m.assignment_state = assignment_state;
             m
         };
-        // (group epoch, target epoch, members, expected state)
+        // (group epoch, target epoch, dirty, members, expected state). A dirty
+        // group has a group epoch that is not bumped yet: the bump comes with
+        // the target, which a group inside its assignment interval still owes.
         let rows = [
-            (3, 3, vec![], "Empty"),
+            (3, 3, false, vec![], "Empty"),
+            (3, 3, true, vec![], "Empty"),
             (
                 4,
                 3,
+                false,
                 vec![at(3, MemberAssignmentState::Stable)],
                 "Assigning",
             ),
             (
                 3,
                 3,
+                true,
+                vec![at(3, MemberAssignmentState::Stable)],
+                "Assigning",
+            ),
+            (
+                3,
+                3,
+                false,
                 vec![at(2, MemberAssignmentState::Stable)],
                 "Reconciling",
             ),
             (
                 3,
                 3,
+                false,
                 vec![at(3, MemberAssignmentState::UnreleasedPartitions)],
                 "Reconciling",
             ),
-            (3, 3, vec![at(3, MemberAssignmentState::Stable)], "Stable"),
+            (
+                3,
+                3,
+                false,
+                vec![at(3, MemberAssignmentState::Stable)],
+                "Stable",
+            ),
         ];
-        for (group_epoch, target_epoch, members, expected) in rows {
+        for (group_epoch, target_epoch, dirty, members, expected) in rows {
             let mut g = GroupState::new("g");
             g.group_epoch = group_epoch;
             g.target.epoch = target_epoch;
+            g.dirty = dirty;
             for m in members {
                 g.members.insert(m.member_id.clone(), m);
             }
@@ -790,7 +811,8 @@ mod tests {
     #[test]
     fn assignment_epochs_follow_kafka_current_assignment_builder() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member("m1"));
+        let topics = Topics(vec![("t", T)]);
+        g.add_or_update_member(subscribed_member("m1", &["t"]));
         let epochs = |g: &GroupState| -> Vec<(i32, i32)> {
             let mut v: Vec<(i32, i32)> = g.members["m1"]
                 .assignment_epochs
@@ -805,24 +827,24 @@ mod tests {
         // Epoch 1: granted partitions 0 and 1.
         g.group_epoch = 1;
         g.install_target([("m1".to_string(), [(T, vec![0, 1])].into())].into());
-        g.reconcile_member("m1", Some(&HashMap::new()), true);
+        g.reconcile_member("m1", Some(&HashMap::new()), true, &topics);
         steps.push(epochs(&g));
 
         // Epoch 2: partition 1 goes. The member still owns it, so it is
         // pending revocation with the epoch it was assigned at.
         g.group_epoch = 2;
         g.install_target([("m1".to_string(), [(T, vec![0])].into())].into());
-        g.reconcile_member("m1", Some(&[(T, vec![0, 1])].into()), false);
+        g.reconcile_member("m1", Some(&[(T, vec![0, 1])].into()), false, &topics);
         steps.push(epochs(&g));
 
         // The member revokes it and moves to epoch 2.
-        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false);
+        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false, &topics);
         steps.push(epochs(&g));
 
         // Epoch 3: partition 2 comes, at epoch 3; partition 0 keeps epoch 1.
         g.group_epoch = 3;
         g.install_target([("m1".to_string(), [(T, vec![0, 2])].into())].into());
-        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false);
+        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false, &topics);
         steps.push(epochs(&g));
 
         // A static leave keeps the assignment at epoch 0.
