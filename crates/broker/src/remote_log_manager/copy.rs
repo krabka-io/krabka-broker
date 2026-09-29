@@ -223,10 +223,13 @@ pub(crate) async fn copy_eligible_below(
     .await
 }
 
-/// [`copy_eligible_below`], for a topic whose copy lag is `delay`: the pass
-/// copies the sealed segments in order and stops at the first that
-/// [`CopyDelay`] says is not yet eligible, as Kafka trunk's
-/// `candidateLogSegments` does. A segment held back is still local and
+/// The copy pass for a partition whose last stable offset is
+/// `last_stable_offset` and whose topic's copy lag is `delay`: a segment is
+/// copied only when it ends below the last stable offset, which is Kafka's
+/// `RLMCopyTask.candidateLogSegments` rule (`nextSegmentBaseOffset <=
+/// lastStableOffset`), and only when [`CopyDelay`] says it is eligible. The
+/// pass copies the sealed segments in order and stops at the first that is
+/// held back, as `candidateLogSegments` does. A held segment is still local and
 /// uncopied, so the copy lag counts it.
 pub(crate) async fn copy_eligible_delayed(
     tier: &RemoteTier<'_>,
