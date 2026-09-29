@@ -24,6 +24,11 @@ use crate::partition::SwapOutcome;
 /// producer added a batch between the caller's catch-up check and this writer
 /// cycle, the function reports `NotCaughtUp`. The replicator loop then drains
 /// the lag and retries.
+///
+/// Log end equality is all Kafka checks too
+/// (`Partition.runCallbackIfFutureReplicaCaughtUp`). That the future log holds
+/// what the current log holds is the replicator's job, as it is the
+/// `ReplicaAlterLogDirsThread`'s: see the `future_log` module.
 pub(super) fn swap_future_log(
     log: &Arc<Mutex<Log>>,
     log_dir: &Arc<ArcSwap<PathBuf>>,

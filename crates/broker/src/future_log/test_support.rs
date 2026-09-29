@@ -87,10 +87,17 @@ pub(super) fn append_records(part: &Arc<Partition>, count: i32) {
         .expect("append source records");
 }
 
+/// Appends a one-record batch stamped with leader epoch 1.
 pub(super) fn append_value_batch(part: &Arc<Partition>, value_size: usize) {
+    append_epoch_batch(part, value_size, 1);
+}
+
+/// Appends a one-record batch stamped with `leader_epoch`, as a replicated
+/// partition holds them.
+pub(super) fn append_epoch_batch(part: &Arc<Partition>, value_size: usize, leader_epoch: i32) {
     let mut batch = RecordBatch {
         base_offset: 0,
-        partition_leader_epoch: -1,
+        partition_leader_epoch: leader_epoch,
         attributes: Attributes::default(),
         last_offset_delta: 0,
         base_timestamp: 1_700_000_000,
