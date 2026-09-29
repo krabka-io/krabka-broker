@@ -105,6 +105,25 @@ pub trait Authorizer: Send + Sync + std::fmt::Debug {
         req: &AuthorizationRequest<'_>,
     ) -> AuthorizationResult;
 
+    /// The decision of [`Authorizer::authorize`] for a check that Kafka makes
+    /// with `logIfDenied = false`: a probe whose Deny is not a refusal, such
+    /// as the cluster-wide `Create` shortcut of `CreateTopics` that falls back
+    /// to a per-topic check, or the operations bit field a `Describe` reports.
+    ///
+    /// The decision is the same. What differs is what a Deny leaves behind:
+    /// none of the audit records and counters that `authorize` may write. The
+    /// default forwards to `authorize`, which is right for an implementation
+    /// that writes none. A decorator that audits a Deny MUST override this to
+    /// forward to the authorizer it wraps without auditing, and one that only
+    /// forwards MUST forward this method too.
+    fn authorize_quiet(
+        &self,
+        source: &dyn AclSource,
+        req: &AuthorizationRequest<'_>,
+    ) -> AuthorizationResult {
+        self.authorize(source, req)
+    }
+
     /// Whether this implementation is a real authorization decision point,
     /// the way Kafka's `authorizer.class.name` names one.
     ///
@@ -189,6 +208,43 @@ pub fn authorize_topics<'a>(
     operation: AclOperation,
     topic_names: impl IntoIterator<Item = &'a str>,
 ) -> std::collections::HashMap<&'a str, AuthorizationResult> {
+    authorize_topics_logged(
+        authorizer,
+        source,
+        principal,
+        host,
+        operation,
+        topic_names,
+        true,
+    )
+}
+
+/// [`authorize_topics`] with Kafka's `logIfDenied` flag. With `log_denied` off
+/// each name goes through [`Authorizer::authorize_quiet`], and a Deny leaves
+/// no audit record and no counter behind.
+///
+/// `Metadata` is the caller that turns it off: for all topics it filters every
+/// topic by `Describe` and hides the denied ones, so a Deny there is not a
+/// refusal (`logIfDenied = !metadataRequest.isAllTopics`).
+#[must_use]
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(
+        principal = %principal.name,
+        operation = ?operation,
+        host = %host.ip(),
+    )
+)]
+pub fn authorize_topics_logged<'a>(
+    authorizer: &dyn Authorizer,
+    source: &dyn AclSource,
+    principal: &Principal,
+    host: &SocketAddr,
+    operation: AclOperation,
+    topic_names: impl IntoIterator<Item = &'a str>,
+    log_denied: bool,
+) -> std::collections::HashMap<&'a str, AuthorizationResult> {
     topic_names
         .into_iter()
         .map(|name| {
@@ -199,7 +255,12 @@ pub fn authorize_topics<'a>(
                 resource_name: name,
                 operation,
             };
-            (name, authorizer.authorize(source, &req))
+            let decision = if log_denied {
+                authorizer.authorize(source, &req)
+            } else {
+                authorizer.authorize_quiet(source, &req)
+            };
+            (name, decision)
         })
         .collect()
 }

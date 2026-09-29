@@ -11,5 +11,5 @@ pub mod opa;
 
 pub use krabka_authz::{
     AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
-    SimpleAclAuthorizer, authorize_topics,
+    SimpleAclAuthorizer, authorize_topics, authorize_topics_logged,
 };

@@ -57,7 +57,9 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{
+        AuthorizationRequest, AuthorizationResult, authorize_topics, authorize_topics_logged,
+    },
     broker::Broker,
     codes,
     error::BrokerError,
@@ -169,7 +171,7 @@ pub(crate) async fn handle(
     let cluster_authorized_operations = if CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS.contains(&version)
         && req.include_cluster_authorized_operations
     {
-        if cluster_allows(broker, &image, ctx, AclOperation::Describe) {
+        if cluster_allows(broker, &image, ctx, AclOperation::Describe, true) {
             authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &image,
@@ -209,22 +211,33 @@ pub(crate) async fn handle(
 }
 
 /// Whether the principal of `ctx` holds `operation` on the cluster.
+///
+/// A Deny is audited and counted only when `log_denied` is set. Kafka's
+/// `Metadata` handler makes the cluster `Create` probe for auto-creation with
+/// `logIfDenied = false`, since a Deny there falls back to a per-topic check,
+/// and the cluster `Describe` check for the operations field with the default,
+/// which logs.
 fn cluster_allows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
     operation: AclOperation,
+    log_denied: bool,
 ) -> bool {
-    broker.config.authorizer.authorize(
-        image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation,
-        },
-    ) == AuthorizationResult::Allow
+    let request = AuthorizationRequest {
+        principal: ctx.principal,
+        host: ctx.peer,
+        resource_type: ResourceType::Cluster,
+        resource_name: CLUSTER_RESOURCE_NAME,
+        operation,
+    };
+    let authorizer = &broker.config.authorizer;
+    let decision = if log_denied {
+        authorizer.authorize(image, &request)
+    } else {
+        authorizer.authorize_quiet(image, &request)
+    };
+    decision == AuthorizationResult::Allow
 }
 
 /// The topics a request asks for, as Kafka's handler sees them before
@@ -366,13 +379,17 @@ fn build_topic_rows(
         results.get(name).copied() == Some(AuthorizationResult::Allow)
     };
 
-    let describe = authorize_topics(
+    // Kafka logs a denied `Describe` only when the request names its topics
+    // (`logIfDenied = !metadataRequest.isAllTopics`): an all-topics request
+    // hides the denied topics, so a Deny there is no refusal.
+    let describe = authorize_topics_logged(
         authorizer,
         image,
         ctx.principal,
         ctx.peer,
         AclOperation::Describe,
         requested.names.iter().map(String::as_str),
+        !requested.all,
     );
     let (mut described, denied_describe): (Vec<&str>, Vec<&str>) = requested
         .names
@@ -390,7 +407,7 @@ fn build_topic_rows(
             .copied()
             .filter(|name| image.topic(name).is_none())
             .collect();
-        if !missing.is_empty() && !cluster_allows(broker, image, ctx, AclOperation::Create) {
+        if !missing.is_empty() && !cluster_allows(broker, image, ctx, AclOperation::Create, false) {
             let create = authorize_topics(
                 authorizer,
                 image,

@@ -1908,6 +1908,93 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
     }
 }
 
+/// #1235: Kafka's `ControllerApis.handleCreateTopics` checks cluster `Create`
+/// and the `DescribeConfigs` disclosure with `logIfDenied = false`, so a
+/// principal that holds only a topic-scoped `Create` ACL (the standard Streams
+/// and Connect setup) creates its topic without a Deny in the audit trail or
+/// in `authorization_denied_total`. A real refusal, `Create` denied on the
+/// topic, is still counted.
+#[tokio::test]
+async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
+    use crate::metrics::AuthorizationDeniedLabel;
+
+    let literal_a = AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: "a".into(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: AclOperation::Create,
+        permission_type: PermissionType::Allow,
+    };
+    let denied = |operation: &str, resource_type: &str| AuthorizationDeniedLabel {
+        operation: operation.into(),
+        resource_type: resource_type.into(),
+    };
+    // (label, ACLs alice holds, the topic's error code, and the denials
+    // counted for cluster Create, topic DescribeConfigs and topic Create)
+    let cases = [
+        (
+            "a topic-scoped Create ACL creates the topic quietly",
+            vec![literal_a],
+            codes::NONE,
+            (0, 0, 0),
+        ),
+        (
+            "a real refusal is counted, and the cluster probe is not",
+            vec![],
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            (0, 0, 1),
+        ),
+    ];
+
+    for (label, acls, error_code, (cluster_create, describe_configs, topic_create)) in cases {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            )))
+            .await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !acls.is_empty() {
+            broker
+                .controller
+                .submit_change(
+                    acls.into_iter()
+                        .map(MetadataRecord::V1AccessControlEntry)
+                        .collect(),
+                )
+                .await
+                .expect("seed acls");
+        }
+
+        let resp = drive(
+            &broker,
+            &request(vec![topic("a", 1, 1)]),
+            &principal("alice"),
+            &peer(),
+        )
+        .await;
+
+        let count = |key| {
+            broker
+                .metrics
+                .authorization_denied
+                .get_or_create(&key)
+                .get()
+        };
+        check!(resp.topics[0].error_code == error_code, "{label}");
+        check!(
+            (
+                count(denied("Create", "Cluster")),
+                count(denied("DescribeConfigs", "Topic")),
+                count(denied("Create", "Topic")),
+            ) == (cluster_create, describe_configs, topic_create),
+            "{label}"
+        );
+        broker_handle.shutdown().await;
+    }
+}
+
 /// An error row, as Kafka builds it: no topic id, and the KIP-525 fields at
 /// the Java defaults (-1 counts, an empty config list).
 fn error_row(name: &str, error_code: i16, message: &str) -> CreatableTopicResult {
