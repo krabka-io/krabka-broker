@@ -1146,3 +1146,61 @@ fn refusals_carry_kafkas_config_exception_text() {
         );
     }
 }
+
+/// Kafka's `ConfigurationControlManager.validateAlterConfig` refuses a value
+/// longer than `Short.MAX_VALUE` with `INVALID_CONFIG` before it validates any
+/// key, and counts the length as Java's `String.length()` does, in UTF-16 code
+/// units: a value of 32767 units fits, and one of 32768 does not, whatever the
+/// bytes it takes.
+#[test]
+fn a_config_value_longer_than_short_max_value_is_refused_before_any_key_check() {
+    const MESSAGE: &str = "The configuration value cannot be added because it exceeds the \
+                           maximum value size of 32767 bytes.";
+    // A valid throttled-replicas list: 8000 entries of `0:1` and 7999 commas.
+    let fits = vec!["0:1"; 8_000].join(",");
+    let too_long = vec!["0:1"; 8_200].join(",");
+    let cases = [
+        ("a value that fits", "a".repeat(32_767), Ok(())),
+        ("one unit too long", "a".repeat(32_768), Err(MESSAGE)),
+        // `é` is one UTF-16 unit and two UTF-8 bytes.
+        ("two-byte characters that fit", "é".repeat(32_767), Ok(())),
+        (
+            "two-byte characters too long",
+            "é".repeat(32_768),
+            Err(MESSAGE),
+        ),
+        // An emoji is two UTF-16 units and four UTF-8 bytes.
+        ("astral characters that fit", "😀".repeat(16_383), Ok(())),
+        (
+            "astral characters too long",
+            "😀".repeat(16_384),
+            Err(MESSAGE),
+        ),
+    ];
+    for (label, value, expected) in cases {
+        check!(
+            check_value_size(&value) == expected.map_err(str::to_owned),
+            "{label}"
+        );
+    }
+
+    // The whole-map check answers the size before a key it would refuse: the
+    // key here is unknown, and the other value is not an integer, yet the size
+    // wins.
+    let mut overrides = BTreeMap::new();
+    overrides.insert(UNKNOWN_KEY.to_owned(), "a".repeat(32_768));
+    overrides.insert(RETENTION_MS.to_owned(), "abc".to_owned());
+    check!(
+        canonical_topic_config_map(
+            &overrides,
+            &TopicDefaults::default(),
+            false,
+            UnstableApiVersions::Disabled,
+        ) == Err(MESSAGE.to_owned())
+    );
+    // A list that fits validates as its own format says, and one that does not
+    // fit is refused for its size on the per-key path too.
+    let key = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
+    check!(validate_topic_config(key, &fits) == Ok(()));
+    check!(validate_topic_config(key, &too_long) == Err(MESSAGE.to_owned()));
+}

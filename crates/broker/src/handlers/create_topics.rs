@@ -189,6 +189,7 @@ pub(crate) async fn handle(
     // metadata batch may carry. The failure answers every requested row, as
     // `CreateTopicsRequest.getErrorResponse` does, and creates nothing.
     if total_partitions(&effective, broker.config.num_partitions) > MAX_PARTITIONS_PER_REQUEST {
+        let message = too_many_partitions_message(broker.config.features.unstable_api_versions);
         let results = req
             .topics
             .iter()
@@ -196,7 +197,7 @@ pub(crate) async fn handle(
                 topic_error_result(
                     topic.name.clone(),
                     codes::POLICY_VIOLATION,
-                    Some(TOO_MANY_PARTITIONS.into()),
+                    Some(message.into()),
                 )
             })
             .collect();
@@ -260,12 +261,27 @@ pub(crate) async fn handle(
     finish_response(broker, ctx, results, validate_only, quota.delay(), version)
 }
 
-/// Kafka's `maxRecordsPerBatch` (`controller.max.records.per.batch`, default
-/// 10000): the most partitions one `CreateTopics` request may create.
+/// The most partitions one `CreateTopics` request may create. Kafka 4.3.1
+/// fixes it at `MAX_PARTITIONS_PER_BATCH = 10_000`. Trunk reads it from
+/// `controller.max.records.per.batch` (KAFKA-20976, default 10000), which
+/// krabka does not expose, so the limit is 10000 in both modes.
 const MAX_PARTITIONS_PER_REQUEST: u64 = 10_000;
 
-/// The message of Kafka's `validateTotalNumberOfPartitions` refusal.
-const TOO_MANY_PARTITIONS: &str = "Too many partitions in request.";
+/// The message of Kafka 4.3.1's `validateTotalNumberOfPartitions` refusal.
+const TOO_MANY_PARTITIONS_4_3_1: &str = "Excessively large number of partitions per request.";
+
+/// The message of trunk's `validateTotalNumberOfPartitions` refusal, which
+/// KAFKA-20976 reworded. It is served only with `unstable.api.versions.enable`,
+/// like the other behavior that trunk has and 4.3.1 does not.
+const TOO_MANY_PARTITIONS_TRUNK: &str = "Too many partitions in request.";
+
+/// The message of the whole-request refusal for too many partitions.
+fn too_many_partitions_message(unstable: crate::api_catalog::UnstableApiVersions) -> &'static str {
+    match unstable {
+        crate::api_catalog::UnstableApiVersions::Enabled => TOO_MANY_PARTITIONS_TRUNK,
+        crate::api_catalog::UnstableApiVersions::Disabled => TOO_MANY_PARTITIONS_4_3_1,
+    }
+}
 
 /// Kafka's `Errors.THROTTLING_QUOTA_EXCEEDED.message()`, which
 /// `StrictControllerMutationQuota.record` puts on the exception.

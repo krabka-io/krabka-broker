@@ -2027,7 +2027,9 @@ struct CheckOrderCase {
 #[tokio::test]
 async fn rows_follow_kafkas_check_order_and_messages() {
     const EXISTS: &str = "Topic 't' already exists.";
-    const TOO_MANY: &str = "Too many partitions in request.";
+    // Kafka 4.3.1's text. Trunk rewords it, and krabka serves that only with
+    // `unstable.api.versions.enable`: see `too_many_partitions_message_follows_the_unstable_flag`.
+    const TOO_MANY: &str = "Excessively large number of partitions per request.";
     let duplicate = |name| error_row(name, codes::INVALID_REQUEST, "Duplicate topic name.");
     let exists = || Some(error_row("t", codes::TOPIC_ALREADY_EXISTS, EXISTS));
     let manual_rf_2 = CreatableTopic {
@@ -2221,4 +2223,91 @@ async fn rows_follow_kafkas_check_order_and_messages() {
         broker_handle.shutdown().await;
     }
     assert!(actual == expected);
+}
+
+/// Kafka's `createTopics` reaches `ConfigurationControlManager.validateAlterConfig`
+/// through `incrementalAlterConfig`, which refuses a config value longer than
+/// `Short.MAX_VALUE` with `INVALID_CONFIG` before it checks any key. A throttled
+/// replicas list of 8000 entries (31999 characters) is valid, and one of 8200
+/// entries (32799 characters) is not.
+#[tokio::test]
+async fn a_config_value_over_short_max_value_answers_invalid_config() {
+    let key = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
+    let fits = vec!["0:1"; 8_000].join(",");
+    let too_long = vec!["0:1"; 8_200].join(",");
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+
+    let resp = drive(
+        &broker,
+        &request(vec![
+            topic_with_configs("fits", &[(key, &fits)]),
+            topic_with_configs("long", &[(key, &too_long)]),
+        ]),
+        &principal("admin"),
+        &peer(),
+    )
+    .await;
+
+    check!(resp.topics[0].error_code == codes::NONE);
+    check!(
+        resp.topics[1]
+            == error_row(
+                "long",
+                codes::INVALID_CONFIG,
+                "The configuration value cannot be added because it exceeds the maximum value \
+                 size of 32767 bytes.",
+            )
+    );
+    let image = broker_handle.controller_image_for_test();
+    check!(image.topic("fits").is_some());
+    check!(image.topic("long").is_none());
+    broker_handle.shutdown().await;
+}
+
+/// The whole-request refusal for more than 10000 partitions answers
+/// `POLICY_VIOLATION` on every row in both modes, with 4.3.1's text by default
+/// ("Excessively large number of partitions per request.") and trunk's text
+/// only with `unstable.api.versions.enable` ("Too many partitions in request.").
+#[tokio::test]
+async fn too_many_partitions_message_follows_the_unstable_flag() {
+    use crate::api_catalog::UnstableApiVersions;
+
+    let cases = [
+        (
+            UnstableApiVersions::Disabled,
+            "Excessively large number of partitions per request.",
+        ),
+        (
+            UnstableApiVersions::Enabled,
+            "Too many partitions in request.",
+        ),
+    ];
+
+    for (unstable, message) in cases {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.features.unstable_api_versions = unstable;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+
+        let resp = drive(
+            &broker,
+            &request(vec![topic("a", 10_001, 1), topic("b", 1, 1)]),
+            &principal("admin"),
+            &peer(),
+        )
+        .await;
+
+        check!(
+            resp.topics
+                == vec![
+                    error_row("a", codes::POLICY_VIOLATION, message),
+                    error_row("b", codes::POLICY_VIOLATION, message),
+                ],
+            "{unstable:?}"
+        );
+        broker_handle.shutdown().await;
+    }
 }
