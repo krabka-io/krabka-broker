@@ -13,7 +13,7 @@
 //! the mailbox loop, and the shared services and constants — while each RPC
 //! path lives in its own submodule.
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Instant};
 
 use tokio::{
     sync::{mpsc, oneshot},
@@ -40,6 +40,8 @@ mod topic_deletion;
 mod views;
 mod waiters;
 
+#[cfg(test)]
+mod group_config_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -269,8 +271,9 @@ async fn run_actor(
             msg = rx.recv() => match msg {
                 None => false,
                 Some(msg) => {
+                    let effective = effective_config(&config, &coordinator, &group.group_id);
                     let services = ActorServices {
-                        config: &config,
+                        config: &effective,
                         metadata: &*metadata,
                         offsets_log: &*offsets_log,
                         coordinator: &coordinator,
@@ -284,8 +287,9 @@ async fn run_actor(
                 // "stop" rather than returning outright: the loop tail still
                 // has to stamp `observe_membership` and break cleanly.
                 if time_util::fired(outcome, TICK_TASK) {
+                    let effective = effective_config(&config, &coordinator, &group.group_id);
                     let services = ActorServices {
-                        config: &config,
+                        config: &effective,
                         metadata: &*metadata,
                         offsets_log: &*offsets_log,
                         coordinator: &coordinator,
@@ -307,8 +311,9 @@ async fn run_actor(
                 // KIP-848: a member's rebalance timeout fired. Run the sweep
                 // now instead of at the next session tick, so the partitions it
                 // did not revoke reach their new owner on time.
+                let effective = effective_config(&config, &coordinator, &group.group_id);
                 let services = ActorServices {
-                    config: &config,
+                    config: &effective,
                     metadata: &*metadata,
                     offsets_log: &*offsets_log,
                     coordinator: &coordinator,
@@ -317,8 +322,9 @@ async fn run_actor(
             }
             () = opt_sleep(classic_sync_deadline(&group)) => {
                 // Kafka's pending-sync timer: a member never sent SyncGroup.
+                let effective = effective_config(&config, &coordinator, &group.group_id);
                 let services = ActorServices {
-                    config: &config,
+                    config: &effective,
                     metadata: &*metadata,
                     offsets_log: &*offsets_log,
                     coordinator: &coordinator,
@@ -360,6 +366,24 @@ async fn run_actor(
         }
     }
     group
+}
+
+/// The settings `group_id` runs with: the `consumer.*` overrides of its group
+/// config in the current metadata image over the broker's `config`.
+///
+/// A classic group and a classic member ignore them: Kafka's classic groups
+/// read only the broker-wide `group.min.session.timeout.ms` and
+/// `group.max.session.timeout.ms`, and a coordinator with no metadata source
+/// runs every group with the broker values.
+fn effective_config<'a>(
+    config: &'a NextGenConfig,
+    coordinator: &GroupCoordinator,
+    group_id: &str,
+) -> Cow<'a, NextGenConfig> {
+    match coordinator.metadata_source() {
+        Some(source) => config.for_group(source.current_image().group_config(group_id)),
+        None => Cow::Borrowed(config),
+    }
 }
 
 /// The classic rebalance-completion deadline, if a rebalance is open.

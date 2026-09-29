@@ -56,6 +56,10 @@ pub struct GroupState {
     /// `DeadlineAndEpoch.EMPTY`: a subscribed topic changed, so the next
     /// heartbeat computes the metadata hash again.
     metadata_refresh_requested: bool,
+    /// Kafka's `ConsumerGroup.assignmentTimestamp`: when the last target
+    /// assignment calculation finished, or `None` when there is no previous
+    /// assignment or its time is unknown, as after a replay.
+    assignment_timestamp: Option<Instant>,
 }
 
 impl GroupState {
@@ -71,7 +75,29 @@ impl GroupState {
             unresolved_regex_members: HashSet::new(),
             metadata_hash: 0,
             metadata_refresh_requested: false,
+            assignment_timestamp: None,
         }
+    }
+
+    /// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`, negated:
+    /// `true` while the assignment `interval` holds the next target
+    /// assignment back at `now`.
+    ///
+    /// The next assignment computes at once when there is no previous one or
+    /// its time is unknown, and when the interval is zero, which is Kafka's
+    /// escape hatch for a wall clock that stepped back. Otherwise it waits
+    /// until the interval has elapsed since the last one.
+    #[must_use]
+    pub(crate) fn assignment_delayed(&self, interval: Duration, now: Instant) -> bool {
+        !interval.is_zero()
+            && self
+                .assignment_timestamp
+                .is_some_and(|computed| now < computed + interval)
+    }
+
+    /// Records that a target assignment calculation finished at `now`.
+    pub(crate) fn record_assignment(&mut self, now: Instant) {
+        self.assignment_timestamp = Some(now);
     }
 
     pub fn bump_epoch(&mut self) -> bool {
@@ -881,6 +907,33 @@ mod tests {
         g.dirty = false;
         g.remove_member("m1");
         assert!(g.dirty);
+    }
+
+    /// Kafka's `canComputeNextTargetAssignment`: no previous assignment, or a
+    /// zero interval, never waits; otherwise the next assignment waits until
+    /// the interval has elapsed since the last one.
+    #[test]
+    fn the_assignment_interval_holds_the_next_assignment_back() {
+        let assigned_at = Instant::now();
+        let second = Duration::from_secs(1);
+        // (last assignment recorded, interval, time since it, delayed)
+        let rows = [
+            (false, second, Duration::ZERO, false),
+            (true, Duration::ZERO, Duration::ZERO, false),
+            (true, second, Duration::from_millis(999), true),
+            (true, second, second, false),
+            (true, second, Duration::from_mins(1), false),
+        ];
+        for (recorded, interval, since, delayed) in rows {
+            let mut g = GroupState::new("g");
+            if recorded {
+                g.record_assignment(assigned_at);
+            }
+            assert!(
+                g.assignment_delayed(interval, assigned_at + since) == delayed,
+                "{recorded} {interval:?} {since:?}"
+            );
+        }
     }
 
     #[test]

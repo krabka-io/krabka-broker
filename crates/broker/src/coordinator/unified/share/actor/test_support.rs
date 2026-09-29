@@ -46,8 +46,8 @@ pub(super) fn make_coordinator(
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let log = Arc::new(InMemoryOffsetsLog::default());
     let coord = Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
+        NextGenConfig::assigning_at_once(),
+        ShareGroupConfig::assigning_at_once(),
         metadata,
         log.clone(),
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),

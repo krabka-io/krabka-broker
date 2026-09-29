@@ -245,7 +245,7 @@ mod tests {
         // CI runners (e.g. a freshly-booted Windows agent).
         let config = NextGenConfig {
             session_timeout: Duration::from_millis(1),
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         };
         let metadata = empty_metadata();
 
@@ -360,7 +360,7 @@ mod tests {
 
         for row in rows {
             let (coord, log) = make_coordinator();
-            let config = NextGenConfig::default();
+            let config = NextGenConfig::assigning_at_once();
             let mut state = GroupState::new("g");
             // Every heartbeat happened a second ago, so a 100 ms timeout armed
             // by them has fired when the tick runs, and a session has not.
@@ -442,9 +442,9 @@ mod tests {
             NextGenConfig {
                 timer: clock.new_timer(),
                 session_expiry_tick: Duration::from_hours(1),
-                ..NextGenConfig::default()
+                ..NextGenConfig::assigning_at_once()
             },
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             Arc::new(StaticMetadata {
                 input: crate::coordinator::unified::reconciler::ReconcileInput {
                     topic_id_by_name: [("t".to_string(), topic)].into(),
@@ -546,9 +546,9 @@ mod tests {
             NextGenConfig {
                 timer: clock.new_timer(),
                 session_expiry_tick: tick_interval,
-                ..NextGenConfig::default()
+                ..NextGenConfig::assigning_at_once()
             },
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             empty_metadata(),
             log.clone(),
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),

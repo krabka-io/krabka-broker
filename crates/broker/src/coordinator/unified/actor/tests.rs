@@ -84,7 +84,7 @@ async fn run_until_the_ticker_dies(timer: Arc<dyn Timer>) -> CoordinatorGroup {
     let (coordinator, log) = make_coordinator();
     let config = Arc::new(NextGenConfig {
         timer,
-        ..NextGenConfig::default()
+        ..NextGenConfig::assigning_at_once()
     });
     let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
     let group = tokio::time::timeout(

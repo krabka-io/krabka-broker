@@ -3,7 +3,10 @@
 //! it sits apart from the actor loop because it is pure, synchronous
 //! state-machine work with no log or persister access.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
@@ -27,9 +30,15 @@ use crate::coordinator::unified::{
 /// or when initialized partitions of a subscribed topic are not assigned yet
 /// (`initializedAssignmentPending`). The target is recomputed whenever the
 /// group epoch is ahead of the target epoch, from the previous target and
-/// over the initialized partitions only (`withTopicAssignablePartitionsMap`).
-/// Returns `false` when the group epoch is exhausted.
-pub(super) fn reconcile(state: &mut ShareGroupState, metadata: &dyn MetadataProvider) -> bool {
+/// over the initialized partitions only (`withTopicAssignablePartitionsMap`),
+/// unless the group's `assignment_interval` since the last target has not
+/// elapsed (`canComputeNextTargetAssignment`). Returns `false` when the group
+/// epoch is exhausted.
+pub(super) fn reconcile(
+    state: &mut ShareGroupState,
+    metadata: &dyn MetadataProvider,
+    assignment_interval: Duration,
+) -> bool {
     let input = metadata.snapshot();
     let subscribed = subscribed_metadata(state, &input);
     let metadata_changed = state.subscribed_metadata.as_ref() != Some(&subscribed);
@@ -39,7 +48,9 @@ pub(super) fn reconcile(state: &mut ShareGroupState, metadata: &dyn MetadataProv
     }
     state.subscribed_metadata = Some(subscribed);
     state.dirty = false;
-    if state.target.epoch >= state.group_epoch {
+    if state.target.epoch >= state.group_epoch
+        || state.assignment_delayed(assignment_interval, Instant::now())
+    {
         return true;
     }
 
@@ -158,7 +169,7 @@ fn resolve_subscribed_topic_ids(member: &ShareMemberState, input: &ReconcileInpu
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, time::Duration};
 
     use assert2::{assert, check};
 
@@ -215,7 +226,7 @@ mod tests {
                 state.topic_names.insert(topic, "t".to_owned());
             }
             check!(
-                reconcile(&mut state, &Metadata { topic, partitions }),
+                reconcile(&mut state, &Metadata { topic, partitions }, Duration::ZERO),
                 "{step}"
             );
             check!(state.group_epoch == epoch, "{step}");
@@ -247,6 +258,7 @@ mod tests {
                 topic,
                 partitions: 1,
             },
+            Duration::ZERO,
         ));
         check!(state.group_epoch == i32::MAX);
         assert!(state.target.per_member.is_empty());

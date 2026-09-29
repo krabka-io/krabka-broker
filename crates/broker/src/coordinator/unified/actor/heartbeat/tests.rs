@@ -96,9 +96,9 @@ async fn member_limit_rejects_only_new_members() {
     let coord = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             max_size: 1,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         empty_metadata(),
         log,
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -173,7 +173,7 @@ fn handoff_heartbeat(
 ) -> HeartbeatStep {
     step_heartbeat(
         state,
-        &NextGenConfig::default(),
+        &NextGenConfig::assigning_at_once(),
         &handoff_metadata(),
         &ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -341,7 +341,12 @@ impl IdentityRow {
 }
 
 fn heartbeat_interval_ms() -> i32 {
-    i32::try_from(NextGenConfig::default().heartbeat_interval.as_millis()).unwrap()
+    i32::try_from(
+        NextGenConfig::assigning_at_once()
+            .heartbeat_interval
+            .as_millis(),
+    )
+    .unwrap()
 }
 
 fn identity_ok(
@@ -561,7 +566,7 @@ fn identity_group() -> GroupState {
 /// [`identity_group`] and compares the whole response and the members after.
 #[test]
 fn heartbeat_identity_rules_follow_kafka() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let metadata = StaticMetadata {
         input: ReconcileInput {
             topic_id_by_name: HashMap::from([("t".to_string(), IDENTITY_TOPIC)]),
@@ -629,7 +634,7 @@ fn written<T>(records: &[(String, Option<T>)]) -> Vec<(String, bool)> {
 /// `replaceMember` does.
 #[test]
 fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let metadata = empty_metadata();
     let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
     let join = |member_id: &str, member_epoch: i32| {
@@ -805,7 +810,7 @@ async fn leave_emits_tombstone_batch() {
 
 #[test]
 fn leave_reconciles_and_persists_survivor_assignments() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let topic_id = Uuid([8; 16]);
     let metadata = StaticMetadata {
         input: ReconcileInput {
@@ -995,7 +1000,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
             ..Default::default()
         },
     };
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let mut group = GroupState::new("g");
     let req = ConsumerGroupHeartbeatRequest {
         group_id: "g".into(),

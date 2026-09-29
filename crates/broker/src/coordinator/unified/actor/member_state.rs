@@ -19,7 +19,7 @@ use crate::coordinator::unified::{
     config::NextGenConfig,
     consumer_state::{GroupState, MemberState},
     persistence_next_gen::MemberAssignmentState,
-    reconciler,
+    reconciler::{self, ReconcileOutcome},
 };
 
 /// The partitions a member reports that it owns in its heartbeat, or `None`
@@ -201,9 +201,17 @@ pub(super) fn run_reconcile(
     if !state.dirty {
         return;
     }
+    // Kafka's `maybeUpdateTargetAssignment`: the target assignment waits for
+    // the group's assignment interval. The group stays dirty, so a later
+    // heartbeat computes it.
+    if state.assignment_delayed(config.assignment_interval, Instant::now()) {
+        return;
+    }
     let input = metadata.snapshot();
     let assignor = pick_assignor(state, config);
-    reconciler::reconcile_if_dirty(state, &input, &*assignor);
+    if reconciler::reconcile_if_dirty(state, &input, &*assignor) == ReconcileOutcome::Recomputed {
+        state.record_assignment(Instant::now());
+    }
 }
 
 /// Kafka's `maybeUpdateTargetAssignment`: the group runs the assignor that the
@@ -307,7 +315,7 @@ mod tests {
 
     #[test]
     fn subscription_change_persists_every_reconciled_assignment() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let first_topic = Uuid([10; 16]);
         let second_topic = Uuid([11; 16]);
         let metadata = StaticMetadata {
@@ -386,7 +394,7 @@ mod tests {
     /// A group holding one member subscribed by regex, already reconciled and
     /// at a stable epoch.
     fn group_with_regex_member(metadata: &StaticMetadata, pattern: &str) -> GroupState {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let mut state = GroupState::new("g");
         state.add_or_update_member(build_member(
             "m1",
@@ -423,7 +431,7 @@ mod tests {
     /// joining member is never admitted.
     #[test]
     fn invalid_regex_on_join_rejects_the_heartbeat() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
         for pattern in ["(", "[a-", "a{2,1}"] {
             let mut state = GroupState::new("g");
@@ -470,7 +478,7 @@ mod tests {
     /// member exactly as it was: same pattern, same epoch, group not dirty.
     #[test]
     fn invalid_regex_on_pattern_change_leaves_member_untouched() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
         for pattern in ["(", "[a-", "a{2,1}"] {
             let mut state = group_with_regex_member(&metadata, "^orders-.*");
@@ -514,7 +522,7 @@ mod tests {
     /// the member and reconciles the topics it matches.
     #[test]
     fn valid_regex_still_reconciles() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
         let mut state = GroupState::new("g");
 
@@ -556,7 +564,7 @@ mod tests {
     /// used to match every topic the principal may describe.
     #[test]
     fn an_absent_pattern_keeps_the_regex_and_an_empty_one_drops_it() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
         let orders = HashSet::from(["orders-eu".to_string()]);
         // (pattern sent at the steady-state heartbeat, the member's pattern
@@ -713,7 +721,7 @@ mod tests {
 
     #[test]
     fn pick_assignor_skips_unregistered_member_preference() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let mut state = crate::coordinator::unified::consumer_state::GroupState::new("g");
         let mut m = build_member(
             "m1",
@@ -737,7 +745,7 @@ mod tests {
     /// `Describe` reports the same choice.
     #[test]
     fn pick_assignor_follows_the_majority_of_members() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let uniform = || vec![Some("uniform"); 1];
         let range = |count| vec![Some("range"); count];
         // (assignors the members name, the assignor the group runs)
@@ -788,7 +796,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn custom_assignor_invoked_when_requested() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut config = NextGenConfig::default();
+        let mut config = NextGenConfig::assigning_at_once();
         config
             .register_assignor(Arc::new(CountingAssignor {
                 calls: calls.clone(),
@@ -798,7 +806,7 @@ mod tests {
         let log = Arc::new(InMemoryOffsetsLog::default());
         let coord = Arc::new(GroupCoordinator::new(
             config,
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             empty_metadata(),
             log,
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),

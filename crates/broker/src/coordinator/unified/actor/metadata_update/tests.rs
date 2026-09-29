@@ -286,9 +286,9 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
     let coordinator = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             migration_policy: ConsumerGroupMigrationPolicy::Upgrade,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        ShareGroupConfig::default(),
+        ShareGroupConfig::assigning_at_once(),
         metadata.clone(),
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),

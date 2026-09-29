@@ -53,7 +53,7 @@ pub(super) fn empty_metadata() -> Arc<dyn MetadataProvider> {
 }
 
 pub(super) fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
-    make_coordinator_with_config(NextGenConfig::default())
+    make_coordinator_with_config(NextGenConfig::assigning_at_once())
 }
 
 /// As [`make_coordinator`], but with an explicit consumer-group config.
@@ -63,7 +63,7 @@ pub(super) fn make_coordinator_with_config(
     let log = Arc::new(InMemoryOffsetsLog::default());
     let coord = Arc::new(GroupCoordinator::new(
         config,
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         empty_metadata(),
         log.clone(),
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -150,9 +150,9 @@ pub(super) fn make_coordinator_with_topic_policy(
     let coord = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             migration_policy: policy,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         metadata,
         log.clone(),
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
