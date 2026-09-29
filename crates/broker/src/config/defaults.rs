@@ -104,6 +104,8 @@ impl Default for BrokerConfig {
             share_coordinator_load_buffer_size: mebibytes(5),
             share_session_cache_max_when_unlimited: 10_000,
             socket_request_max: mebibytes(100),
+            sasl_server_max_receive: kibibytes(512),
+            connection_failed_authentication_delay: millis(100),
             queued_max_requests: 500,
             queued_max_request_bytes: None,
             // The floor of `benches/fetch_drain.rs`'s sweep, not a

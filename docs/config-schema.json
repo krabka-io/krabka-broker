@@ -1659,6 +1659,15 @@
             "null"
           ]
         },
+        "connection_failed_authentication_delay": {
+          "default": null,
+          "description": "How long a failed SASL authentication holds its response and the close\nthat follows, Kafka's `connection.failed.authentication.delay.ms`. Zero\ncloses at once.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "consumer_group_heartbeat_interval": {
           "default": null,
           "description": "Default KIP-848 consumer-group heartbeat interval, Kafka's\n`group.consumer.heartbeat.interval.ms`.",
@@ -2475,6 +2484,15 @@
           "default": null,
           "description": "Cadence of KIP-405 remote-log metadata reconciliation.",
           "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sasl_server_max_receive": {
+          "default": null,
+          "description": "Largest request frame a connection may send before it finishes\nauthenticating on a SASL listener, Kafka's\n`sasl.server.max.receive.size`. It replaces `socket_request_max` for\nthat stretch, and a larger frame fails the authentication.",
+          "format": "byte-size",
           "type": [
             "string",
             "null"

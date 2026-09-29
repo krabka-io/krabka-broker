@@ -138,6 +138,8 @@ fn runtime_policy_cli_reads_krabka_environment() {
         [
             ("KRABKA_CLEANER_INTERVAL", Some("17ms")),
             ("KRABKA_SOCKET_REQUEST_MAX", Some("100MiB")),
+            ("KRABKA_SASL_SERVER_MAX_RECEIVE", Some("64KiB")),
+            ("KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY", Some("0ms")),
             ("KRABKA_METADATA_SNAPSHOT_FETCH_MAX", Some("512MiB")),
             ("KRABKA_CONTROLLER_HEARTBEAT_INTERVAL", Some("500ms")),
             ("KRABKA_CONTROLLER_FETCH_MISS_LIMIT", Some("7")),
@@ -173,6 +175,8 @@ fn runtime_policy_cli_reads_krabka_environment() {
             let mut config = BrokerConfig::default();
             args.apply_runtime_to(&mut config, None)
                 .expect("apply environment runtime");
+            assert!(config.sasl_server_max_receive == krabka_units::kibibytes(64));
+            assert!(config.connection_failed_authentication_delay == krabka_units::millis(0));
             assert!(config.metadata_snapshot_fetch_max == krabka_units::mebibytes(512));
             assert!(config.controller_heartbeat_interval_explicit);
             assert!(config.controller_heartbeat_interval == krabka_units::millis(500));

@@ -9,8 +9,9 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        kafka_int_bytes, positive_i32, positive_i64, positive_ratio, positive_time, positive_u32,
-        positive_usize, whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
+        kafka_int_bytes, nonnegative_time, positive_i32, positive_i64, positive_ratio,
+        positive_time, positive_u32, positive_usize, whole_bytes_u32, whole_bytes_u64,
+        whole_bytes_usize,
     },
 };
 
@@ -177,6 +178,18 @@ impl RuntimeFileConfig {
             socket_request_max,
             cfg.socket_request_max,
             whole_bytes_u32
+        );
+        set_runtime_size_bytes!(
+            runtime,
+            sasl_server_max_receive,
+            cfg.sasl_server_max_receive,
+            whole_bytes_u32
+        );
+        set_runtime_validated!(
+            runtime,
+            connection_failed_authentication_delay,
+            cfg.connection_failed_authentication_delay,
+            nonnegative_time
         );
         set_runtime_usize!(runtime, queued_max_requests, cfg.queued_max_requests);
         if let Some(bytes) = runtime.queued_max_request_bytes.take() {

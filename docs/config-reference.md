@@ -391,6 +391,7 @@ Validated operational policy loaded from `[runtime]`.
 | `client_metrics_stale_push_intervals` | integer (uint32) | broker default |  | Number of missed push intervals after which client metrics expire. |
 | `client_metrics_telemetry_max` | string | broker default | byte size | Maximum accepted KIP-714 client telemetry payload size. |
 | `connection_creation_throttle_max` | string | broker default | duration | Maximum KIP-612 connection-creation quota delay. |
+| `connection_failed_authentication_delay` | string | broker default | duration | How long a failed SASL authentication holds its response and the close that follows, Kafka's `connection.failed.authentication.delay.ms`. Zero closes at once. |
 | `consumer_group_heartbeat_interval` | string | broker default | duration | Default KIP-848 consumer-group heartbeat interval, Kafka's `group.consumer.heartbeat.interval.ms`. |
 | `consumer_group_max_heartbeat_interval` | string | broker default | duration | Upper bound on the negotiated consumer-group heartbeat interval, Kafka's `group.consumer.max.heartbeat.interval.ms`. |
 | `consumer_group_max_session_timeout` | string | broker default | duration | Upper bound on the negotiated consumer-group session timeout, Kafka's `group.consumer.max.session.timeout.ms`. |
@@ -483,6 +484,7 @@ Validated operational policy loaded from `[runtime]`.
 | `rlmm_bootstrap_backoff_initial` | string | broker default | duration | Initial retry delay while remote-log metadata bootstrap is incomplete. |
 | `rlmm_bootstrap_backoff_max` | string | broker default | duration | Maximum retry delay while remote-log metadata bootstrap is incomplete. |
 | `rlmm_reconcile_tick` | string | broker default | duration | Cadence of KIP-405 remote-log metadata reconciliation. |
+| `sasl_server_max_receive` | string | broker default | byte size | Largest request frame a connection may send before it finishes authenticating on a SASL listener, Kafka's `sasl.server.max.receive.size`. It replaces `socket_request_max` for that stretch, and a larger frame fails the authentication. |
 | `schema_registry_http_timeout` | string | broker default | duration | Timeout for one schema-registry request. |
 | `self_registration_backoff_max` | string | broker default | duration | Maximum delay between broker self-registration attempts. |
 | `self_registration_backoff_min` | string | broker default | duration | Initial delay between broker self-registration attempts. |
