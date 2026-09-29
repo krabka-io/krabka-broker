@@ -88,17 +88,18 @@ async fn wait_for_leader(broker: &Broker) {
 /// The advertised rows whose ranges are a deliberate choice, pinned whole.
 ///
 /// - Produce: min 0, as Kafka 4.x still advertises it
-///   (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659), and as
-///   krabka still serves it, which Kafka does not (#863).
-/// - Fetch and `ListOffsets`: min 0, below Kafka 4.x's 4 and 1, for pre-4.0
-///   clients.
-/// - `InitProducerId`: v6 is `latestVersionUnstable`, so it is advertised
-///   only under `unstable.api.versions.enable` (#646).
+///   (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659),
+///   whichever minimum it serves.
+/// - Fetch and `ListOffsets`: Kafka 4.x's 4 and 1 by default, 0 under
+///   `legacy_request_versions_enable` for pre-4.0 clients (#784).
+/// - `InitProducerId`: v6 is `latestVersionUnstable`, and `ApiVersions` v5 is
+///   Kafka trunk's, so both are advertised only under
+///   `unstable.api.versions.enable` (#646, #784).
 #[test]
 fn api_versions_advertises_the_deliberate_ranges() {
     use krabka_protocol::owned::api_versions_response::ApiVersion;
 
-    use crate::api_catalog::UnstableApiVersions;
+    use crate::api_catalog::{LegacyRequestVersions, UnstableApiVersions, VersionGates};
 
     let row = |api_key, min_version, max_version| ApiVersion {
         api_key,
@@ -106,26 +107,58 @@ fn api_versions_advertises_the_deliberate_ranges() {
         max_version,
         ..Default::default()
     };
-    for (unstable, expected) in [
+    let gates = |unstable, legacy| VersionGates { unstable, legacy };
+    for (gates, expected) in [
         (
-            UnstableApiVersions::Disabled,
-            vec![row(0, 0, 13), row(1, 0, 18), row(2, 0, 11), row(22, 0, 5)],
+            gates(
+                UnstableApiVersions::Disabled,
+                LegacyRequestVersions::Disabled,
+            ),
+            vec![
+                row(0, 0, 13),
+                row(1, 4, 18),
+                row(2, 1, 11),
+                row(18, 0, 4),
+                row(22, 0, 5),
+            ],
         ),
         (
-            UnstableApiVersions::Enabled,
-            vec![row(0, 0, 13), row(1, 0, 18), row(2, 0, 11), row(22, 0, 6)],
+            gates(
+                UnstableApiVersions::Enabled,
+                LegacyRequestVersions::Disabled,
+            ),
+            vec![
+                row(0, 0, 13),
+                row(1, 4, 18),
+                row(2, 1, 11),
+                row(18, 0, 5),
+                row(22, 0, 6),
+            ],
+        ),
+        (
+            gates(
+                UnstableApiVersions::Disabled,
+                LegacyRequestVersions::Enabled,
+            ),
+            vec![
+                row(0, 0, 13),
+                row(1, 0, 18),
+                row(2, 0, 11),
+                row(18, 0, 4),
+                row(22, 0, 5),
+            ],
         ),
     ] {
         let table = crate::api_catalog::supported_apis(
             crate::api_catalog::ListenerKind::Client,
             crate::api_catalog::ClientMetricsReceiver::Absent,
-            unstable,
+            gates,
         );
         let pinned: Vec<ApiVersion> = table
             .into_iter()
-            .filter(|api| [0, 1, 2, 22].contains(&api.api_key))
+            .filter(|api| [0, 1, 2, 18, 22].contains(&api.api_key))
             .collect();
-        check!(pinned == expected, "{unstable:?}");
+        check!(pinned == expected, "{gates:?}");
     }
 }
 
@@ -147,7 +180,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
         api_keys: vec![ApiVersion {
             api_key: 18,
             min_version: 0,
-            max_version: krabka_protocol::owned::api_versions_request::MAX_VERSION,
+            max_version: 4,
             ..Default::default()
         }],
         ..Default::default()
@@ -193,7 +226,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
         let expected_keys = crate::api_catalog::supported_apis(
             broker.config.listener_kind(listener),
             broker.config.client_metrics_receiver(),
-            crate::api_catalog::UnstableApiVersions::Disabled,
+            crate::api_catalog::VersionGates::default(),
         );
         check!(
             expected_keys
@@ -202,7 +235,9 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
             "{listener} telemetry={telemetry}"
         );
 
-        for version in 0..=krabka_protocol::owned::api_versions_request::MAX_VERSION {
+        // The dispatch loop answers v5 `UNSUPPORTED_VERSION` before the
+        // handler sees it while unstable api versions are off.
+        for version in 0..=4 {
             let req = ApiVersionsRequest {
                 client_software_name: "krabka-test".into(),
                 client_software_version: "1.0.0".into(),
@@ -219,10 +254,11 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
                 "{listener} telemetry={telemetry} v{version}"
             );
         }
-        let body = unsupported_version_response().expect("unsupported answer");
+        let body = unsupported_version_response(crate::api_catalog::UnstableApiVersions::Disabled)
+            .expect("unsupported answer");
         check!(
             decode_response(0, &body) == unsupported,
-            "{listener} telemetry={telemetry} v6"
+            "{listener} telemetry={telemetry} v5"
         );
 
         broker_handle.shutdown().await;
@@ -237,7 +273,7 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
     let table = crate::api_catalog::supported_apis(
         crate::api_catalog::ListenerKind::InterBroker,
         crate::api_catalog::ClientMetricsReceiver::Absent,
-        crate::api_catalog::UnstableApiVersions::Disabled,
+        crate::api_catalog::VersionGates::default(),
     );
     let by_key = |k: i16| table.iter().find(|v| v.api_key == k);
 
@@ -361,7 +397,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
             == crate::api_catalog::supported_apis(
                 crate::api_catalog::ListenerKind::ClientAndInterBroker,
                 crate::api_catalog::ClientMetricsReceiver::Absent,
-                crate::api_catalog::UnstableApiVersions::Disabled,
+                crate::api_catalog::VersionGates::default(),
             ),
         "{resp:?}"
     );
@@ -379,7 +415,9 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
         .find(|f| f.name == "metadata.version")
         .expect("metadata.version supported");
     check!(mv.min_version == crate::features::METADATA_VERSION_MIN);
-    check!(mv.max_version == crate::features::METADATA_VERSION_MAX);
+    // #784: 4.3.1's latest production level while
+    // `unstable.feature.versions.enable` is off.
+    check!(mv.max_version == crate::features::LATEST_PRODUCTION_METADATA_VERSION);
     check!(resp.finalized_features_epoch == metadata_offset);
     let finalized_mv = resp
         .finalized_features

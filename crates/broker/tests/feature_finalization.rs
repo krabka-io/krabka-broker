@@ -28,11 +28,63 @@ fn metadata_version_update(level: i16) -> UpdateFeaturesRequest {
     }
 }
 
-/// A cluster bootstraps at 4.3-IV0 and opts into Kafka trunk's 4.4 levels by
-/// finalizing them.
+/// Starts a broker with Kafka's `unstable.feature.versions.enable` on, the
+/// setting a node needs to support trunk's `metadata.version` levels.
+async fn start_with_unstable_features() -> support::InProcess {
+    support::start_configured(|config| {
+        config.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
+    })
+    .await
+}
+
+/// #784: by default a node supports `metadata.version` only up to 4.3.1's
+/// latest production level, so trunk's 4.4-IV2 is refused with the text a
+/// Kafka 4.3.1 controller answers (`QuorumFeatures.reasonNotSupported`) and the
+/// supported range `ApiVersions` advertises stops at 30.
+#[tokio::test]
+async fn an_unstable_metadata_version_is_refused_by_default() {
+    let p = support::start().await;
+    let resp = p
+        .client
+        .send(metadata_version_update(METADATA_VERSION_MAX))
+        .await
+        .expect("UpdateFeatures");
+    assert!(
+        resp.error_message.as_deref()
+            == Some(
+                "The update failed for all features since the following feature had an error: \
+                 Invalid update version 33 for feature metadata.version. Local controller 1 \
+                 only supports versions 7-30"
+            ),
+        "{resp:?}"
+    );
+    assert_feature_error(&resp, "metadata.version");
+    let av = p
+        .client
+        .send(ApiVersionsRequest {
+            client_software_name: "krabka-test".into(),
+            client_software_version: "0.0.0".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("ApiVersions");
+    let supported = av
+        .supported_features
+        .iter()
+        .find(|f| f.name == "metadata.version")
+        .map(|f| (f.min_version, f.max_version));
+    assert!(
+        supported == Some((7, LATEST_PRODUCTION_METADATA_VERSION)),
+        "{av:?}"
+    );
+    p.broker.shutdown().await;
+}
+
+/// A cluster bootstraps at 4.3-IV0 and, on a node that supports unstable
+/// feature levels, opts into Kafka trunk's 4.4 levels by finalizing them.
 #[tokio::test]
 async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
-    let p = support::start().await;
+    let p = start_with_unstable_features().await;
 
     let resp = p
         .client
@@ -122,7 +174,7 @@ fn metadata_version(
 
 #[tokio::test]
 async fn validate_only_does_not_persist() {
-    let p = support::start().await;
+    let p = start_with_unstable_features().await;
 
     // A self-bootstrapped broker already finalizes metadata.version=4.3-IV0, so
     // emptiness no longer signals "nothing persisted". Capture the level + epoch

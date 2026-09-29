@@ -217,9 +217,12 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     // metadata.version, group.version, etc. at their 4.0 defaults so a fresh
     // cluster engages each feature with no manual step; a level-0 feature is
     // omitted (absent = disabled), matching `kafka-storage format`.
-    let (bootstrap_mv, feature_overrides) =
-        resolve_format_features(args.release_version.as_deref(), &args.feature)
-            .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
+    let (bootstrap_mv, feature_overrides) = resolve_format_features(
+        args.release_version.as_deref(),
+        &args.feature,
+        args.unstable_feature_versions_enable,
+    )
+    .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
     let metadata_version = krabka_metadata::metadata_version::from_feature_level(bootstrap_mv)
         .map_or_else(|| bootstrap_mv.to_string(), |mv| mv.ivn().to_owned());
 

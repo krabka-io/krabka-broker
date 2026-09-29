@@ -32,7 +32,7 @@ macro_rules! api_version {
             api_key: krabka_protocol::owned::$request::API_KEY,
             min_version: krabka_protocol::owned::$request::MIN_VERSION,
             max_version: krabka_protocol::owned::$request::MAX_VERSION,
-            latest_stable_version: krabka_protocol::owned::$request::LATEST_STABLE_VERSION,
+            released_max: krabka_raft::kafka_4_3_1_max(krabka_protocol::owned::$request::API_KEY),
             flexible_min: krabka_protocol::owned::$request::FLEXIBLE_MIN,
         }
     };
@@ -416,6 +416,18 @@ fn unwrap_envelope(
     if !entry.supports_version(forwarded.api_version) {
         return Err(EnvelopeError::UnsupportedVersion);
     }
+    // An api key Kafka 4.3.1 does not have -- trunk's `UnregisterController`
+    // (94) while `unstable.api.versions.enable` is off -- fails
+    // `RequestHeader.parse` on a 4.3.1 controller, and `EnvelopeUtils` reports
+    // an unparseable embedded header as UNSUPPORTED_VERSION. The same
+    // answer covers a version the listener's gates disable.
+    if crate::api_catalog::is_disabled_version(
+        forwarded.api_key,
+        forwarded.api_version,
+        broker.config.features.version_gates(),
+    ) {
+        return Err(EnvelopeError::UnsupportedVersion);
+    }
 
     Ok(Unwrapped {
         forwarded,
@@ -477,7 +489,7 @@ mod tests {
                     api_key: 58,
                     min_version: 0,
                     max_version: 0,
-                    latest_stable_version: 0,
+                    released_max: Some(0),
                     flexible_min: 0,
                 })
         );

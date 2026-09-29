@@ -766,6 +766,62 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
     );
 }
 
+/// #784: `UnregisterController` (94) is Kafka trunk's, so a 4.3.1 controller
+/// cannot parse an embedded header naming it, and `EnvelopeUtils` reports
+/// that as `UNSUPPORTED_VERSION`. krabka answers the same while
+/// `unstable.api.versions.enable` is off, and serves the embedded request --
+/// here refused by the handler's own `metadata.version` gate, a response the
+/// envelope carries back -- when it is on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled() {
+    use krabka_protocol::owned::unregister_controller_request::{
+        self, UnregisterControllerRequest,
+    };
+
+    for unstable in [
+        krabka_broker::api_catalog::UnstableApiVersions::Disabled,
+        krabka_broker::api_catalog::UnstableApiVersions::Enabled,
+    ] {
+        let (broker, _dir) = start_broker_with(|config| {
+            config.features.unstable_api_versions = unstable;
+        })
+        .await;
+        let version = unregister_controller_request::MAX_VERSION;
+        let request_data = request_frame(
+            unregister_controller_request::API_KEY,
+            version,
+            EMBEDDED_CORRELATION_ID,
+            Some("adminclient-1"),
+            true,
+            &encode(
+                &UnregisterControllerRequest {
+                    controller_id: 9,
+                    ..Default::default()
+                },
+                version,
+            ),
+        )
+        .slice(4..);
+
+        let response = send_envelope(
+            broker.controller_addr(),
+            &envelope_for(request_data, Some(JVM_USER_ALICE)),
+        )
+        .await;
+        let served = unstable == krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        if served {
+            check!(response.error_code == 0, "{unstable:?}: {response:?}");
+            check!(response.response_data.is_some(), "{unstable:?}");
+        } else {
+            check!(
+                (response.error_code, response.response_data) == (35, None),
+                "{unstable:?}"
+            );
+        }
+        broker.shutdown().await;
+    }
+}
+
 /// Canonical Kafka error code that mirrors `krabka_broker::codes::
 /// DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`. The broker's `codes` module is
 /// private to the crate, so this file keeps a local copy, as

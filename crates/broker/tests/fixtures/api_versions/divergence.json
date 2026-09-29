@@ -12,36 +12,36 @@
         "min": 0,
         "max": 13
       },
-      "verdict": "range_differs",
-      "intent": "Intended, and the same choice as Fetch and ListOffsets, though the advertised ranges match: Kafka 4.x still advertises Produce from v0 (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659, for librdkafka), but `ProduceRequest.json` accepts only 3-13, so a v0-v2 request fails with INVALID_REQUEST and the connection closes. krabka serves v0-v2: `handlers::produce::owned_decode` up-converts the legacy message set and appends it, so a pre-0.11 producer keeps working, and a modern client negotiates v13 either way."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 1,
       "name": "Fetch",
       "krabka": {
-        "min": 0,
+        "min": 4,
         "max": 18
       },
       "kafka": {
         "min": 4,
         "max": 18
       },
-      "verdict": "range_differs",
-      "intent": "Intended. krabka still serves the pre-v4 Fetch request shapes that Kafka 4.x dropped: `api_catalog::client_facing_apis` takes the key's `min_version` from `krabka_protocol::kafka_3_6_2::owned::fetch_request`, and `handlers::fetch::encode_fetch_response` answers v0-v3 from the same `kafka_3_6_2` flavor, which `throttle_audit`'s split probe also covers. The wider range costs a client nothing -- version negotiation picks the highest both sides know -- and it keeps a long-lived pre-4.0 consumer working against krabka."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 2,
       "name": "ListOffsets",
       "krabka": {
-        "min": 0,
+        "min": 1,
         "max": 11
       },
       "kafka": {
         "min": 1,
         "max": 11
       },
-      "verdict": "range_differs",
-      "intent": "Intended, and the same story as Fetch: krabka advertises ListOffsets from v0, which Kafka 4.x no longer does. `client_facing_apis` sets that `min_version` to 0 explicitly and `handlers::list_offsets` routes v0 to its own hand-rolled `v0` module, because the generated schema starts at v1. A modern client negotiates v11 either way."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 3,
@@ -202,14 +202,14 @@
       "name": "ApiVersions",
       "krabka": {
         "min": 0,
-        "max": 5
+        "max": 4
       },
       "kafka": {
         "min": 0,
         "max": 4
       },
-      "verdict": "range_differs",
-      "intent": "Intended: krabka advertises KIP-1242 ApiVersions v5, the routing identity and the REBOOTSTRAP_REQUIRED answer, which no released Kafka broker serves yet. The capability is real -- `handlers::api_versions` implements the v5 checks from `ROUTING_IDENTITY_MIN_VERSION` up and `api_versions/tests.rs` drives every one of them -- so clamping `max_version` to the oracle's v4 would make the broker deny a feature it has. The risk taken deliberately: a client built against Kafka trunk schemas can negotiate a version no released broker has validated, so a v5 shape change before Kafka ships it lands here as a wire break."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 19,
@@ -342,14 +342,14 @@
       "name": "TxnOffsetCommit",
       "krabka": {
         "min": 0,
-        "max": 6
+        "max": 5
       },
       "kafka": {
         "min": 0,
         "max": 5
       },
-      "verdict": "range_differs",
-      "intent": "Intended. krabka serves TxnOffsetCommit v6 from Kafka trunk (KIP-1319), which 4.3.1 predates: the request and the response name each topic by its topic id, an id the metadata image does not hold answers UNKNOWN_TOPIC_ID, and a missing group or a refused member epoch answers GROUP_ID_NOT_FOUND or STALE_MEMBER_EPOCH where v5 answers ILLEGAL_GENERATION. krabka-client-rs' producer sends v6 when every topic of the commit has an id under transaction.version 2. A 4.3 client negotiates v5 and sees no difference."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 29,
@@ -986,28 +986,28 @@
       "name": "StreamsGroupHeartbeat",
       "krabka": {
         "min": 0,
-        "max": 1
+        "max": 0
       },
       "kafka": {
         "min": 0,
         "max": 0
       },
-      "verdict": "range_differs",
-      "intent": "Intended. krabka serves StreamsGroupHeartbeat v1 from Kafka trunk (KIP-1331), which 4.3.1 predates: the response carries the group's acceptable.recovery.lag in the int64 AcceptableRecoveryLag field, and TopologyDescriptionRequired stays false because krabka has no topology description plugin. The v1 request is the v0 request, so a 4.3 client negotiates v0 and sees no difference."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 89,
       "name": "StreamsGroupDescribe",
       "krabka": {
         "min": 0,
-        "max": 1
+        "max": 0
       },
       "kafka": {
         "min": 0,
         "max": 0
       },
-      "verdict": "range_differs",
-      "intent": "Intended. krabka serves StreamsGroupDescribe v1 from Kafka trunk (KIP-1331, KIP-1357), which 4.3.1 predates: a described group names its assignor, sticky, and a request for the topology description is answered NOT_STORED, as Kafka answers it without a topology description plugin. A 4.3 client negotiates v0 and sees no difference."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 90,
@@ -1049,28 +1049,6 @@
         "max": 0
       },
       "verdict": "same",
-      "intent": null
-    },
-    {
-      "api_key": 93,
-      "name": "StreamsGroupTopologyDescriptionUpdate",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
-      "api_key": 94,
-      "name": "UnregisterController",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
       "intent": null
     }
   ]

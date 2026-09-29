@@ -193,7 +193,11 @@ pub(super) async fn process_resource(
                 return out;
             }
         },
-        RESOURCE_TYPE_GROUP => match group_config_record(&resource, &broker.config.streams_group) {
+        RESOURCE_TYPE_GROUP => match group_config_record(
+            &resource,
+            &broker.config.streams_group,
+            broker.config.features.unstable_api_versions,
+        ) {
             Ok(record) => vec![record],
             Err((code, message)) => {
                 out.error_code = code;

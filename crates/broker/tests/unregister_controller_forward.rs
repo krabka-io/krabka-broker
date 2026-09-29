@@ -16,7 +16,7 @@ use krabka_protocol::owned::{
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
 
-use crate::support::start_n_node_with_retry;
+use crate::support::start_n_node_with;
 
 /// Kafka trunk's `CONTROLLER_ID_NOT_REGISTERED`.
 const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
@@ -25,7 +25,15 @@ const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
 /// needs, through `UpdateFeatures` on the follower, which forwards it too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
-    let cluster = start_n_node_with_retry(2).await;
+    // Both the RPC and the level are Kafka trunk's, so every node runs with
+    // Kafka's two `unstable.*.enable` settings on.
+    let cluster = start_n_node_with(2, |_, cfg| {
+        cfg.features.unstable_api_versions =
+            krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
+    })
+    .await
+    .expect("start the cluster");
     let leader = cluster[0]
         .0
         .controller_leader_id()

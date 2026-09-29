@@ -451,6 +451,7 @@ mod tests {
                 metadata_offset: -1,
                 admin_router: None,
                 unstable: crate::UnstableApiVersions::Disabled,
+                unstable_features: crate::UnstableFeatureVersions::Disabled,
             },
         );
         let mut cur = &av[..];

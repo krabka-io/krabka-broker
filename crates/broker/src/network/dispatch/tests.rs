@@ -347,7 +347,9 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
         api_keys: vec![ApiVersion {
             api_key: API_VERSIONS_KEY,
             min_version: 0,
-            max_version: krabka_protocol::owned::api_versions_request::MAX_VERSION,
+            max_version: krabka_raft::api_versions_max_version(
+                crate::api_catalog::UnstableApiVersions::Disabled,
+            ),
             ..Default::default()
         }],
         ..Default::default()
@@ -387,51 +389,114 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
 }
 
-/// #646: `InitProducerId` v6 is `latestVersionUnstable`. With Kafka's
-/// `unstable.api.versions.enable` at its default, `false`, the broker closes
-/// a connection that sends it, as `Processor.parseRequestHeader` does
-/// (`InvalidRequestException`, no response), while v5 is dispatched. With the
-/// config on, v6 is dispatched too. A dispatched request with an empty body
-/// fails to decode and closes as well, so the rows tell "refused before
-/// dispatch" from "dispatched" by the unsupported-request metric.
+/// #646, #784: under Kafka's `unstable.api.versions.enable` and krabka's
+/// `legacy_request_versions_enable`, both off by default, the broker closes a
+/// connection that sends a version or an api key Kafka 4.3.1 does not serve,
+/// as `Processor.parseRequestHeader` does (`InvalidRequestException`, no
+/// response): `InitProducerId` v6, trunk's `TxnOffsetCommit` v6, streams v1,
+/// api keys 93 and 94, and the pre-4.0 `Produce`, `Fetch` and `ListOffsets`
+/// versions. `ApiVersions` v5 is answered `UNSUPPORTED_VERSION` with the v0-v4
+/// range instead. Turning the matching switch on dispatches the request. A
+/// dispatched request with an empty body fails to decode and closes as well,
+/// so the rows tell "refused before dispatch" from "dispatched" by the
+/// unsupported-request metric.
 #[tokio::test]
-async fn an_unstable_version_is_refused_unless_unstable_api_versions_are_enabled() {
-    use krabka_protocol::owned::init_producer_id_request;
+async fn a_gated_version_is_refused_unless_its_switch_is_on() {
+    use crate::api_catalog::{
+        LegacyRequestVersions::{self, Disabled as NoLegacy, Enabled as Legacy},
+        UnstableApiVersions::{self, Disabled as Strict, Enabled as Trunk},
+    };
 
-    use crate::api_catalog::UnstableApiVersions;
-
-    let stable = init_producer_id_request::LATEST_STABLE_VERSION;
-    let unstable = init_producer_id_request::MAX_VERSION;
-    assert!(
-        stable < unstable,
-        "InitProducerId still has an unstable last version"
-    );
-
-    for (setting, frame_version, refused) in [
-        (UnstableApiVersions::Disabled, unstable, true),
-        (UnstableApiVersions::Disabled, stable, false),
-        (UnstableApiVersions::Enabled, unstable, false),
-    ] {
+    let cases: &[(
+        i16,
+        &str,
+        i16,
+        UnstableApiVersions,
+        LegacyRequestVersions,
+        bool,
+    )] = &[
+        (22, "InitProducerId", 6, Strict, NoLegacy, true),
+        (22, "InitProducerId", 5, Strict, NoLegacy, false),
+        (22, "InitProducerId", 6, Trunk, NoLegacy, false),
+        (28, "TxnOffsetCommit", 6, Strict, NoLegacy, true),
+        (28, "TxnOffsetCommit", 6, Trunk, NoLegacy, false),
+        (88, "StreamsGroupHeartbeat", 1, Strict, NoLegacy, true),
+        (88, "StreamsGroupHeartbeat", 1, Trunk, NoLegacy, false),
+        (89, "StreamsGroupDescribe", 1, Strict, NoLegacy, true),
+        (
+            93,
+            "StreamsGroupTopologyDescriptionUpdate",
+            0,
+            Strict,
+            NoLegacy,
+            true,
+        ),
+        (
+            93,
+            "StreamsGroupTopologyDescriptionUpdate",
+            0,
+            Trunk,
+            NoLegacy,
+            false,
+        ),
+        (94, "UnregisterController", 0, Strict, NoLegacy, true),
+        (94, "UnregisterController", 0, Trunk, NoLegacy, false),
+        (0, "Produce", 2, Strict, NoLegacy, true),
+        (0, "Produce", 0, Trunk, NoLegacy, true),
+        (0, "Produce", 2, Strict, Legacy, false),
+        (1, "Fetch", 3, Strict, NoLegacy, true),
+        (1, "Fetch", 3, Strict, Legacy, false),
+        (2, "ListOffsets", 0, Strict, NoLegacy, true),
+        (2, "ListOffsets", 0, Strict, Legacy, false),
+    ];
+    for &(api_key, name, frame_version, unstable, legacy, refused) in cases {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        cfg.features.unstable_api_versions = setting;
-        let (outcomes, metrics) = drive_one_frame_per_connection(
-            cfg,
-            &[(init_producer_id_request::API_KEY, frame_version)],
-        )
-        .await;
-        check!(
-            outcomes == vec![Outcome::Closed],
-            "{setting:?} v{frame_version}"
-        );
-        let label = crate::metrics::ApiKeyLabel {
-            api_key: "InitProducerId".into(),
+        cfg.features.unstable_api_versions = unstable;
+        cfg.features.legacy_request_versions = legacy;
+        let (outcomes, metrics) =
+            drive_one_frame_per_connection(cfg, &[(api_key, frame_version)]).await;
+        let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
+        check!(outcomes == vec![Outcome::Closed], "{label}");
+        let metric = crate::metrics::ApiKeyLabel {
+            api_key: name.into(),
         };
         check!(
-            (metrics.unsupported_api_requests.get_or_create(&label).get() == 1) == refused,
-            "{setting:?} v{frame_version}"
+            (metrics
+                .unsupported_api_requests
+                .get_or_create(&metric)
+                .get()
+                == 1)
+                == refused,
+            "{label}"
         );
     }
+}
+
+/// #784: `ApiVersions` v5 is Kafka trunk's KIP-1242 version. With
+/// `unstable.api.versions.enable` off the broker answers it as Kafka 4.3.1
+/// answers a version it does not know: `UNSUPPORTED_VERSION` in a v0 body
+/// naming v0-v4.
+#[tokio::test]
+async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled() {
+    use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let (outcomes, _) = drive_one_frame_per_connection(cfg, &[(API_VERSIONS_KEY, 5)]).await;
+    check!(
+        outcomes
+            == vec![Outcome::ApiVersionsV0(ApiVersionsResponse {
+                error_code: codes::UNSUPPORTED_VERSION,
+                api_keys: vec![ApiVersion {
+                    api_key: API_VERSIONS_KEY,
+                    min_version: 0,
+                    max_version: 4,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })]
+    );
 }
 
 /// Boots a broker, serves exactly one connection on a listener of `protocol`

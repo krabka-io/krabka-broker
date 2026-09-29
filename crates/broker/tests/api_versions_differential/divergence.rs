@@ -75,69 +75,15 @@ pub(crate) struct ApiRow {
 /// Kafka's fails `divergence_from_real_kafka_matches_the_expectation` until
 /// someone decides what the divergence is for. `aspect generate-kip-matrix`
 /// renders the sentence beside the two version columns in `docs/KIP_MATRIX.md`.
-const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
-    (
-        1, // Fetch
-        "Intended. krabka still serves the pre-v4 Fetch request shapes that \
-         Kafka 4.x dropped: `api_catalog::client_facing_apis` takes the key's \
-         `min_version` from `krabka_protocol::kafka_3_6_2::owned::fetch_request`, \
-         and `handlers::fetch::encode_fetch_response` answers v0-v3 from the \
-         same `kafka_3_6_2` flavor, which `throttle_audit`'s split probe also \
-         covers. The wider range costs a client nothing -- version negotiation \
-         picks the highest both sides know -- and it keeps a long-lived \
-         pre-4.0 consumer working against krabka.",
-    ),
-    (
-        2, // ListOffsets
-        "Intended, and the same story as Fetch: krabka advertises ListOffsets \
-         from v0, which Kafka 4.x no longer does. `client_facing_apis` sets \
-         that `min_version` to 0 explicitly and `handlers::list_offsets` \
-         routes v0 to its own hand-rolled `v0` module, because the generated \
-         schema starts at v1. A modern client negotiates v11 either way.",
-    ),
-    (
-        18, // ApiVersions
-        "Intended: krabka advertises KIP-1242 ApiVersions v5, the routing \
-         identity and the REBOOTSTRAP_REQUIRED answer, which no released \
-         Kafka broker serves yet. The capability is real -- \
-         `handlers::api_versions` implements the v5 checks from \
-         `ROUTING_IDENTITY_MIN_VERSION` up and `api_versions/tests.rs` drives \
-         every one of them -- so clamping `max_version` to the oracle's v4 \
-         would make the broker deny a feature it has. The risk taken \
-         deliberately: a client built against Kafka trunk schemas can \
-         negotiate a version no released broker has validated, so a v5 shape \
-         change before Kafka ships it lands here as a wire break.",
-    ),
-    (
-        28, // TxnOffsetCommit
-        "Intended. krabka serves TxnOffsetCommit v6 from Kafka trunk \
-         (KIP-1319), which 4.3.1 predates: the request and the response name \
-         each topic by its topic id, an id the metadata image does not hold \
-         answers UNKNOWN_TOPIC_ID, and a missing group or a refused member \
-         epoch answers GROUP_ID_NOT_FOUND or STALE_MEMBER_EPOCH where v5 \
-         answers ILLEGAL_GENERATION. krabka-client-rs' producer sends v6 when \
-         every topic of the commit has an id under transaction.version 2. A \
-         4.3 client negotiates v5 and sees no difference.",
-    ),
-    (
-        88, // StreamsGroupHeartbeat
-        "Intended. krabka serves StreamsGroupHeartbeat v1 from Kafka trunk \
-         (KIP-1331), which 4.3.1 predates: the response carries the group's \
-         acceptable.recovery.lag in the int64 AcceptableRecoveryLag field, \
-         and TopologyDescriptionRequired stays false because krabka has no \
-         topology description plugin. The v1 request is the v0 request, so a \
-         4.3 client negotiates v0 and sees no difference.",
-    ),
-    (
-        89, // StreamsGroupDescribe
-        "Intended. krabka serves StreamsGroupDescribe v1 from Kafka trunk \
-         (KIP-1331, KIP-1357), which 4.3.1 predates: a described group names \
-         its assignor, sticky, and a request for the topology description is \
-         answered NOT_STORED, as Kafka answers it without a topology \
-         description plugin. A 4.3 client negotiates v0 and sees no \
-         difference.",
-    ),
-];
+///
+/// It is empty (#784): with `unstable.api.versions.enable` and
+/// `legacy_request_versions_enable` at their defaults, which is how the suite
+/// starts krabka, every listener advertises exactly Kafka 4.3.1's table. The
+/// Kafka trunk versions krabka implements (`ApiVersions` v5, `TxnOffsetCommit`
+/// v6, the streams v1 pair, api keys 93 and 94) and the pre-4.0 versions it
+/// still decodes (`Fetch` v0-v3, `ListOffsets` v0) are opt-ins, recorded in
+/// `api_catalog`'s notes and `docs/KIP_MATRIX.md` instead.
+const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[];
 
 /// Keys whose advertised ranges match the oracle's while the versions krabka
 /// serves do not, one entry each, with why krabka means it.
@@ -146,20 +92,26 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
 /// join alone cannot see such a divergence. [`DivergenceReport::build`] labels
 /// these rows [`Verdict::RangeDiffers`] anyway, keeping both advertised ranges
 /// in the version columns, so `docs/KIP_MATRIX.md` states the divergence
-/// beside the Fetch and `ListOffsets` rows instead of calling it a match. The
-/// build panics if one of these keys stops advertising the same range, since
-/// the sentence would then be describing a different divergence.
-const SERVED_RANGE_DIVERGENCES: &[(i16, &str)] = &[(
-    0, // Produce
-    "Intended, and the same choice as Fetch and ListOffsets, though the \
-     advertised ranges match: Kafka 4.x still advertises Produce from v0 \
-     (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659, for \
-     librdkafka), but `ProduceRequest.json` accepts only 3-13, so a v0-v2 \
-     request fails with INVALID_REQUEST and the connection closes. krabka \
-     serves v0-v2: `handlers::produce::owned_decode` up-converts the legacy \
-     message set and appends it, so a pre-0.11 producer keeps working, and a \
-     modern client negotiates v13 either way.",
-)];
+/// instead of calling it a match. The build panics if one of these keys stops
+/// advertising the same range, since the sentence would then be describing a
+/// different divergence.
+///
+/// It is empty (#784): `Produce` v0-v2, advertised by both brokers, is refused
+/// by krabka too unless `legacy_request_versions_enable` is set.
+const SERVED_RANGE_DIVERGENCES: &[(i16, &str)] = &[];
+
+/// The two recorded-intent tables one join reads.
+#[derive(Clone, Copy)]
+struct Intents<'a> {
+    range: &'a [(i16, &'a str)],
+    served: &'a [(i16, &'a str)],
+}
+
+/// The tables this repository records.
+const RECORDED: Intents<'static> = Intents {
+    range: RANGE_DIVERGENCE_INTENTS,
+    served: SERVED_RANGE_DIVERGENCES,
+};
 
 /// The recorded intent for one row of the join.
 ///
@@ -169,16 +121,17 @@ const SERVED_RANGE_DIVERGENCES: &[(i16, &str)] = &[(
 ///
 /// # Panics
 ///
-/// Panics when a range differs and [`RANGE_DIVERGENCE_INTENTS`] has no entry
-/// for the key. That is the point of the table: a new divergence stops the
-/// differential suite until someone writes down whether it is meant.
-fn range_divergence_intent(api_key: i16, verdict: Verdict) -> Option<String> {
+/// Panics when a range differs and `intents` has no entry for the key. That
+/// is the point of the table: a new divergence stops the differential suite
+/// until someone writes down whether it is meant.
+fn range_divergence_intent(intents: Intents<'_>, api_key: i16, verdict: Verdict) -> Option<String> {
     if verdict != Verdict::RangeDiffers {
         return None;
     }
-    let Some((_, intent)) = RANGE_DIVERGENCE_INTENTS
+    let Some((_, intent)) = intents
+        .range
         .iter()
-        .chain(SERVED_RANGE_DIVERGENCES)
+        .chain(intents.served)
         .find(|(key, _)| *key == api_key)
     else {
         panic!(
@@ -203,6 +156,16 @@ pub(crate) struct DivergenceReport {
 impl DivergenceReport {
     /// Join krabka's advertised table against the oracle's.
     pub(crate) fn build(oracle_image: &str, krabka: &[ApiVersion], kafka: &[ApiVersion]) -> Self {
+        Self::build_with(RECORDED, oracle_image, krabka, kafka)
+    }
+
+    /// [`Self::build`] against `intents` rather than the recorded tables.
+    fn build_with(
+        intents: Intents<'_>,
+        oracle_image: &str,
+        krabka: &[ApiVersion],
+        kafka: &[ApiVersion],
+    ) -> Self {
         let mut keys: Vec<i16> = krabka
             .iter()
             .chain(kafka)
@@ -224,9 +187,7 @@ impl DivergenceReport {
             .map(|api_key| {
                 let krabka = find(krabka, api_key);
                 let kafka = find(kafka, api_key);
-                let served_divergence = SERVED_RANGE_DIVERGENCES
-                    .iter()
-                    .any(|(key, _)| *key == api_key);
+                let served_divergence = intents.served.iter().any(|(key, _)| *key == api_key);
                 let verdict = match (krabka, kafka) {
                     (Some(ours), Some(theirs)) if ours == theirs && served_divergence => {
                         Verdict::RangeDiffers
@@ -249,7 +210,7 @@ impl DivergenceReport {
                     krabka,
                     kafka,
                     verdict,
-                    intent: range_divergence_intent(api_key, verdict),
+                    intent: range_divergence_intent(intents, api_key, verdict),
                 }
             })
             .collect();
@@ -312,9 +273,20 @@ mod tests {
         VersionRange { min, max }
     }
 
-    /// The recorded intent for `api_key`, as `build` writes it.
+    /// Intent tables of the shape the recorded ones once had, so the join's
+    /// labelling is exercised whatever the recorded tables hold.
+    const SAMPLE: Intents<'static> = Intents {
+        range: &[(1, "Fetch serves older versions.")],
+        served: &[(0, "Produce serves older versions.")],
+    };
+
+    /// The sample intent for `api_key`, as `build_with` writes it.
     fn intent(api_key: i16) -> Option<String> {
-        range_divergence_intent(api_key, Verdict::RangeDiffers)
+        range_divergence_intent(SAMPLE, api_key, Verdict::RangeDiffers)
+    }
+
+    fn build(oracle: &str, krabka: &[ApiVersion], kafka: &[ApiVersion]) -> DivergenceReport {
+        DivergenceReport::build_with(SAMPLE, oracle, krabka, kafka)
     }
 
     #[test]
@@ -322,7 +294,7 @@ mod tests {
         let krabka = vec![api(3, 0, 13), api(1, 4, 17), api(80, 0, 1)];
         let kafka = vec![api(3, 0, 13), api(1, 4, 18), api(88, 0, 0)];
         assert!(
-            DivergenceReport::build("oracle:1.2.3", &krabka, &kafka)
+            build("oracle:1.2.3", &krabka, &kafka)
                 == DivergenceReport {
                     oracle_image: "oracle:1.2.3".to_owned(),
                     apis: vec![
@@ -363,9 +335,8 @@ mod tests {
         );
     }
 
-    /// Every recorded intent is reachable, so a key that stops diverging
-    /// leaves no stale sentence behind. A key is recorded in one table or the
-    /// other, never both.
+    /// A key is recorded in one table or the other, never both, and every
+    /// recorded sentence says something.
     #[test]
     fn every_recorded_intent_is_non_empty_and_keyed_once() {
         let all: Vec<&(i16, &str)> = RANGE_DIVERGENCE_INTENTS
@@ -377,11 +348,11 @@ mod tests {
         assert!(all.iter().all(|(_, intent)| !intent.trim().is_empty()));
     }
 
-    /// #863: Produce advertises the oracle's own range, and the row still
-    /// records why krabka serves the versions Kafka refuses.
+    /// #863: a key that advertises the oracle's own range, recorded as served
+    /// wider, still carries the reason.
     #[test]
     fn a_served_range_divergence_is_recorded_on_a_matching_advertised_range() {
-        let report = DivergenceReport::build("oracle:1.2.3", &[api(0, 0, 13)], &[api(0, 0, 13)]);
+        let report = build("oracle:1.2.3", &[api(0, 0, 13)], &[api(0, 0, 13)]);
         assert!(
             report.apis
                 == vec![ApiRow {
@@ -400,7 +371,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "no longer does")]
     fn a_served_range_divergence_whose_advertised_range_moves_panics() {
-        let _ = DivergenceReport::build("oracle:1.2.3", &[api(0, 3, 13)], &[api(0, 0, 13)]);
+        let _ = build("oracle:1.2.3", &[api(0, 3, 13)], &[api(0, 0, 13)]);
     }
 
     /// A range that starts differing with nothing written for it fails the
@@ -408,7 +379,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "no intent is recorded")]
     fn an_unrecorded_range_divergence_panics() {
-        let _ = DivergenceReport::build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
+        let _ = build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
+    }
+
+    /// #784: with nothing recorded, any range divergence at all fails the
+    /// suite, since krabka's default table is Kafka 4.3.1's.
+    #[test]
+    #[should_panic(expected = "no intent is recorded")]
+    fn the_recorded_tables_admit_no_range_divergence() {
+        let _ = DivergenceReport::build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
     }
 
     /// The checked-in fixture is byte-for-byte what [`DivergenceReport::store`]
@@ -440,7 +419,7 @@ mod tests {
 
     #[test]
     fn report_round_trips_through_json() {
-        let report = DivergenceReport::build("oracle:1.2.3", &[api(18, 0, 4)], &[api(18, 0, 5)]);
+        let report = build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("nested").join("divergence.json");
         report.store(&path);

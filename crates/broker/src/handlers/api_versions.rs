@@ -59,8 +59,10 @@ const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 /// (KIP-511), on every listener: the client reads it to pick the version it
 /// retries with, and nothing else. The controller listener answers with the
 /// same bytes, from the same `krabka_raft::unsupported_version_response`.
-pub(crate) fn unsupported_version_response() -> Result<Bytes, BrokerError> {
-    let response = krabka_raft::unsupported_version_response();
+pub(crate) fn unsupported_version_response(
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> Result<Bytes, BrokerError> {
+    let response = krabka_raft::unsupported_version_response(unstable);
     let mut body = BytesMut::with_capacity(response.encoded_len(0));
     response.encode(&mut body, 0)?;
     Ok(body.freeze())
@@ -176,7 +178,7 @@ pub(crate) fn handle<'a>(
             api_keys: crate::api_catalog::supported_apis(
                 listener_kind,
                 broker.config.client_metrics_receiver(),
-                broker.config.features.unstable_api_versions,
+                broker.config.features.version_gates(),
             ),
             // KIP-584. `supported_features` advertises the broker's
             // `crate::features` table the way Kafka's
@@ -186,7 +188,10 @@ pub(crate) fn handle<'a>(
             // `KRaftMetadataCache.features` reports
             // `image.highestOffsetAndEpoch().offset()`: it rises with every
             // metadata record, and is `-1` before the first.
-            supported_features: supported_feature_keys(version),
+            supported_features: supported_feature_keys(
+                version,
+                broker.config.features.unstable_feature_versions,
+            ),
             finalized_features_epoch: metadata_offset,
             finalized_features: finalized_feature_keys(&image),
             throttle_time_ms: charge_request_quota(broker, &image, context, handler_start),

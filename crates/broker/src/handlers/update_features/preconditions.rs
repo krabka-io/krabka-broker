@@ -29,6 +29,16 @@ fn reason_range_not_supported(level: i16, what: &str, (min, max): (i16, i16)) ->
     }
 }
 
+/// The controller answering an `UpdateFeatures`: its node id, which Kafka
+/// names as `Local controller <id>`, and the
+/// `unstable.feature.versions.enable` its own supported ranges follow
+/// (`QuorumFeatures.defaultSupportedFeatureMap`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LocalController {
+    pub node_id: krabka_metadata::NodeId,
+    pub unstable_features: krabka_raft::UnstableFeatureVersions,
+}
+
 /// `FeatureControlManager.reasonNotSupported`: why some node cannot take
 /// `feature` to `level`, or `None` when every node can.
 ///
@@ -38,12 +48,14 @@ fn reason_range_not_supported(level: i16, what: &str, (min, max): (i16, i16)) ->
 /// not registered blocks the update.
 pub(super) fn reason_not_supported(
     image: &krabka_metadata::MetadataImage,
-    local_controller: krabka_metadata::NodeId,
+    local: LocalController,
     feature: &str,
     level: i16,
 ) -> Option<String> {
-    let local = krabka_metadata::feature(feature)
-        .map_or(DISABLED, krabka_metadata::Feature::supported_range);
+    let local_controller = local.node_id;
+    let local = krabka_metadata::feature(feature).map_or(DISABLED, |feature| {
+        krabka_raft::supported_feature_range(feature, local.unstable_features)
+    });
     let range = |features: &BTreeMap<String, (i16, i16)>| {
         features.get(feature).copied().unwrap_or(DISABLED)
     };
@@ -126,6 +138,11 @@ mod tests {
     };
 
     use super::*;
+
+    const LOCAL: LocalController = LocalController {
+        node_id: NodeId(1),
+        unstable_features: krabka_raft::UnstableFeatureVersions::Disabled,
+    };
 
     #[test]
     fn range_reasons_use_kafka_version_range_text() {
@@ -270,7 +287,7 @@ mod tests {
                 image.apply(record);
             }
             assert!(
-                reason_not_supported(&image, NodeId(1), feature, level).as_deref() == want,
+                reason_not_supported(&image, LOCAL, feature, level).as_deref() == want,
                 "{case}"
             );
         }

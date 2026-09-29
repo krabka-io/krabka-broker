@@ -2,15 +2,16 @@
 
 //! The KIP-584 write-side surface. `ApiVersions` v3 and above expose the
 //! feature surface that the JVM admin tooling reads. `supported_features`
-//! advertises `metadata.version` over the range the feature table supports,
-//! `min = 7` (`3.3-IV3`) to `max = 32` (`4.4-IV1`), and from v4 every other
-//! feature from level 0, as Kafka does.
+//! advertises `metadata.version` from `min = 7` (`3.3-IV3`) to `max = 30`
+//! (`4.3-IV0`, Kafka 4.3.1's latest production level, while
+//! `unstable.feature.versions.enable` is off), and from v4 every other feature
+//! from level 0, as Kafka does.
 //!
 //! A standalone, self-bootstrapped broker behaves like a freshly formatted
 //! Kafka 4.3 cluster. It finalizes every registered feature at its release
 //! default for `metadata.version = 30` (`4.3-IV0`, Kafka 4.3's
 //! `LATEST_PRODUCTION`), not at trunk's unstable 4.4 levels, which an operator
-//! reaches only through `UpdateFeatures` or `krabka format --release-version`.
+//! reaches only under `unstable.feature.versions.enable`.
 //! At 4.3-IV0 that is `group.version = 1`, `transaction.version = 2`, and ELR,
 //! `share.version` and `streams.version` at 1. It also reports a real
 //! `finalized_features_epoch` of `>= 0`. `tests/feature_finalization.rs`
@@ -29,7 +30,6 @@ use assert2::assert;
 mod support;
 
 use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
-use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
 use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
 #[tokio::test]
@@ -59,13 +59,16 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         .find(|f| f.name == "metadata.version")
         .expect("metadata.version advertised in supported_features");
     assert!(mv.min_version == 7, "{resp:?}");
-    assert!(mv.max_version == METADATA_VERSION_MAX, "{resp:?}");
+    assert!(
+        mv.max_version == LATEST_PRODUCTION_METADATA_VERSION,
+        "{resp:?}"
+    );
     let gv = resp
         .supported_features
         .iter()
         .find(|f| f.name == "group.version")
         .expect("group.version advertised in supported_features");
-    // The client negotiates ApiVersions v5, where Kafka advertises every
+    // The client negotiates ApiVersions v4, where Kafka advertises every
     // feature from its minimum production level, 0 for all but
     // metadata.version (`BrokerFeatures.defaultSupportedFeatures`). Below v4
     // Kafka omits a zero-minimum feature instead (`alterFeatureLevel0`).

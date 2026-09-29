@@ -122,12 +122,15 @@ async fn start_sasl_controller() -> (krabka_broker::BrokerHandle, SocketAddr, Te
 async fn sasl_controller_listener_answers_api_versions_before_authentication() {
     let (broker, controller_addr, _dir) = start_sasl_controller().await;
 
-    for version in [0, 3, 4, 5] {
+    // Kafka 4.3.1 serves `ApiVersions` v0-v4; v5 is trunk's, so it is
+    // refused below like an unknown version, while
+    // `unstable.api.versions.enable` is off.
+    for version in [0, 3, 4] {
         let mut stream = TcpStream::connect(controller_addr).await.expect("connect");
 
         // An unsupported version gets Kafka's v0 refusal, and the connection
         // stays open for the next request.
-        let refusal = round_trip(&mut stream, frame(18, 6, 1, true, &[0xff]), 1).await;
+        let refusal = round_trip(&mut stream, frame(18, 5, 1, true, &[0xff]), 1).await;
         check!(
             ApiVersionsResponse::decode(&mut &refusal[..], 0).expect("decode refusal")
                 == ApiVersionsResponse {
@@ -135,7 +138,7 @@ async fn sasl_controller_listener_answers_api_versions_before_authentication() {
                     api_keys: vec![ApiVersion {
                         api_key: 18,
                         min_version: 0,
-                        max_version: 5,
+                        max_version: 4,
                         ..Default::default()
                     }],
                     ..Default::default()

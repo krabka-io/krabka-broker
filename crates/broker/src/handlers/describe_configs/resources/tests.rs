@@ -120,6 +120,7 @@ fn describe_at(
                 levels: &levels,
             },
             static_min_insync_replicas: 1,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -174,6 +175,7 @@ fn describe_with_loggers(
             static_broker: untuned(),
             loggers,
             static_min_insync_replicas: 1,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -208,6 +210,7 @@ fn describe_with_static(
                 levels: &levels,
             },
             static_min_insync_replicas: 1,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -1277,6 +1280,61 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
         check!(entry.value.is_some(), "{} has no value", entry.name);
         check!(entry.documentation.is_some(), "{} has no doc", entry.name);
     }
+}
+
+/// #784: with `unstable.api.versions.enable` off a group resource lists
+/// exactly Kafka 4.3.1's 20 `GroupConfig` keys, none of trunk's.
+#[test]
+fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
+    let image = MetadataImage::new(Uuid::nil());
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
+    let group = describe_one(
+        &image,
+        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            resource_type: RESOURCE_TYPE_GROUP,
+            resource_name: "streams-1".to_owned(),
+            ..Default::default()
+        },
+        ServingBroker {
+            node: krabka_metadata::NodeId(1),
+            static_broker: untuned(),
+            loggers: BrokerLoggers {
+                node_id: 1,
+                levels: &levels,
+            },
+            static_min_insync_replicas: 1,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+        },
+        300_000,
+        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        EVERYTHING,
+    );
+    let reported: Vec<&str> = group.configs.iter().map(|e| e.name.as_str()).collect();
+    check!(
+        reported
+            == vec![
+                "consumer.assignment.interval.ms",
+                "consumer.assignor.offload.enable",
+                "consumer.heartbeat.interval.ms",
+                "consumer.session.timeout.ms",
+                "share.assignment.interval.ms",
+                "share.assignor.offload.enable",
+                "share.auto.offset.reset",
+                "share.delivery.count.limit",
+                "share.heartbeat.interval.ms",
+                "share.isolation.level",
+                "share.partition.max.record.locks",
+                "share.record.lock.duration.ms",
+                "share.renew.acknowledge.enable",
+                "share.session.timeout.ms",
+                "streams.assignment.interval.ms",
+                "streams.assignor.offload.enable",
+                "streams.heartbeat.interval.ms",
+                "streams.initial.rebalance.delay.ms",
+                "streams.num.standby.replicas",
+                "streams.session.timeout.ms",
+            ]
+    );
 }
 
 #[test]

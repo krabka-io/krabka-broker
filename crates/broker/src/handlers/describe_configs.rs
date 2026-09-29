@@ -219,6 +219,7 @@ pub(crate) fn handle(
                             levels: &broker.config.log_levels,
                         },
                         static_min_insync_replicas: broker.config.default_min_insync_replicas,
+                        unstable_api_versions: broker.config.features.unstable_api_versions,
                     },
                     broker.config.client_metrics_default_interval.millis_i32(),
                     &broker.config.streams_group,

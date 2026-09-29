@@ -308,6 +308,7 @@ async fn process_resource(
                 &resource,
                 image,
                 &broker.config.streams_group,
+                broker.config.features.unstable_api_versions,
                 &mut out,
                 &mut to_submit,
             );

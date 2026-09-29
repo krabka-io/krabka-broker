@@ -72,16 +72,22 @@ fn boolean_property(
 /// Kafka's internal `ServerConfigs.UNSTABLE_API_VERSIONS_ENABLE_CONFIG`.
 const UNSTABLE_API_VERSIONS_ENABLE: &str = "unstable.api.versions.enable";
 
+/// Kafka's internal `ServerConfigs.UNSTABLE_FEATURE_VERSIONS_ENABLE_CONFIG`.
+const UNSTABLE_FEATURE_VERSIONS_ENABLE: &str = "unstable.feature.versions.enable";
+
 /// The static boolean broker keys Kafka reads at startup:
 /// `delete.topic.enable` and `auto.create.topics.enable`, each recorded as
 /// operator-supplied when named, and the internal
-/// `unstable.api.versions.enable`.
+/// `unstable.api.versions.enable` and `unstable.feature.versions.enable`.
 fn apply_boolean_properties(
     properties: &std::collections::BTreeMap<String, String>,
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if let Some(enabled) = boolean_property(properties, UNSTABLE_API_VERSIONS_ENABLE)? {
         cfg.features.unstable_api_versions = enabled.into();
+    }
+    if let Some(enabled) = boolean_property(properties, UNSTABLE_FEATURE_VERSIONS_ENABLE)? {
+        cfg.features.unstable_feature_versions = enabled.into();
     }
     if let Some(enabled) = boolean_property(properties, crate::config_keys::DELETE_TOPIC_ENABLE)? {
         cfg.delete_topic_enable = enabled;
@@ -583,6 +589,46 @@ connections_max_idle = "5s"
             let applied = file
                 .apply_to(&mut cfg)
                 .map(|()| cfg.features.unstable_api_versions)
+                .map_err(|error| match error {
+                    crate::file_config::FileConfigError::InvalidConfig(message) => message,
+                    other => other.to_string(),
+                });
+            assert!(applied == expected, "{toml}");
+        }
+    }
+
+    /// #784: Kafka's internal `unstable.feature.versions.enable` under its own
+    /// name, off by default, refused unless it is a boolean.
+    #[test]
+    fn apply_to_reads_unstable_feature_versions_enable_from_server_properties() {
+        use krabka_raft::UnstableFeatureVersions;
+
+        use crate::config::BrokerConfig;
+
+        for (toml, expected) in [
+            ("broker_id = 0", Ok(UnstableFeatureVersions::Disabled)),
+            (
+                "[server_properties]\n\"unstable.feature.versions.enable\" = \"true\"\n",
+                Ok(UnstableFeatureVersions::Enabled),
+            ),
+            (
+                "[server_properties]\n\"unstable.feature.versions.enable\" = \"false\"\n",
+                Ok(UnstableFeatureVersions::Disabled),
+            ),
+            (
+                "[server_properties]\n\"unstable.feature.versions.enable\" = \"1\"\n",
+                Err(
+                    "server_properties `unstable.feature.versions.enable` must be `true` or \
+                     `false`, got `1`"
+                        .to_string(),
+                ),
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| cfg.features.unstable_feature_versions)
                 .map_err(|error| match error {
                     crate::file_config::FileConfigError::InvalidConfig(message) => message,
                     other => other.to_string(),

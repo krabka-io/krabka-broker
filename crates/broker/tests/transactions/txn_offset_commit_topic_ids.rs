@@ -4,8 +4,9 @@
 //! the cluster finalizes `transaction.version` 2 and its metadata holds an id
 //! for every topic of the request, as Kafka's `TransactionManager` picks
 //! `TxnOffsetCommitRequest.Builder.forTopicIdsOrNames`. The in-process broker
-//! finalizes `transaction.version` 2 and advertises `TxnOffsetCommit` 0-6, so
-//! the producer commits by topic id alone.
+//! finalizes `transaction.version` 2 and, under Kafka's
+//! `unstable.api.versions.enable`, advertises `TxnOffsetCommit` 0-6, so the
+//! producer commits by topic id alone. By default it advertises 4.3.1's 0-5.
 
 use std::collections::BTreeMap;
 
@@ -13,7 +14,7 @@ use assert2::assert;
 use krabka_client_admin::AdminClient;
 use krabka_client_producer::{ConsumerGroupMetadata, Producer, ProducerError};
 
-use crate::txn_harness::{boot_single, create_topic};
+use crate::txn_harness::{boot_single_trunk, create_topic};
 
 /// `GROUP_ID_NOT_FOUND`. Kafka's `validateTransactionalOffsetCommit` answers
 /// it at v6 for a generation of a group the coordinator does not hold, and
@@ -27,7 +28,7 @@ const GROUP_ID_NOT_FOUND: i16 = 69;
 /// offsets are what the transaction sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_offsets_to_transaction_commits_by_topic_id() {
-    let (broker, bootstrap, _dir) = boot_single().await;
+    let (broker, bootstrap, _dir) = boot_single_trunk().await;
     create_topic(&bootstrap, "v6-in").await;
 
     let producer = Producer::builder()

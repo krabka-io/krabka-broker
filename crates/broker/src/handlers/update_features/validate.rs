@@ -19,7 +19,7 @@ use krabka_verified::features::{
 
 use super::{
     java_order::hash_map_order,
-    preconditions::{dependency_error, reason_not_supported},
+    preconditions::{LocalController, dependency_error, reason_not_supported},
     upgrade_type::update_type,
 };
 use crate::codes;
@@ -74,7 +74,8 @@ pub(super) struct UpdatePlan {
 /// Validate `request` against `image` and plan its writes.
 ///
 /// `local_controller` is the node that answers for the controller's own
-/// feature support, which Kafka names as `Local controller <id>`.
+/// feature support, which Kafka names as `Local controller <id>`, with the
+/// `unstable.feature.versions.enable` that support follows.
 ///
 /// # Errors
 ///
@@ -82,7 +83,7 @@ pub(super) struct UpdatePlan {
 pub(super) fn plan_updates(
     request: &UpdateFeaturesRequest,
     image: &krabka_metadata::MetadataImage,
-    local_controller: krabka_metadata::NodeId,
+    local_controller: LocalController,
 ) -> Result<UpdatePlan, UpdateError> {
     let order = hash_map_order(
         request
@@ -127,7 +128,7 @@ pub(super) fn plan_updates(
 fn plan_update(
     update: &FeatureUpdateKey,
     image: &krabka_metadata::MetadataImage,
-    local_controller: krabka_metadata::NodeId,
+    local_controller: LocalController,
     proposed: &BTreeMap<String, i16>,
     plan: &mut UpdatePlan,
 ) -> Result<(), UpdateError> {

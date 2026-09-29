@@ -66,6 +66,9 @@ impl RuntimeFileConfig {
             cfg.future_log_move_retry_backoff
         );
         set_runtime_plain!(runtime, client_metrics_enable, cfg.client_metrics_enable);
+        if let Some(enabled) = runtime.legacy_request_versions_enable {
+            cfg.features.legacy_request_versions = enabled.into();
+        }
         set_runtime_time_millis!(
             runtime,
             client_metrics_eviction_tick,

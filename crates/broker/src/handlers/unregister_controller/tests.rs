@@ -192,6 +192,9 @@ async fn send(
 #[tokio::test]
 async fn handle_unregisters_a_registered_controller_as_trunk_does() {
     let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        // Trunk's 4.4-IV2 is past 4.3.1's latest production level, so the
+        // node has to support unstable feature levels to finalize it.
+        cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
         cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
             crate::test_support::GrantsInPrincipalName,
         ));

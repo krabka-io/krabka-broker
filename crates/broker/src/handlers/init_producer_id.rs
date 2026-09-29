@@ -192,12 +192,19 @@ pub(crate) async fn handle(
             if req.enable2_pc && !two_phase_commit {
                 return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
             }
-            // Kafka 4.3.1 answers every `keepPreparedTxn` with
-            // UNSUPPORTED_VERSION, because it has not implemented the recovery
-            // yet. krabka does implement it, and serves it only where the
-            // operator opted into 2PC. With the config at its default, `false`,
-            // the answer is Kafka's.
-            if req.keep_prepared_txn && !two_phase_commit {
+            // Kafka 4.3.1's `TransactionCoordinator.handleInitProducerId`
+            // answers every `keepPreparedTxn` with UNSUPPORTED_VERSION, after
+            // the 2PC gate above, because it has not implemented the recovery
+            // (trunk still has not). krabka does implement it, and serves it
+            // only where the operator opted into both 2PC and Kafka's unstable
+            // api versions; otherwise the answer is Kafka's. Without
+            // `unstable.api.versions.enable` the v6 request cannot reach this
+            // handler at all, so the second condition only matters to a
+            // future path that does.
+            let prepared_txn_recovery = two_phase_commit
+                && broker.config.features.unstable_api_versions
+                    == crate::api_catalog::UnstableApiVersions::Enabled;
+            if req.keep_prepared_txn && !prepared_txn_recovery {
                 return encode_err(version, codes::UNSUPPORTED_VERSION);
             }
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {

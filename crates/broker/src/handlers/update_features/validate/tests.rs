@@ -3,13 +3,19 @@
 
 use assert2::assert;
 use krabka_metadata::NodeId;
+use krabka_raft::UnstableFeatureVersions;
 
 use super::*;
 use crate::handlers::update_features::test_support::{
     elr_update, metadata_update, named_update, validate_only,
 };
 
-const LOCAL: NodeId = NodeId(1);
+/// The local controller at the defaults: `unstable.feature.versions.enable`
+/// off, as a stock Kafka 4.3.1 controller runs.
+const LOCAL: LocalController = LocalController {
+    node_id: NodeId(1),
+    unstable_features: UnstableFeatureVersions::Disabled,
+};
 const UPGRADE: i8 = 1;
 const SAFE: i8 = 2;
 const UNSAFE: i8 = 3;
@@ -175,6 +181,42 @@ fn rows_validate_as_kafkas_update_feature() {
 /// A version 0 row carries `AllowDowngrade` rather than `UpgradeType`, and
 /// Kafka reads the `UpgradeType` default, UPGRADE, so the flag never
 /// authorizes a downgrade.
+/// #784: a Kafka trunk `metadata.version` (31-33) is past what the local
+/// controller supports unless `unstable.feature.versions.enable` is set, and
+/// is refused with `QuorumFeatures.reasonNotSupported`'s text, as a 4.3.1
+/// controller refuses it. With the flag set, trunk's levels are accepted.
+#[test]
+fn an_unstable_metadata_version_needs_unstable_feature_versions() {
+    let mv = "metadata.version";
+    let trunk = LocalController {
+        unstable_features: UnstableFeatureVersions::Enabled,
+        ..LOCAL
+    };
+    let refused = |level| {
+        Err(invalid(
+            mv,
+            level,
+            "Local controller 1 only supports versions 7-30",
+        ))
+    };
+    let accepted = |level| Ok(plan(vec![feature_record(mv, level)], &[mv]));
+    for (local, level, expected) in [
+        (LOCAL, 30, accepted(30)),
+        (LOCAL, 31, refused(31)),
+        (LOCAL, 33, refused(33)),
+        (trunk, 31, accepted(31)),
+        (trunk, 33, accepted(33)),
+    ] {
+        let image = image(&[(mv, 30)]);
+        let request = validate_only(vec![metadata_update(level, UPGRADE)]);
+        assert!(
+            plan_updates(&request, &image, local) == expected,
+            "{:?} level {level}",
+            local.unstable_features
+        );
+    }
+}
+
 #[test]
 fn version_zero_allow_downgrade_is_read_as_upgrade() {
     let request = UpdateFeaturesRequest {
@@ -269,10 +311,7 @@ fn metadata_version_downgrades_follow_did_metadata_change() {
             Err(invalid(
                 "metadata.version",
                 6,
-                &format!(
-                    "Local controller 1 only supports versions 7-{}",
-                    crate::features::METADATA_VERSION_MAX
-                ),
+                "Local controller 1 only supports versions 7-30",
             )),
         ),
     ];

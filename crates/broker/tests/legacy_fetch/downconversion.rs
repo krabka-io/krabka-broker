@@ -27,7 +27,7 @@ use crate::{
 
 #[tokio::test]
 async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
-    let p = support::start().await;
+    let p = support::start_legacy().await;
 
     // 1. Create topic.
     let cr = p
@@ -135,7 +135,7 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
 /// unit helper.
 #[tokio::test]
 async fn fetch_v0_downconverts_to_magic_v0_without_timestamps() {
-    let p = support::start().await;
+    let p = support::start_legacy().await;
     create_topic(&p.client, "legacy_fetch_v0").await;
 
     // base_timestamp + per-record delta give a non-zero create-time that
@@ -206,7 +206,7 @@ async fn fetch_v3_meters_every_converted_partition_of_a_topic() {
     const TOPIC: &str = "legacy_fetch_multi";
     const PARTITIONS: [i32; 3] = [0, 1, 2];
 
-    let p = support::start().await;
+    let p = support::start_legacy().await;
     create_topic_with_partitions(&p.client, TOPIC, 3).await;
     let addr = p.broker.listen_addr();
 

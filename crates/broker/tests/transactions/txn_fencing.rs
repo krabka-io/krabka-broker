@@ -301,7 +301,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
 /// that carries a member epoch other than the member's, and accepts it at the
 /// current epoch. The member epoch travels in the
 /// `generation_id_or_member_epoch` field. At v6, the version the client
-/// negotiates, Kafka's `validateTransactionalOffsetCommit` passes the group's
+/// negotiates under `unstable.api.versions.enable`, Kafka trunk's `validateTransactionalOffsetCommit` passes the group's
 /// `StaleMemberEpochException` through as `STALE_MEMBER_EPOCH` (KIP-1319).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_next_gen_member_epoch() {
@@ -312,7 +312,7 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         },
     };
 
-    let (broker, bootstrap, _dir) = boot_single().await;
+    let (broker, bootstrap, _dir) = crate::txn_harness::boot_single_trunk().await;
     create_topic(&bootstrap, "ng-in").await;
 
     let client = krabka_client_core::Client::builder()

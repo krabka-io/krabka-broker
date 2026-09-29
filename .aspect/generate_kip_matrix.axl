@@ -1194,28 +1194,25 @@ that appears on one side only, changes that file and so changes this table.
 The oracle is `{api_image}`.
 
 It is a stock single-node KRaft broker, read on its PLAINTEXT *broker* listener.
-Both facts shape the Kafka column, so a `krabka only` verdict means "that broker
-did not advertise the key there", not "Kafka does not have the API". Three
-reasons account for every such row:
+krabka is read the same way: one client listener, no client-telemetry receiver,
+and both version switches at their defaults. `unstable.api.versions.enable` is
+Kafka's own; `legacy_request_versions_enable` is krabka's. With those defaults
+krabka advertises exactly Kafka 4.3.1's table, so every row below should match.
+A `krabka only` or `Kafka only` verdict would mean the two brokers disagree on
+which keys exist.
 
-- Kafka scopes an `ApiVersions` response to the listener it arrives on
-  (`ApiVersionsResponse.filterApis` takes a `ListenerType`), and answers the
-  controller-plane APIs on the controller listener, which this table does not
-  read. krabka runs both roles behind one listener and advertises the union.
-- Kafka advertises `GetTelemetrySubscriptions` and `PushTelemetry` only while a
-  client-telemetry exporter is configured, and this oracle configures none.
-  krabka advertises them unconditionally.
-- krabka serves a few APIs that only Kafka trunk defines, because krabka-protocol
-  vendors their trunk schemas, and no released image advertises them. The KIP
-  rows above name each one.
+What krabka serves past 4.3.1 is opt-in, and so it does not appear here. Kafka
+trunk's `ApiVersions` v5, `TxnOffsetCommit` v6, the streams v1 pair, and api
+keys 93 and 94 need `unstable.api.versions.enable`. The pre-4.0 `Fetch`,
+`ListOffsets` and `Produce` versions need `legacy_request_versions_enable`. The
+KIP rows above name each one.
 
 A row whose ranges differ carries the reason krabka means to differ, recorded
 beside the ranges themselves in `RANGE_DIVERGENCE_INTENTS`
 ([`divergence.rs`](../crates/broker/tests/api_versions_differential/divergence.rs)).
 The suite panics on a range divergence with no entry there, so a range that
 moves cannot reach this page unexplained. Every other verdict leaves the column
-empty: a matching range needs no reason, and the one-sided rows are accounted
-for by the three facts above.
+empty.
 
 | API | Key | krabka | Kafka | Verdict | Intent |
 | :--- | ---: | :--- | :--- | :--- | :--- |

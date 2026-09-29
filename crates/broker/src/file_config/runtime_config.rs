@@ -75,6 +75,14 @@ pub struct RuntimeFileConfig {
     /// starts no telemetry handshake the broker has nowhere to forward. A
     /// configured `[telemetry]` OTLP endpoint turns them on without this key.
     pub client_metrics_enable: Option<bool>,
+    /// Whether the broker serves the request versions Kafka 4.x removed:
+    /// `Fetch` v0-v3, `ListOffsets` v0 and `Produce` v0-v2. krabka-only, with
+    /// no Kafka equivalent. The default is `false`, which advertises and
+    /// accepts exactly Kafka 4.3.1's minimums (`Fetch` v4, `ListOffsets` v1,
+    /// and `Produce` v3 though it is still advertised from v0, KAFKA-18659)
+    /// and closes a connection that sends an older version, as a 4.3.1 broker
+    /// does. `true` keeps a pre-0.11 client working.
+    pub legacy_request_versions_enable: Option<bool>,
     /// Cadence at which the KIP-714 client-metrics cache evicts entries.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]

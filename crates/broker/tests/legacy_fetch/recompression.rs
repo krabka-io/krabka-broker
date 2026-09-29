@@ -24,7 +24,7 @@ use crate::{
 
 #[tokio::test]
 async fn fetch_v3_recompresses_zstd_as_snappy() {
-    let p = support::start().await;
+    let p = support::start_legacy().await;
 
     // 1. Create topic.
     let cr = p

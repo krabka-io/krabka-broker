@@ -237,9 +237,10 @@ fn begin_request(
     (started, InFlightGuard::new(&broker.metrics, parsed.api_key))
 }
 
-/// Rejects a request at a version outside its API's range, or at a
-/// `latestVersionUnstable` version that `unstable.api.versions.enable` leaves
-/// disabled.
+/// Rejects a request at a version outside its API's range, or at a version --
+/// or of an api key -- that the broker's `VersionGates` leave disabled: one
+/// Kafka 4.3.1 does not serve, unless `unstable.api.versions.enable` or
+/// `legacy_request_versions_enable` opts into it.
 ///
 /// Kafka's `Processor.parseRequestHeader` throws `UnsupportedVersionException`
 /// for the first and `InvalidRequestException` for the second, and
@@ -248,6 +249,31 @@ fn begin_request(
 /// accepts every version of it: the request reaches `KafkaApis`, which
 /// answers `UNSUPPORTED_VERSION` with a v0 body carrying the one
 /// `ApiVersions` range (KIP-511), and the client falls back to that version.
+/// Whether the listener serves `parsed` at its version: inside the handler's
+/// decodable range, and not a version the broker's `VersionGates` disable.
+///
+/// `ApiVersions` is never a disabled version (Kafka's `isVersionEnabled`
+/// accepts every one of it); a version above the one the listener serves --
+/// trunk's KIP-1242 v5 while `unstable.api.versions.enable` is off -- is not
+/// served, and [`reject_unsupported_version`] answers it `UNSUPPORTED_VERSION`
+/// as it answers an unknown version.
+fn is_served_version(
+    broker: &Broker,
+    entry: crate::handlers::registry::DispatchEntry,
+    parsed: &crate::network::request::ParsedRequest<'_>,
+) -> bool {
+    let api_versions_unserved = parsed.api_key == API_VERSIONS_KEY
+        && parsed.api_version
+            > krabka_raft::api_versions_max_version(broker.config.features.unstable_api_versions);
+    entry.supports_version(parsed.api_version)
+        && !api_versions_unserved
+        && !crate::api_catalog::is_disabled_version(
+            parsed.api_key,
+            parsed.api_version,
+            broker.config.features.version_gates(),
+        )
+}
+
 async fn reject_unsupported_version<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     broker: &Broker,
@@ -280,7 +306,9 @@ where
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
-    let body = match crate::handlers::api_versions::unsupported_version_response() {
+    let body = match crate::handlers::api_versions::unsupported_version_response(
+        broker.config.features.unstable_api_versions,
+    ) {
         Ok(body) => body,
         Err(error) => {
             tracing::warn!(%error, "unsupported-version response encode error, closing");
@@ -511,13 +539,7 @@ async fn serve_connection_stream<S>(
             );
             break;
         }
-        if !entry.supports_version(parsed.api_version)
-            || crate::api_catalog::is_disabled_version(
-                parsed.api_key,
-                parsed.api_version,
-                broker.config.features.unstable_api_versions,
-            )
-        {
+        if !is_served_version(&broker, entry, &parsed) {
             match reject_unsupported_version(&mut framed, &broker, entry, &parsed, &auth).await {
                 AfterResponse::Close => break,
                 AfterResponse::Mute(window) => mute_until = mute_deadline(window),

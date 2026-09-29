@@ -383,7 +383,7 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
 /// A freshly bootstrapped cluster finalizes Kafka 4.3's `4.3-IV0`, below the
 /// `4.4-IV1` CIDR host patterns need, so it refuses a CIDR host until an
 /// operator opts into 4.4-IV1. (An image with no `metadata.version` at all is
-/// judged against this binary's highest level; `features::tests` pins that.)
+/// judged against 4.3-IV0 too; `features::tests` pins that.)
 #[tokio::test]
 async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;

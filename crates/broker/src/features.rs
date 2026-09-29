@@ -30,11 +30,12 @@ pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STR
 /// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`. It is the level
 /// `krabka format` picks when no release is named, and the two must agree.
 ///
-/// The feature table also carries Kafka trunk's unstable `4.4-IV0` and
-/// `4.4-IV1`. A stock 4.3 node or tool does not know them, so a cluster
-/// reaches them only through `UpdateFeatures` or an explicit
-/// `krabka format --release-version`.
-pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
+/// The feature table also carries Kafka trunk's unstable `4.4-IV0` to
+/// `4.4-IV2`. A stock 4.3 node or tool does not know them, so a node supports
+/// them only under `unstable.feature.versions.enable`, and a cluster reaches
+/// them only through `UpdateFeatures` or `krabka format` with that set.
+pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 =
+    krabka_raft::LATEST_PRODUCTION_METADATA_VERSION;
 
 /// The `metadata.version` level at which CIDR-based ACL host patterns
 /// (KIP-1276) are accepted: upstream Kafka's `4.4-IV1`,
@@ -56,13 +57,16 @@ pub(crate) struct SupportedFeature {
     pub max_version: i16,
 }
 
-/// The features this broker supports finalizing. They come from the
-/// `krabka_metadata` registry, the single source of truth.
-pub(crate) fn supported_features() -> Vec<SupportedFeature> {
+/// The features this broker supports finalizing under `unstable`. They come
+/// from the `krabka_metadata` registry, the single source of truth, capped as
+/// Kafka's `BrokerFeatures.defaultSupportedFeatures` caps them.
+pub(crate) fn supported_features(
+    unstable: krabka_raft::UnstableFeatureVersions,
+) -> Vec<SupportedFeature> {
     krabka_metadata::feature_registry()
         .iter()
         .map(|f| {
-            let (min_version, max_version) = f.supported_range();
+            let (min_version, max_version) = krabka_raft::supported_feature_range(*f, unstable);
             SupportedFeature {
                 name: f.name(),
                 min_version,
@@ -97,9 +101,7 @@ pub(crate) fn lookup(name: &str) -> Option<SupportedFeature> {
 /// entirely, so there is nothing to compare against and the RPC must still
 /// work. It is the wrong helper for [`CIDR_ACL_HOST_MIN_LEVEL`]: an
 /// unfinalized `metadata.version` there is a real (if legacy or
-/// pre-bootstrap) image whose effective level is at most
-/// [`krabka_metadata::metadata_version::METADATA_VERSION_MAX`], never a
-/// blank check. See [`cidr_hosts_supported`].
+/// pre-bootstrap) image, never a blank check. See [`cidr_hosts_supported`].
 pub(crate) fn require_feature(
     image: &MetadataImage,
     name: &str,
@@ -116,14 +118,15 @@ pub(crate) fn require_feature(
 /// KIP-1276 admission gate: whether `image` supports CIDR-range ACL hosts.
 ///
 /// Unlike [`require_feature`], an unfinalized `metadata.version` is treated
-/// as [`krabka_metadata::metadata_version::METADATA_VERSION_MAX`], the level
-/// this binary supports, not as an unconditional pass.
+/// as [`LATEST_PRODUCTION_METADATA_VERSION`], the level a cluster bootstraps
+/// at, not as an unconditional pass: CIDR hosts are Kafka trunk's, and a
+/// cluster reaches them only by finalizing 4.4-IV1 (#784).
 pub(crate) fn cidr_hosts_supported(image: &MetadataImage) -> bool {
     image
         .finalized_features()
         .get(METADATA_VERSION)
         .copied()
-        .unwrap_or(krabka_metadata::metadata_version::METADATA_VERSION_MAX)
+        .unwrap_or(LATEST_PRODUCTION_METADATA_VERSION)
         >= CIDR_ACL_HOST_MIN_LEVEL
 }
 
@@ -159,13 +162,13 @@ mod tests {
     }
 
     /// KIP-1276's gate: an image with no `metadata.version` is judged against
-    /// this binary's highest level, 4.4-IV1, which admits CIDR hosts; a
-    /// finalized level admits them only from 4.4-IV1.
+    /// the bootstrap level, 4.3-IV0, which refuses CIDR hosts; a finalized
+    /// level admits them only from 4.4-IV1.
     #[test]
     fn cidr_hosts_supported_follows_the_finalized_metadata_version() {
         use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
         for (finalized, want) in [
-            (None, true),
+            (None, false),
             (Some(LATEST_PRODUCTION_METADATA_VERSION), false),
             (Some(CIDR_ACL_HOST_MIN_LEVEL - 1), false),
             (Some(CIDR_ACL_HOST_MIN_LEVEL), true),
@@ -244,7 +247,7 @@ mod tests {
         assert!(lookup(SHARE_VERSION) == Some(expected));
         // Advertised via the registry-derived supported-feature table.
         assert!(
-            supported_features()
+            supported_features(krabka_raft::UnstableFeatureVersions::Disabled)
                 .iter()
                 .any(|f| f.name == SHARE_VERSION && f.min_version == 0 && f.max_version == 1)
         );
@@ -260,7 +263,7 @@ mod tests {
         assert!(lookup(STREAMS_VERSION) == Some(expected));
         // Advertised via the registry-derived supported-feature table.
         assert!(
-            supported_features()
+            supported_features(krabka_raft::UnstableFeatureVersions::Disabled)
                 .iter()
                 .any(|f| f.name == STREAMS_VERSION && f.min_version == 0 && f.max_version == 1)
         );

@@ -33,6 +33,33 @@ the `krabka-*` names to crates.io.
 
 ### Changed
 
+- **Strict Kafka 4.3.1 by default** (#784). With no opt-in, every listener,
+  the broker's and the controller's alike, advertises and accepts exactly what
+  a stock `apache/kafka:4.3.1` does. A version or api key only Kafka trunk
+  has closes the connection, as 4.3.1 closes it: `TxnOffsetCommit` v6,
+  `StreamsGroupHeartbeat` and `StreamsGroupDescribe` v1,
+  `StreamsGroupTopologyDescriptionUpdate` (93), `UnregisterController` (94),
+  and an `Envelope` that wraps one of them. `ApiVersions` v5 is answered
+  `UNSUPPORTED_VERSION` with the v0-v4 range. The pre-4.0 `Fetch` v0-v3,
+  `ListOffsets` v0 and `Produce` v0-v2 are refused too, and `Produce` is still
+  advertised from v0 (KAFKA-18659). `metadata.version` is supported only up
+  to `4.3-IV0` (30). That cap applies to `ApiVersions`, node registration,
+  `UpdateFeatures` (Kafka's `Local controller N only supports versions 7-30`)
+  and `krabka format`. CIDR ACL hosts (4.4-IV1) and controller unregistration
+  (4.4-IV2) are therefore unreachable by default. A group resource carries
+  4.3.1's 20 `GroupConfig` keys, and trunk's seven are `Unknown group config
+  name`. There are three opt-ins:
+  - `server_properties` `unstable.api.versions.enable = "true"`, Kafka's own
+    switch, serves the trunk versions, api keys and group keys above, plus
+    `InitProducerId` v6. With `transaction.two.phase.commit.enable` it also
+    serves krabka's KIP-939 `keepPreparedTxn` recovery, which 4.3.1 answers
+    `UNSUPPORTED_VERSION`.
+  - `server_properties` `unstable.feature.versions.enable = "true"`, Kafka's
+    own switch, supports `metadata.version` up to trunk's `4.4-IV2` (33).
+    `krabka format --unstable-feature-versions-enable` is the same setting
+    for a format.
+  - `[runtime] legacy_request_versions_enable = true`, krabka-only, serves the
+    pre-4.0 `Fetch`, `ListOffsets` and `Produce` versions again.
 - **Breaking, config.** In `[runtime]`, the share-group lock limit is
   `share_group_partition_max_record_locks` and the delivery-attempt limit is
   `share_group_delivery_count_limit`, after the Kafka keys they set.

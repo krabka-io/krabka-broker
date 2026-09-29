@@ -122,7 +122,7 @@ pub(crate) async fn handle(
     // a single time and passes it into `validateNewAcl` for every creation.
     // `require_feature` is deliberately not used here: it passes any
     // unfinalized metadata.version, whereas `cidr_hosts_supported` compares
-    // this binary's own highest level against the CIDR floor.
+    // the bootstrap level, 4.3-IV0, against the CIDR floor.
     let cidr_hosts_supported = crate::features::cidr_hosts_supported(&image);
 
     let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());

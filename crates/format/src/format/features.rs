@@ -10,19 +10,41 @@
 use std::collections::BTreeMap;
 
 use krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
+use krabka_raft::UnstableFeatureVersions;
 
-/// Map a release string to a supported `metadata.version` feature level,
-/// erroring if it is unknown or outside `[MIN, MAX]`.
-fn resolve_release_level(s: &str) -> Result<i16, String> {
-    let mv = krabka_metadata::metadata_version::from_version_string(s)
-        .ok_or_else(|| format!("unknown metadata.version {s:?}"))?;
-    let level = mv.feature_level();
-    if !krabka_metadata::metadata_version::is_supported_level(level) {
-        return Err(format!(
-            "metadata.version {s:?} (level {level}) is outside the supported range"
-        ));
-    }
-    Ok(level)
+/// The highest `metadata.version` this format accepts under `unstable`:
+/// Kafka 4.3's latest production level, or with unstable feature versions the
+/// highest level krabka knows (Kafka's `MetadataVersion.latestTesting()`).
+fn metadata_version_ceiling(unstable: UnstableFeatureVersions) -> i16 {
+    krabka_metadata::feature(krabka_metadata::metadata_version::METADATA_VERSION_FEATURE)
+        .map_or(LATEST_PRODUCTION_METADATA_VERSION, |feature| {
+            krabka_raft::supported_feature_range(feature, unstable).1
+        })
+}
+
+/// Map a release string to a supported `metadata.version` feature level, as
+/// Kafka's `MetadataVersion.fromVersionString(versionString,
+/// unstableFeatureVersionsEnabled)` does: an unknown release, or one past the
+/// latest production level while unstable feature versions are off, is
+/// refused with Kafka's message, which lists the releases that are accepted.
+fn resolve_release_level(s: &str, unstable: UnstableFeatureVersions) -> Result<i16, String> {
+    let ceiling = metadata_version_ceiling(unstable);
+    krabka_metadata::metadata_version::from_version_string(s)
+        .map(krabka_metadata::metadata_version::MetadataVersion::feature_level)
+        .filter(|level| {
+            krabka_metadata::metadata_version::is_supported_level(*level) && *level <= ceiling
+        })
+        .ok_or_else(|| {
+            let supported: Vec<&str> = (krabka_metadata::metadata_version::METADATA_VERSION_MIN
+                ..=ceiling)
+                .filter_map(krabka_metadata::metadata_version::from_feature_level)
+                .map(krabka_metadata::metadata_version::MetadataVersion::ivn)
+                .collect();
+            format!(
+                "Unknown metadata.version '{s}'. Supported metadata.version are: {}",
+                supported.join(", ")
+            )
+        })
 }
 
 /// Parse one `--feature NAME=LEVEL` spec into `(name, level)`.
@@ -45,11 +67,12 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<(String, i16), String> {
 /// nor `--feature metadata.version` names one: Kafka 4.3's
 /// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`.
 ///
-/// The levels above it that the feature table carries, `4.4-IV0` and
-/// `4.4-IV1`, are Kafka trunk's unstable versions. A stock 4.3 node or tool
-/// does not know them, so a cluster reaches them only when an operator names
-/// one here or finalizes it with `UpdateFeatures`.
-pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
+/// The levels above it that the feature table carries, `4.4-IV0` to
+/// `4.4-IV2`, are Kafka trunk's unstable versions. A stock 4.3 node or tool
+/// does not know them, so a format names one only under
+/// `--unstable-feature-versions-enable`, Kafka's
+/// `unstable.feature.versions.enable`.
+pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = krabka_raft::LATEST_PRODUCTION_METADATA_VERSION;
 
 /// Resolve `krabka format`'s KIP-1022 feature flags into the bootstrap
 /// `metadata.version` level and the per-feature override map, applying the
@@ -57,13 +80,17 @@ pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
 ///
 /// - every `--feature` names a registered feature, finalized in its supported
 ///   range (else reject);
-/// - `--feature metadata.version=X` conflicts with `--release-version`;
+/// - `--feature metadata.version=X` conflicts with `--release-version`, and a
+///   level past the latest production one is refused as `not yet stable`
+///   unless `unstable` allows it (`Formatter.verifyReleaseVersion`);
 /// - `bootstrap_mv` = `--feature metadata.version` if set, else
-///   `--release-version`, else [`LATEST_PRODUCTION_METADATA_VERSION`];
+///   `--release-version`, else [`LATEST_PRODUCTION_METADATA_VERSION`], or the
+///   highest level krabka knows under `unstable` (`latestTesting`);
 /// - the fully-resolved feature set satisfies every KIP-1022 dependency.
 pub(super) fn resolve_format_features(
     release_version: Option<&str>,
     features: &[(String, i16)],
+    unstable: UnstableFeatureVersions,
 ) -> Result<(i16, BTreeMap<String, i16>), String> {
     use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE;
 
@@ -88,6 +115,14 @@ pub(super) fn resolve_format_features(
             ));
         };
         let (min, max) = feat.supported_range();
+        if name == METADATA_VERSION_FEATURE
+            && (min..=max).contains(level)
+            && *level > metadata_version_ceiling(unstable)
+        {
+            let ivn = krabka_metadata::metadata_version::from_feature_level(*level)
+                .map_or_else(|| level.to_string(), |mv| mv.ivn().to_owned());
+            return Err(format!("metadata.version {ivn} is not yet stable."));
+        }
         if *level < min || *level > max {
             return Err(format!(
                 "feature {name}={level} is outside the supported range {min}..={max}"
@@ -109,9 +144,9 @@ pub(super) fn resolve_format_features(
     let bootstrap_mv = if let Some(mv) = feature_mv {
         mv
     } else if let Some(rv) = release_version {
-        resolve_release_level(rv)?
+        resolve_release_level(rv, unstable)?
     } else {
-        LATEST_PRODUCTION_METADATA_VERSION
+        metadata_version_ceiling(unstable)
     };
 
     // KIP-1022 dependency validation over the fully-resolved feature set
@@ -139,6 +174,9 @@ mod tests {
 
     use super::*;
 
+    /// `unstable.feature.versions.enable` at Kafka's default.
+    const STRICT: UnstableFeatureVersions = UnstableFeatureVersions::Disabled;
+
     /// A level equal to the supported minimum is in range. Every other case
     /// sits strictly inside the range or well outside it, so relaxing the
     /// guard from `<` to `<=` -- which rejects the minimum itself -- changed
@@ -146,8 +184,8 @@ mod tests {
     #[test]
     fn resolve_features_accepts_a_level_at_the_supported_minimum() {
         // group.version supports 0..=1; metadata.version 7..=25.
-        check!(resolve_format_features(None, &[("group.version".into(), 0)]).is_ok());
-        check!(resolve_format_features(None, &[("metadata.version".into(), 7)]).is_ok());
+        check!(resolve_format_features(None, &[("group.version".into(), 0)], STRICT).is_ok());
+        check!(resolve_format_features(None, &[("metadata.version".into(), 7)], STRICT).is_ok());
     }
 
     #[test]
@@ -158,7 +196,7 @@ mod tests {
             ("2.8", None),     // below MIN / unknown
             ("9.9-IV0", None), // unknown
         ] {
-            assert2::assert!(resolve_release_level(input).ok() == want);
+            assert2::assert!(resolve_release_level(input, STRICT).ok() == want);
         }
     }
 
@@ -191,7 +229,7 @@ mod tests {
     // `--release-version` and asserts the FeatureLevel record is present.
     #[test]
     fn short_release_string_resolves_to_its_last_iv() {
-        assert2::assert!(resolve_release_level("4.0").unwrap() == 25);
+        assert2::assert!(resolve_release_level("4.0", STRICT).unwrap() == 25);
     }
 
     #[test]
@@ -223,22 +261,22 @@ mod tests {
         // 4.3-IV0, not at trunk's unstable levels; an explicit non-metadata
         // feature becomes an override.
         let (mv, ov) =
-            resolve_format_features(None, &[("group.version".into(), 1)]).expect("resolve");
+            resolve_format_features(None, &[("group.version".into(), 1)], STRICT).expect("resolve");
         assert2::assert!(mv == LATEST_PRODUCTION_METADATA_VERSION);
         assert2::assert!(ov.get("group.version") == Some(&1));
     }
 
     #[test]
     fn resolve_features_metadata_version_feature_sets_bootstrap_mv() {
-        let (mv, ov) =
-            resolve_format_features(None, &[("metadata.version".into(), 20)]).expect("resolve");
+        let (mv, ov) = resolve_format_features(None, &[("metadata.version".into(), 20)], STRICT)
+            .expect("resolve");
         assert2::assert!(mv == 20);
         assert2::assert!(ov.get("metadata.version") == Some(&20));
     }
 
     #[test]
     fn resolve_features_release_version_sets_bootstrap_mv() {
-        let (mv, ov) = resolve_format_features(Some("4.0-IV0"), &[]).expect("resolve");
+        let (mv, ov) = resolve_format_features(Some("4.0-IV0"), &[], STRICT).expect("resolve");
         assert2::assert!(mv == 22);
         assert2::assert!(ov.is_empty());
     }
@@ -246,9 +284,12 @@ mod tests {
     #[test]
     fn resolve_features_release_and_feature_combine() {
         // --release-version sets the base; a non-metadata --feature overrides it.
-        let (mv, ov) =
-            resolve_format_features(Some("4.0-IV0"), &[("transaction.version".into(), 2)])
-                .expect("resolve");
+        let (mv, ov) = resolve_format_features(
+            Some("4.0-IV0"),
+            &[("transaction.version".into(), 2)],
+            STRICT,
+        )
+        .expect("resolve");
         assert2::assert!(mv == 22);
         assert2::assert!(ov.get("transaction.version") == Some(&2));
     }
@@ -256,14 +297,16 @@ mod tests {
     #[test]
     fn resolve_features_rejects_release_plus_metadata_version_feature() {
         // Ambiguity: both --release-version and --feature metadata.version set MV.
-        let err = resolve_format_features(Some("4.0-IV0"), &[("metadata.version".into(), 24)])
-            .unwrap_err();
+        let err =
+            resolve_format_features(Some("4.0-IV0"), &[("metadata.version".into(), 24)], STRICT)
+                .unwrap_err();
         assert2::assert!(err.contains("metadata.version"));
     }
 
     #[test]
     fn resolve_features_rejects_unknown_feature() {
-        let err = resolve_format_features(None, &[("bogus.version".into(), 1)]).unwrap_err();
+        let err =
+            resolve_format_features(None, &[("bogus.version".into(), 1)], STRICT).unwrap_err();
         assert2::assert!(err.contains("Unsupported feature"));
         assert2::assert!(err.contains("bogus.version"));
     }
@@ -275,12 +318,61 @@ mod tests {
             ("metadata.version", 99), // metadata.version supports 7..=25
             ("metadata.version", 1),
         ] {
-            assert2::assert!(resolve_format_features(None, &[(name.into(), level)]).is_err());
+            assert2::assert!(
+                resolve_format_features(None, &[(name.into(), level)], STRICT).is_err()
+            );
+        }
+    }
+
+    /// #784: a Kafka trunk `metadata.version` (4.4-IV0 to 4.4-IV2) is
+    /// refused with Kafka 4.3.1's `kafka-storage format` messages unless
+    /// unstable feature versions are enabled, and the default release is
+    /// `latestTesting` when they are.
+    #[test]
+    fn unstable_metadata_versions_follow_unstable_feature_versions_enable() {
+        type Case<'a> = (
+            Option<&'a str>,
+            Vec<(String, i16)>,
+            UnstableFeatureVersions,
+            Result<i16, String>,
+        );
+        let trunk = UnstableFeatureVersions::Enabled;
+        let known = "Unknown metadata.version '4.4'. Supported metadata.version are: \
+                     3.3-IV3, 3.4-IV0, 3.5-IV0, 3.5-IV1, 3.5-IV2, 3.6-IV0, 3.6-IV1, 3.6-IV2, \
+                     3.7-IV0, 3.7-IV1, 3.7-IV2, 3.7-IV3, 3.7-IV4, 3.8-IV0, 3.9-IV0, 4.0-IV0, \
+                     4.0-IV1, 4.0-IV2, 4.0-IV3, 4.1-IV0, 4.1-IV1, 4.2-IV0, 4.2-IV1, 4.3-IV0";
+        let mv = |level| vec![("metadata.version".to_string(), level)];
+        let cases: Vec<Case<'_>> = vec![
+            (None, vec![], STRICT, Ok(30)),
+            (None, vec![], trunk, Ok(33)),
+            (Some("4.4"), vec![], STRICT, Err(known.to_owned())),
+            (Some("4.4-IV0"), vec![], trunk, Ok(31)),
+            (Some("4.4"), vec![], trunk, Ok(33)),
+            (
+                None,
+                mv(31),
+                STRICT,
+                Err("metadata.version 4.4-IV0 is not yet stable.".to_owned()),
+            ),
+            (
+                None,
+                mv(33),
+                STRICT,
+                Err("metadata.version 4.4-IV2 is not yet stable.".to_owned()),
+            ),
+            (None, mv(30), STRICT, Ok(30)),
+            (None, mv(32), trunk, Ok(32)),
+        ];
+        for (release, features, unstable, want) in cases {
+            check!(
+                resolve_format_features(release, &features, unstable).map(|(mv, _)| mv) == want,
+                "{release:?} {features:?} {unstable:?}"
+            );
         }
     }
 
     #[test]
     fn resolve_features_rejects_bad_release_string() {
-        assert2::assert!(resolve_format_features(Some("2.8"), &[]).is_err());
+        assert2::assert!(resolve_format_features(Some("2.8"), &[], STRICT).is_err());
     }
 }

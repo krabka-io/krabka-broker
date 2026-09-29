@@ -38,8 +38,8 @@ mod tests_api_versions;
 mod voter_admin;
 
 pub use self::api_versions::{
-    finalized_feature_keys, is_valid_client_info, supported_feature_key, supported_feature_keys,
-    unsupported_version_response,
+    api_versions_max_version, finalized_feature_keys, is_valid_client_info, supported_feature_key,
+    supported_feature_keys, unsupported_version_response,
 };
 use self::{
     api_versions::{API_KEY_API_VERSIONS, api_versions_response},
@@ -63,7 +63,17 @@ use crate::{error::RaftError, kraft::KraftController};
 struct ListenerApiVersions {
     engine: KraftController,
     admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
-    unstable: crate::UnstableApiVersions,
+    unstable: Unstable,
+}
+
+/// Kafka's two internal `unstable.*.enable` settings, as one listener reads
+/// them.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Unstable {
+    /// `unstable.api.versions.enable`.
+    pub(crate) api_versions: crate::UnstableApiVersions,
+    /// `unstable.feature.versions.enable`.
+    pub(crate) feature_versions: crate::UnstableFeatureVersions,
 }
 
 impl crate::ControllerApiVersions for ListenerApiVersions {
@@ -88,7 +98,7 @@ impl crate::ControllerApiVersions for ListenerApiVersions {
 fn answer_api_versions(
     engine: &KraftController,
     admin_router: Option<&dyn crate::ControllerAdminRouter>,
-    unstable: crate::UnstableApiVersions,
+    unstable: Unstable,
     request_version: i16,
     request_body: &[u8],
 ) -> Result<bytes::Bytes, RaftError> {
@@ -103,7 +113,8 @@ fn answer_api_versions(
             image: &image,
             metadata_offset,
             admin_router,
-            unstable,
+            unstable: unstable.api_versions,
+            unstable_features: unstable.feature_versions,
         },
     )
 }
@@ -113,8 +124,8 @@ struct ConnectionContext {
     principal: Option<krabka_security::Principal>,
     authenticated_via_token: bool,
     grants: Arc<dyn crate::ClusterGrants>,
-    /// Kafka's `unstable.api.versions.enable` for this listener.
-    unstable: crate::UnstableApiVersions,
+    /// Kafka's `unstable.*.enable` settings for this listener.
+    unstable: Unstable,
 }
 
 pub(crate) async fn run(
@@ -124,7 +135,7 @@ pub(crate) async fn run(
     handshake: Option<Arc<dyn crate::RaftListenerHandshake>>,
     shard_router: Option<Arc<dyn crate::RaftShardRouter>>,
     admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
-    unstable: crate::UnstableApiVersions,
+    unstable: Unstable,
 ) {
     match listener.local_addr() {
         Ok(addr) => info!(%addr, "controller listener started"),
@@ -246,7 +257,7 @@ where
                     api_key_n.get(),
                     api_version.get(),
                     admin_router.as_deref(),
-                    context.unstable,
+                    context.unstable.api_versions,
                 ) {
                     tracing::debug!(
                         peer = %context.peer,

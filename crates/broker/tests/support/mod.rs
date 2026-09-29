@@ -72,7 +72,8 @@ pub use self::{
     },
     ports::{bind_and_drop_ports, bind_and_hold_ports},
     single_broker::{
-        InProcess, start, start_with_audit_key, start_with_deny_all_authz, start_with_dir,
+        InProcess, start, start_configured, start_legacy, start_with_audit_key,
+        start_with_deny_all_authz, start_with_dir,
     },
 };
 

@@ -3,9 +3,13 @@
 //! This is the single source of truth for both the live `ApiVersions`
 //! (`api_key` 18) response and the generated protocol-API reference page. The
 //! handler in `handlers::api_versions` calls [`supported_apis`] with the kind
-//! of listener the request arrived on and the broker's KIP-714 setting, so a
-//! listener a client reaches advertises what a Kafka broker advertises. The
-//! dispatch registry calls [`dispatched_apis`] instead, because what the broker
+//! of listener the request arrived on, the broker's KIP-714 setting and its
+//! [`VersionGates`], so a listener a client reaches advertises what a Kafka
+//! broker advertises. Under the default gates that is exactly Kafka 4.3.1's
+//! table: [`CatalogApi::released`], from [`krabka_raft::KAFKA_4_3_1_APIS`], is
+//! the one per-API record of what that release serves, and both the
+//! advertised range and the receive-side refusal ([`is_disabled_version`])
+//! are derived from it. The dispatch registry calls [`dispatched_apis`] instead, because what the broker
 //! serves is wider than what any one listener names. `krabka-docgen` reads the
 //! same list and does not spawn the broker binary.
 //!
@@ -94,7 +98,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/log/tests/integration.rs::jvm_consumes_rust_written_log_dir",
             "crates/broker/tests/legacy_fetch.rs",
         ],
-        note: "",
+        note: "The v0 and v1 message sets reach the wire only through `Fetch` v0-v3 and `Produce` v0-v2, which Kafka 4.x refuses and krabka serves only under the `[runtime]` key `legacy_request_versions_enable` (default off). Produce v3 and up still up-converts a legacy message set it carries.",
     },
     KipAnnotation {
         key: "KIP-48",
@@ -184,7 +188,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/recompression.rs",
             "crates/broker/tests/legacy_fetch.rs",
         ],
-        note: "A zstd batch is re-compressed as snappy for a v0 or v1 fetch, because those formats never carried zstd.",
+        note: "A zstd batch is re-compressed as snappy for a v0 or v1 fetch, because those formats never carried zstd. Those fetch versions are served only under `legacy_request_versions_enable`.",
     },
     KipAnnotation {
         key: "KIP-112",
@@ -628,7 +632,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/api_versions_features.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`.",
+        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. `metadata.version` is supported up to 4.3.1's latest production level, `4.3-IV0` (30), unless Kafka's `unstable.feature.versions.enable` is set, which raises it to trunk's `4.4-IV2` (33) in `ApiVersions`, node registration, `UpdateFeatures` and `krabka format` alike.",
     },
     KipAnnotation {
         key: "KIP-590",
@@ -901,7 +905,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transactions_2pc.rs",
             "crates/broker/src/txn/two_pc_model.rs",
         ],
-        note: "",
+        note: "`InitProducerId` v6 is `latestVersionUnstable` in Kafka 4.3.1, so it is served only under `unstable.api.versions.enable`, and 2PC itself only under `transaction.two.phase.commit.enable`. `keepPreparedTxn` is answered UNSUPPORTED_VERSION, as 4.3.1's `TransactionCoordinator.handleInitProducerId` answers it, unless both switches are on; then krabka's prepared-transaction recovery serves it, which no Kafka release implements.",
     },
     KipAnnotation {
         key: "KIP-950",
@@ -1081,7 +1085,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/api_versions.rs",
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
-        note: "",
+        note: "Kafka trunk's ApiVersions v5, served only under `unstable.api.versions.enable`. By default both listeners serve 4.3.1's v0-v4 and answer v5 `UNSUPPORTED_VERSION` with that range, so REBOOTSTRAP_REQUIRED (129) is never sent.",
     },
     KipAnnotation {
         key: "KIP-1251",
@@ -1112,7 +1116,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/authz/src/simple/matching.rs",
             "crates/broker/src/handlers/create_acls/validate.rs",
         ],
-        note: "",
+        note: "Matches Kafka trunk. `CreateAcls` accepts a CIDR host from `metadata.version` 4.4-IV1 (level 32), which a node supports only under `unstable.feature.versions.enable`; by default the cluster stays at 4.3-IV0 and a host containing `/` is refused with trunk's UNSUPPORTED_VERSION text.",
     },
     KipAnnotation {
         key: "KIP-1312",
@@ -1125,7 +1129,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/controller_admin_surface.rs::controller_listener_serves_unregister_controller",
             "crates/broker/tests/unregister_controller_forward.rs",
         ],
-        note: "Matches Kafka trunk: no Kafka release has api key 94. The controller listener answers it and a broker listener forwards it in an Envelope, as trunk's `ControllerApis` and `KafkaApis` do. It needs `metadata.version` 4.4-IV2 (level 33), a Kafka trunk level a cluster reaches only through UpdateFeatures or `krabka format --release-version`, and answers trunk's UNSUPPORTED_VERSION below it.",
+        note: "Matches Kafka trunk: no Kafka release has api key 94. The controller listener answers it and a broker listener forwards it in an Envelope, as trunk's `ControllerApis` and `KafkaApis` do. It is advertised and accepted only under `unstable.api.versions.enable`; by default a request for key 94 closes the connection, as it does against a 4.3.1 broker or controller, and an Envelope carrying one is answered UNSUPPORTED_VERSION. It needs `metadata.version` 4.4-IV2 (level 33), which a node supports only under `unstable.feature.versions.enable`, and answers trunk's UNSUPPORTED_VERSION below it.",
     },
     KipAnnotation {
         key: "KIP-1319",
@@ -1137,7 +1141,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/txn/handlers/txn_offset_commit/integration_tests.rs::v6_answers_group_id_not_found_where_older_versions_answer_illegal_generation",
             "crates/broker/tests/transactions/txn_offset_commit_topic_ids.rs::send_offsets_to_transaction_commits_by_topic_id",
         ],
-        note: "Kafka trunk's TxnOffsetCommit v6, which Kafka 4.3.1 predates.",
+        note: "Kafka trunk's TxnOffsetCommit v6, which Kafka 4.3.1 predates, served only under `unstable.api.versions.enable`. By default the broker advertises and accepts 4.3.1's v0-v5.",
     },
     KipAnnotation {
         key: "KIP-1331",
@@ -1151,7 +1155,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
             "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_answers_as_a_trunk_broker_without_a_plugin",
         ],
-        note: "Matches Kafka trunk. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
+        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
     },
     KipAnnotation {
         key: "KIP-1357",
@@ -1161,7 +1165,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
         ],
-        note: "",
+        note: "Kafka trunk's StreamsGroupDescribe v1, served only under `unstable.api.versions.enable`.",
     },
     KipAnnotation {
         key: "SASL/GSSAPI",
@@ -1187,60 +1191,153 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
 
 macro_rules! v {
     ($mod:ident) => {
-        v!($mod, max = krabka_protocol::owned::$mod::MAX_VERSION)
-    };
-    // The protocol crate vendors Kafka trunk's schemas, which can run ahead of
-    // what the latest Kafka release, and this broker, implement. An explicit
-    // maximum advertises only the versions the handler serves.
-    ($mod:ident,max = $max:expr) => {
-        CatalogApi {
-            api_key: krabka_protocol::owned::$mod::API_KEY,
-            min_version: krabka_protocol::owned::$mod::MIN_VERSION,
-            max_version: $max,
-            latest_stable_version: krabka_protocol::owned::$mod::LATEST_STABLE_VERSION.min($max),
-        }
+        CatalogApi::new(
+            krabka_protocol::owned::$mod::API_KEY,
+            krabka_protocol::owned::$mod::MIN_VERSION,
+            krabka_protocol::owned::$mod::MAX_VERSION,
+        )
     };
 }
 
-/// One API the broker dispatches, with the version range it decodes.
+/// Whether the broker serves the request versions Kafka 4.x removed.
 ///
-/// `max_version` is the highest version the handler decodes and answers.
-/// `latest_stable_version` is Kafka's `ApiKeys.latestVersion(false)`: the same
-/// version, or one below it when the request schema marks its last version
-/// `latestVersionUnstable`. Kafka advertises and accepts that last version only
-/// under the internal `unstable.api.versions.enable` config, and so does
-/// krabka: [`CatalogApi::advertised`] and [`is_disabled_version`] read it.
+/// krabka-only; Kafka has no switch for it. The `[runtime]` key
+/// `legacy_request_versions_enable` reads it. While it is
+/// [`Disabled`][Self::Disabled], the default, every listener advertises and
+/// accepts exactly Kafka 4.3.1's minimum versions: `Fetch` from v4 and
+/// `ListOffsets` from v1, and `Produce` from v3, though `Produce` is still
+/// advertised from v0 as Kafka advertises it (KAFKA-18659). A request below
+/// the minimum closes the connection, as it does against a 4.3.1 broker.
+/// [`Enabled`][Self::Enabled] serves `Fetch` v0-v3, `ListOffsets` v0 and
+/// `Produce` v0-v2 as well.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LegacyRequestVersions {
+    /// Serve Kafka 4.3.1's minimum versions only.
+    #[default]
+    Disabled,
+    /// Also serve the pre-4.0 request versions krabka still decodes.
+    Enabled,
+}
+
+impl From<bool> for LegacyRequestVersions {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
+/// The two version switches a listener's table depends on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VersionGates {
+    /// Kafka's internal `unstable.api.versions.enable`.
+    pub unstable: UnstableApiVersions,
+    /// krabka's `legacy_request_versions_enable`.
+    pub legacy: LegacyRequestVersions,
+}
+
+/// One API the broker dispatches, with the version range it decodes and the
+/// range Kafka 4.3.1 serves.
+///
+/// `min_version..=max_version` is what the handler decodes and answers.
+/// `released` is the Kafka 4.3.1 row for the key, from
+/// [`krabka_raft::KAFKA_4_3_1_APIS`], or `None` when that release has no such
+/// api key; it is the single table the default gates read.
+///
+/// Under the defaults a listener advertises and accepts `released` exactly.
+/// [`UnstableApiVersions::Enabled`] lifts the maximum to `max_version` and
+/// admits the api keys 4.3.1 lacks, as Kafka's `unstable.api.versions.enable`
+/// does for a `latestVersionUnstable` version; [`LegacyRequestVersions::Enabled`]
+/// lowers the minimum to `min_version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CatalogApi {
     pub api_key: i16,
     pub min_version: i16,
     pub max_version: i16,
-    pub latest_stable_version: i16,
+    pub released: Option<krabka_raft::ReleasedApi>,
 }
 
 impl CatalogApi {
-    /// The highest version this API is advertised and accepted at under
-    /// `unstable`.
+    /// The catalog row for `api_key` decoded over `min_version..=max_version`,
+    /// with its Kafka 4.3.1 row looked up.
+    ///
+    /// A krabka-private api key -- `GetReplicaLogInfo` (1020), at or above
+    /// `KRABKA_PRIVATE_API_KEY_FLOOR` -- has no Kafka counterpart for either
+    /// switch to track, so its whole decodable range counts as released.
     #[must_use]
-    pub const fn enabled_max(self, unstable: UnstableApiVersions) -> i16 {
-        match unstable {
-            UnstableApiVersions::Enabled => self.max_version,
-            UnstableApiVersions::Disabled => self.latest_stable_version,
+    pub const fn new(api_key: i16, min_version: i16, max_version: i16) -> Self {
+        let released = if api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR {
+            Some(krabka_raft::ReleasedApi {
+                api_key,
+                min_version,
+                max_version,
+            })
+        } else {
+            krabka_raft::kafka_4_3_1_api(api_key)
+        };
+        Self {
+            api_key,
+            min_version,
+            max_version,
+            released,
         }
     }
 
-    /// The `ApiVersions` row for this API under `unstable`, Kafka's
-    /// `ApiKeys.toApiVersion(enableUnstableLastVersion)`.
+    /// Kafka 4.3.1's highest version of this api, or `None` when that
+    /// release does not have it.
     #[must_use]
-    pub fn advertised(self, unstable: UnstableApiVersions) -> ApiVersion {
-        ApiVersion {
-            api_key: self.api_key,
-            min_version: self.min_version,
-            max_version: self.enabled_max(unstable),
-            ..Default::default()
+    pub const fn released_max(self) -> Option<i16> {
+        match self.released {
+            Some(released) => Some(released.max_version),
+            None => None,
         }
     }
+
+    /// The versions this api is accepted at under `gates`, or `None` when the
+    /// api key is not accepted at all.
+    #[must_use]
+    pub fn accepted(self, gates: VersionGates) -> Option<std::ops::RangeInclusive<i16>> {
+        let max = match gates.unstable {
+            UnstableApiVersions::Enabled => self.max_version,
+            UnstableApiVersions::Disabled => self.released_max()?,
+        };
+        let min = match (gates.legacy, self.released) {
+            (LegacyRequestVersions::Disabled, Some(released)) => {
+                released.min_version.max(self.min_version)
+            }
+            _ => self.min_version,
+        };
+        Some(min..=max)
+    }
+
+    /// The `ApiVersions` row for this api under `gates`, Kafka's
+    /// `ApiKeys.toApiVersionForApiResponse`, or `None` when the listener
+    /// leaves the key out. `Produce` keeps advertising from v0 whatever it
+    /// accepts, as Kafka's `PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION` does.
+    #[must_use]
+    pub fn advertised(self, gates: VersionGates) -> Option<ApiVersion> {
+        let accepted = self.accepted(gates)?;
+        let min_version = if self.api_key == krabka_protocol::owned::produce_request::API_KEY {
+            PRODUCE_ADVERTISED_MIN_VERSION.min(*accepted.start())
+        } else {
+            *accepted.start()
+        };
+        Some(ApiVersion {
+            api_key: self.api_key,
+            min_version,
+            max_version: *accepted.end(),
+            ..Default::default()
+        })
+    }
 }
+
+/// Kafka's `ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`: a broker
+/// listener advertises `Produce` from v0 although it accepts only v3 and up,
+/// because librdkafka reads a higher minimum as no `Produce` support at all
+/// (KAFKA-18659).
+const PRODUCE_ADVERTISED_MIN_VERSION: i16 = 0;
 
 /// Which of the broker's listeners an `ApiVersions` response goes out on, and
 /// where [`INTER_BROKER_ONLY_APIS`] may dispatch.
@@ -1385,44 +1482,55 @@ pub fn catalog_apis() -> Vec<CatalogApi> {
 ///
 /// This is what the dispatch registry takes its per-key version bounds from.
 /// It is not what any listener advertises; that is [`supported_apis`]. A
-/// version above an API's latest stable one is inside this range, and
-/// [`is_disabled_version`] is what refuses it while
-/// [`UnstableApiVersions::Disabled`] holds.
+/// version outside Kafka 4.3.1's range, or any version of a key that release
+/// lacks, is inside this range, and [`is_disabled_version`] is what refuses it
+/// under the default [`VersionGates`].
 #[must_use]
 pub fn dispatched_apis() -> Vec<ApiVersion> {
     catalog_apis()
         .into_iter()
-        .map(|api| api.advertised(UnstableApiVersions::Enabled))
+        .map(|api| ApiVersion {
+            api_key: api.api_key,
+            min_version: api.min_version,
+            max_version: api.max_version,
+            ..Default::default()
+        })
         .collect()
 }
 
-/// The `(api_key, latest stable version)` of every dispatched API whose
-/// highest decodable version is unstable. Computed once, because
-/// [`is_disabled_version`] reads it on every request.
-static UNSTABLE_LAST_VERSIONS: std::sync::LazyLock<Vec<(i16, i16)>> =
+/// The catalog, keyed for the per-request lookup [`is_disabled_version`]
+/// makes. Computed once.
+static CATALOG_BY_KEY: std::sync::LazyLock<std::collections::BTreeMap<i16, CatalogApi>> =
     std::sync::LazyLock::new(|| {
         catalog_apis()
             .into_iter()
-            .filter(|api| api.latest_stable_version < api.max_version)
-            .map(|api| (api.api_key, api.latest_stable_version))
+            .map(|api| (api.api_key, api))
             .collect()
     });
 
-/// Whether `version` of `api_key` is a `latestVersionUnstable` version that
-/// `unstable` disables.
+/// Whether `version` of `api_key` is a decodable version that `gates`
+/// disables: above Kafka 4.3.1's maximum, below its minimum, or any version of
+/// an api key that release does not have.
 ///
 /// Kafka's `Processor.parseRequestHeader` asks `ApiKeys.isVersionEnabled`,
-/// which refuses such a version, and throws `InvalidRequestException` for it
-/// -- the version is known, only disabled -- so `SocketServer` closes the
-/// connection without a response. `ApiVersions` is exempt in Kafka, and has no
-/// unstable version here either. A version outside the decodable range is not
-/// this function's concern: [`dispatched_apis`] refuses it first.
+/// which refuses a version the release knows but does not enable, and throws
+/// `InvalidRequestException` for it; `RequestHeader.parse` throws the same for
+/// an api key the release does not know (`ApiKeys.forId`). `SocketServer`
+/// closes the connection without a response either way. `ApiVersions` is
+/// exempt in Kafka -- every version of it reaches `KafkaApis`, which answers
+/// `UNSUPPORTED_VERSION` -- so it is never disabled here. A version outside
+/// the decodable range is not this function's concern: [`dispatched_apis`]
+/// refuses it first. A krabka-private api key, at or above 1000, is not in
+/// the catalog and never disabled.
 #[must_use]
-pub fn is_disabled_version(api_key: i16, version: i16, unstable: UnstableApiVersions) -> bool {
-    unstable == UnstableApiVersions::Disabled
-        && UNSTABLE_LAST_VERSIONS
-            .iter()
-            .any(|(key, latest_stable)| *key == api_key && version > *latest_stable)
+pub fn is_disabled_version(api_key: i16, version: i16, gates: VersionGates) -> bool {
+    if api_key == krabka_protocol::owned::api_versions_request::API_KEY {
+        return false;
+    }
+    CATALOG_BY_KEY.get(&api_key).is_some_and(|api| {
+        api.accepted(gates)
+            .is_none_or(|accepted| !accepted.contains(&version))
+    })
 }
 
 /// The API set `listener` advertises, sorted by API key.
@@ -1438,13 +1546,13 @@ pub fn is_disabled_version(api_key: i16, version: i16, unstable: UnstableApiVers
 /// [`ListenerKind::ClientAndInterBroker`] alike -- and kept only on
 /// [`ListenerKind::InterBroker`], the dedicated listener no client dials
 /// (#843). Dispatch is a separate, wider gate: see [`INTER_BROKER_ONLY_APIS`].
-/// `unstable` picks each row's maximum, as Kafka's
-/// `unstable.api.versions.enable` does.
+/// `gates` picks each row's range, and leaves out a key Kafka 4.3.1 lacks
+/// unless unstable api versions are enabled.
 #[must_use]
 pub fn supported_apis(
     listener: ListenerKind,
     client_metrics: ClientMetricsReceiver,
-    unstable: UnstableApiVersions,
+    gates: VersionGates,
 ) -> Vec<ApiVersion> {
     let mut apis: Vec<ApiVersion> = catalog_apis()
         .into_iter()
@@ -1455,7 +1563,7 @@ pub fn supported_apis(
                 && CLIENT_METRICS_APIS.contains(&api.api_key);
             !withheld_control_plane && !withheld_telemetry
         })
-        .map(|api| api.advertised(unstable))
+        .filter_map(|api| api.advertised(gates))
         .collect();
     apis.sort_unstable_by_key(|api| api.api_key);
     apis
@@ -1465,42 +1573,27 @@ fn client_facing_apis() -> Vec<CatalogApi> {
     use krabka_protocol::owned;
     vec![
         v!(api_versions_request),
-        // Kafka 4.0 removed `Produce` v0-2 (KAFKA-18659,
-        // `ProduceRequest.json`'s `validVersions` moved to "3-13"), but
-        // `ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION` stays 0, so a
-        // 4.x broker's own `ApiVersions` answer still advertises the same
-        // 0-13 krabka does here -- this entry already matches Kafka on the
-        // one thing `ApiVersions` reports.
-        //
-        // What Kafka does differently is SERVE: a real v0-2 request gets an
-        // invalid-request error and the connection closes, where krabka's
-        // handler still up-converts the legacy `MessageSet` and appends it --
-        // the same choice this repo already made for `Fetch` and
-        // `ListOffsets` below, whose own pre-4.0 version floors are kept on
-        // purpose (see their notes in `docs/KIP_MATRIX.md`) because the wider
-        // range costs a modern client nothing and keeps an old one working.
-        // #863 records that choice for `Produce`: `docs/KIP_MATRIX.md` states
-        // it beside the Fetch and ListOffsets rows, from the
-        // `SERVED_RANGE_DIVERGENCES` entry in
-        // `tests/api_versions_differential/divergence.rs`.
-        CatalogApi {
-            api_key: owned::produce_request::API_KEY,
-            min_version: krabka_protocol::kafka_3_6_2::owned::produce_request::MIN_VERSION,
-            max_version: owned::produce_request::MAX_VERSION,
-            latest_stable_version: owned::produce_request::LATEST_STABLE_VERSION,
-        },
-        CatalogApi {
-            api_key: owned::fetch_request::API_KEY,
-            min_version: krabka_protocol::kafka_3_6_2::owned::fetch_request::MIN_VERSION,
-            max_version: owned::fetch_request::MAX_VERSION,
-            latest_stable_version: owned::fetch_request::LATEST_STABLE_VERSION,
-        },
-        CatalogApi {
-            api_key: owned::list_offsets_request::API_KEY,
-            min_version: 0,
-            max_version: owned::list_offsets_request::MAX_VERSION,
-            latest_stable_version: owned::list_offsets_request::LATEST_STABLE_VERSION,
-        },
+        // Kafka 4.0 removed `Produce` v0-2, `Fetch` v0-3 and `ListOffsets`
+        // v0. krabka still decodes them -- `Produce` up-converts the legacy
+        // `MessageSet`, `Fetch` answers from the `kafka_3_6_2` flavor and
+        // `ListOffsets` v0 from its own module -- and serves them only under
+        // `LegacyRequestVersions::Enabled`. The row's Kafka 4.3.1 range is what
+        // the default gate reads.
+        CatalogApi::new(
+            owned::produce_request::API_KEY,
+            krabka_protocol::kafka_3_6_2::owned::produce_request::MIN_VERSION,
+            owned::produce_request::MAX_VERSION,
+        ),
+        CatalogApi::new(
+            owned::fetch_request::API_KEY,
+            krabka_protocol::kafka_3_6_2::owned::fetch_request::MIN_VERSION,
+            owned::fetch_request::MAX_VERSION,
+        ),
+        CatalogApi::new(
+            owned::list_offsets_request::API_KEY,
+            0,
+            owned::list_offsets_request::MAX_VERSION,
+        ),
         v!(metadata_request),
         v!(find_coordinator_request),
         v!(join_group_request),
@@ -1528,7 +1621,8 @@ fn admin_apis() -> Vec<CatalogApi> {
         v!(add_offsets_to_txn_request),
         v!(end_txn_request),
         v!(write_txn_markers_request),
-        // Version 6 (KIP-1319, topic ids) is Kafka trunk's; 4.3.1 stops at 5.
+        // Version 6 (KIP-1319, topic ids) is Kafka trunk's; 4.3.1 stops at 5,
+        // so v6 is served only under `unstable.api.versions.enable`.
         v!(txn_offset_commit_request),
         v!(describe_configs_request),
         v!(alter_replica_log_dirs_request),
@@ -1550,7 +1644,9 @@ fn admin_apis() -> Vec<CatalogApi> {
         v!(unregister_broker_request),
         // UnregisterController (KIP-1312, Kafka trunk) — drops a controller
         // registration. Tagged `broker` and `controller`: a broker listener
-        // forwards it to the active controller.
+        // forwards it to the active controller. Kafka 4.3.1 has no api key 94,
+        // so it is advertised and accepted only under
+        // `unstable.api.versions.enable`.
         v!(unregister_controller_request),
         v!(alter_user_scram_credentials_request),
         // UpdateFeatures (api_key 57, KIP-584) — `kafka-features` admin tool
@@ -1611,12 +1707,15 @@ fn admin_apis() -> Vec<CatalogApi> {
         // KIP-932 share-group membership protocol.
         v!(share_group_heartbeat_request),
         v!(share_group_describe_request),
-        // KIP-1071 streams-group rebalance protocol.
+        // KIP-1071 streams-group rebalance protocol. Version 1 of both
+        // (KIP-1331, KIP-1357) is Kafka trunk's and is served only under
+        // `unstable.api.versions.enable`.
         v!(streams_group_heartbeat_request),
         v!(streams_group_describe_request),
         // KIP-1331 topology description push (Kafka trunk). krabka has no
         // topology description plugin, so it answers as a trunk broker
-        // without one.
+        // without one. Kafka 4.3.1 has no api key 93, so it is advertised and
+        // accepted only under `unstable.api.versions.enable`.
         v!(streams_group_topology_description_update_request),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
@@ -1652,13 +1751,33 @@ mod tests {
 
     use super::*;
 
+    /// The default gates: Kafka 4.3.1's table exactly.
+    const STRICT: VersionGates = VersionGates {
+        unstable: UnstableApiVersions::Disabled,
+        legacy: LegacyRequestVersions::Disabled,
+    };
+    /// Both opt-ins on: everything krabka decodes.
+    const ALL: VersionGates = VersionGates {
+        unstable: UnstableApiVersions::Enabled,
+        legacy: LegacyRequestVersions::Enabled,
+    };
+    /// Every combination of the two switches.
+    const EVERY_GATE: [VersionGates; 4] = [
+        STRICT,
+        VersionGates {
+            unstable: UnstableApiVersions::Enabled,
+            legacy: LegacyRequestVersions::Disabled,
+        },
+        VersionGates {
+            unstable: UnstableApiVersions::Disabled,
+            legacy: LegacyRequestVersions::Enabled,
+        },
+        ALL,
+    ];
+
     /// The client listener's table, which is what a Kafka client reads.
     fn client_apis() -> Vec<ApiVersion> {
-        supported_apis(
-            ListenerKind::Client,
-            ClientMetricsReceiver::Absent,
-            UnstableApiVersions::Disabled,
-        )
+        supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent, STRICT)
     }
 
     #[test]
@@ -1675,11 +1794,12 @@ mod tests {
     fn streams_group_apis_are_advertised() {
         let apis = client_apis();
         let keys: Vec<i16> = apis.iter().map(|a| a.api_key).collect();
-        // StreamsGroupHeartbeat(88), StreamsGroupDescribe(89).
+        // StreamsGroupHeartbeat(88), StreamsGroupDescribe(89), at Kafka
+        // 4.3.1's v0; trunk's v1 is behind `unstable.api.versions.enable`.
         assert!(keys.contains(&88));
         assert!(keys.contains(&89));
         let hb = apis.iter().find(|a| a.api_key == 88).unwrap();
-        assert!((hb.min_version, hb.max_version) == (0, 1));
+        assert!((hb.min_version, hb.max_version) == (0, 0));
     }
 
     #[test]
@@ -1726,7 +1846,8 @@ mod tests {
             .collect();
         let dispatched = keys_of(&dispatched_apis());
         assert!(withheld.is_subset(&dispatched));
-        assert!(keys_of(&client_apis()) == dispatched.difference(&withheld).copied().collect());
+        let all = supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent, ALL);
+        assert!(keys_of(&all) == dispatched.difference(&withheld).copied().collect());
     }
 
     /// The dedicated inter-broker listener keeps the control-plane keys,
@@ -1738,7 +1859,7 @@ mod tests {
         let apis = supported_apis(
             ListenerKind::InterBroker,
             ClientMetricsReceiver::Absent,
-            UnstableApiVersions::Disabled,
+            STRICT,
         );
         let keys = keys_of(&apis);
         for api_key in INTER_BROKER_ONLY_APIS {
@@ -1762,7 +1883,7 @@ mod tests {
             let keys = keys_of(&supported_apis(
                 listener,
                 ClientMetricsReceiver::Absent,
-                UnstableApiVersions::Disabled,
+                STRICT,
             ));
             for api_key in INTER_BROKER_ONLY_APIS {
                 assert!(
@@ -1785,12 +1906,12 @@ mod tests {
             let absent = keys_of(&supported_apis(
                 listener,
                 ClientMetricsReceiver::Absent,
-                UnstableApiVersions::Disabled,
+                STRICT,
             ));
             let configured = keys_of(&supported_apis(
                 listener,
                 ClientMetricsReceiver::Configured,
-                UnstableApiVersions::Disabled,
+                STRICT,
             ));
             assert!(
                 configured
@@ -1816,7 +1937,7 @@ mod tests {
                 ClientMetricsReceiver::Absent,
                 ClientMetricsReceiver::Configured,
             ] {
-                for api in supported_apis(listener, metrics, UnstableApiVersions::Enabled) {
+                for api in supported_apis(listener, metrics, ALL) {
                     assert!(dispatched.contains(&api), "api_key {}", api.api_key);
                 }
             }
@@ -1836,69 +1957,137 @@ mod tests {
                 ClientMetricsReceiver::Absent,
                 ClientMetricsReceiver::Configured,
             ] {
-                for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
-                    let apis = supported_apis(listener, metrics, unstable);
+                for gates in EVERY_GATE {
+                    let apis = supported_apis(listener, metrics, gates);
                     assert!(
                         apis.windows(2)
                             .all(|pair| pair[0].api_key < pair[1].api_key),
-                        "{listener:?} {metrics:?} {unstable:?}"
+                        "{listener:?} {metrics:?} {gates:?}"
                     );
                 }
             }
         }
     }
 
-    /// #646: the only difference `unstable.api.versions.enable` makes to the
-    /// advertised table is the maximum of an API whose last version is
-    /// `latestVersionUnstable` -- today `InitProducerId` v6 alone -- and the
-    /// disabled version is refused on receive exactly when it is not
-    /// advertised.
+    /// #784: with both switches at their defaults every listener advertises
+    /// exactly Kafka 4.3.1's table -- each key's range is the release's
+    /// `validVersions`, `Produce` advertised from v0 (KAFKA-18659) -- and no
+    /// key that release lacks except krabka-private `GetReplicaLogInfo` on
+    /// the inter-broker listener.
     #[test]
-    fn unstable_api_versions_move_only_the_unstable_maxima() {
-        let unstable_apis: Vec<CatalogApi> = catalog_apis()
-            .into_iter()
-            .filter(|api| api.latest_stable_version < api.max_version)
-            .collect();
-        assert!(
-            unstable_apis
-                == vec![CatalogApi {
-                    api_key: 22,
-                    min_version: 0,
-                    max_version: 6,
-                    latest_stable_version: 5,
-                }]
-        );
-
-        let disabled = supported_apis(
-            ListenerKind::InterBroker,
-            ClientMetricsReceiver::Configured,
-            UnstableApiVersions::Disabled,
-        );
-        let enabled = supported_apis(
-            ListenerKind::InterBroker,
-            ClientMetricsReceiver::Configured,
-            UnstableApiVersions::Enabled,
-        );
-        let moved: Vec<(i16, i16, i16)> = disabled
+    fn the_default_table_is_kafka_4_3_1s() {
+        let released: std::collections::BTreeMap<i16, (i16, i16)> = krabka_raft::KAFKA_4_3_1_APIS
             .iter()
-            .zip(&enabled)
-            .filter(|(off, on)| off != on)
-            .map(|(off, on)| (off.api_key, off.max_version, on.max_version))
+            .map(|api| (api.api_key, (api.min_version, api.max_version)))
             .collect();
-        assert!(moved == vec![(22, 5, 6)]);
-
-        for (unstable, version, disabled_version) in [
-            (UnstableApiVersions::Disabled, 6, true),
-            (UnstableApiVersions::Disabled, 5, false),
-            (UnstableApiVersions::Enabled, 6, false),
-        ] {
-            assert!(
-                is_disabled_version(22, version, unstable) == disabled_version,
-                "{unstable:?} v{version}"
-            );
+        let apis = supported_apis(
+            ListenerKind::InterBroker,
+            ClientMetricsReceiver::Configured,
+            STRICT,
+        );
+        for api in &apis {
+            let range = (api.min_version, api.max_version);
+            match (api.api_key, released.get(&api.api_key)) {
+                (0, Some(&(3, max))) => assert!(range == (0, max), "Produce"),
+                (key, Some(&want)) => assert!(range == want, "api_key {key}"),
+                (key, None) => assert!(
+                    key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
+                    "api_key {key} is not in Kafka 4.3.1"
+                ),
+            }
         }
-        // Only the api that has an unstable version is gated.
-        assert!(!is_disabled_version(0, 13, UnstableApiVersions::Disabled));
+    }
+
+    /// #784: what each switch moves, in the whole table. Table-driven over
+    /// every combination: each row names the keys whose advertised range
+    /// differs from the default table, and how.
+    #[test]
+    fn each_switch_moves_only_its_own_rows() {
+        type Moved = Vec<(i16, Option<(i16, i16)>, Option<(i16, i16)>)>;
+        let table = |gates| {
+            supported_apis(
+                ListenerKind::InterBroker,
+                ClientMetricsReceiver::Configured,
+                gates,
+            )
+        };
+        let strict = table(STRICT);
+        let moved = |gates| -> Moved {
+            let other = table(gates);
+            let keys: BTreeSet<i16> = keys_of(&strict).union(&keys_of(&other)).copied().collect();
+            let range = |apis: &[ApiVersion], key| {
+                apis.iter()
+                    .find(|api| api.api_key == key)
+                    .map(|api| (api.min_version, api.max_version))
+            };
+            keys.into_iter()
+                .map(|key| (key, range(&strict, key), range(&other, key)))
+                .filter(|(_, before, after)| before != after)
+                .collect()
+        };
+        let unstable: Moved = vec![
+            (18, Some((0, 4)), Some((0, 5))),
+            (22, Some((0, 5)), Some((0, 6))),
+            (28, Some((0, 5)), Some((0, 6))),
+            (88, Some((0, 0)), Some((0, 1))),
+            (89, Some((0, 0)), Some((0, 1))),
+            (93, None, Some((0, 0))),
+            (94, None, Some((0, 0))),
+        ];
+        let legacy: Moved = vec![
+            (1, Some((4, 18)), Some((0, 18))),
+            (2, Some((1, 11)), Some((0, 11))),
+        ];
+        let both: Moved = {
+            let mut rows = legacy.clone();
+            rows.extend(unstable.iter().copied());
+            rows.sort_unstable_by_key(|row| row.0);
+            rows
+        };
+        for (gates, expected) in [
+            (EVERY_GATE[1], unstable),
+            (EVERY_GATE[2], legacy),
+            (ALL, both),
+        ] {
+            assert!(moved(gates) == expected, "{gates:?}");
+        }
+    }
+
+    /// #784: a version is refused on receive exactly when it is not
+    /// accepted, table-driven over the gated rows of every switch
+    /// combination. `Produce` v0-v2 is refused by default although it is
+    /// advertised, as Kafka 4.3.1 refuses it; `ApiVersions` is never refused
+    /// here, since its handler answers `UNSUPPORTED_VERSION`.
+    #[test]
+    fn a_gated_version_is_refused_exactly_when_it_is_not_accepted() {
+        let [strict, unstable, legacy, all] = EVERY_GATE;
+        let cases: &[(i16, i16, [bool; 4])] = &[
+            // (api_key, version, disabled under [strict, unstable, legacy, all])
+            (0, 0, [true, true, false, false]),
+            (0, 2, [true, true, false, false]),
+            (0, 3, [false, false, false, false]),
+            (1, 3, [true, true, false, false]),
+            (1, 4, [false, false, false, false]),
+            (2, 0, [true, true, false, false]),
+            (2, 1, [false, false, false, false]),
+            (18, 5, [false, false, false, false]),
+            (22, 6, [true, false, true, false]),
+            (28, 6, [true, false, true, false]),
+            (28, 5, [false, false, false, false]),
+            (88, 1, [true, false, true, false]),
+            (89, 1, [true, false, true, false]),
+            (93, 0, [true, false, true, false]),
+            (94, 0, [true, false, true, false]),
+            (1020, 0, [false, false, false, false]),
+        ];
+        for &(api_key, version, want) in cases {
+            for (gates, disabled) in [strict, unstable, legacy, all].into_iter().zip(want) {
+                assert!(
+                    is_disabled_version(api_key, version, gates) == disabled,
+                    "api_key {api_key} v{version} {gates:?}"
+                );
+            }
+        }
     }
 
     /// The single row Kafka puts in an `UNSUPPORTED_VERSION` answer
@@ -1906,20 +2095,27 @@ mod tests {
     /// `ApiVersions` row every listener advertises.
     #[test]
     fn the_unsupported_version_row_is_the_advertised_api_versions_row() {
-        let advertised: Vec<ApiVersion> = client_apis()
-            .into_iter()
-            .filter(|api| api.api_key == 18)
-            .collect();
-        assert!(
-            advertised
-                == vec![ApiVersion {
-                    api_key: 18,
-                    min_version: 0,
-                    max_version: 5,
-                    ..Default::default()
-                }]
-        );
-        assert!(krabka_raft::unsupported_version_response().api_keys == advertised);
+        for (gates, max_version) in [(STRICT, 4), (ALL, 5)] {
+            let advertised: Vec<ApiVersion> =
+                supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent, gates)
+                    .into_iter()
+                    .filter(|api| api.api_key == 18)
+                    .collect();
+            assert!(
+                advertised
+                    == vec![ApiVersion {
+                        api_key: 18,
+                        min_version: 0,
+                        max_version,
+                        ..Default::default()
+                    }],
+                "{gates:?}"
+            );
+            assert!(
+                krabka_raft::unsupported_version_response(gates.unstable).api_keys == advertised,
+                "{gates:?}"
+            );
+        }
     }
 
     /// The KIP number of a `KIP-<n>` key, or `None` for a scope-only key.

@@ -76,7 +76,11 @@ pub(crate) async fn handle(
         );
     }
 
-    let mut plan = match plan_updates(&req, &image, broker.config.node_id) {
+    let local_controller = preconditions::LocalController {
+        node_id: broker.config.node_id,
+        unstable_features: broker.config.features.unstable_feature_versions,
+    };
+    let mut plan = match plan_updates(&req, &image, local_controller) {
         Ok(plan) => plan,
         Err(error) => return feature_error(&error),
     };

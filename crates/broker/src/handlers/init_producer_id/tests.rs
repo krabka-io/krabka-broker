@@ -139,6 +139,7 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         config.transaction_state_num_partitions = 7;
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
+        config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
@@ -315,26 +316,45 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
 /// coordinator check.
 #[tokio::test]
 async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version_2() {
+    use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
     let refused = |error_code| InitProducerIdResponse {
         error_code,
         producer_id: -1,
         producer_epoch: -1,
         ..Default::default()
     };
-    for (two_phase_commit, enable_2pc, keep_prepared_txn, want) in [
+    // `keepPreparedTxn` is refused as Kafka 4.3.1 refuses it unless 2PC and
+    // `unstable.api.versions.enable` are both on (#784).
+    for (two_phase_commit, unstable, enable_2pc, keep_prepared_txn, want) in [
         (
             false,
+            Enabled,
             true,
             false,
             refused(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
         ),
-        (false, false, true, refused(codes::UNSUPPORTED_VERSION)),
-        (true, true, false, refused(codes::NOT_COORDINATOR)),
-        (true, false, true, refused(codes::NOT_COORDINATOR)),
+        (
+            false,
+            Enabled,
+            false,
+            true,
+            refused(codes::UNSUPPORTED_VERSION),
+        ),
+        (true, Disabled, true, false, refused(codes::NOT_COORDINATOR)),
+        (
+            true,
+            Disabled,
+            false,
+            true,
+            refused(codes::UNSUPPORTED_VERSION),
+        ),
+        (true, Enabled, true, false, refused(codes::NOT_COORDINATOR)),
+        (true, Enabled, false, true, refused(codes::NOT_COORDINATOR)),
     ] {
         let (broker_handle, _dir) = start_broker_with(|config| {
             config.audit_enabled = false;
             config.features.transaction_two_phase_commit_enable = two_phase_commit;
+            config.features.unstable_api_versions = unstable;
         })
         .await;
         wait_for_transaction_version_2(&broker_handle).await;
@@ -364,8 +384,8 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
             crate::test_support::decode_response(&response, version);
         assert!(
             response == want,
-            "config {two_phase_commit}, enable2Pc {enable_2pc}, keepPreparedTxn \
-             {keep_prepared_txn}: {response:?}"
+            "config {two_phase_commit}, {unstable:?}, enable2Pc {enable_2pc}, \
+             keepPreparedTxn {keep_prepared_txn}: {response:?}"
         );
         broker_handle.shutdown().await;
     }
@@ -378,6 +398,7 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
         config.transaction_state_num_partitions = 7;
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
+        config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
@@ -898,6 +919,8 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             config.transaction_state_num_partitions = 7;
             config.transaction_max_timeout = secs(8);
             config.features.transaction_two_phase_commit_enable = true;
+            config.features.unstable_api_versions =
+                crate::api_catalog::UnstableApiVersions::Enabled;
             config.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
                 SimpleAclAuthorizer::new(HashSet::new()),
             ));

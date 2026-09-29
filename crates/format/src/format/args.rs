@@ -49,6 +49,21 @@ pub struct FormatArgs {
     /// except `metadata.version`, where the two conflict.
     #[arg(long = "feature", value_parser = parse_feature_spec)]
     pub(super) feature: Vec<(String, i16)>,
+    /// Accept feature levels past the latest production ones: Kafka trunk's
+    /// `metadata.version` `4.4-IV0` to `4.4-IV2`, which a stock Kafka 4.3.1
+    /// does not know. It is Kafka's internal `unstable.feature.versions.enable`,
+    /// which `kafka-storage format` reads from its `--config` file; without it
+    /// such a release is refused as Kafka refuses it. A node formatted at one
+    /// of those levels needs the same setting in its `server_properties`.
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::TypedValueParser::map(
+            clap::builder::BoolValueParser::new(),
+            krabka_raft::UnstableFeatureVersions::from,
+        ),
+    )]
+    pub(super) unstable_feature_versions_enable: krabka_raft::UnstableFeatureVersions,
     /// Seed a SCRAM credential. May be repeated.
     /// Format: `SCRAM-SHA-256=[name=<u>,password=<p>,iterations=<n>]`
     /// or `SCRAM-SHA-512=[name=<u>,password=<p>,iterations=<n>]`

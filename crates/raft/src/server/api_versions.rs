@@ -16,7 +16,7 @@ pub use self::{
     client_software::is_valid_client_info,
     features::{finalized_feature_keys, supported_feature_key, supported_feature_keys},
 };
-use crate::{UnstableApiVersions, error::RaftError};
+use crate::{UnstableApiVersions, UnstableFeatureVersions, error::RaftError};
 
 mod client_software;
 mod features;
@@ -29,11 +29,22 @@ pub(super) const API_KEY_API_VERSIONS: i16 = 18;
 
 /// Lowest `ApiVersions` request version this listener speaks.
 const API_VERSIONS_MIN_VERSION: i16 = api_versions_request::MIN_VERSION;
-/// Highest `ApiVersions` request version this listener speaks: the clamp
-/// applied to the response body codec, and the same generated maximum the
-/// `api_keys` table advertises for API 18 (current JVM controllers dial at v5;
-/// Krabka's own client at v0).
+/// Highest `ApiVersions` request version this listener decodes: the generated
+/// maximum. [`api_versions_max_version`] is what it serves.
 const API_VERSIONS_MAX_VERSION: i16 = api_versions_request::MAX_VERSION;
+
+/// Highest `ApiVersions` version a listener serves under `unstable`, the same
+/// maximum its `api_keys` table advertises for API 18: Kafka 4.3.1's v4 by
+/// default, and trunk's KIP-1242 v5 under `unstable.api.versions.enable`.
+#[must_use]
+pub fn api_versions_max_version(unstable: UnstableApiVersions) -> i16 {
+    match unstable {
+        UnstableApiVersions::Enabled => API_VERSIONS_MAX_VERSION,
+        UnstableApiVersions::Disabled => {
+            crate::kafka_4_3_1_max(API_KEY_API_VERSIONS).unwrap_or(API_VERSIONS_MAX_VERSION)
+        }
+    }
+}
 /// First `ApiVersions` version that carries the KIP-511 client software name
 /// and version.
 const API_VERSIONS_CLIENT_SOFTWARE_MIN_VERSION: i16 = 3;
@@ -56,6 +67,8 @@ pub(crate) struct ApiVersionsView<'a> {
     pub(crate) admin_router: Option<&'a dyn crate::ControllerAdminRouter>,
     /// Kafka's `unstable.api.versions.enable`.
     pub(crate) unstable: UnstableApiVersions,
+    /// Kafka's `unstable.feature.versions.enable`.
+    pub(crate) unstable_features: UnstableFeatureVersions,
 }
 
 /// The offset of the last record `engine`'s image contains, or `-1` before
@@ -94,8 +107,9 @@ pub(crate) fn api_versions_response(
     body: &[u8],
     view: ApiVersionsView<'_>,
 ) -> Result<Bytes, RaftError> {
-    if !(API_VERSIONS_MIN_VERSION..=API_VERSIONS_MAX_VERSION).contains(&req_version) {
-        return Ok(encode_body(&unsupported_version_response(), 0));
+    if !(API_VERSIONS_MIN_VERSION..=api_versions_max_version(view.unstable)).contains(&req_version)
+    {
+        return Ok(encode_body(&unsupported_version_response(view.unstable), 0));
     }
     let request = ApiVersionsRequest::decode(&mut &body[..], req_version)?;
     if !is_valid_request(&request, req_version) {
@@ -116,13 +130,13 @@ pub(crate) fn api_versions_response(
 /// which the client reads to pick the version it retries with. Every listener,
 /// broker or controller, answers with these bytes in a v0 body.
 #[must_use]
-pub fn unsupported_version_response() -> ApiVersionsResponse {
+pub fn unsupported_version_response(unstable: UnstableApiVersions) -> ApiVersionsResponse {
     ApiVersionsResponse {
         error_code: API_VERSIONS_UNSUPPORTED_VERSION,
         api_keys: vec![ApiVersionEntry {
             api_key: API_KEY_API_VERSIONS,
             min_version: API_VERSIONS_MIN_VERSION,
-            max_version: API_VERSIONS_MAX_VERSION,
+            max_version: api_versions_max_version(unstable),
             ..Default::default()
         }],
         ..Default::default()
@@ -151,28 +165,37 @@ fn encode_body(response: &ApiVersionsResponse, version: i16) -> Bytes {
 
 /// The controller listener's advertised table under `unstable`, sorted by API
 /// key: its own APIs and the Admin router's, each capped at the version
-/// `unstable` enables, as Kafka's `ApiKeys.toApiVersion` caps it.
+/// `unstable` enables, as Kafka's `ApiKeys.toApiVersion` caps it. An api key
+/// the enabled table does not have -- one Kafka 4.3.1 lacks, while unstable
+/// api versions are disabled -- is left out.
 pub(super) fn advertised_api_keys(
     admin_router: Option<&dyn crate::ControllerAdminRouter>,
     unstable: UnstableApiVersions,
 ) -> Vec<ApiVersionEntry> {
-    let entry = |version: &crate::ControllerApiVersion| ApiVersionEntry {
-        api_key: version.api_key,
-        min_version: version.min_version,
-        max_version: version.enabled_max(unstable),
-        ..Default::default()
+    let entry = |version: &crate::ControllerApiVersion| {
+        version
+            .enabled_max(unstable)
+            .map(|max_version| ApiVersionEntry {
+                api_key: version.api_key,
+                min_version: version.min_version,
+                max_version,
+                ..Default::default()
+            })
     };
-    let mut api_keys: Vec<ApiVersionEntry> = CONTROLLER_LISTENER_APIS.iter().map(entry).collect();
+    let mut api_keys: Vec<ApiVersionEntry> =
+        CONTROLLER_LISTENER_APIS.iter().filter_map(entry).collect();
     if let Some(router) = admin_router {
-        api_keys.extend(router.api_versions().iter().map(entry));
+        api_keys.extend(router.api_versions().iter().filter_map(entry));
     }
     api_keys.sort_unstable_by_key(|version| version.api_key);
     api_keys
 }
 
-/// Whether `version` of `api_key` is a `latestVersionUnstable` version that
-/// `unstable` disables on this listener. Kafka's `Processor.parseRequestHeader`
-/// closes the connection on one (`ApiKeys.isVersionEnabled`).
+/// Whether `version` of `api_key` is a version that `unstable` disables on
+/// this listener: one above the enabled maximum, or any version of an api key
+/// the enabled table does not have. Kafka's `Processor.parseRequestHeader`
+/// closes the connection on either (`ApiKeys.isVersionEnabled`, and
+/// `ApiKeys.forId` for a key the release does not know).
 pub(super) fn is_disabled_version(
     api_key: i16,
     version: i16,
@@ -213,7 +236,7 @@ pub(super) fn is_disabled_version(
 pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView<'_>) -> Bytes {
     let resp = ApiVersionsResponse {
         api_keys: advertised_api_keys(view.admin_router, view.unstable),
-        supported_features: supported_feature_keys(req_version),
+        supported_features: supported_feature_keys(req_version, view.unstable_features),
         finalized_features_epoch: view.metadata_offset,
         finalized_features: finalized_feature_keys(view.image),
         ..Default::default()
@@ -223,7 +246,10 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
     // v0-shaped body, req v>=3 → flexible (compact) body. The v0 ApiVersions
     // response HEADER asymmetry lives in the framing (`write_response_no_tagged_fields`),
     // not here.
-    encode_body(&resp, req_version.clamp(0, API_VERSIONS_MAX_VERSION))
+    encode_body(
+        &resp,
+        req_version.clamp(0, api_versions_max_version(view.unstable)),
+    )
 }
 
 #[cfg(test)]
@@ -242,6 +268,7 @@ mod tests {
             metadata_offset,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
+            unstable_features: UnstableFeatureVersions::Disabled,
         }
     }
 
@@ -308,7 +335,7 @@ mod tests {
                     api_key: broker_heartbeat_request::API_KEY,
                     min_version: broker_heartbeat_request::MIN_VERSION,
                     max_version: broker_heartbeat_request::MAX_VERSION,
-                    latest_stable_version: broker_heartbeat_request::LATEST_STABLE_VERSION,
+                    released_max: Some(broker_heartbeat_request::MAX_VERSION),
                     flexible_min: broker_heartbeat_request::FLEXIBLE_MIN,
                 }]
             }
@@ -355,7 +382,7 @@ mod tests {
                 api_key: 22,
                 min_version: 0,
                 max_version: 6,
-                latest_stable_version: 5,
+                released_max: Some(5),
                 flexible_min: 2,
             }]
         }
@@ -401,6 +428,47 @@ mod tests {
         }
     }
 
+    /// A router api Kafka 4.3.1 does not have -- `UnregisterController` (94),
+    /// a trunk key -- is neither advertised nor accepted while unstable api
+    /// versions are disabled, and is served whole when they are enabled.
+    #[test]
+    fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable() {
+        struct TrunkRouter;
+        impl crate::ControllerAdminRouter for TrunkRouter {
+            fn api_versions(&self) -> &[crate::ControllerApiVersion] {
+                &[crate::ControllerApiVersion {
+                    api_key: 94,
+                    min_version: 0,
+                    max_version: 0,
+                    released_max: None,
+                    flexible_min: 0,
+                }]
+            }
+
+            fn route(
+                &self,
+                _request: crate::ControllerAdminRequest,
+            ) -> crate::ControllerAdminRouteFuture<'_> {
+                Box::pin(async { Ok(None) })
+            }
+        }
+
+        for (unstable, advertised, disabled) in [
+            (UnstableApiVersions::Disabled, None, true),
+            (UnstableApiVersions::Enabled, Some((0, 0)), false),
+        ] {
+            let row = advertised_api_keys(Some(&TrunkRouter), unstable)
+                .into_iter()
+                .find(|key| key.api_key == 94)
+                .map(|key| (key.min_version, key.max_version));
+            assert2::check!(row == advertised, "{unstable:?}");
+            assert2::check!(
+                is_disabled_version(94, 0, Some(&TrunkRouter), unstable) == disabled,
+                "{unstable:?}"
+            );
+        }
+    }
+
     /// The controller listener's table is strictly ascending by api key, the
     /// router's rows merged in, as Kafka's `apisForListener` `EnumSet` orders
     /// it.
@@ -424,6 +492,7 @@ mod tests {
 
         struct Row {
             label: &'static str,
+            unstable: UnstableApiVersions,
             version: i16,
             request: Option<ApiVersionsRequest>,
             expected: Option<(i16, ApiVersionsResponse)>,
@@ -437,19 +506,22 @@ mod tests {
                 ..Default::default()
             })
         };
-        let unsupported = Some((
-            0,
-            ApiVersionsResponse {
-                error_code: API_VERSIONS_UNSUPPORTED_VERSION,
-                api_keys: vec![ApiVersionEntry {
-                    api_key: 18,
-                    min_version: 0,
-                    max_version: 5,
+        let unsupported = |max_version| {
+            Some((
+                0,
+                ApiVersionsResponse {
+                    error_code: API_VERSIONS_UNSUPPORTED_VERSION,
+                    api_keys: vec![ApiVersionEntry {
+                        api_key: 18,
+                        min_version: 0,
+                        max_version,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
-                ..Default::default()
-            },
-        ));
+                },
+            ))
+        };
+        let (strict, trunk) = (UnstableApiVersions::Disabled, UnstableApiVersions::Enabled);
         let invalid = |version| {
             Some((
                 version,
@@ -462,69 +534,94 @@ mod tests {
         let rows = [
             Row {
                 label: "v6",
+                unstable: strict,
                 version: 6,
                 request: None,
-                expected: unsupported.clone(),
+                expected: unsupported(4),
             },
             Row {
                 label: "i16::MAX",
+                unstable: strict,
                 version: i16::MAX,
                 request: None,
-                expected: unsupported.clone(),
+                expected: unsupported(4),
             },
             Row {
                 label: "negative",
+                unstable: strict,
                 version: -1,
                 request: None,
-                expected: unsupported,
+                expected: unsupported(4),
             },
             Row {
                 label: "v3 empty name",
+                unstable: strict,
                 version: 3,
                 request: request("", "1.0", None, -1),
                 expected: invalid(3),
             },
             Row {
                 label: "v4 name with a space",
+                unstable: strict,
                 version: 4,
                 request: request("a b", "1.0", None, -1),
                 expected: invalid(4),
             },
             Row {
                 label: "v3 empty software version",
+                unstable: strict,
                 version: 3,
                 request: request("krabka", "", None, -1),
                 expected: invalid(3),
             },
             Row {
                 label: "v5 cluster id without node id",
+                unstable: trunk,
                 version: 5,
                 request: request("krabka", "1.0", Some("cluster"), -1),
                 expected: invalid(5),
             },
             Row {
                 label: "v5 node id without cluster id",
+                unstable: trunk,
                 version: 5,
                 request: request("krabka", "1.0", None, 7),
                 expected: invalid(5),
             },
             Row {
                 label: "v5 another cluster and node, no KIP-1242 check",
+                unstable: trunk,
                 version: 5,
                 request: request("krabka", "1.0", Some("other"), 8),
                 expected: None,
             },
             Row {
                 label: "v5 valid",
+                unstable: trunk,
                 version: 5,
                 request: request("krabka", "1.0", None, -1),
                 expected: None,
             },
             Row {
                 label: "v0",
+                unstable: strict,
                 version: 0,
                 request: Some(ApiVersionsRequest::default()),
                 expected: None,
+            },
+            Row {
+                label: "v6 under unstable api versions",
+                unstable: trunk,
+                version: 6,
+                request: None,
+                expected: unsupported(5),
+            },
+            Row {
+                label: "v5 is Kafka 4.3.1's unsupported version",
+                unstable: strict,
+                version: 5,
+                request: request("krabka", "1.0", None, -1),
+                expected: unsupported(4),
             },
         ];
 
@@ -538,10 +635,13 @@ mod tests {
                     body.freeze()
                 },
             );
-            let answer =
-                super::api_versions_response(row.version, &body, view(&image, -1)).expect("answer");
+            let view = ApiVersionsView {
+                unstable: row.unstable,
+                ..view(&image, -1)
+            };
+            let answer = super::api_versions_response(row.version, &body, view).expect("answer");
             let (version, expected) = row.expected.unwrap_or_else(|| {
-                let full = super::api_versions_response_body(row.version, view(&image, -1));
+                let full = super::api_versions_response_body(row.version, view);
                 (
                     row.version,
                     ApiVersionsResponse::decode(&mut &full[..], row.version).expect("full"),
@@ -571,10 +671,7 @@ mod tests {
     /// epoch is the metadata offset the view carries.
     #[test]
     fn feature_fields_match_kafka_on_the_controller_listener() {
-        use krabka_metadata::{
-            KRaftVersionRecord,
-            metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN},
-        };
+        use krabka_metadata::{KRaftVersionRecord, metadata_version::METADATA_VERSION_MIN};
         use krabka_protocol::owned::api_versions_response::{
             FinalizedFeatureKey, SupportedFeatureKey,
         };
@@ -599,17 +696,16 @@ mod tests {
             max_version_level: level,
             ..Default::default()
         };
+        // The listener's default, `unstable.feature.versions.enable=false`,
+        // caps metadata.version at 4.3.1's latest production level.
+        let metadata_max = crate::LATEST_PRODUCTION_METADATA_VERSION;
         let legacy = vec![supported(
             "metadata.version",
             METADATA_VERSION_MIN,
-            METADATA_VERSION_MAX,
+            metadata_max,
         )];
         let modern = vec![
-            supported(
-                "metadata.version",
-                METADATA_VERSION_MIN,
-                METADATA_VERSION_MAX,
-            ),
+            supported("metadata.version", METADATA_VERSION_MIN, metadata_max),
             supported("group.version", 0, 1),
             supported("transaction.version", 0, 2),
             supported("share.version", 0, 1),

@@ -414,7 +414,14 @@ fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
 
     assert!(registration.node_id == krabka_metadata::NodeId(7));
     assert!(registration.incarnation_id == uuid::Uuid::from_u128(0xCAFE));
-    assert!(registration.features == krabka_metadata::supported_feature_ranges());
+    // #784: `metadata.version` capped at 4.3.1's latest production level,
+    // the node's default `unstable.feature.versions.enable=false`.
+    let mut expected = krabka_metadata::supported_feature_ranges();
+    expected.insert(
+        "metadata.version".into(),
+        (krabka_metadata::metadata_version::METADATA_VERSION_MIN, 30),
+    );
+    assert!(registration.features == expected);
     assert!(
         registration.endpoints
             == vec![krabka_metadata::BrokerEndpoint {

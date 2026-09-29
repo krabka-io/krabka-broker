@@ -43,13 +43,17 @@ pub fn supported_feature_key(
 }
 
 /// Every supported-feature row of the `krabka_metadata` feature registry at
-/// `api_version`.
+/// `api_version`, each feature capped as `unstable` caps it
+/// ([`crate::supported_feature_range`]).
 #[must_use]
-pub fn supported_feature_keys(api_version: i16) -> Vec<SupportedFeatureKey> {
+pub fn supported_feature_keys(
+    api_version: i16,
+    unstable: crate::UnstableFeatureVersions,
+) -> Vec<SupportedFeatureKey> {
     krabka_metadata::feature_registry()
         .iter()
         .filter_map(|feature| {
-            let (min_version, max_version) = feature.supported_range();
+            let (min_version, max_version) = crate::supported_feature_range(*feature, unstable);
             supported_feature_key(feature.name(), min_version, max_version, api_version)
         })
         .collect()
@@ -121,32 +125,45 @@ mod tests {
 
     /// #783's table: below v4 only the features with a non-zero minimum stay;
     /// from v4 every feature is advertised from Kafka's minimum production
-    /// level.
+    /// level. #784: `metadata.version` tops out at 4.3.1's latest production
+    /// level, 30, unless `unstable.feature.versions.enable` is set, as
+    /// `BrokerFeatures.defaultSupportedFeatures` caps it.
     #[test]
     fn supported_features_follow_kafkas_minimums_and_alter_level_zero() {
-        let modern = vec![
-            supported(
+        use crate::UnstableFeatureVersions;
+        let modern = |metadata_max| {
+            vec![
+                supported("metadata.version", METADATA_VERSION_MIN, metadata_max),
+                supported("group.version", 0, 1),
+                supported("transaction.version", 0, 2),
+                supported("share.version", 0, 1),
+                supported("streams.version", 0, 1),
+                supported("eligible.leader.replicas.version", 0, 1),
+                supported("kraft.version", 0, 1),
+            ]
+        };
+        let legacy = |metadata_max| {
+            vec![supported(
                 "metadata.version",
                 METADATA_VERSION_MIN,
-                METADATA_VERSION_MAX,
-            ),
-            supported("group.version", 0, 1),
-            supported("transaction.version", 0, 2),
-            supported("share.version", 0, 1),
-            supported("streams.version", 0, 1),
-            supported("eligible.leader.replicas.version", 0, 1),
-            supported("kraft.version", 0, 1),
-        ];
-        let legacy = vec![supported(
-            "metadata.version",
-            METADATA_VERSION_MIN,
-            METADATA_VERSION_MAX,
-        )];
-        for (api_version, expected) in [(0, &legacy), (3, &legacy), (4, &modern), (5, &modern)] {
-            check!(
-                supported_feature_keys(api_version) == *expected,
-                "v{api_version}"
-            );
+                metadata_max,
+            )]
+        };
+        for (unstable, metadata_max) in [
+            (UnstableFeatureVersions::Disabled, 30),
+            (UnstableFeatureVersions::Enabled, METADATA_VERSION_MAX),
+        ] {
+            for (api_version, expected) in [
+                (0, legacy(metadata_max)),
+                (3, legacy(metadata_max)),
+                (4, modern(metadata_max)),
+                (5, modern(metadata_max)),
+            ] {
+                check!(
+                    supported_feature_keys(api_version, unstable) == expected,
+                    "v{api_version} {unstable:?}"
+                );
+            }
         }
     }
 

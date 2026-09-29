@@ -15,6 +15,7 @@ use super::{
     topic_scope::{merge_list_op, not_a_list},
 };
 use crate::{
+    api_catalog::UnstableApiVersions,
     codes,
     config_keys::{
         group::{kafka_group_key, validate_group_configs},
@@ -27,6 +28,7 @@ fn group_record(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     defaults: &StreamsGroupConfig,
+    unstable: UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
     let mut merged = image
         .group_config(&resource.resource_name)
@@ -42,7 +44,7 @@ fn group_record(
                 merged.remove(&cfg.name);
             }
             operation => {
-                let key = kafka_group_key(&cfg.name)
+                let key = kafka_group_key(&cfg.name, unstable)
                     .filter(|key| key.config_type == ConfigType::List)
                     .ok_or_else(|| not_a_list(operation, &cfg.name))?;
                 let next = merge_list_op(
@@ -62,7 +64,8 @@ fn group_record(
             "Default group resources are not allowed.".into(),
         ));
     }
-    validate_group_configs(&merged, defaults).map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    validate_group_configs(&merged, defaults, unstable)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
         group_id: resource.resource_name.clone(),
         configs: merged,
@@ -73,10 +76,11 @@ pub(super) fn handle_group_scoped(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     defaults: &StreamsGroupConfig,
+    unstable: UnstableApiVersions,
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    match group_record(resource, image, defaults) {
+    match group_record(resource, image, defaults, unstable) {
         Ok(record) => to_submit.push(record),
         Err((code, message)) => {
             out.error_code = code;
@@ -117,6 +121,7 @@ mod tests {
             &resource,
             &MetadataImage::new(uuid::Uuid::nil()),
             &StreamsGroupConfig::default(),
+            crate::api_catalog::UnstableApiVersions::Enabled,
             &mut out,
             &mut records,
         );
@@ -159,6 +164,7 @@ mod tests {
                 &resource,
                 &MetadataImage::new(uuid::Uuid::nil()),
                 &StreamsGroupConfig::default(),
+                crate::api_catalog::UnstableApiVersions::Enabled,
                 &mut out,
                 &mut records,
             );
@@ -201,6 +207,7 @@ mod tests {
             &resource,
             &MetadataImage::new(uuid::Uuid::nil()),
             &StreamsGroupConfig::default(),
+            crate::api_catalog::UnstableApiVersions::Enabled,
             &mut out,
             &mut records,
         );
@@ -274,6 +281,7 @@ mod tests {
                     &resource,
                     &MetadataImage::new(uuid::Uuid::nil()),
                     &StreamsGroupConfig::default(),
+                    crate::api_catalog::UnstableApiVersions::Enabled,
                 ) == want,
                 "{name:?} {configs:?}"
             );
