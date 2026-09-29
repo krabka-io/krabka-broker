@@ -49,7 +49,7 @@ fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
             crate::config_keys::serves_topic_key(
                 row.name,
                 crate::api_catalog::UnstableApiVersions::Disabled,
-            )
+            ) && (!row.internal || overrides.iter().any(|(key, _)| *key == row.name))
         })
         .map(|row| {
             let stored = overrides
@@ -911,6 +911,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
                 name,
                 &std::collections::BTreeMap::new(),
                 crate::api_catalog::UnstableApiVersions::Disabled,
+                &std::collections::BTreeMap::new(),
             ))
         } else {
             expected_row.configs.clone()
@@ -1083,6 +1084,7 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
             "mirrored",
             image.topic_config("mirrored").expect("stored overrides"),
             crate::api_catalog::UnstableApiVersions::Disabled,
+            &std::collections::BTreeMap::new(),
         )
         .into_iter()
         .map(|entry| CreatableTopicConfigs {

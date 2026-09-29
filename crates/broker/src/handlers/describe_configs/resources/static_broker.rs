@@ -63,7 +63,10 @@
 //! `synonyms={STATIC_BROKER_CONFIG:...=10080, DEFAULT_CONFIG:...=10080}`.
 
 use krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult;
-use krabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{
+    Time,
+    convert::{ByteSizeExt as _, TimeExt as _},
+};
 
 use super::super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
@@ -125,6 +128,95 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
     /// listener name. Each is a key per listener rather than a registry row.
     pub(in crate::handlers::describe_configs) connections_max_idle_overrides:
         &'a std::collections::BTreeMap<String, Time>,
+    /// The other `KafkaConfig` keys this process runs with a static value
+    /// for, by Kafka key. See [`static_settings`].
+    pub(in crate::handlers::describe_configs) settings:
+        &'a std::collections::BTreeMap<&'static str, String>,
+}
+
+/// The `KafkaConfig` keys krabka can state a static value of, for the
+/// `STATIC_BROKER_CONFIG` layer of a named broker resource and of a topic key's
+/// broker synonym.
+///
+/// Kafka reports a key at `STATIC_BROKER_CONFIG` when `server.properties`
+/// names it, whatever the value is. Some keys are always named: `log.dirs`,
+/// `listeners`, `advertised.listeners` and `process.roles` are how a node is
+/// told where it lives, and krabka always holds them. The three log defaults
+/// `message.max.bytes`, `log.segment.bytes` and `min.insync.replicas` are
+/// named only when the operator supplied them, which
+/// [`crate::config::StaticConfigOrigins`] records, so an inherited default
+/// stays at `DEFAULT_CONFIG`. `broker.rack` and `cordoned.log.dirs` are named
+/// when the node has a value.
+///
+/// A key absent here is reported at its Kafka default, which is what an
+/// operator who never wrote it gets from Kafka too.
+pub(crate) fn static_settings(
+    config: &crate::config::BrokerConfig,
+) -> std::collections::BTreeMap<&'static str, String> {
+    let join_paths = |dirs: Vec<std::path::PathBuf>| {
+        dirs.iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let listeners = config.effective_listeners();
+    let roles: Vec<&str> = config
+        .roles
+        .iter()
+        .map(|role| match role {
+            crate::config::NodeRole::Controller => "controller",
+            crate::config::NodeRole::Broker | crate::config::NodeRole::Witness => "broker",
+        })
+        .collect();
+    let mut settings = std::collections::BTreeMap::from([
+        ("log.dirs", join_paths(config.all_log_dirs())),
+        ("process.roles", roles.join(",")),
+        (
+            "listeners",
+            listeners
+                .iter()
+                .map(|listener| format!("{}://{}", listener.name, listener.bind_addr))
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        (
+            "advertised.listeners",
+            listeners
+                .iter()
+                .map(|listener| format!("{}://{}", listener.name, listener.advertised))
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    ]);
+    if let Some(rack) = &config.rack {
+        settings.insert("broker.rack", rack.clone());
+    }
+    if let Some(cordoned) = &config.cordoned_log_dirs {
+        settings.insert(
+            crate::cordoned_log_dirs::CORDONED_LOG_DIRS,
+            cordoned.clone(),
+        );
+    }
+    let supplied = config.static_config_origins.log;
+    if supplied.message_max_bytes {
+        settings.insert(
+            "message.max.bytes",
+            config.log_config.max_message_size.bytes_u64().to_string(),
+        );
+    }
+    if supplied.log_segment_bytes {
+        settings.insert(
+            "log.segment.bytes",
+            config.log_config.segment_size.bytes_u64().to_string(),
+        );
+    }
+    if supplied.min_insync_replicas {
+        settings.insert(
+            config_keys::MIN_INSYNC_REPLICAS,
+            config.default_min_insync_replicas.to_string(),
+        );
+    }
+    settings
 }
 
 /// One static broker entry.
@@ -287,8 +379,15 @@ pub(in crate::handlers::describe_configs) fn kafka_default_static_broker()
         auto_create_topics_enable: None,
         connections_max_idle: None,
         connections_max_idle_overrides: NO_IDLE_OVERRIDES.get_or_init(Default::default),
+        settings: NO_SETTINGS.get_or_init(Default::default),
     }
 }
+
+/// The empty static-settings map [`kafka_default_static_broker`] borrows: a
+/// process that names none of the keys [`static_settings`] states.
+#[cfg(test)]
+static NO_SETTINGS: std::sync::OnceLock<std::collections::BTreeMap<&'static str, String>> =
+    std::sync::OnceLock::new();
 
 /// The empty override map [`kafka_default_static_broker`] borrows, so the
 /// helper can hand back a `'static` view without each caller owning a map.

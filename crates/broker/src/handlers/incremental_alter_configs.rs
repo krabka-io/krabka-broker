@@ -311,7 +311,7 @@ async fn process_resource(
             handle_group_scoped(
                 &resource,
                 image,
-                &broker.config.streams_group,
+                &crate::config_keys::group::GroupBounds::of(&broker.config),
                 broker.config.features.unstable_api_versions,
                 &mut out,
                 &mut to_submit,
@@ -321,6 +321,12 @@ async fn process_resource(
             }
         }
         other => unreachable!("resource type {other} passed the ACL dispatch"),
+    }
+
+    if let Some((code, message)) = super::alter_configs::config_value_size_error(&to_submit) {
+        out.error_code = code;
+        out.error_message = Some(message);
+        return out;
     }
 
     if to_submit.iter().any(|record| match record {

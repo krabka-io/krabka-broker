@@ -273,7 +273,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/describe_configs.rs",
         tests: &["crates/broker/tests/jvm_acceptance_cli/configs.rs"],
-        note: "",
+        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. Dynamic keys with no krabka behaviour behind them (thread pool sizes, the log cleaner, connection limits, SSL and SASL listener settings, `listeners`) are stored and reported and do not change how the broker runs, and a `CLASS` value is accepted without loading the class.",
     },
     KipAnnotation {
         key: "KIP-227",
@@ -400,7 +400,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
         ],
-        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them.",
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them. With the flag on, `remote.copy.lag.ms` and `remote.copy.lag.bytes` are stored and reported and do not delay a segment's copy to the remote tier, and `max.decompressed.message.bytes` is stored and reported and is not enforced on produce, compaction or ListOffsets, where the broker-wide decompression bound applies to every topic. `errors.deadletterqueue.topic.name`, `errors.deadletterqueue.copy.record.enable` and the three `*.assignor.offload.enable` group keys are accepted on a group with trunk's validation and stored, and nothing reads them yet.",
     },
     KipAnnotation {
         key: "KIP-392",
@@ -815,7 +815,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",
+        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker. A group's `consumer.session.timeout.ms`, `consumer.heartbeat.interval.ms` and `consumer.assignment.interval.ms` are accepted, validated against the `group.consumer.min.*` and `group.consumer.max.*` bounds and stored by `AlterConfigs` and `IncrementalAlterConfigs` on a `GROUP` resource, as Kafka does, but the consumer coordinator still runs every group with the broker's `group.consumer.*` values.",
     },
     KipAnnotation {
         key: "KIP-853",
@@ -895,7 +895,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/share_admin_offsets.rs",
             "crates/broker/tests/jvm_share_groups.rs",
         ],
-        note: "",
+        note: "Group-level configs are accepted, validated and stored for every key of Kafka 4.3.1's `GroupConfig`, by `AlterConfigs` and `IncrementalAlterConfigs` on a `GROUP` resource, as Kafka does. The share partitions apply `share.auto.offset.reset`, `share.record.lock.duration.ms`, `share.delivery.count.limit`, `share.partition.max.record.locks`, `share.isolation.level` and `share.renew.acknowledge.enable`. `share.session.timeout.ms`, `share.heartbeat.interval.ms` and `share.assignment.interval.ms` are stored and reported, and the share coordinator still runs every group with the broker's `group.share.*` values.",
     },
     KipAnnotation {
         key: "KIP-939",
@@ -1018,7 +1018,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_streams_groups.rs",
             "crates/broker/tests/jvm_streams_app.rs",
         ],
-        note: "",
+        note: "A group's `streams.*` overrides, `streams.initial.rebalance.delay.ms` and `streams.assignment.interval.ms` included, apply per group, and a key of another coordinator stored beside them leaves them intact.",
     },
     KipAnnotation {
         key: "KIP-1073",

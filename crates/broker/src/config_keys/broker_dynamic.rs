@@ -5,9 +5,11 @@
 //! refuses a Kafka key that is not dynamic, an SSL key without a listener
 //! prefix, a per-broker key on the cluster-default resource, and a value its
 //! own validator refuses, each with `INVALID_REQUEST` (KAFKA-13609 keeps the
-//! code at 42 even for a bad value). The rules here are that check, over the
-//! broker keys krabka knows: the dynamic keys it runs with, the broker
-//! synonyms of its topic keys, and the static keys it reads at startup.
+//! code at 42 even for a bad value). The rules here are that check. A `KafkaConfig`
+//! key is one [`super::kafka_broker`] holds, and any other name passes
+//! through unchecked, as Kafka's `ConfigDef.parse` ignores a name it does not
+//! define. The broker synonyms of Kafka trunk's topic keys join the roster
+//! under `unstable.api.versions.enable`.
 
 use std::collections::BTreeMap;
 
@@ -15,13 +17,7 @@ use krabka_metadata::NodeId;
 
 use super::{
     MIN_INSYNC_REPLICAS,
-    broker_scope::{
-        AUTO_CREATE_TOPICS_ENABLE, CONNECTIONS_MAX_IDLE_MS, CONNECTIONS_MAX_REAUTH_MS,
-        DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
-        OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
-        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-        TRANSACTIONAL_ID_EXPIRATION_MS, parse_remote_list_offsets_timeout,
-    },
+    kafka_broker::{self, Dynamic, listener_override_base},
     parse::{check_range, parse_long},
     recovery::UNCLEAN_RECOVERY_STRATEGY,
     registry::{self, ConfigScope},
@@ -158,16 +154,22 @@ pub(crate) fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
     }
 }
 
-/// The registry row that types a broker key: its own broker row, or the row
-/// of the topic key it sets the default of on a broker serving `unstable`.
+/// The row that types a broker key, for `DescribeConfigs`: its own registry
+/// row, the row of the topic key it sets the default of on a broker serving
+/// `unstable`, or, for a `KafkaConfig` key krabka has no row for, the one
+/// [`kafka_broker`] states. `None` is a name Kafka does not define, which
+/// Kafka reports untyped and withholds the value of.
 pub(crate) fn broker_key_row(
     name: &str,
     unstable: UnstableApiVersions,
-) -> Option<&'static registry::ConfigKey> {
-    registry::lookup(ConfigScope::Broker, name).or_else(|| {
-        served_topic_default(name, unstable)
-            .and_then(|topic| registry::lookup(ConfigScope::Topic, topic))
-    })
+) -> Option<registry::ConfigKey> {
+    registry::lookup(ConfigScope::Broker, name)
+        .or_else(|| {
+            served_topic_default(name, unstable)
+                .and_then(|topic| registry::lookup(ConfigScope::Topic, topic))
+        })
+        .copied()
+        .or_else(|| kafka_broker::resolve(name).map(kafka_broker::KafkaBrokerConfig::row))
 }
 
 /// The three KIP-73 replication quotas, which Kafka's
@@ -176,39 +178,6 @@ const THROTTLE_RATES: [&str; 3] = [
     crate::throttle::LEADER_THROTTLED_RATE_KEY,
     crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
     crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
-];
-
-/// Kafka broker keys that `DynamicConfig.Broker.nonDynamicProps` names and
-/// that krabka knows of: the process reads them at startup, so an alter of
-/// one is refused rather than stored and ignored.
-const NON_DYNAMIC_KEYS: &[&str] = &[
-    "node.id",
-    "broker.id",
-    "process.roles",
-    "log.dirs",
-    "log.dir",
-    "listeners",
-    "advertised.listeners",
-    "controller.listener.names",
-    "controller.quorum.voters",
-    "controller.quorum.bootstrap.servers",
-    "inter.broker.listener.name",
-    "broker.rack",
-    "log.retention.hours",
-    "log.retention.minutes",
-    "log.roll.hours",
-    "log.roll.jitter.hours",
-    "log.flush.scheduler.interval.ms",
-    NUM_PARTITIONS,
-    DEFAULT_REPLICATION_FACTOR,
-    DELETE_TOPIC_ENABLE,
-    AUTO_CREATE_TOPICS_ENABLE,
-    OFFSETS_RETENTION_MINUTES,
-    OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-    CONNECTIONS_MAX_IDLE_MS,
-    CONNECTIONS_MAX_REAUTH_MS,
-    TRANSACTIONAL_ID_EXPIRATION_MS,
-    TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
 ];
 
 /// Kafka's `SslConfigs.RECONFIGURABLE_CONFIGS`: dynamic only per listener,
@@ -234,20 +203,14 @@ const CLUSTER_LEVEL_LISTENER_CONFIGS: &[&str] = &[
     "num.network.threads",
 ];
 
-/// The base key of a `listener.name.<listener>.<key>` override.
-fn listener_base(name: &str) -> Option<&str> {
-    let rest = name.strip_prefix("listener.name.")?;
-    let (_, base) = rest.split_once('.')?;
-    Some(base)
-}
-
-/// Whether a key may be set only on a named broker: an SSL key,
-/// `cordoned.log.dirs` (`DynamicBrokerConfig.PER_BROKER_CONFIGS`), or a
-/// listener override of anything but the cluster-level listener keys.
+/// Whether a key may be set only on a named broker: a key of Kafka's
+/// `PER_BROKER_CONFIGS` (the SSL keys, `DynamicListenerConfig`'s keys and
+/// `cordoned.log.dirs`, less the cluster-level listener keys), or a listener
+/// override of anything but the cluster-level listener keys.
 fn is_per_broker(name: &str) -> bool {
-    DYNAMIC_SECURITY_CONFIGS.contains(&name)
-        || name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS
-        || listener_base(name).is_some_and(|base| !CLUSTER_LEVEL_LISTENER_CONFIGS.contains(&base))
+    kafka_broker::lookup(name).is_some_and(|row| row.dynamic == Dynamic::PerBroker)
+        || listener_override_base(name)
+            .is_some_and(|base| !CLUSTER_LEVEL_LISTENER_CONFIGS.contains(&base))
 }
 
 /// What krabka knows of a broker key, for `IncrementalAlterConfigs`'
@@ -278,12 +241,17 @@ pub(crate) fn broker_key_kind(name: &str, unstable: UnstableApiVersions) -> Brok
             BrokerKeyKind::Scalar
         };
     }
-    if THROTTLE_RATES.contains(&name)
-        || NON_DYNAMIC_KEYS.contains(&name)
-        || DYNAMIC_SECURITY_CONFIGS.contains(&name)
-        || name == REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS
-        || registry::lookup(ConfigScope::Broker, name).is_some()
-    {
+    // Kafka's `prepareIncrementalConfigs` reads the type off `KafkaConfig`'s
+    // own `ConfigDef`, so it covers the keys that are not dynamic too, which
+    // the whole-map validation refuses afterwards.
+    if let Some(row) = kafka_broker::lookup(name) {
+        return if row.config_type == registry::ConfigType::List {
+            BrokerKeyKind::List
+        } else {
+            BrokerKeyKind::Scalar
+        };
+    }
+    if THROTTLE_RATES.contains(&name) || registry::lookup(ConfigScope::Broker, name).is_some() {
         return BrokerKeyKind::Scalar;
     }
     BrokerKeyKind::Unknown
@@ -345,9 +313,6 @@ fn canonical_broker_value(
     if THROTTLE_RATES.contains(&name) {
         return check_range(name, parse_long(name, value)?, Some(0), None).map(|v| v.to_string());
     }
-    if name == REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS {
-        return parse_remote_list_offsets_timeout(value).map(|_| value.trim().to_owned());
-    }
     if name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS {
         return crate::cordoned_log_dirs::validate_value_type(value).map(|()| value.to_owned());
     }
@@ -356,11 +321,16 @@ fn canonical_broker_value(
             .map_or_else(|| Ok(value.to_owned()), |row| canonical_value(row, value));
     }
     let topic_key = served_topic_default(name, unstable);
-    match topic_key.and_then(|key| registry::lookup(ConfigScope::Topic, key)) {
+    if let Some(row) = topic_key.and_then(|key| registry::lookup(ConfigScope::Topic, key)) {
         // The topic key's validator, under the broker key's name.
-        Some(row) => {
-            canonical_value(row, value).map_err(|message| message.replacen(row.name, name, 2))
-        }
+        return canonical_value(row, value).map_err(|message| message.replacen(row.name, name, 2));
+    }
+    // A `KafkaConfig` key is parsed by `DynamicConfig.Broker.validate`, and a
+    // listener override is checked as the key it overrides, under that key's
+    // name. A key that is not dynamic never gets here.
+    let checked = listener_override_base(name).unwrap_or(name);
+    match kafka_broker::lookup(checked).filter(|row| row.dynamic != Dynamic::ReadOnly) {
+        Some(row) => row.canonical(value),
         None => Ok(value.to_owned()),
     }
 }
@@ -386,7 +356,9 @@ pub(crate) fn canonical_dynamic_broker_configs(
             .filter(|name| test(name))
             .collect()
     };
-    let non_dynamic = names(&|name| NON_DYNAMIC_KEYS.contains(&name));
+    let non_dynamic = names(&|name| {
+        kafka_broker::lookup(name).is_some_and(|row| row.dynamic == Dynamic::ReadOnly)
+    });
     if !non_dynamic.is_empty() {
         return Err(invalid_props(
             "Cannot update these configs dynamically",
@@ -606,6 +578,77 @@ mod tests {
                      least 1",
                 ),
             ),
+            // Every `KafkaConfig` key that is not dynamic is refused, not only
+            // the ones krabka reads at startup.
+            (
+                map(&[("auto.leader.rebalance.enable", "false")]),
+                false,
+                Err("Cannot update these configs dynamically: [auto.leader.rebalance.enable]"),
+            ),
+            (
+                map(&[("queued.max.requests", "10")]),
+                true,
+                Err("Cannot update these configs dynamically: [queued.max.requests]"),
+            ),
+            (
+                map(&[("log.cleaner.enable", "false"), ("num.io.threads", "abc")]),
+                false,
+                Err("Cannot update these configs dynamically: [log.cleaner.enable]"),
+            ),
+            (
+                map(&[("offsets.topic.replication.factor", "1")]),
+                false,
+                Err("Cannot update these configs dynamically: [offsets.topic.replication.factor]"),
+            ),
+            // A dynamic key is parsed and range-checked against its `ConfigDef`.
+            (
+                map(&[("num.io.threads", "abc")]),
+                false,
+                Err("Invalid value abc for configuration num.io.threads: Not a number of type INT"),
+            ),
+            (
+                map(&[("max.connections", "-5")]),
+                false,
+                Err("Invalid value -5 for configuration max.connections: Value must be at least 0"),
+            ),
+            (
+                map(&[("num.network.threads", "0")]),
+                false,
+                Err(
+                    "Invalid value 0 for configuration num.network.threads: Value must be at \
+                     least 1",
+                ),
+            ),
+            (
+                map(&[("follower.fetch.last.tiered.offset.enable", " TRUE ")]),
+                false,
+                Ok(map(&[("follower.fetch.last.tiered.offset.enable", "true")])),
+            ),
+            // A listener override is checked as the key it overrides, under
+            // that key's name.
+            (
+                map(&[("listener.name.external.num.network.threads", "abc")]),
+                false,
+                Err(
+                    "Invalid value abc for configuration num.network.threads: Not a number of \
+                     type INT",
+                ),
+            ),
+            // A `PER_BROKER_CONFIGS` key that is not an SSL key is per-broker
+            // too.
+            (
+                map(&[("sasl.enabled.mechanisms", "PLAIN")]),
+                false,
+                Err(
+                    "Cannot update these configs at default cluster level, broker id must be \
+                     specified: [sasl.enabled.mechanisms]",
+                ),
+            ),
+            (
+                map(&[("sasl.enabled.mechanisms", "PLAIN")]),
+                true,
+                Ok(map(&[("sasl.enabled.mechanisms", "PLAIN")])),
+            ),
         ];
         for (props, per_broker, want) in cases {
             let want = want.map_err(|message| (codes::INVALID_REQUEST, message.to_owned()));
@@ -666,6 +709,11 @@ mod tests {
                 crate::throttle::LEADER_THROTTLED_RATE_KEY,
                 BrokerKeyKind::Scalar,
             ),
+            // Kafka types the operation off `KafkaConfig`'s whole `ConfigDef`,
+            // the keys that are not dynamic included.
+            ("listeners", BrokerKeyKind::List),
+            ("log.dirs", BrokerKeyKind::List),
+            ("num.io.threads", BrokerKeyKind::Scalar),
             ("not.a.kafka.key", BrokerKeyKind::Unknown),
         ] {
             check!(

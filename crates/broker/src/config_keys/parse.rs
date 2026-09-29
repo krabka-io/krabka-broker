@@ -123,6 +123,13 @@ pub(crate) fn parse_int(key: &str, value: &str) -> Result<i32, String> {
     int_value(value).ok_or_else(|| invalid_value(key, value, "Not a number of type INT"))
 }
 
+/// Parse a `SHORT` for `key`, with Kafka's refusal.
+pub(crate) fn parse_short(key: &str, value: &str) -> Result<i16, String> {
+    java_trim(value)
+        .parse()
+        .map_err(|_| invalid_value(key, value, "Not a number of type SHORT"))
+}
+
 /// Parse a `LONG` for `key`, with Kafka's refusal.
 pub(crate) fn parse_long(key: &str, value: &str) -> Result<i64, String> {
     long_value(value).ok_or_else(|| invalid_value(key, value, "Not a number of type LONG"))
@@ -191,9 +198,13 @@ pub(crate) fn check_valid_list<'a>(
 ) -> Result<Vec<&'a str>, String> {
     let values = list_value(value);
     if !empty_allowed && values.is_empty() {
+        let valid = if accepted.is_empty() {
+            "any non-empty value".to_owned()
+        } else {
+            format!("[{}]", accepted.join(", "))
+        };
         return Err(format!(
-            "Configuration '{key}' must not be empty. Valid values include: [{}]",
-            accepted.join(", ")
+            "Configuration '{key}' must not be empty. Valid values include: {valid}"
         ));
     }
     let distinct: std::collections::BTreeSet<&str> = values.iter().copied().collect();

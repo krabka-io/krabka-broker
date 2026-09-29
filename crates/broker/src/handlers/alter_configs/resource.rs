@@ -197,7 +197,7 @@ pub(super) async fn process_resource(
         },
         RESOURCE_TYPE_GROUP => match group_config_record(
             &resource,
-            &broker.config.streams_group,
+            &crate::config_keys::group::GroupBounds::of(&broker.config),
             broker.config.features.unstable_api_versions,
         ) {
             Ok(record) => vec![record],
@@ -217,6 +217,11 @@ pub(super) async fn process_resource(
         },
         _ => unreachable!("resource type passed ACL dispatch"),
     };
+    if let Some((code, message)) = super::config_value_size_error(&records) {
+        out.error_code = code;
+        out.error_message = Some(message);
+        return out;
+    }
     let min_isr_changed = records.iter().any(|record| match record {
         krabka_metadata::MetadataRecord::V1TopicConfig(config) => {
             image

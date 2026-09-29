@@ -39,6 +39,7 @@ const SECRET: registry::ConfigKey = registry::ConfigKey {
     doc: "The store password for the key store file.",
     read_only: false,
     sensitive: true,
+    internal: false,
     kip: None,
     cluster_default: None,
     check: ValueCheck::Parsed,
@@ -95,6 +96,45 @@ fn the_chain_head_decides_the_value_and_the_source() {
     );
 }
 
+/// A name Kafka does not define has no row: `KafkaConfig.configType` is empty,
+/// so the entry is `UNKNOWN`-typed, its value is withheld (`maybeSensitive`
+/// treats an untyped key as sensitive), and, being in no dynamic set, it is
+/// read-only.
+#[test]
+fn a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {
+    let entry = config_entry(
+        None,
+        "plugin.custom.key",
+        &[Layer {
+            source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+            name: "plugin.custom.key",
+            value: "x",
+        }],
+        DefaultLayer::default(),
+        BOTH,
+    );
+
+    assert!(
+        entry
+            == DescribeConfigsResourceResult {
+                name: "plugin.custom.key".to_owned(),
+                value: None,
+                read_only: true,
+                config_source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                is_sensitive: true,
+                synonyms: vec![DescribeConfigsSynonym {
+                    name: "plugin.custom.key".to_owned(),
+                    value: None,
+                    source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                    ..Default::default()
+                }],
+                config_type: 0,
+                documentation: None,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
+}
+
 /// The same row as `log.retention.ms` would carry, so the chain test does not
 /// depend on a key krabka happens to have.
 const SECRET_FREE: registry::ConfigKey = registry::ConfigKey {
@@ -106,6 +146,7 @@ const SECRET_FREE: registry::ConfigKey = registry::ConfigKey {
     doc: "How long a log file is kept before it is deleted.",
     read_only: false,
     sensitive: false,
+    internal: false,
     kip: None,
     cluster_default: None,
     check: ValueCheck::Parsed,

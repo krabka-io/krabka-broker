@@ -35,7 +35,7 @@ pub use self::{
     listener::{InterBrokerCredentials, ListenerSpec},
     replication::ReplicationRuntimeConfig,
     roles::NodeRole,
-    static_origins::{StaticConfigOrigins, TopicAdminOrigins, TopicCreationOrigins},
+    static_origins::{LogOrigins, StaticConfigOrigins, TopicAdminOrigins, TopicCreationOrigins},
     stretch::StretchProfile,
     tiered_storage::{KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
 };

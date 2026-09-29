@@ -38,8 +38,26 @@ pub struct StaticConfigOrigins {
     pub txn_id_expiration_cleanup_interval: bool,
     /// Which of the KIP-464 topic-creation defaults were supplied.
     pub topic_creation: TopicCreationOrigins,
+    /// Which of the static settings that back a topic key's broker synonym
+    /// were supplied.
+    pub log: LogOrigins,
     /// Which of the static topic-administration switches were supplied.
     pub topic_admin: TopicAdminOrigins,
+}
+
+/// Which of the static log defaults, each the broker synonym of a topic key,
+/// this node's configuration named explicitly. A topic that overrides none of
+/// them reports the supplied one at `STATIC_BROKER_CONFIG`, Kafka's
+/// `staticNodeConfig.containsKey(synonym)` rule, and reports the built-in
+/// default alone otherwise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LogOrigins {
+    /// `message.max.bytes`, the default of `max.message.bytes`, was supplied.
+    pub message_max_bytes: bool,
+    /// `log.segment.bytes`, the default of `segment.bytes`, was supplied.
+    pub log_segment_bytes: bool,
+    /// `min.insync.replicas` was supplied.
+    pub min_insync_replicas: bool,
 }
 
 /// Which of the static switches that gate topic deletion and auto-creation

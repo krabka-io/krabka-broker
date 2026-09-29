@@ -439,3 +439,105 @@ fn a_group_or_client_metrics_replacement_audits_a_key_it_drops_by_omission() {
             ]
     );
 }
+
+/// The size rule is shared by both alter APIs and holds for every record type
+/// a resource turns into.
+#[test]
+fn an_oversized_value_is_refused_in_every_kind_of_config_record() {
+    use krabka_metadata::{
+        BrokerConfigRecord, ClientMetricsConfigRecord, GroupConfigRecord, MetadataRecord,
+        TopicConfigRecord,
+    };
+
+    let long = "a".repeat(32_768);
+    let map = |value: &str| maplit::btreemap! {"k".to_owned() => value.to_owned()};
+    let records = |value: &str| {
+        vec![
+            MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: map(value),
+            }),
+            MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: krabka_metadata::NodeId(1),
+                config_name: "k".into(),
+                config_value: Some(value.to_owned()),
+            }),
+            MetadataRecord::V1GroupConfig(GroupConfigRecord {
+                group_id: "g".into(),
+                configs: map(value),
+            }),
+            MetadataRecord::V1ClientMetricsConfig(ClientMetricsConfigRecord {
+                name: "s".into(),
+                configs: map(value),
+            }),
+        ]
+    };
+    for record in records(&long) {
+        check!(
+            super::config_value_size_error(std::slice::from_ref(&record))
+                == Some((
+                    codes::INVALID_CONFIG,
+                    "The configuration value cannot be added because it exceeds the maximum \
+                     value size of 32767 bytes."
+                        .to_owned()
+                )),
+            "{record:?}"
+        );
+    }
+    for record in records(&long[1..]) {
+        check!(
+            super::config_value_size_error(std::slice::from_ref(&record)).is_none(),
+            "{record:?}"
+        );
+    }
+    // A deletion writes no value.
+    check!(
+        super::config_value_size_error(&[MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: krabka_metadata::NodeId(1),
+            config_name: "k".into(),
+            config_value: None,
+        })])
+        .is_none()
+    );
+}
+
+/// Kafka's `ConfigurationControlManager.validateAlterConfig` refuses, for
+/// every resource type, a value longer than `Short.MAX_VALUE` UTF-16 code
+/// units with `INVALID_CONFIG`, whatever the key is. A key Kafka does not
+/// define is stored as it is, so it is the one an oversized value reaches.
+#[tokio::test]
+async fn a_config_value_past_short_max_value_is_invalid_config() {
+    let refused = "The configuration value cannot be added because it exceeds the maximum \
+                   value size of 32767 bytes.";
+    // 16384 emoji are 32768 UTF-16 code units: Java's `String.length()` counts
+    // each surrogate pair twice, so the value is over the limit at half the
+    // `char` count.
+    let cases = [
+        ("at the limit", "a".repeat(32_767), codes::NONE, None),
+        (
+            "one past the limit",
+            "a".repeat(32_768),
+            codes::INVALID_CONFIG,
+            Some(refused),
+        ),
+        (
+            "surrogate pairs count twice",
+            "\u{1F600}".repeat(16_384),
+            codes::INVALID_CONFIG,
+            Some(refused),
+        ),
+    ];
+    for (label, value, want_code, want_message) in cases {
+        let resp = Box::pin(drive_one(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            broker_resource("1", &[("custom.setting", &value)]),
+        ))
+        .await;
+        assert!(resp.responses.len() == 1, "{label}");
+        check!(resp.responses[0].error_code == want_code, "{label}");
+        check!(
+            resp.responses[0].error_message.as_deref() == want_message,
+            "{label}"
+        );
+    }
+}

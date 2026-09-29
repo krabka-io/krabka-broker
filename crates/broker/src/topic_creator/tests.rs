@@ -134,6 +134,7 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
         "fresh",
         &std::collections::BTreeMap::new(),
         crate::api_catalog::UnstableApiVersions::Disabled,
+        &std::collections::BTreeMap::new(),
     )
     .into_iter()
     .map(|entry| CreatableTopicConfigs {

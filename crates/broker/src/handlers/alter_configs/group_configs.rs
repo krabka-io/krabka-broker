@@ -11,8 +11,8 @@ use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
 use crate::{
-    codes, config_keys::group::validate_group_configs,
-    coordinator::unified::streams::config::StreamsGroupConfig,
+    codes,
+    config_keys::group::{GroupBounds, validate_group_configs},
 };
 
 /// Build the authoritative `V1GroupConfig` record for a GROUP resource. The
@@ -20,7 +20,7 @@ use crate::{
 /// builds is the whole override map.
 pub(super) fn group_config_record(
     resource: &AlterConfigsResource,
-    defaults: &StreamsGroupConfig,
+    bounds: &GroupBounds,
     unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
     if resource.resource_name.is_empty() {
@@ -34,7 +34,7 @@ pub(super) fn group_config_record(
         .iter()
         .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap_or_default()))
         .collect();
-    validate_group_configs(&overrides, defaults, unstable)
+    validate_group_configs(&overrides, bounds, unstable)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
         group_id: resource.resource_name.clone(),
@@ -59,7 +59,7 @@ mod tests {
                     "1",
                 )],
             ),
-            &StreamsGroupConfig::default(),
+            &GroupBounds::default(),
             crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect("valid group replacement");
@@ -78,7 +78,7 @@ mod tests {
     fn group_replacement_rejects_unknown_key() {
         let error = group_config_record(
             &group_resource("streams-app", &[("bogus.key", "1")]),
-            &StreamsGroupConfig::default(),
+            &GroupBounds::default(),
             crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect_err("unknown group config key must be rejected");
@@ -95,7 +95,7 @@ mod tests {
                     "1000",
                 )],
             ),
-            &StreamsGroupConfig::default(),
+            &GroupBounds::default(),
             crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect_err("out-of-bounds session timeout must be rejected");
@@ -106,7 +106,7 @@ mod tests {
     fn group_replacement_rejects_empty_group_id() {
         let error = group_config_record(
             &group_resource("", &[]),
-            &StreamsGroupConfig::default(),
+            &GroupBounds::default(),
             crate::api_catalog::UnstableApiVersions::Enabled,
         )
         .expect_err("empty group id must be rejected");

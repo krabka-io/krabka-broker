@@ -336,6 +336,37 @@ mod tests {
                     "Cannot update these configs dynamically: [log.dirs]",
                 )),
             ),
+            // `kafka-configs --entity-type brokers --entity-default
+            // --add-config auto.leader.rebalance.enable=false` is refused, as
+            // is every other `KafkaConfig` key that is not dynamic.
+            (
+                "",
+                image_with(&[], false),
+                vec![make_set_cfg("auto.leader.rebalance.enable", "false")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Cannot update these configs dynamically: [auto.leader.rebalance.enable]",
+                )),
+            ),
+            (
+                "",
+                image_with(&[], false),
+                vec![make_set_cfg("max.connections", "-5")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Invalid value -5 for configuration max.connections: Value must be at least 0",
+                )),
+            ),
+            (
+                "",
+                image_with(&[], false),
+                vec![op("metric.reporters", OP_APPEND, "com.example.Reporter")],
+                Ok(vec![record(
+                    krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                    "metric.reporters",
+                    Some("org.apache.kafka.common.metrics.JmxReporter,com.example.Reporter"),
+                )]),
+            ),
             (
                 "1",
                 image_with(&[], false),

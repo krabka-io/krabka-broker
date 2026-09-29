@@ -102,7 +102,14 @@ impl ReplicatorSupervisor {
         // noop write inside `Log::set_config`. The metadata-watch reconcile
         // loop fires on every image change, so AlterConfigs propagation is
         // bounded to one reconcile tick.
-        push_topic_configs(&local_set, &self.partitions, image, &self.log_config).await;
+        push_topic_configs(
+            &local_set,
+            &self.partitions,
+            image,
+            &self.log_config,
+            self.node_id,
+        )
+        .await;
 
         self.reconcile_fetchers(image);
 
