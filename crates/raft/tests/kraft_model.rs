@@ -64,11 +64,18 @@ const MAX_DEPTH: usize = 60;
 // are gone, and so are the states reachable only through them. The step
 // cannot leave the in-flight bound: it consumes the response and adds at most
 // one fetch.
-const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_834;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 43_811;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 777_338;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 457_067;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 230_591;
+//
+// Every count moved again when vote and pre-vote began to follow
+// `KafkaRaftClient` (#1243): a higher-epoch pre-vote now advances the epoch
+// before the voter-key check, and a follower grants a pre-vote only once it has
+// stopped fetching from its leader. The election-safety config lost states (a
+// follower no longer grants while its leader is live) and the others gained the
+// epoch advance. The `always` properties are unchanged and still hold.
+const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 6_046;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 46_521;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 824_954;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 573_401;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_973;
 
 fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {
     let checker = model
