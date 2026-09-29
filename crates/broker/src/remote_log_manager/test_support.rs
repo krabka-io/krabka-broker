@@ -74,6 +74,7 @@ pub(crate) fn tier_with_copy_timeout<'a>(
         rlmm,
         metrics: shared_test_metrics(),
         index_cache: shared_test_index_cache(),
+        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         copy_timeout,
     }
 }
@@ -229,6 +230,18 @@ pub fn rolled_tiered_partition_at(
         let mut b = batch(2);
         log.append(&mut b).unwrap();
     }
+    leading_partition_over(index, log_dir, log)
+}
+
+/// A partition of `orders` at `index` that this broker (node 1, epoch 0)
+/// leads, over a log the caller has already written. The log must live in the
+/// partition directory under `log_dir`.
+pub fn leading_partition_over(
+    index: PartitionIndex,
+    log_dir: &std::path::Path,
+    log: Log,
+) -> Arc<Partition> {
+    let log_end = log.log_end_offset();
     let partition = crate::broker::spawn_partition(
         "orders".to_string(),
         index,
@@ -240,6 +253,14 @@ pub fn rolled_tiered_partition_at(
     );
     partition.current_leader.store(1, Ordering::Relaxed);
     partition.current_leader_epoch.store(0, Ordering::Release);
+    // A sole replica has replicated everything it wrote: the high watermark
+    // is the log end, so nothing the fixture wrote is withheld from the tier
+    // as uncommitted.
+    partition
+        .replica_state
+        .try_lock()
+        .expect("nothing else holds a partition that was just spawned")
+        .hw = log_end;
     partition
 }
 

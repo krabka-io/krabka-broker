@@ -133,9 +133,11 @@ async fn disable_and_delete_remote(
 #[cfg(test)]
 pub(crate) mod test_support;
 
+#[cfg(test)]
+pub(crate) use self::copy::copy_eligible;
 pub(crate) use self::{
     archive::ArchiveMode,
-    copy::copy_eligible,
+    copy::copy_eligible_below,
     delete::cascade_remote_partition_delete,
     local_retention::local_retention_pass,
     remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
@@ -155,6 +157,8 @@ pub(crate) struct RemoteLogManagerConfig {
     pub copy_timeout: Time,
     /// How wide one tick sweeps. See [`SweepConcurrency`].
     pub concurrency: SweepConcurrency,
+    /// See [`RemoteTier::unstable_api_versions`].
+    pub unstable_api_versions: crate::api_catalog::UnstableApiVersions,
 }
 
 impl Default for RemoteLogManagerConfig {
@@ -163,6 +167,7 @@ impl Default for RemoteLogManagerConfig {
             interval: DEFAULT_TIERING_INTERVAL,
             copy_timeout: crate::config::DEFAULT_REMOTE_COPY_TIMEOUT,
             concurrency: SweepConcurrency::default(),
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         }
     }
 }
@@ -265,17 +270,23 @@ pub(crate) struct RemoteTier<'a> {
     /// retention refuses to delete against -- and the next tick retries the
     /// segment under a fresh id.
     pub copy_timeout: Time,
+    /// Whether the broker runs Kafka trunk's tiered-storage behavior where it
+    /// differs from the released 4.3.1: today, how local retention ages a
+    /// segment whose newest record claims a timestamp in the future. See
+    /// [`local_retention::local_retention_target`].
+    pub unstable_api_versions: crate::api_catalog::UnstableApiVersions,
 }
 
 impl RemoteLogManagerContext {
-    fn tier(&self, copy_timeout: Time) -> RemoteTier<'_> {
+    fn tier(&self, cfg: &RemoteLogManagerConfig) -> RemoteTier<'_> {
         RemoteTier {
             archive: self.archive,
             rsm: &self.rsm,
             rlmm: &self.rlmm,
             metrics: &self.metrics,
             index_cache: &self.index_cache,
-            copy_timeout,
+            copy_timeout: cfg.copy_timeout,
+            unstable_api_versions: cfg.unstable_api_versions,
         }
     }
 }
@@ -299,7 +310,7 @@ pub(crate) async fn run(
         tick_all(
             &context.partitions,
             &*context.controller,
-            &context.tier(cfg.copy_timeout),
+            &context.tier(&cfg),
             context.node_id,
             context.broker_id,
             cfg.concurrency,
@@ -379,8 +390,10 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // measures a segment against them, and a value read under a second
     // lock could describe a different `DeleteRecords` than the segment
     // list does.
-    let (log_config, log_start_offset, deleted_below, local_exports, local_log_size) = {
-        let log = partition.log.lock().expect("log mutex poisoned");
+    // The high watermark is read before the lock, because reading it awaits.
+    let high_watermark = partition.high_watermark().await;
+    let (log_config, log_start_offset, deleted_below, local_exports, local_log_size, lso) = {
+        let mut log = partition.log.lock().expect("log mutex poisoned");
         let cfg = log.config_snapshot();
         (
             cfg,
@@ -388,6 +401,9 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             log.established_log_start(),
             log.tierable_segments(),
             log.size(),
+            // Kafka's `UnifiedLog.lastStableOffset`, which bounds what the
+            // copy may upload.
+            log.last_stable_offset(high_watermark),
         )
     };
     if !log_config.remote_storage_enable {
@@ -442,7 +458,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         let leader_epoch =
             krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
         let _permit = permits.copier().await;
-        copy_eligible(tier, &tp, broker_id, leader_epoch, exports.clone()).await;
+        copy_eligible_below(tier, &tp, broker_id, leader_epoch, exports.clone(), lso).await;
     }
     // KFC-9: the copy above stays allowed on a frozen topic, and both
     // retention passes below stop. A freeze refuses every operation that
@@ -516,7 +532,15 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
     // Local retention is deliberately not gated on `archive`: evicting a
     // local segment that the archive already holds is the whole point of
     // tiering, and it deletes nothing from the remote tier.
-    local_retention_pass(tp, partition, exports, log_config, tier.rlmm, now_ms());
+    local_retention_pass(
+        tp,
+        partition,
+        exports,
+        log_config,
+        tier.rlmm,
+        now_ms(),
+        tier.unstable_api_versions,
+    );
     if !is_leader {
         return;
     }
@@ -568,7 +592,7 @@ fn now_ms() -> i64 {
 mod tests {
     use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
-    use krabka_log::LogConfig;
+    use krabka_log::{Log, LogConfig, Offset};
     use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
     use krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogSegmentState,
@@ -715,6 +739,138 @@ mod tests {
                 .iter()
                 .all(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
         );
+    }
+
+    /// Sweep `partition` once and count the segments the remote tier holds
+    /// afterwards.
+    async fn segments_copied_by_one_sweep(partition: Arc<Partition>) -> usize {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let partitions = PartitionRegistry::new();
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
+        let controller = fixed_source(image_with_orders_topic());
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        tick_all(
+            &partitions,
+            &controller,
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+            NodeId(1),
+            1,
+            SweepConcurrency::default(),
+        )
+        .await;
+        rlmm.list_remote_log_segments(&tp()).unwrap().len()
+    }
+
+    /// Kafka's `RLMCopyTask.copyLogSegmentsToRemote` copies only segments that
+    /// end below `log.lastStableOffset()`, and the remote tier must hold only
+    /// committed, acknowledged records: after a leader change it would
+    /// otherwise hold records the new leader never had. The high watermark is
+    /// the first bound on it.
+    #[tokio::test]
+    async fn tick_all_copies_only_segments_below_the_high_watermark() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let sealed_ends: Vec<Offset> = {
+            let partition = rolled_tiered_partition(log_dir.path());
+            let log = partition.log.lock().expect("partition log mutex poisoned");
+            log.tierable_segments()
+                .iter()
+                .map(|export| export.last_offset)
+                .collect()
+        };
+        assert!(sealed_ends.len() >= 3, "test needs several sealed segments");
+
+        // `(label, high watermark, sealed segments copied)`.
+        let cases = [
+            ("nothing is replicated yet", Offset(0), 0),
+            (
+                "the high watermark is inside the first segment",
+                sealed_ends[0],
+                0,
+            ),
+            (
+                "the high watermark is at the first segment's end",
+                sealed_ends[0] + 1,
+                1,
+            ),
+            (
+                "the high watermark is inside the third segment",
+                sealed_ends[2],
+                2,
+            ),
+            (
+                "everything is replicated",
+                Offset(i64::MAX),
+                sealed_ends.len(),
+            ),
+        ];
+        for (label, high_watermark, want) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let partition = rolled_tiered_partition(dir.path());
+            partition.replica_state.lock().await.hw = high_watermark;
+
+            let copied = segments_copied_by_one_sweep(partition).await;
+
+            check!(copied == want, "{label}: copied {copied}, wanted {want}");
+        }
+    }
+
+    /// The other bound on `lastStableOffset` is the first offset of an open
+    /// transaction: nothing at or after it is tiered while the transaction has
+    /// no marker, even when the high watermark is past it.
+    #[tokio::test]
+    async fn tick_all_holds_the_copy_at_an_open_transaction() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let part_dir = crate::log_dir::partition_dir(log_dir.path(), "orders", 0);
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let mut log = Log::open(
+            &part_dir,
+            LogConfig {
+                segment_size: bytes(256),
+                remote_storage_enable: true,
+                retention: None,
+                retention_size: None,
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        for i in 0..12 {
+            let mut batch = test_support::batch(2);
+            if i == 5 {
+                // A transaction that opens here and is never closed.
+                batch.producer_id = 7;
+                batch.producer_epoch = 0;
+                batch.base_sequence = 0;
+                batch.attributes =
+                    krabka_protocol::records::Attributes::default().with_transactional(true);
+            }
+            log.append(&mut batch).unwrap();
+        }
+        let first_unstable = log.last_stable_offset(Offset(i64::MAX));
+        let sealed_ends: Vec<Offset> = log
+            .tierable_segments()
+            .iter()
+            .map(|export| export.last_offset)
+            .collect();
+        let want = sealed_ends
+            .iter()
+            .filter(|end| **end < first_unstable)
+            .count();
+        assert!(
+            0 < want && want < sealed_ends.len(),
+            "the open transaction has to split the sealed segments: first unstable offset \
+             {first_unstable:?}, sealed segments ending at {sealed_ends:?}"
+        );
+        let partition =
+            test_support::leading_partition_over(PartitionIndex(0), log_dir.path(), log);
+        // Everything is replicated, so only the transaction holds the copy.
+        partition.replica_state.lock().await.hw = Offset(i64::MAX);
+
+        let copied = segments_copied_by_one_sweep(partition).await;
+
+        check!(copied == want);
     }
 
     /// A `DeleteRecords` floor takes the segments under it out of the copy

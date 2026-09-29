@@ -128,6 +128,7 @@ fn faulty_tier<'a>(
         rlmm,
         metrics,
         index_cache,
+        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         copy_timeout,
     }
 }
@@ -376,6 +377,7 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
             &config,
             &rlmm,
             now_ms() + 1_000_000,
+            crate::api_catalog::UnstableApiVersions::Disabled,
         );
 
         check!(removed == 0, "{case}");

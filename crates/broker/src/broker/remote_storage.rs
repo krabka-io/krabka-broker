@@ -145,6 +145,7 @@ pub(super) fn start_remote_storage(
                 copier: config.remote_copier_threads,
                 expiration: config.remote_expiration_threads,
             },
+            unstable_api_versions: config.features.unstable_api_versions,
         },
         shutdown.child_token(),
     ));

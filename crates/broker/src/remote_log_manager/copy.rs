@@ -81,12 +81,44 @@ fn tier_holds_whole(merged: &[(i64, i64)], base: i64, last: i64) -> bool {
 /// whole, the way Kafka's `candidateLogSegments` includes the segment that
 /// contains the resume point: the alternative is to skip it and leave the tier
 /// a permanent hole between the resume point and the next segment's base.
+#[cfg(test)]
 pub(crate) async fn copy_eligible(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
     leader_epoch: krabka_ids::LeaderEpoch,
     exports: Vec<SegmentExport>,
+) -> usize {
+    copy_eligible_below(
+        tier,
+        tp,
+        broker_id,
+        leader_epoch,
+        exports,
+        krabka_log::Offset(i64::MAX),
+    )
+    .await
+}
+
+/// [`copy_eligible`], for a partition whose last stable offset is
+/// `last_stable_offset`: a segment is copied only when it ends below it, which
+/// is Kafka's `RLMCopyTask.candidateLogSegments` rule (`nextSegmentBaseOffset <=
+/// lastStableOffset`). The remote tier must hold only committed, acknowledged
+/// records, so nothing above the high watermark, and nothing inside an open
+/// transaction, is uploaded. After a leader change the tier would otherwise
+/// hold records the new leader never had, and unresolved transactions Kafka
+/// would not tier yet.
+///
+/// The copy lag still counts the segments the last stable offset holds back:
+/// they are sealed local segments the tier does not hold, as Kafka's
+/// `recordLagStats` counts them.
+pub(crate) async fn copy_eligible_below(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    leader_epoch: krabka_ids::LeaderEpoch,
+    exports: Vec<SegmentExport>,
+    last_stable_offset: krabka_log::Offset,
 ) -> usize {
     let listed = match tier.rlmm.list_remote_log_segments(tp) {
         Ok(list) => list,
@@ -181,6 +213,11 @@ pub(crate) async fn copy_eligible(
         if !wanted(&ex) {
             continue;
         }
+        // The segment ends at or above the last stable offset, so part of it
+        // is not committed yet. The segments after it end above it as well.
+        if ex.last_offset >= last_stable_offset {
+            break;
+        }
         if chain == ChainPosition::Exhausted {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   "remote-log-manager: WORM chain sequence exhausted; refusing to copy a \
@@ -243,6 +280,7 @@ mod tests {
             metrics: &metrics,
             index_cache: &index_cache,
             copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         };
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
 
@@ -266,6 +304,71 @@ mod tests {
         check!(metrics.remote_copy_lag_bytes.get_or_create(&topic).get() == 128);
     }
 
+    /// Kafka's `RLMCopyTask.candidateLogSegments`: a segment is a copy
+    /// candidate only when the next segment's base offset is at or below the
+    /// last stable offset, that is when the segment ends below it. The tier
+    /// must hold only committed, acknowledged records. The copy lag still
+    /// counts the segments the bound holds back, which are local and
+    /// uncopied.
+    #[tokio::test]
+    async fn a_segment_is_copied_only_when_it_ends_below_the_last_stable_offset() {
+        // `(last stable offset, segments copied)` over the sealed segments
+        // 0..=9, 10..=19 and 20..=29.
+        for (last_stable_offset, want) in [
+            (0, 0),
+            (9, 0),
+            (10, 1),
+            (19, 1),
+            (20, 2),
+            (29, 2),
+            (30, 3),
+            (i64::MAX, 3),
+        ] {
+            let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let metrics = BrokerMetrics::new();
+            let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+            let tier = RemoteTier {
+                archive: ArchiveMode::Mutable,
+                rsm: &rsm,
+                rlmm: &rlmm,
+                metrics: &metrics,
+                index_cache: &index_cache,
+                copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+            };
+            let exports = vec![
+                synth_export(0, 9, 100, 64),
+                synth_export(10, 19, 200, 64),
+                synth_export(20, 29, 300, 64),
+            ];
+
+            let copied = copy_eligible_below(
+                &tier,
+                &tp(),
+                1,
+                LeaderEpoch(0),
+                exports,
+                krabka_log::Offset(last_stable_offset),
+            )
+            .await;
+
+            check!(copied == want, "last stable offset {last_stable_offset}");
+            check!(
+                rlmm.list_remote_log_segments(&tp()).unwrap().len() == want,
+                "last stable offset {last_stable_offset}: the tier's listing"
+            );
+            let topic = crate::metrics::TopicLabel {
+                topic: std::sync::Arc::from(tp().topic.as_str()),
+            };
+            check!(
+                metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 3,
+                "last stable offset {last_stable_offset}: the lag counts every uncopied segment"
+            );
+        }
+    }
+
     /// A copy the backend refuses counts as an error and moves no bytes, so
     /// the ratio of the two counters is a failure rate an alert can read.
     #[tokio::test]
@@ -282,6 +385,7 @@ mod tests {
             metrics: &metrics,
             index_cache: &index_cache,
             copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         };
 
         let copied = copy_eligible(
@@ -907,6 +1011,7 @@ mod tests {
             metrics: &metrics,
             index_cache: &index_cache,
             copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         };
 
         // 0..=49 the tier holds; 50..=149 it holds only through 99, and
