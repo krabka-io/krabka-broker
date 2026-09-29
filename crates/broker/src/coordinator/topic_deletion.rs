@@ -14,7 +14,10 @@
 //! The same watcher gives every created, changed and deleted topic to
 //! `coordinator::metadata_update`, so that the groups that subscribe to one of
 //! them refresh their metadata. `GroupCoordinatorService.onMetadataUpdate`
-//! does both too, the refresh first.
+//! does both too, the refresh first. It also tells the coordinator when an
+//! image can change what a regular expression of a consumer group resolves
+//! to, with `metadata_update::regex_resolution_may_change`, so that the
+//! groups resolve their patterns again at their next heartbeat.
 //!
 //! # Only the coordinator writes
 //!
@@ -30,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     GroupCoordinator,
-    metadata_update::{changed_topics, on_metadata_update},
+    metadata_update::{changed_topics, on_metadata_update, regex_resolution_may_change},
     partitioner::local_partition_for_group,
     unified::actor::GroupActorMessage,
 };
@@ -50,6 +53,11 @@ pub(crate) fn spawn(
     tokio::spawn(async move {
         let mut images = metadata.watch_image();
         let mut previous = images.borrow_and_update().clone();
+        // Kafka's `onMetadataUpdate` starts `lastMetadataImageWithNewTopics` at
+        // the version of the first image it reads, so a group that a failover
+        // loaded refreshes the resolutions of its regular expressions once,
+        // at its first heartbeat.
+        coordinator.bump_regex_refresh_version(metadata.current_metadata_offset());
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => return,
@@ -64,6 +72,9 @@ pub(crate) fn spawn(
                     let changed = changed_topics(&previous, &image);
                     if !changed.is_empty() {
                         on_metadata_update(&coordinator, owned, &changed).await;
+                    }
+                    if regex_resolution_may_change(&previous, &image) {
+                        coordinator.bump_regex_refresh_version(metadata.current_metadata_offset());
                     }
                     let deleted = deleted_topics(&previous, &image);
                     if !deleted.is_empty() {

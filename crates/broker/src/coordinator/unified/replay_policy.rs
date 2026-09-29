@@ -16,6 +16,7 @@ pub(crate) enum ReplayRecordKind {
     TargetAssignmentMember,
     CurrentMemberAssignment,
     StatePartitionMetadata,
+    RegularExpression,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -65,7 +66,8 @@ pub(crate) fn replay_mutation(
         | ReplayRecordKind::Topology
         | ReplayRecordKind::PartitionMetadata
         | ReplayRecordKind::TargetAssignmentMetadata
-        | ReplayRecordKind::StatePartitionMetadata => {
+        | ReplayRecordKind::StatePartitionMetadata
+        | ReplayRecordKind::RegularExpression => {
             if group_exists {
                 ReplayMutation::Apply
             } else {

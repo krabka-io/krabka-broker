@@ -162,8 +162,7 @@ mod tests {
         };
 
         use crate::coordinator::unified::{
-            consumer_state::{CompiledRegex, MemberState},
-            persistence_next_gen::MemberAssignmentState,
+            consumer_state::MemberState, persistence_next_gen::MemberAssignmentState,
         };
 
         let mut state = ConsumerState::new("g");
@@ -176,8 +175,6 @@ mod tests {
             client_host: "h".into(),
             subscribed_topic_names: HashSet::default(),
             subscribed_topic_regex: None,
-            compiled_regex: CompiledRegex::Absent,
-            regex_authorized_topics: HashSet::default(),
             server_assignor: None,
             rebalance_timeout: Duration::from_secs(30),
             member_epoch: 0,
@@ -194,10 +191,7 @@ mod tests {
 
     #[test]
     fn downgrade_re_expresses_members_as_classic() {
-        use std::{
-            collections::HashSet,
-            time::{Duration, Instant},
-        };
+        use std::time::{Duration, Instant};
 
         use crate::coordinator::unified::{
             classic_state::GroupState as ClassicGroupState,
@@ -220,8 +214,6 @@ mod tests {
             client_host: "/127.0.0.1".into(),
             subscribed_topic_names: ["orders".to_string()].into(),
             subscribed_topic_regex: None,
-            compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_authorized_topics: HashSet::default(),
             server_assignor: None,
             rebalance_timeout: Duration::from_mins(1),
             member_epoch: 7,

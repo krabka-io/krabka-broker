@@ -71,6 +71,13 @@ pub struct NextGenConfig {
     /// Kafka's `group.consumer.assignment.interval.ms`: the least time between
     /// two target assignments of a group. Zero does not wait.
     pub assignment_interval: Duration,
+    /// Kafka's `group.consumer.regex.refresh.interval.ms`: how long a resolution
+    /// of a subscribed regular expression stands before a heartbeat resolves it
+    /// again.
+    pub regex_refresh_interval: Duration,
+    /// Kafka's `REGEX_BATCH_REFRESH_MIN_INTERVAL_MS`: the least time between
+    /// two resolutions of the regular expressions of a group.
+    pub regex_refresh_min_interval: Duration,
     pub min_session_timeout: Duration,
     pub max_session_timeout: Duration,
     pub min_heartbeat_interval: Duration,
@@ -114,6 +121,11 @@ impl std::fmt::Debug for NextGenConfig {
             .field("session_timeout", &self.session_timeout)
             .field("heartbeat_interval", &self.heartbeat_interval)
             .field("assignment_interval", &self.assignment_interval)
+            .field("regex_refresh_interval", &self.regex_refresh_interval)
+            .field(
+                "regex_refresh_min_interval",
+                &self.regex_refresh_min_interval,
+            )
             .field("min_session_timeout", &self.min_session_timeout)
             .field("max_session_timeout", &self.max_session_timeout)
             .field("min_heartbeat_interval", &self.min_heartbeat_interval)
@@ -170,6 +182,14 @@ pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// `group.share.assignment.interval.ms`.
 pub const DEFAULT_ASSIGNMENT_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Default time a resolution of a subscribed regular expression stands: 10
+/// minutes, matching Kafka's `group.consumer.regex.refresh.interval.ms`.
+pub const DEFAULT_REGEX_REFRESH_INTERVAL: Duration = Duration::from_mins(10);
+
+/// Default least time between two resolutions of the regular expressions of a
+/// group: 10 s, matching Kafka's `REGEX_BATCH_REFRESH_MIN_INTERVAL_MS`.
+pub const DEFAULT_REGEX_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(10);
+
 /// The millisecond value of the group config `key` in `overrides`, the
 /// group's stored override map, or `None` when the group has no override for
 /// it. Kafka's `GroupConfig` parses the stored value as an `INT`, and the
@@ -223,6 +243,8 @@ impl Default for NextGenConfig {
             session_timeout: DEFAULT_SESSION_TIMEOUT,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             assignment_interval: DEFAULT_ASSIGNMENT_INTERVAL,
+            regex_refresh_interval: DEFAULT_REGEX_REFRESH_INTERVAL,
+            regex_refresh_min_interval: DEFAULT_REGEX_REFRESH_MIN_INTERVAL,
             min_session_timeout: DEFAULT_MIN_SESSION_TIMEOUT,
             max_session_timeout: DEFAULT_MAX_SESSION_TIMEOUT,
             min_heartbeat_interval: DEFAULT_MIN_HEARTBEAT_INTERVAL,
@@ -447,9 +469,10 @@ mod tests {
     /// parse, leave it.
     #[test]
     fn for_group_applies_each_consumer_override() {
-        let broker = NextGenConfig::default();
         // (overrides, session timeout, heartbeat interval, assignment interval)
-        let rows: [(&[(&str, &str)], Duration, Duration, Duration); 6] = [
+        type Row<'a> = (&'a [(&'a str, &'a str)], Duration, Duration, Duration);
+        let broker = NextGenConfig::default();
+        let rows: [Row<'_>; 6] = [
             (
                 &[],
                 DEFAULT_SESSION_TIMEOUT,

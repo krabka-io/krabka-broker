@@ -24,7 +24,9 @@ use crate::{
     codes,
     coordinator::unified::{
         classic_state::{ClassicGroup, Member},
-        consumer_state::{GroupState as ConsumerGroup, test_support::member},
+        consumer_state::{
+            GroupState as ConsumerGroup, ResolvedRegularExpression, test_support::member,
+        },
         group::{CoordinatorGroup, GroupKind},
     },
     test_support::{DenyAll, decode_response, encode_request, request_context},
@@ -100,9 +102,16 @@ fn classic_group(group_id: &str, protocol_type: &str, metadata: Bytes) -> Coordi
 fn consumer_group(group_id: &str, regex: &str, resolved: &[&str]) -> CoordinatorGroup {
     let mut state = ConsumerGroup::new(group_id);
     let mut m = member("m1");
-    m.set_regex(Some(regex.into()));
-    m.regex_authorized_topics = resolved.iter().map(|s| (*s).to_string()).collect();
+    m.subscribed_topic_regex = Some(regex.into());
     state.add_or_update_member(m);
+    state.set_resolved_regex(
+        regex.into(),
+        ResolvedRegularExpression {
+            topics: resolved.iter().map(|s| (*s).to_string()).collect(),
+            version: 1,
+            timestamp_ms: 1,
+        },
+    );
     CoordinatorGroup::seeded(group_id, GroupKind::Consumer(state), HashMap::new())
 }
 

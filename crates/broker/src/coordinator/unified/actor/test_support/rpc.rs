@@ -120,7 +120,7 @@ pub async fn consumer_heartbeat(
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -160,7 +160,7 @@ pub async fn consumer_heartbeat_owning(
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await

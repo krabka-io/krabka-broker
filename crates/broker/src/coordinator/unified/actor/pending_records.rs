@@ -10,13 +10,17 @@ use crate::coordinator::unified::{
     GroupCoordinator, OffsetRecordBatchBuilder,
     persistence_next_gen::{
         CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
-        TargetAssignmentMemberValue, TargetAssignmentMetadataValue, encode_key,
+        RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+        encode_key,
     },
 };
 
 #[derive(Debug, Default)]
 pub(crate) struct PendingRecords {
     pub group_metadata: Option<GroupMetadataValue>,
+    /// The regular expressions whose resolution the transition writes
+    /// (`Some(value)`) or tombstones (`None`), by regular expression.
+    pub resolved_regexes: Vec<(String, Option<RegularExpressionValue>)>,
     /// `Some(value)` writes the record. `None` writes a tombstone (null
     /// value).
     pub member_metadata: Vec<(String, Option<MemberMetadataValue>)>,
@@ -38,6 +42,7 @@ pub(crate) struct PendingRecords {
 impl PendingRecords {
     pub fn is_empty(&self) -> bool {
         self.group_metadata.is_none()
+            && self.resolved_regexes.is_empty()
             && self.member_metadata.is_empty()
             && self.target_metadata.is_none()
             && self.target_per_member.is_empty()
@@ -57,6 +62,15 @@ impl PendingRecords {
                     group_id: group_id.into(),
                 }),
                 Some(v.encode()),
+            );
+        }
+        for (regex, v) in &self.resolved_regexes {
+            batch.push(
+                encode_key(&NextGenKey::RegularExpression {
+                    group_id: group_id.into(),
+                    regex: regex.clone(),
+                }),
+                v.as_ref().map(RegularExpressionValue::encode),
             );
         }
         for (member_id, v) in &self.member_metadata {
@@ -143,6 +157,13 @@ impl PendingRecords {
         coordinator.update_cached_seed(group_id, |seed| {
             if let Some(value) = self.group_metadata {
                 seed.group_epoch = value.epoch;
+            }
+            for (regex, value) in self.resolved_regexes {
+                if let Some(value) = value {
+                    seed.resolved_regexes.insert(regex, value);
+                } else {
+                    seed.resolved_regexes.remove(&regex);
+                }
             }
             for (member_id, value) in self.member_metadata {
                 if let Some(value) = value {
@@ -265,7 +286,6 @@ mod tests {
                 host: "h",
             },
             Instant::now(),
-            &std::collections::HashSet::new(),
         );
         m.member_epoch = 7;
         m.previous_member_epoch = 6;
@@ -289,7 +309,13 @@ mod tests {
             .insert("m1".to_string(), maplit::hashmap! {topic => vec![0, 1, 2]});
         state.add_or_update_member(m);
 
-        let pending = snapshot_pending_after_change(&state, &["m1".to_string()], true);
+        let mut pending = snapshot_pending_after_change(&state, &["m1".to_string()], true);
+        let resolution = p::RegularExpressionValue {
+            topics: vec!["t".to_string()],
+            version: 9,
+            timestamp_ms: 1_000,
+        };
+        pending.resolved_regexes = vec![("t.*".to_string(), Some(resolution.clone()))];
         let (coordinator, _) = make_coordinator();
         pending.apply_to_cache(&coordinator, "g");
         let seed = coordinator.cached_seed("g").expect("cached seed");
@@ -331,8 +357,57 @@ mod tests {
                 }],
                 partitions_pending_revocation: vec![],
             }},
+            resolved_regexes: maplit::hashmap! {"t.*".to_string() => resolution},
         };
         assert!(seed == expected);
+    }
+
+    /// A resolved regular expression is written under the key of Kafka's
+    /// `ConsumerGroupRegularExpressionKey`, and a tombstone removes it from
+    /// the respawn cache.
+    #[test]
+    fn a_resolved_regex_is_written_and_tombstoned() {
+        use crate::coordinator::unified::persistence_next_gen as p;
+
+        let value = p::RegularExpressionValue {
+            topics: vec!["t".to_string()],
+            version: 9,
+            timestamp_ms: 1_000,
+        };
+        let write = PendingRecords {
+            resolved_regexes: vec![("t.*".to_string(), Some(value.clone()))],
+            ..Default::default()
+        };
+        let batch = write.to_batch("g", 0);
+        assert!(batch.records.len() == 1);
+        assert!(
+            batch.records[0].key.as_deref()
+                == Some(
+                    &p::encode_key(&p::NextGenKey::RegularExpression {
+                        group_id: "g".into(),
+                        regex: "t.*".into(),
+                    })[..]
+                )
+        );
+        assert!(batch.records[0].value.as_deref() == Some(&value.encode()[..]));
+
+        let (coordinator, _) = make_coordinator();
+        write.apply_to_cache(&coordinator, "g");
+        assert!(coordinator.cached_seed("g").unwrap().resolved_regexes.len() == 1);
+
+        let tombstone = PendingRecords {
+            resolved_regexes: vec![("t.*".to_string(), None)],
+            ..Default::default()
+        };
+        assert!(tombstone.to_batch("g", 0).records[0].value.is_none());
+        tombstone.apply_to_cache(&coordinator, "g");
+        assert!(
+            coordinator
+                .cached_seed("g")
+                .unwrap()
+                .resolved_regexes
+                .is_empty()
+        );
     }
 
     #[test]

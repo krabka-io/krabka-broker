@@ -33,6 +33,7 @@ mod metadata_update;
 mod offset_delete;
 mod pending_records;
 mod persistence;
+mod regex_resolution;
 mod retention;
 mod seed;
 mod tick;
@@ -428,10 +429,13 @@ fn chrono_now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
 }
 
-// `reconciler_model` drives the real heartbeat step, so these two are
-// re-exported for it alone.
+// `reconciler_model` drives the real heartbeat step, so these are re-exported
+// for it alone.
 #[cfg(test)]
-pub(crate) use self::heartbeat::{HeartbeatStep, step_heartbeat};
+pub(crate) use self::{
+    heartbeat::{HeartbeatStep, step_heartbeat},
+    regex_resolution::RegexResolution,
+};
 
 #[cfg(test)]
 #[path = "reconciler_model.rs"]

@@ -6,7 +6,7 @@
 //! async wrappers around it flush the records it produces and drive the
 //! in-place upgrade a heartbeat against a classic group triggers.
 
-use std::{collections::HashSet, time::Instant};
+use std::time::Instant;
 
 use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -32,6 +32,9 @@ use super::{
         current_assignment_value, flush_pending, snapshot_pending_after_change,
         target_assignment_value,
     },
+    regex_resolution::{
+        RegexResolution, delete_unsubscribed_regexes, maybe_update_regular_expressions,
+    },
 };
 use crate::{
     codes,
@@ -42,10 +45,13 @@ use crate::{
         first_join_member_id,
         group::{CoordinatorGroup, GroupKind},
         migration,
+        regex_resolver::TopicRegexResolver,
     },
 };
 
 mod identity;
+#[cfg(test)]
+mod regex_tests;
 #[cfg(test)]
 mod tests;
 
@@ -54,7 +60,7 @@ pub(super) async fn handle_actor_heartbeat(
     services: ActorServices<'_>,
     request: ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
-    regex_authorized_topics: &HashSet<String>,
+    regex_resolver: &dyn TopicRegexResolver,
     reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
 ) -> bool {
     if let Some(classic) = group.as_classic() {
@@ -157,7 +163,7 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     }
-    match handle_heartbeat(state, services, &request, client, regex_authorized_topics).await {
+    match handle_heartbeat(state, services, &request, client, regex_resolver).await {
         Ok(response) => {
             let _ = reply.send(response);
         }
@@ -208,7 +214,7 @@ pub(crate) fn step_heartbeat(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
-    regex_authorized_topics: &HashSet<String>,
+    regexes: &RegexResolution<'_>,
 ) -> HeartbeatStep {
     // ─── Leave path ──────────────────────────────────────────────
     // Kafka's `consumerGroupHeartbeat`: -1 leaves the group, and -2 is a
@@ -257,7 +263,7 @@ pub(crate) fn step_heartbeat(
 
     // ─── First-join path ─────────────────────────────────────────
     if resolved == Resolved::New {
-        let m = match try_build_member(&member_id, req, client, now, regex_authorized_topics) {
+        let m = match try_build_member(&member_id, req, client, now) {
             Ok(m) => m,
             Err(message) => {
                 return HeartbeatStep {
@@ -266,6 +272,16 @@ pub(crate) fn step_heartbeat(
                 };
             }
         };
+        // Kafka's `maybeUpdateRegularExpressions`, before the member reaches
+        // the group's counts: a new pattern is resolved for the group.
+        let mut regex_records = Vec::new();
+        maybe_update_regular_expressions(
+            state,
+            None,
+            m.subscribed_topic_regex.as_deref(),
+            regexes,
+            &mut regex_records,
+        );
         state.add_or_update_member(m);
         run_reconcile(state, config, metadata);
         // Compute the new member's current assignment (grants free target
@@ -274,7 +290,9 @@ pub(crate) fn step_heartbeat(
         let owned = reported_owned(req);
         state.reconcile_member(&member_id, owned.as_ref(), true);
         state.track_rebalance_timeout(&member_id, now);
-        let pending = snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
+        let mut pending =
+            snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
+        pending.resolved_regexes = regex_records;
         let response = build_assignment_resp(state, &member_id, config, true);
         return HeartbeatStep { response, pending };
     }
@@ -317,16 +335,8 @@ pub(crate) fn step_heartbeat(
         &request_for_member
     };
     let previous_target_epoch = state.target.epoch;
-    let any_change = match update_member_state(
-        state,
-        config,
-        metadata,
-        req,
-        client,
-        now,
-        regex_authorized_topics,
-    ) {
-        Ok(changed) => changed,
+    let update = match update_member_state(state, config, metadata, req, client, now, regexes) {
+        Ok(update) => update,
         Err(message) => {
             return HeartbeatStep {
                 response: invalid_regex_resp(message),
@@ -335,7 +345,7 @@ pub(crate) fn step_heartbeat(
         }
     };
     state.track_rebalance_timeout(&member_id, now);
-    let mut pending = if any_change || replaced.is_some() {
+    let mut pending = if update.changed || replaced.is_some() {
         snapshot_pending_after_change(
             state,
             std::slice::from_ref(&member_id),
@@ -344,6 +354,7 @@ pub(crate) fn step_heartbeat(
     } else {
         PendingRecords::default()
     };
+    pending.resolved_regexes = update.regex_records;
     if let Some(previous) = replaced {
         replacement_records(state, &mut pending, &previous, &member_id);
     }
@@ -444,8 +455,12 @@ fn leave_step(
         };
     }
     state.remove_member(&member_id);
+    // Kafka's `maybeDeleteResolvedRegularExpressions`: a regular expression
+    // that only this member used goes with it.
+    let regex_records = delete_unsubscribed_regexes(state);
     run_reconcile(state, config, metadata);
     let mut pending = snapshot_pending_after_change(state, &[], true);
+    pending.resolved_regexes = regex_records;
     pending.member_metadata.push((member_id.clone(), None));
     pending.target_per_member.push((member_id.clone(), None));
     pending.current_per_member.push((member_id, None));
@@ -474,10 +489,16 @@ async fn handle_heartbeat(
     services: ActorServices<'_>,
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
-    regex_authorized_topics: &HashSet<String>,
+    regex_resolver: &dyn TopicRegexResolver,
 ) -> Result<ConsumerGroupHeartbeatResponse, crate::error::BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
+    let regexes = RegexResolution::of(
+        services.config,
+        regex_resolver,
+        services.coordinator.regex_refresh_version(),
+        now_ms,
+    );
     let step = step_heartbeat(
         state,
         services.config,
@@ -485,7 +506,7 @@ async fn handle_heartbeat(
         req,
         client,
         now,
-        regex_authorized_topics,
+        &regexes,
     );
     flush_pending(
         state,

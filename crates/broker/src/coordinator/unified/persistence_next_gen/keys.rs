@@ -5,19 +5,20 @@
 //! the matching Apache Kafka schema at tag `4.3.1`: 3 for
 //! `ConsumerGroupMetadataKey`, 5 for `ConsumerGroupMemberMetadataKey`, 6 for
 //! `ConsumerGroupTargetAssignmentMetadataKey`, 7 for
-//! `ConsumerGroupTargetAssignmentMemberKey` and 8 for
-//! `ConsumerGroupCurrentMemberAssignmentKey`. The group id follows, and then
-//! the member id for the per-member records. [`NextGenKey`] is the parsed form
-//! that the `__consumer_offsets` replay path dispatches on.
+//! `ConsumerGroupTargetAssignmentMemberKey`, 8 for
+//! `ConsumerGroupCurrentMemberAssignmentKey` and 16 for
+//! `ConsumerGroupRegularExpressionKey`. The group id follows, and then the
+//! member id for the per-member records and the regular expression for the
+//! resolved-regular-expression record. [`NextGenKey`] is the parsed form that
+//! the `__consumer_offsets` replay path dispatches on.
 //!
 //! Every `coordinator-key` schema declares `"flexibleVersions": "none"`, so a
 //! key string keeps the legacy `i16` length prefix and a key carries no
 //! tagged-field trailer. Only the values are flexible; see
 //! [`persistence::flex`](crate::coordinator::unified::persistence::flex).
 //!
-//! `apiKey` 4 is Kafka's `ConsumerGroupPartitionMetadata` and 16 is its
-//! `ConsumerGroupRegularExpression`. The broker writes neither, and neither
-//! number is reused.
+//! `apiKey` 4 is Kafka's `ConsumerGroupPartitionMetadata`. The broker does not
+//! write it, and the number is not reused.
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::ProtocolError;
@@ -32,6 +33,7 @@ pub const KEY_MEMBER_METADATA: i16 = 5;
 pub const KEY_TARGET_ASSIGNMENT_METADATA: i16 = 6;
 pub const KEY_TARGET_ASSIGNMENT_MEMBER: i16 = 7;
 pub const KEY_CURRENT_MEMBER_ASSIGNMENT: i16 = 8;
+pub const KEY_REGULAR_EXPRESSION: i16 = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NextGenKey {
@@ -40,6 +42,7 @@ pub enum NextGenKey {
     TargetAssignmentMetadata { group_id: String },
     TargetAssignmentMember { group_id: String, member_id: String },
     CurrentMemberAssignment { group_id: String, member_id: String },
+    RegularExpression { group_id: String, regex: String },
 }
 
 /// # Errors
@@ -63,6 +66,10 @@ pub fn parse_key(version: i16, mut buf: &[u8]) -> Result<NextGenKey, BrokerError
         KEY_CURRENT_MEMBER_ASSIGNMENT => NextGenKey::CurrentMemberAssignment {
             group_id: get_string(&mut buf)?,
             member_id: get_string(&mut buf)?,
+        },
+        KEY_REGULAR_EXPRESSION => NextGenKey::RegularExpression {
+            group_id: get_string(&mut buf)?,
+            regex: get_string(&mut buf)?,
         },
         _ => {
             return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
@@ -109,6 +116,11 @@ pub fn encode_key(key: &NextGenKey) -> Bytes {
             put_string(&mut buf, group_id);
             put_string(&mut buf, member_id);
         }
+        NextGenKey::RegularExpression { group_id, regex } => {
+            buf.put_i16(KEY_REGULAR_EXPRESSION);
+            put_string(&mut buf, group_id);
+            put_string(&mut buf, regex);
+        }
     }
     buf.freeze()
 }
@@ -122,6 +134,21 @@ mod tests {
     #[test]
     fn unknown_key_version_rejected() {
         assert!(parse_key(99, &[]).is_err());
+    }
+
+    /// `ConsumerGroupRegularExpressionKey`: an `i16` key version of 16, then
+    /// the group id and the regular expression as non-flexible strings.
+    #[test]
+    fn regular_expression_key_bytes_match_kafka_schema() {
+        let key = NextGenKey::RegularExpression {
+            group_id: "g".into(),
+            regex: "a.*".into(),
+        };
+        assert!(&encode_key(&key)[..] == b"\x00\x10\x00\x01g\x00\x03a.*");
+        let encoded = encode_key(&key);
+        let mut r = &encoded[..];
+        let v = bytes::Buf::get_i16(&mut r);
+        assert!(parse_key(v, r).unwrap() == key);
     }
 
     #[test]

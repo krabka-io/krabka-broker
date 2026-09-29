@@ -87,15 +87,12 @@ fn classic_guard(state: &ClassicState) -> Result<SubscribedTopics, ErrorCode> {
 }
 
 /// `ModernGroup.isSubscribedToTopic`: the names the members subscribe to,
-/// plus the topics their regular expressions resolve to. A regex resolves to
-/// the topics it matches that the member may `Describe`, the same rule the
-/// reconciler assigns by.
+/// plus the topics their regular expressions resolved to in the group.
 ///
-/// Kafka replays the topics each regex resolved to. Krabka persists none, so a
-/// member replay restored with a regex subscribes the group to topics it
-/// cannot name until the member's next heartbeat resolves it. Until then the
-/// group counts as subscribed to every topic, so neither `OffsetDelete` nor
-/// offset expiration removes an offset the regex may still cover.
+/// A regex that the group has not resolved yet subscribes the group to topics
+/// it cannot name. Until it is resolved the group counts as subscribed to
+/// every topic, so neither `OffsetDelete` nor offset expiration removes an
+/// offset the regex may still cover.
 fn consumer_subscribed_topics(state: &ConsumerState) -> SubscribedTopics {
     if state.has_unresolved_regex() {
         return SubscribedTopics::All;
@@ -103,15 +100,7 @@ fn consumer_subscribed_topics(state: &ConsumerState) -> SubscribedTopics {
     let mut topics = HashSet::new();
     for member in state.members.values() {
         topics.extend(member.subscribed_topic_names.iter().cloned());
-        if let Some(regex) = member.compiled_regex() {
-            topics.extend(
-                member
-                    .regex_authorized_topics
-                    .iter()
-                    .filter(|topic| regex.is_match(topic))
-                    .cloned(),
-            );
-        }
+        topics.extend(state.regex_topics(member).cloned());
     }
     SubscribedTopics::Named(topics)
 }
@@ -138,7 +127,8 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        classic_state::Member as ClassicMember, consumer_state::test_support::member,
+        classic_state::Member as ClassicMember,
+        consumer_state::{ResolvedRegularExpression, test_support::member},
     };
 
     fn subscription(version: i16, topics: &[&str]) -> Bytes {
@@ -252,19 +242,29 @@ mod tests {
         }
     }
 
-    /// `ModernGroup.isSubscribedToTopic`: names and resolved regex topics.
+    /// `ModernGroup.isSubscribedToTopic`: the names, and the topics that the
+    /// group resolved each regex to. A regex the group has not resolved makes
+    /// the group subscribed to every topic.
     #[test]
     fn consumer_group_subscribes_to_names_and_resolved_regex() {
         let mut g = ConsumerState::new("g");
         let mut by_name = member("m1");
         by_name.subscribed_topic_names = HashSet::from(["orders".to_string()]);
         let mut by_regex = member("m2");
-        by_regex.set_regex(Some("pay.*".into()));
-        by_regex.regex_authorized_topics =
-            HashSet::from(["payments".to_string(), "orders-archive".to_string()]);
+        by_regex.subscribed_topic_regex = Some("pay.*".into());
         g.add_or_update_member(by_name);
         g.add_or_update_member(by_regex);
 
+        check!(consumer_subscribed_topics(&g) == SubscribedTopics::All);
+
+        g.set_resolved_regex(
+            "pay.*".into(),
+            ResolvedRegularExpression {
+                topics: ["payments".to_string()].into(),
+                version: 1,
+                timestamp_ms: 1,
+            },
+        );
         check!(consumer_subscribed_topics(&g) == named(&["orders", "payments"]));
     }
 }

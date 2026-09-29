@@ -23,7 +23,10 @@ use super::{
         committed_of, member, owned_map, owned_to_vec,
     },
 };
-use crate::coordinator::unified::{ClientIdentity, actor::step_heartbeat};
+use crate::coordinator::unified::{
+    ClientIdentity,
+    actor::{RegexResolution, step_heartbeat},
+};
 
 impl Model for CgcModel {
     type State = CgcState;
@@ -126,7 +129,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.entry(id.clone()).or_default();
@@ -144,7 +147,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.remove(&id);
@@ -163,7 +166,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 adv.insert(id, advertised_of(&step).unwrap_or_default());
@@ -180,7 +183,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 // Without an assignment in the answer, the member keeps the one

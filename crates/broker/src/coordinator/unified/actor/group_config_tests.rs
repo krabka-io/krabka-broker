@@ -82,7 +82,7 @@ async fn heartbeat(
             },
             client_id: "client".into(),
             client_host: "host".into(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply,
         })
         .await

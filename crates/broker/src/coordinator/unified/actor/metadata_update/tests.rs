@@ -1,7 +1,7 @@
 //! Tests for the metadata refresh that a metadata update asks of a consumer
 //! group, through the group actor's mailbox.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
@@ -38,7 +38,7 @@ async fn heartbeat(
             request,
             client_id: "client".into(),
             client_host: "host".into(),
-            regex_authorized_topics: HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply,
         })
         .await

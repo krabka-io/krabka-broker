@@ -73,6 +73,45 @@ pub fn changed_topics(previous: &MetadataImage, next: &MetadataImage) -> Vec<Str
     changed.into_iter().map(str::to_owned).collect()
 }
 
+/// Whether `next` can resolve a regular expression of a consumer group to
+/// other topics than `previous` did.
+///
+/// Kafka's `GroupMetadataManager.onMetadataUpdate` remembers the version of
+/// the latest image that created a topic (`lastMetadataImageWithNewTopics`),
+/// and a group refreshes the resolutions older than it at its next heartbeat.
+/// It does not refresh when a topic is deleted, because the assignment drops a
+/// deleted topic through the metadata hash, and the next resolution cleans the
+/// resolved regular expression up. A resolution also depends on the `Describe`
+/// grants of the principal that made it, so a change of the ACLs counts too,
+/// which Kafka only sees at its refresh interval.
+///
+/// The watch channel can skip images, so the comparison is between whole
+/// images: a topic is new when its topic id is not in `previous`.
+#[must_use]
+pub fn regex_resolution_may_change(previous: &MetadataImage, next: &MetadataImage) -> bool {
+    next.topics()
+        .any(|topic| previous.topic_by_id(&topic.topic_id).is_none())
+        || acl_fingerprint(previous) != acl_fingerprint(next)
+}
+
+/// The number of ACLs of `image`, and a hash that does not depend on their
+/// order, so that two images hold the same ACLs when both agree.
+fn acl_fingerprint(image: &MetadataImage) -> (usize, u64) {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    image.all_acls().fold((0, 0_u64), |(count, sum), acl| {
+        let mut hasher = DefaultHasher::new();
+        acl.resource_type.hash(&mut hasher);
+        acl.resource_name.hash(&mut hasher);
+        acl.pattern_type.hash(&mut hasher);
+        acl.principal.hash(&mut hasher);
+        acl.host.hash(&mut hasher);
+        acl.operation.hash(&mut hasher);
+        acl.permission_type.hash(&mut hasher);
+        (count + 1, sum.wrapping_add(hasher.finish()))
+    })
+}
+
 /// Sends `topics` to every group actor that `owned` accepts.
 ///
 /// The update has no reply: a group only notes that its next heartbeat must

@@ -265,7 +265,6 @@ mod tests {
                     host: "host",
                 },
                 Instant::now(),
-                &std::collections::HashSet::new(),
             ));
         }
         let topic_id = Uuid([9; 16]);
@@ -317,7 +316,6 @@ mod tests {
                     host: "host",
                 },
                 Instant::now(),
-                &std::collections::HashSet::new(),
             ));
             state
                 .target
@@ -352,7 +350,6 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
-            &std::collections::HashSet::new(),
         ));
 
         let pending = snapshot_pending_after_change(&state, &["m1".into()], false);
