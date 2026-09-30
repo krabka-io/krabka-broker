@@ -89,6 +89,14 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
         proof_assert!((grant.0@ / units_per_token@) * units_per_token@ == grant.0@);
         proof_assert!((granted@ + grant.0@ / units_per_token@) * units_per_token@
             == granted@ * units_per_token@ + grant.0@);
+        // Expand the whole-token update before composing the ledger equality.
+        proof_assert!((granted@ * units_per_token@ + available@ - debt@) * 1_000_000_000
+            == granted@ * units_per_token@ * 1_000_000_000
+                + (available@ - debt@) * 1_000_000_000);
+        proof_assert!(((granted@ + grant.0@ / units_per_token@) * units_per_token@
+            + left.0@ - refilled.1@) * 1_000_000_000
+            == granted@ * units_per_token@ * 1_000_000_000
+                + (grant.0@ + left.0@ - refilled.1@) * 1_000_000_000);
         proof_assert!((grant.0@ + left.0@ - refilled.1@) * 1_000_000_000
             + refilled.2@ + discarded@
             == (available@ - debt@) * 1_000_000_000 + fraction@ + elapsed@ * rate@);
