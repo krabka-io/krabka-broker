@@ -16,17 +16,21 @@
 //! quota refresh task sees it and no lookup of it is running. A lookup is
 //! bounded by a timeout, and a name that fails is held back for a wait that
 //! grows with each failure, so a resolver that is down is not asked again on
-//! every image.
+//! every image. The refresh task asks again when the wait is over
+//! ([`IpNames::next_retry`]) and does not need another image to do it: Kafka
+//! resolves once, so a name that failed must not stay unenforced until the
+//! next metadata change.
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::Future,
     net::IpAddr,
     sync::{Mutex, MutexGuard, PoisonError},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use krabka_metadata::MetadataImage;
+use tokio::time::Instant;
 
 /// The address an IP literal names, with an IPv4-mapped IPv6 address as the
 /// IPv4 address it maps to, as Java's `InetAddress.getByName` returns it.
@@ -133,7 +137,7 @@ impl Failure {
 
 /// The first address the system resolver returns for `host`, as
 /// `InetAddress.getByName` does.
-async fn system_lookup(host: String) -> Option<IpAddr> {
+pub(super) async fn system_lookup(host: String) -> Option<IpAddr> {
     let addrs = krabka_client_core::transport::resolve(&format!("{host}:0"))
         .await
         .ok()?;
@@ -211,13 +215,27 @@ impl IpNames {
         claimed
     }
 
-    /// Resolves each host name that [`Self::claim`] returned, and remembers the
-    /// address for the next [`Self::update`]. A lookup that fails or takes
-    /// longer than [`LOOKUP_TIMEOUT`] leaves the name out and holds it back for
-    /// a wait that doubles with each failure.
-    pub(super) async fn resolve(&self, hosts: &[String]) {
-        self.resolve_with(hosts, LOOKUP_TIMEOUT, system_lookup)
-            .await;
+    /// The earliest time a host name that failed may be looked up again, for
+    /// the names of the last [`Self::update`]'s image. `None` when no name is
+    /// waiting, and then nothing needs to wake up to look one up.
+    pub(super) fn next_retry(&self) -> Option<Instant> {
+        self.lock()
+            .failed
+            .values()
+            .map(|failure| failure.retry_at)
+            .min()
+    }
+
+    /// Resolves each host name that [`Self::claim`] returned with `lookup`, and
+    /// remembers the address for the next [`Self::update`]. A lookup that fails
+    /// or takes longer than [`LOOKUP_TIMEOUT`] leaves the name out and holds it
+    /// back for a wait that doubles with each failure.
+    pub(super) async fn resolve<Lookup, Found>(&self, hosts: &[String], lookup: Lookup)
+    where
+        Lookup: Fn(String) -> Found,
+        Found: Future<Output = Option<IpAddr>>,
+    {
+        self.resolve_with(hosts, LOOKUP_TIMEOUT, lookup).await;
     }
 
     async fn resolve_with<Lookup, Found>(&self, hosts: &[String], timeout: Duration, lookup: Lookup)
@@ -368,7 +386,10 @@ mod tests {
         );
         let unresolved = names.update(&image);
         names
-            .resolve(&names.claim(unresolved.clone(), Instant::now()))
+            .resolve(
+                &names.claim(unresolved.clone(), Instant::now()),
+                system_lookup,
+            )
             .await;
         let unresolved_after = names.update(&image);
 
@@ -494,6 +515,48 @@ mod tests {
 
         check!(unresolved_after.is_empty());
         check!(names.entity_names(address) == db());
+    }
+
+    /// The next retry is the earliest wait among the names of the image, and
+    /// there is none once no failed name is left in the image.
+    #[tokio::test(start_paused = true)]
+    async fn the_next_retry_is_the_earliest_wait_of_a_name_in_the_image() {
+        let names = IpNames::default();
+        let both = image_with_quotas(vec![
+            quota_record(vec![("ip", Some("a"))], "connection_creation_rate", 1.0),
+            quota_record(vec![("ip", Some("b"))], "connection_creation_rate", 1.0),
+        ]);
+        let start = Instant::now();
+        let none_failed = names.next_retry();
+
+        let a = names.claim(vec!["a".to_owned()], start);
+        hang_until_timeout(&names, &a).await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let b = names.claim(vec!["b".to_owned()], Instant::now());
+        hang_until_timeout(&names, &b).await;
+        let _ = names.update(&both);
+        let earliest = names.next_retry();
+        let _ = names.update(&host_image("b"));
+        let after_a_left = names.next_retry();
+        let _ = names.update(&host_image("c"));
+        let after_both_left = names.next_retry();
+
+        // `a` failed 10 ms after `start`, when its lookup timed out, and `b`
+        // ten seconds and 10 ms after that; each waits 1 s.
+        let wait = |next: Option<Instant>| next.map(|at| at - start);
+        check!(
+            (
+                none_failed,
+                wait(earliest),
+                wait(after_a_left),
+                after_both_left
+            ) == (
+                None,
+                Some(Duration::from_millis(1_010)),
+                Some(Duration::from_millis(11_020)),
+                None
+            )
+        );
     }
 
     /// A name whose entity is gone is forgotten with its failures, so a record
