@@ -21,38 +21,9 @@
 //! of a change in krabka-protocol.
 
 use krabka_compression::{CompressionType, RecordDecompressionPolicy};
-use krabka_protocol::{
-    primitives::varint::{varint_len, varlong_len},
-    records::validate_one_v2_batch,
-};
+use krabka_protocol::records::validate_one_v2_batch;
 
 use super::prepare::{PreparedBatch, PreparedSource};
-
-/// The size of one record's body as Kafka's `DefaultRecord` writes it, which
-/// is the `sizeOfBodyInBytes` its varint length prefix declares: the
-/// attributes byte, the two deltas, and the length-prefixed key, value and
-/// headers. `None` lengths are Kafka's `-1` null marker.
-fn record_body_len(
-    (timestamp_delta, offset_delta): (i64, i32),
-    key: Option<usize>,
-    value: Option<usize>,
-    headers: impl ExactSizeIterator<Item = (usize, Option<usize>)>,
-) -> usize {
-    let field = |len: Option<usize>| match len {
-        None => varint_len(-1),
-        Some(len) => varint_len(i32::try_from(len).unwrap_or(i32::MAX)) + len,
-    };
-    let header_count = varint_len(i32::try_from(headers.len()).unwrap_or(i32::MAX));
-    let headers: usize = headers
-        .map(|(key, value)| field(Some(key)) + field(value))
-        .sum();
-    1 + varlong_len(timestamp_delta)
-        + varint_len(offset_delta)
-        + field(key)
-        + field(value)
-        + header_count
-        + headers
-}
 
 /// Whether `prepared` breaks the topic's `max.decompressed.message.bytes`,
 /// which `(image, node, topic)` resolve: a compressed batch with a record whose
@@ -92,34 +63,16 @@ fn has_oversized_record(
         return false;
     }
     match &prepared.source {
-        PreparedSource::Owned(batch) => batch.records.iter().any(|record| {
-            record_body_len(
-                (record.timestamp_delta, record.offset_delta),
-                record.key.as_ref().map(bytes::Bytes::len),
-                record.value.as_ref().map(bytes::Bytes::len),
-                record.headers.iter().map(|header| {
-                    (
-                        header.key.len(),
-                        header.value.as_ref().map(bytes::Bytes::len),
-                    )
-                }),
-            ) > limit
-        }),
+        PreparedSource::Owned(batch) => {
+            batch.records.iter().any(|record| record.body_len() > limit)
+        }
         PreparedSource::Verbatim(bytes) => {
             let Ok(batch) = validate_one_v2_batch(bytes) else {
                 return false;
             };
             let mut oversized = false;
             let walked = batch.validate_records_with(policy, |record| {
-                oversized |= record_body_len(
-                    (record.timestamp_delta, record.offset_delta),
-                    record.key.map(<[u8]>::len),
-                    record.value.map(<[u8]>::len),
-                    record
-                        .headers
-                        .iter()
-                        .map(|header| (header.key.len(), header.value.map(<[u8]>::len))),
-                ) > limit;
+                oversized |= record.body_len() > limit;
             });
             walked.is_ok() && oversized
         }
@@ -175,34 +128,17 @@ mod tests {
         }
     }
 
-    /// The record's body size, 114 bytes: its attributes byte, a two-byte
-    /// timestamp delta, a one-byte offset delta, `1 + 3` bytes of key,
-    /// `2 + 100` of value, a one-byte header count, and one header of `1 + 1`
-    /// bytes of key with a null value. Its encoding is that behind a two-byte
-    /// length prefix, which is what the record's own `encoded_len` says.
-    #[test]
-    fn a_record_body_is_measured_the_way_kafka_encodes_it() {
-        let record = &batch(CompressionType::None, 100).records[0];
-        check!(record.encoded_len() == 2 + 114);
-        check!(
-            record_body_len(
-                (record.timestamp_delta, record.offset_delta),
-                record.key.as_ref().map(Bytes::len),
-                record.value.as_ref().map(Bytes::len),
-                record
-                    .headers
-                    .iter()
-                    .map(|header| (header.key.len(), header.value.as_ref().map(Bytes::len))),
-            ) == 114
-        );
-    }
-
     /// The limit refuses a compressed record above it, on the verbatim and the
     /// owned path alike, and never an uncompressed one.
     #[test]
     fn only_a_compressed_batch_is_held_to_the_limit() {
         let policy = RecordDecompressionPolicy::default();
-        // The record body is 114 bytes with a 100-byte value.
+        // The record body is 114 bytes with a 100-byte value: its attributes
+        // byte, a two-byte timestamp delta, a one-byte offset delta, `1 + 3`
+        // bytes of key, `2 + 100` of value, a one-byte header count, and one
+        // header of `1 + 1` bytes of key with a null value. Its encoding is
+        // that behind a two-byte length prefix, so a limit of 114 admits it and
+        // 113 refuses it.
         for (codec, verbatim, limit, expected) in [
             (CompressionType::Gzip, true, 113, true),
             (CompressionType::Gzip, true, 114, false),
