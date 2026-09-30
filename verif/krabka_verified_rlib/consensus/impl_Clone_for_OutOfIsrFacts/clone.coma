@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 63 27 63 32 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 66 27 66 32 *)
 
 (* <consensus::OutOfIsrFacts as std::clone::Clone> *)
 
@@ -6,13 +6,17 @@ use creusot.prelude.Any
 
 type t_FailoverRecovery = None | Balanced | Aggressive
 
-type t_OutOfIsrFacts = { has_electable_elr: bool; recovery: t_FailoverRecovery; unclean_election_available: bool }
+type t_OutOfIsrFacts = {
+  has_electable_elr: bool;
+  last_known_leader_electable: bool;
+  recovery: t_FailoverRecovery;
+  unclean_election_available: bool }
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_OutOfIsrFacts [#"/workspace/crates/verified/src/consensus.rs" 63 27 63 32] (self: t_OutOfIsrFacts)
+let clone_OutOfIsrFacts [#"/workspace/crates/verified/src/consensus.rs" 66 27 66 32] (self: t_OutOfIsrFacts)
   (return (x: t_OutOfIsrFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_OutOfIsrFacts = Any.any_l () | & self: t_OutOfIsrFacts = self ])

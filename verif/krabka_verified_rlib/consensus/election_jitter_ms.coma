@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 438 0 438 67 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 462 0 462 67 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 439 18 439 19
-let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 440 15 440 16
-let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 444 30 444 51
-let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 444 14 444 52
-let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 445 10 445 26
-let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 445 40 445 61
-let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 445 10 445 62
-let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 446 4 446 17
-let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 435 10 435 40
-let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 436 10 436 45
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 463 18 463 19
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 464 15 464 16
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 468 30 468 51
+let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 468 14 468 52
+let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 469 10 469 26
+let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 469 40 469 61
+let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 469 10 469 62
+let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 470 4 470 17
+let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 459 10 459 40
+let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 460 10 460 45
 
 use creusot.int.UInt64
 use creusot.int.UInt32
@@ -36,7 +36,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let election_jitter_ms [#"/workspace/crates/verified/src/consensus.rs" 438 0 438 67] (me: UInt64.t) (epoch: UInt32.t)
+let election_jitter_ms [#"/workspace/crates/verified/src/consensus.rs" 462 0 462 67] (me: UInt64.t) (epoch: UInt32.t)
   (base_ms: UInt64.t) (return (x: UInt64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- base_ms = ([%#sconsensus] (0: UInt64.t)) ] s1

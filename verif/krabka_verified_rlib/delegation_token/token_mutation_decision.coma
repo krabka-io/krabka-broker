@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 239 0 239 82 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 244 0 244 82 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 278 31 278 32
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 282 47 282 48
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 260 30 260 31
-let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 209 10 229 9
-let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 230 10 237 75
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 283 31 283 32
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 287 47 287 48
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 265 30 265 31
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 214 10 234 9
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 235 10 242 75
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -34,7 +34,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.rs" 239 0 239 82]
+let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.rs" 244 0 244 82]
   (facts: t_TokenMutationFacts) (return (x: t_TokenMutationDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.uncommitted_tail = false} (! bb2) | br1 -> {facts.uncommitted_tail} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
