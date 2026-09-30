@@ -59,16 +59,11 @@ use crate::{
         persistence::{RecordKey, encode_key},
         state::{GroupEntry, GroupSpec},
     },
+    coordinator::unified::persistence::MAX_STRING_BYTES,
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
 };
 
-/// Check a group definition that a caller supplied.
-///
-/// # Errors
-/// Returns [`BarrierError::InvalidDefinition`] when the topic list is empty,
-/// when it holds an empty name or a duplicate name, when `retained_cuts` is
-/// below one, or when the interval is not positive.
 /// The fan-out deadline a request gets.
 ///
 /// `ceiling` is the operator's configured bound. A request that names none
@@ -78,6 +73,31 @@ fn clamp_timeout(requested: Option<Time>, ceiling: Time) -> Time {
     requested.map_or(ceiling, |asked| asked.min(ceiling))
 }
 
+/// Check the name of a group that a caller asks to create.
+///
+/// The name is a string in every `__barrier_state` key and in every marker,
+/// and both carry it with an `i16` length.
+///
+/// # Errors
+/// Returns [`BarrierError::InvalidDefinition`] when the name is longer than
+/// 32767 bytes.
+pub(crate) fn validate_group_name(group: &str) -> Result<(), BarrierError> {
+    if group.len() > MAX_STRING_BYTES {
+        return Err(BarrierError::InvalidDefinition(format!(
+            "a barrier group name is {} bytes, and the limit is {MAX_STRING_BYTES}",
+            group.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Check a group definition that a caller supplied.
+///
+/// # Errors
+/// Returns [`BarrierError::InvalidDefinition`] when the topic list is empty,
+/// when it holds an empty name, a name longer than 32767 bytes or a duplicate
+/// name, when `retained_cuts` is below one, or when the interval is not
+/// positive.
 pub(crate) fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
     if spec.topics.is_empty() {
         return Err(BarrierError::InvalidDefinition(
@@ -88,6 +108,12 @@ pub(crate) fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
         return Err(BarrierError::InvalidDefinition(
             "a barrier group topic name is empty".to_owned(),
         ));
+    }
+    if let Some(topic) = spec.topics.iter().find(|t| t.len() > MAX_STRING_BYTES) {
+        return Err(BarrierError::InvalidDefinition(format!(
+            "a barrier group topic name is {} bytes, and the limit is {MAX_STRING_BYTES}",
+            topic.len()
+        )));
     }
     let unique: HashSet<&String> = spec.topics.iter().collect();
     if unique.len() != spec.topics.len() {
@@ -241,7 +267,8 @@ impl BarrierCoordinator {
     ///
     /// # Errors
     /// Returns [`BarrierError::StateNotLocal`] when the state partition is not
-    /// open here, and [`BarrierError::Persist`] when the append fails.
+    /// open here, and [`BarrierError::Persist`] when a key does not encode or
+    /// the append fails.
     async fn append_records(
         &self,
         group: &str,
@@ -266,7 +293,7 @@ impl BarrierCoordinator {
         for (delta, (key, value)) in records.into_iter().enumerate() {
             batch.records.push(Record {
                 offset_delta: i32::try_from(delta).expect("the record count fits in an i32"),
-                key: Some(encode_key(&key).into()),
+                key: Some(encode_key(&key)?.into()),
                 value,
                 ..Record::default()
             });
@@ -372,6 +399,23 @@ mod tests {
         ];
         for (case, spec, ok) in cases {
             check!(validate_spec(spec).is_ok() == *ok, "{case}");
+        }
+    }
+
+    /// A group name and a topic name go into `i16`-length strings of the
+    /// state records, so 32767 bytes is the longest that a definition can use.
+    #[test]
+    fn a_group_or_topic_name_is_usable_up_to_32767_bytes() {
+        for (length, ok) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let long = "n".repeat(length);
+            check!(
+                validate_group_name(&long).is_ok() == ok,
+                "group of {length} bytes"
+            );
+            check!(
+                validate_spec(&spec(&["orders", long.as_str()], None, 4)).is_ok() == ok,
+                "topic of {length} bytes"
+            );
         }
     }
 

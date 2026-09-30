@@ -58,38 +58,38 @@ mod tests {
 
     #[test]
     fn every_decoder_rejects_a_wrong_version() {
-        let mut key = encode_key(&RecordKey::cut("orders-cut", 7));
+        let mut key = encode_key(&RecordKey::cut("orders-cut", 7)).expect("encodes");
         key[1] = 1;
         assert!(decode_key(&key).is_err());
 
-        let mut group = encode_group(&sample_group());
+        let mut group = encode_group(&sample_group()).expect("encodes");
         group[1] = 1;
         assert!(decode_group(&group).is_err());
 
-        let mut start = encode_injection_start(&sample_injection_start());
+        let mut start = encode_injection_start(&sample_injection_start()).expect("encodes");
         start[1] = 1;
         assert!(decode_injection_start(&start).is_err());
 
-        let mut cut = encode_cut(&sample_cut());
+        let mut cut = encode_cut(&sample_cut()).expect("encodes");
         cut[1] = 1;
         assert!(decode_cut(&cut).is_err());
     }
 
     #[test]
     fn every_decoder_rejects_trailing_bytes() {
-        let mut key = encode_key(&RecordKey::cut("orders-cut", 7));
+        let mut key = encode_key(&RecordKey::cut("orders-cut", 7)).expect("encodes");
         key.push(0);
         assert!(decode_key(&key).is_err());
 
-        let mut group = encode_group(&sample_group());
+        let mut group = encode_group(&sample_group()).expect("encodes");
         group.push(0);
         assert!(decode_group(&group).is_err());
 
-        let mut start = encode_injection_start(&sample_injection_start());
+        let mut start = encode_injection_start(&sample_injection_start()).expect("encodes");
         start.push(0);
         assert!(decode_injection_start(&start).is_err());
 
-        let mut cut = encode_cut(&sample_cut());
+        let mut cut = encode_cut(&sample_cut()).expect("encodes");
         cut.push(0);
         assert!(decode_cut(&cut).is_err());
     }

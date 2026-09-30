@@ -10,9 +10,10 @@
 //!
 //! The layout is deliberately plain, because `krabka-streams-java` and
 //! `krabka-streams-go` decode cut records by hand. Every integer is
-//! big-endian. A string is an `i16` byte length and then UTF-8 bytes. An `i32`
-//! count precedes every array. There are no compact lengths and no tagged
-//! fields.
+//! big-endian. A string is an `i16` byte length and then UTF-8 bytes, so an
+//! encoder refuses one of more than 32767 bytes with an error instead of
+//! writing a length it cannot hold. An `i32` count precedes every array. There
+//! are no compact lengths and no tagged fields.
 //!
 //! Wire, in field order:
 //!

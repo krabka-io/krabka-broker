@@ -23,9 +23,19 @@
 //! over the bound before it changes the group.
 //!
 //! The strings that a record can carry are listed once, per request type, in
-//! the [`RecordStrings`] impls below. A request that is not listed reads or
-//! writes only state that a listed request created, or has no flexible version
+//! the [`RecordStrings`] impls below. A request that is not listed writes no
+//! coordinator record with a string of its own, or has no flexible version
 //! (`OffsetDelete`), so its strings cannot pass the `INT16` bound.
+//!
+//! The listing is not a wire-parity guard for every request. `ShareFetch`,
+//! `ShareAcknowledge`, `DescribeShareGroupOffsets` and `FindCoordinator` are
+//! flexible-only, and they decode a group id of more than 32767 bytes where
+//! Kafka's reader would close the connection. No group with such an id can
+//! exist, so none of them writes a record for it: the share requests find no
+//! initialized share state, and the share-state key encoder refuses the id if a
+//! request reaches it. `FindCoordinator` only names a coordinator. The barrier
+//! requests have their own bound, in `barrier::handlers`, because their
+//! strings go to `__barrier_state` and not to a group coordinator.
 
 use krabka_protocol::{
     Decode,

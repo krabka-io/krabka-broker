@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Instant};
 use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::Mutex;
 
-use super::{BarrierCoordinator, validate_spec_limits};
+use super::{BarrierCoordinator, validate_group_name, validate_spec_limits};
 use crate::{
     barrier::{
         STATE_TOPIC,
@@ -96,13 +96,16 @@ impl BarrierCoordinator {
     /// # Errors
     /// Returns [`BarrierError::NotCoordinator`] when another broker owns the
     /// group, [`BarrierError::GroupExists`] when the name is live,
-    /// [`BarrierError::InvalidDefinition`] when the definition is not usable,
-    /// and [`BarrierError::Persist`] when the append fails.
+    /// [`BarrierError::InvalidDefinition`] when the name or the definition is
+    /// not usable, and [`BarrierError::Persist`] when the append fails.
     pub(crate) async fn create_group(
         &self,
         group: &str,
         spec: GroupSpec,
     ) -> Result<GroupValue, BarrierError> {
+        // Both checks run before the group has an entry, so a refusal leaves
+        // nothing behind.
+        validate_group_name(group)?;
         validate_spec_limits(
             &spec,
             self.config.max_topics_per_group,
@@ -139,7 +142,7 @@ impl BarrierCoordinator {
             group,
             vec![(
                 RecordKey::group(group),
-                Some(encode_group(&definition).into()),
+                Some(encode_group(&definition)?.into()),
             )],
         )
         .await?;
@@ -192,7 +195,7 @@ impl BarrierCoordinator {
             group,
             vec![(
                 RecordKey::group(group),
-                Some(encode_group(&definition).into()),
+                Some(encode_group(&definition)?.into()),
             )],
         )
         .await?;
@@ -310,6 +313,7 @@ mod tests {
             coordinator::test_support::{Fixture, GROUP, spec},
             test_support::topic_records,
         },
+        coordinator::unified::persistence::MAX_STRING_BYTES,
         metadata_source::MetadataSource,
     };
 
@@ -337,6 +341,89 @@ mod tests {
                     cut_epochs: Vec::new(),
                     pending_epoch: None,
                 }]
+        );
+    }
+
+    /// The longest name that a state record can carry is 32767 bytes. A group
+    /// of that name and a topic of that length are written, replayed and cut,
+    /// and each string goes through a key, a value and a marker.
+    #[tokio::test]
+    async fn a_group_and_a_topic_of_32767_bytes_are_created_cut_and_recovered() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        let group = "g".repeat(MAX_STRING_BYTES);
+        let topic = "t".repeat(MAX_STRING_BYTES);
+        let definition = coordinator
+            .create_group(&group, spec(&["orders", &topic], None, 4))
+            .await
+            .expect("the group is created");
+        let outcome = coordinator
+            .trigger_injection(&group, None)
+            .await
+            .expect("the injection runs");
+
+        let replayed = fixture.recovered().await;
+        assert!(
+            replayed.describe_groups(&[]).await
+                == vec![GroupDescription {
+                    group,
+                    definition: GroupValue {
+                        last_epoch: outcome.epoch,
+                        ..definition
+                    },
+                    cut_epochs: vec![outcome.epoch],
+                    pending_epoch: None,
+                }]
+        );
+    }
+
+    /// A name over 32767 bytes is refused before the group has an entry, and
+    /// nothing reaches a state partition. Each of the two strings would
+    /// otherwise panic the encoder of the record that names it.
+    #[tokio::test]
+    async fn a_group_or_topic_of_32768_bytes_is_refused_and_leaves_nothing_behind() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        let long = "n".repeat(MAX_STRING_BYTES + 1);
+        coordinator
+            .create_group(GROUP, spec(&["orders"], None, 4))
+            .await
+            .expect("the group is created");
+        let before = coordinator.groups.len();
+
+        let refused = [
+            (
+                "group name on create",
+                coordinator
+                    .create_group(&long, spec(&["orders"], None, 4))
+                    .await,
+            ),
+            (
+                "topic name on create",
+                coordinator
+                    .create_group("other", spec(&["orders", &long], None, 4))
+                    .await,
+            ),
+            (
+                "topic name on update",
+                coordinator
+                    .update_group(GROUP, spec(&[&long], None, 4))
+                    .await,
+            ),
+        ];
+        for (case, result) in refused {
+            assert!(let Err(BarrierError::InvalidDefinition(_)) = result, "{case}");
+        }
+
+        assert!(coordinator.groups.len() == before);
+        assert!(
+            coordinator
+                .describe_groups(&[])
+                .await
+                .iter()
+                .map(|d| (d.group.as_str(), d.definition.topics.clone()))
+                .collect::<Vec<_>>()
+                == vec![(GROUP, vec!["orders".to_owned()])]
         );
     }
 
