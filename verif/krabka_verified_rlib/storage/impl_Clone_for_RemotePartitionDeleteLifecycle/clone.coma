@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/storage.rs" 151 27 151 32 *)
+(* #"/workspace/crates/verified/src/storage.rs" 153 27 153 32 *)
 
 (* <storage::RemotePartitionDeleteLifecycle as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RemotePartitionDeleteLifecycle [#"/workspace/crates/verified/src/storage.rs" 151 27 151 32]
+let clone_RemotePartitionDeleteLifecycle [#"/workspace/crates/verified/src/storage.rs" 153 27 153 32]
   (self: t_RemotePartitionDeleteLifecycle) (return (x: t_RemotePartitionDeleteLifecycle)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RemotePartitionDeleteLifecycle = Any.any_l () | & self: t_RemotePartitionDeleteLifecycle = self ])

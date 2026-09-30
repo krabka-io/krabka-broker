@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 170 27 170 32 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 175 27 175 32 *)
 
 (* <delegation_token::TokenMutationState as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TokenMutationState [#"/workspace/crates/verified/src/delegation_token.rs" 170 27 170 32]
+let clone_TokenMutationState [#"/workspace/crates/verified/src/delegation_token.rs" 175 27 175 32]
   (self: t_TokenMutationState) (return (x: t_TokenMutationState)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TokenMutationState = Any.any_l () | & self: t_TokenMutationState = self ])

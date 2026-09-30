@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/compaction.rs" 86 0 90 25 *)
+(* #"/workspace/crates/verified/src/compaction.rs" 90 0 94 25 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span scompaction = "/workspace/crates/verified/src/compaction.rs" 91 27 91 28
-let%span scompaction'0 = "/workspace/crates/verified/src/compaction.rs" 79 10 79 76
-let%span scompaction'1 = "/workspace/crates/verified/src/compaction.rs" 80 10 82 44
-let%span scompaction'2 = "/workspace/crates/verified/src/compaction.rs" 83 10 84 68
+let%span scompaction = "/workspace/crates/verified/src/compaction.rs" 95 27 95 28
+let%span scompaction'0 = "/workspace/crates/verified/src/compaction.rs" 83 10 83 76
+let%span scompaction'1 = "/workspace/crates/verified/src/compaction.rs" 84 10 86 44
+let%span scompaction'2 = "/workspace/crates/verified/src/compaction.rs" 87 10 88 68
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let compaction_decode_step [#"/workspace/crates/verified/src/compaction.rs" 86 0 90 25] (remaining_before: UInt64.t)
+let compaction_decode_step [#"/workspace/crates/verified/src/compaction.rs" 90 0 94 25] (remaining_before: UInt64.t)
   (decode_succeeded: bool) (remaining_after: UInt64.t) (return (x: t_CompactionDecodeStep)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_14 <- remaining_before = ([%#scompaction] (0: UInt64.t)) ] s1

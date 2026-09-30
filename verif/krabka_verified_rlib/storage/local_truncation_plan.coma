@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/storage.rs" 60 0 64 24 *)
+(* #"/workspace/crates/verified/src/storage.rs" 62 0 66 24 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sstorage = "/workspace/crates/verified/src/storage.rs" 65 30 65 36
-let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 69 14 69 52
-let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 70 28 70 46
-let%span sstorage'2 = "/workspace/crates/verified/src/storage.rs" 67 16 68 32
-let%span sstorage'3 = "/workspace/crates/verified/src/storage.rs" 66 16 66 55
-let%span sstorage'4 = "/workspace/crates/verified/src/storage.rs" 70 50 70 79
-let%span sstorage'5 = "/workspace/crates/verified/src/storage.rs" 71 27 71 28
-let%span sstorage'6 = "/workspace/crates/verified/src/storage.rs" 71 8 71 28
-let%span sstorage'7 = "/workspace/crates/verified/src/storage.rs" 77 20 77 25
-let%span sstorage'8 = "/workspace/crates/verified/src/storage.rs" 48 11 49 86
-let%span sstorage'9 = "/workspace/crates/verified/src/storage.rs" 50 10 50 56
-let%span sstorage'10 = "/workspace/crates/verified/src/storage.rs" 51 10 52 28
-let%span sstorage'11 = "/workspace/crates/verified/src/storage.rs" 53 10 54 29
-let%span sstorage'12 = "/workspace/crates/verified/src/storage.rs" 55 10 58 1
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 67 30 67 36
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 71 14 71 52
+let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 72 28 72 46
+let%span sstorage'2 = "/workspace/crates/verified/src/storage.rs" 69 16 70 32
+let%span sstorage'3 = "/workspace/crates/verified/src/storage.rs" 68 16 68 55
+let%span sstorage'4 = "/workspace/crates/verified/src/storage.rs" 72 50 72 79
+let%span sstorage'5 = "/workspace/crates/verified/src/storage.rs" 73 27 73 28
+let%span sstorage'6 = "/workspace/crates/verified/src/storage.rs" 73 8 73 28
+let%span sstorage'7 = "/workspace/crates/verified/src/storage.rs" 79 20 79 25
+let%span sstorage'8 = "/workspace/crates/verified/src/storage.rs" 50 11 51 86
+let%span sstorage'9 = "/workspace/crates/verified/src/storage.rs" 52 10 52 56
+let%span sstorage'10 = "/workspace/crates/verified/src/storage.rs" 53 10 54 28
+let%span sstorage'11 = "/workspace/crates/verified/src/storage.rs" 55 10 56 29
+let%span sstorage'12 = "/workspace/crates/verified/src/storage.rs" 57 10 60 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -60,7 +60,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let local_truncation_plan [#"/workspace/crates/verified/src/storage.rs" 60 0 64 24]
+let local_truncation_plan [#"/workspace/crates/verified/src/storage.rs" 62 0 66 24]
   (sealed_bases: Slice64.slice Int64.t) (active_base: t_Option_i64) (cut: Int64.t) (return (x: t_LocalTruncationPlan)) =
 {[@stop_split] [@expl:local_truncation_plan requires] [%#sstorage'8] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view sealed_bases)

@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 114 0 118 22 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 119 0 123 22 *)
 
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 107 10 109 1
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 110 10 112 1
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 112 10 114 1
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 115 10 117 1
 
 use creusot.prelude.Any
 
@@ -13,7 +13,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_api_admission [#"/workspace/crates/verified/src/delegation_token.rs" 114 0 118 22]
+let token_api_admission [#"/workspace/crates/verified/src/delegation_token.rs" 119 0 123 22]
   (has_authenticated_identity: bool) (authenticated_via_token: bool) (_api: t_TokenApi)
   (return (x: t_TokenApiAdmission)) = (! bb0
   [ bb0 = any [ br0 -> {has_authenticated_identity = false} (! bb3) | br1 -> {has_authenticated_identity} (! bb1) ]

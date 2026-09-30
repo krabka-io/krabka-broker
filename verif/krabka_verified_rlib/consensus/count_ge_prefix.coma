@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 256 0 256 97 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 280 0 280 97 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 255 10 255 15
-let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 247 8 247 48
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 279 10 279 15
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 271 8 271 48
 
 use creusot.int.Int64
 use seq.Seq
@@ -23,7 +23,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 245 0 245 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 269 0 269 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sconsensus'0] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
 meta "compute_max_steps" 1000000
@@ -40,7 +40,7 @@ constant limit : int
 
 constant leader_counts : bool
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 256 0 256 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 280 0 280 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 goal vc_count_ge_prefix: if limit <= 0 then
     true
