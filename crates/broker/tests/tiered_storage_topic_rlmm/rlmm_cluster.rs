@@ -110,7 +110,7 @@ pub(crate) async fn build_client_secured(
         .expect("client build")
 }
 
-/// Wait for the slice-48f bootstrap to swap the topic-backed manager in. The
+/// Wait for the topic-backed remote-log-metadata-manager bootstrap to swap the topic-backed manager in. The
 /// `tiered_storage_rlmm_topic_backed` gauge flips to 1 to signal the swap.
 pub(crate) async fn await_activation(broker: &BrokerHandle) {
     broker

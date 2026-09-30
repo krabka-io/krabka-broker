@@ -721,7 +721,7 @@ pub struct BrokerMetrics {
     pub diskless_wal_cold_read_hits_total: Counter,
     pub diskless_wal_cold_read_misses_total: Counter,
     pub diskless_wal_cold_read_errors_total: Counter,
-    // --- Milestone 11 KRaft quorum and cluster state metrics (#390) ---
+    // --- KRaft quorum and cluster state metrics (#390) ---
     pub raft_current_state: Family<RaftStateLabel, Gauge>,
     pub raft_current_epoch: Gauge,
     pub raft_high_watermark: Gauge,
@@ -739,7 +739,7 @@ pub struct BrokerMetrics {
     pub reassigning_partitions: Gauge,
     pub preferred_replica_imbalance: Gauge,
 
-    // --- Milestone 11 Tiered Storage and replication throttling metrics (#420) ---
+    // --- Tiered Storage and replication throttling metrics (#420) ---
     pub remote_copy_bytes_total: Family<TopicLabel, Counter>,
     pub remote_fetch_bytes_total: Family<TopicLabel, Counter>,
     pub remote_copy_requests_total: Family<TopicLabel, Counter>,
@@ -756,7 +756,7 @@ pub struct BrokerMetrics {
     pub replication_throttled_bytes_in_total: Counter,
     pub replication_throttle_sleeps_total: Counter,
 
-    // --- Milestone 11 KIP-405 remote reader pool and index cache (#422) ---
+    // --- KIP-405 remote reader pool and index cache (#422) ---
     /// Cold-tier reads waiting for a reader slot. Kafka's
     /// `RemoteLogReaderTaskQueueSize`.
     pub remote_log_reader_task_queue_size: Gauge,
@@ -781,7 +781,7 @@ pub struct BrokerMetrics {
     /// Entries the index cache currently holds.
     pub remote_index_cache_entries: Gauge,
 
-    // --- Milestone 11 Quota entity and request queue metrics (#418, #412) ---
+    // --- Quota entity and request queue metrics (#418, #412) ---
     /// KIP-599 / KIP-13: cumulative throttle time charged to each quota
     /// entity, in seconds.
     ///

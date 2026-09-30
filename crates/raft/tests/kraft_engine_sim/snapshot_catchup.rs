@@ -41,7 +41,7 @@ fn checkpoint_names(dir: &std::path::Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// 5. KIP-630 snapshot catch-up, the Slice-4 acceptance. A lagging controller
+/// 5. KIP-630 snapshot catch-up, the snapshot catch-up acceptance case. A lagging controller
 ///    follower whose own log is empty and far behind the leader's pruned
 ///    `log_start` catches up purely through `FetchSnapshot`, and not through log
 ///    replication.

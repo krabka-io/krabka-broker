@@ -54,7 +54,7 @@ pub fn broker_config(
 }
 
 /// Boot an `n`-broker cluster with ephemeral ports and short raft timings
-/// through **static multi-voter bootstrap** (KIP-595 Slice 3c):
+/// through **static multi-voter bootstrap** (KIP-595 static-quorum bootstrap):
 ///
 /// * All `n` brokers boot in `Bootstrap` mode (`auto_join = false`), each
 ///   configured with the *same* `controller_quorum_voters` = the full

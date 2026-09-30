@@ -1,4 +1,4 @@
-//! KIP-595 Slice 6 ACCEPTANCE TEST, Docker-gated and `#[ignore]`.
+//! KIP-595 JVM mixed-quorum ACCEPTANCE TEST, Docker-gated and `#[ignore]`.
 //!
 //! One `mirror.gcr.io/apache/kafka:4.0.0` controller and two Krabka
 //! controllers form one STATIC metadata quorum, with

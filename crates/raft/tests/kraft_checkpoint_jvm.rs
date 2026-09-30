@@ -204,7 +204,7 @@ fn jvm_dump_log_parses_engine_snapshot() {
     //    (kafka-dump-log prints lines like `RegisterBrokerRecord(brokerId=1,
     //    incarnationId=00000000-0000-0000-0000-000000000000, ...)` where a
     //    nil UUID is all-zeros).
-    // 3. All Partition records must have partitionEpoch >= 0 after Slice 6
+    // 3. All Partition records must have partitionEpoch >= 0 after JVM mixed-quorum replication
     //    (not -1, the schema default).
     // `DumpLogSegments` prints "Error at <offset>, skipping." for a record
     // that `MetadataRecordSerde` cannot read, for example an unknown apiKey.

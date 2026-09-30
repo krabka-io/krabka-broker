@@ -1,5 +1,5 @@
 //! KIP-1071 integration tests for the cold downgrade from streams to classic,
-//! and for admin type-awareness (slice 2).
+//! and for the admin type-awareness work stream.
 //!
 //! A drained streams group converts to classic on a classic `JoinGroup`, and
 //! keeps its offsets. A streams group with a live member rejects that

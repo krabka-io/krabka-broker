@@ -1,4 +1,4 @@
-//! Slice-48f broker integration: the topic-backed
+//! Topic-backed remote-log-metadata-manager broker integration: the topic-backed
 //! [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
 //! wired against a single broker's own loopback listener. The manager is
 //! configured with `[remote_storage.kafka_metadata]`.

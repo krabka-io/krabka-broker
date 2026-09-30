@@ -9,8 +9,7 @@
 //! 3 distinct keys survive with only their latest values, v10-kN. Old values
 //! v0..v9 must be gone from the sealed segments.
 //!
-//! Gated to non-Windows to match the multi-broker test convention from
-//! slices 10b/12b/14/15.
+//! Gated to non-Windows to match the multi-broker test convention established by the existing integration suites.
 
 use krabka_broker::metrics::PartitionLabel;
 

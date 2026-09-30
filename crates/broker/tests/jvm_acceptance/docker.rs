@@ -32,7 +32,7 @@ pub(crate) const KAFKA_IMAGE_TXN: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.
 /// 0.10.x-era producer emits v1 `MessageSet` records by default, with
 /// KIP-32 per-message timestamps. The consumer negotiates Fetch v0–3. This
 /// image exercises the broker's `kafka_3_6_2`-namespace handlers and the
-/// up/down-conversion paths from slices 2b+2c (#226).
+/// legacy record up/down-conversion paths (#226).
 pub(crate) const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka:3.1.2";
 
 /// `KIP-405` topic configs (`remote.storage.enable`, `local.retention.bytes`)

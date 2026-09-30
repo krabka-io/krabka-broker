@@ -154,10 +154,10 @@ async fn start_two_sasl(
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(2).await;
 
-    // KIP-595 Slice 3c static bootstrap: both brokers boot in `Bootstrap` mode
+    // KIP-595 static-quorum bootstrap: both brokers boot in `Bootstrap` mode
     // with the same static 2-voter set (concrete controller ports) and elect
-    // among themselves over the SASL controller wire — no auto-join (KIP-853,
-    // Slice 5).
+    // among themselves over the SASL controller wire — no KIP-853 dynamic voter
+    // reconfiguration or auto-join.
     let voters: Vec<(u64, SocketAddr)> = vec![(1, controller_addrs[0]), (2, controller_addrs[1])];
 
     let dir0 = TempDir::new().unwrap();

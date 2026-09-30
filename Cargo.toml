@@ -67,7 +67,7 @@ jsonpath-rust = "1.0"
 # Consumed Linux-only; gated under `[target.'cfg(target_os="linux")']` in the
 # broker so non-Linux builds never pull it.
 ktls = "6"
-# Slice 53: bounded decision cache for the OPA authorizer. `lru` provides
+# Bounded decision cache for the OPA authorizer. `lru` provides
 # an O(1) LRU with a non-zero capacity invariant; pair it with our own
 # TTL field on the value (no built-in expiry).
 lru = "0.18"
@@ -90,7 +90,7 @@ num-traits = "0.2.19"
 # them. Their HTTP client and `LocalFileSystem` do not build for
 # wasm32-wasip1, where the broker keeps only the core.
 object_store = { version = "0.14", default-features = false }
-# Slice 42: OTLP distributed tracing. opentelemetry-otlp 0.33 lines up with
+# OTLP distributed-tracing work stream. opentelemetry-otlp 0.33 lines up with
 # the tonic 0.14 / prost 0.14 / reqwest 0.13 stack already in the dep graph.
 opentelemetry = { version = "0.33", default-features = false, features = ["trace", "logs"] }
 # Bridges `tracing` events → OTLP log records so services emit logs over OTLP
@@ -98,7 +98,7 @@ opentelemetry = { version = "0.33", default-features = false, features = ["trace
 # (which doesn't stream on Docker Desktop). Version tracks the opentelemetry 0.33 stack.
 opentelemetry-appender-tracing = { version = "0.33", default-features = false }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "logs", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
-# Slice KIP-714: prost-generated OTLP MetricsData / MetricsService types
+# KIP-714 OTLP metrics: prost-generated OTLP MetricsData / MetricsService types
 # (opentelemetry 0.33 stack). `gen-tonic-messages` + `trace` serve the traces
 # signal. `gen-tonic` exposes the OTLP gRPC service traits and client, which
 # pull tonic's transport; the broker adds it only on the native targets, because

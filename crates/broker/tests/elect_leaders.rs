@@ -31,7 +31,7 @@
 //!   wire path without a SASL handshake, which keeps the test helpers simpler.
 //!
 //! These tests are gated to non-Windows to match the multi-broker test
-//! convention from slices 10b/12b. The openraft `debug_assert!` races on the
+//! convention established by the existing integration suites. The openraft `debug_assert!` races on the
 //! hosted Windows task scheduler are unrelated to the protocol under test.
 
 mod support;

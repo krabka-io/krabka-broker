@@ -110,7 +110,7 @@ pub struct Partition {
     /// leader/epoch installation. Replication holds a read guard through the
     /// writer acknowledgement; metadata reconciliation takes the write guard.
     pub(crate) replication_target: Arc<tokio::sync::RwLock<ReplicationTarget>>,
-    /// True for Slice 1 diskless partitions whose client-visible HW may only
+    /// True for diskless runtime partitions whose client-visible HW may only
     /// advance through the WAL durable-sync path.
     pub(crate) diskless: bool,
     /// Retained so broker shutdown can abort and await the writer task after

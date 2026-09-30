@@ -142,9 +142,9 @@ async fn start_two_brokers_with_controller_protocol(
         (plain_user, plain_pass),
     );
 
-    // KIP-595 Slice 3c static bootstrap: both brokers boot with the same
+    // KIP-595 static-quorum bootstrap: both brokers boot with the same
     // static voter set and elect among themselves over the (SASL/plaintext)
-    // controller wire — no add_learner / change_membership (KIP-853, Slice 5).
+    // controller wire — no add_learner / change_membership (KIP-853 dynamic voter reconfiguration).
     let cfg1_for_spawn = cfg1.clone();
     let join = tokio::spawn(async move {
         Broker::start_with_controller_listener(cfg1_for_spawn, Some(ctrl_l1)).await

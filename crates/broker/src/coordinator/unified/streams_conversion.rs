@@ -159,7 +159,7 @@ impl GroupCoordinator {
         }
 
         // Reject if the streams actor (if any) still has live members; a drained
-        // group falls through to convert. Mirrors slice 1's `ClassicInspect` check.
+        // group falls through to convert. Mirrors the classic-to-streams conversion `ClassicInspect` check.
         if let Some(handle) = self.find_streams(group_id) {
             let (tx, rx) = tokio::sync::oneshot::channel();
             if handle

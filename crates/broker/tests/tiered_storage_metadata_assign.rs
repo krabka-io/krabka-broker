@@ -1,4 +1,4 @@
-//! Slice-48o integration: `KafkaMetadataEventLog` manual per-partition
+//! Tiered-storage metadata-assignment integration: `KafkaMetadataEventLog` manual per-partition
 //! fetch consumer honors a partition subset and a non-zero start offset.
 //!
 //! The test boots a bare loopback broker with no tiered-storage backend.

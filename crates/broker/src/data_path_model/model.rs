@@ -139,7 +139,7 @@ impl Model for DpModel {
             hwm: 0,
             leader: 0,
             leader_epoch: 1,
-            // Slice 1 diskless is a single-node local-fsync WAL. Keep the RF=3
+            // The diskless runtime foundation is a single-node local-fsync WAL. Keep the RF=3
             // model for classic clean/unclean checks, but constrain diskless to
             // the leader broker so WAL durability is not incorrectly invalidated
             // by electing a different replica that never fsynced the record.
