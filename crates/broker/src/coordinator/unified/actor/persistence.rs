@@ -218,9 +218,8 @@ pub(super) async fn flush_classic_metadata(
         classic_group_metadata: Some(classic_group_metadata_record(state, now_ms)),
         ..PendingRecords::default()
     };
-    offsets_log
-        .append(&state.group_id, pending.to_batch(&state.group_id, now_ms))
-        .await
+    let batch = pending.to_batch(&state.group_id, now_ms)?;
+    offsets_log.append(&state.group_id, batch).await
 }
 
 pub(super) async fn flush_pending(
@@ -233,7 +232,7 @@ pub(super) async fn flush_pending(
     if pending.is_empty() {
         return Ok(());
     }
-    let batch = pending.to_batch(&state.group_id, now_ms);
+    let batch = pending.to_batch(&state.group_id, now_ms)?;
     offsets_log.append(&state.group_id, batch).await?;
     pending.apply_to_cache(coordinator, &state.group_id);
     Ok(())
@@ -302,6 +301,43 @@ mod tests {
         check!(target_ids == vec!["m1", "m2"]);
         check!(current_ids == vec!["m1", "m2"]);
         assert!(pending.target_metadata.is_some());
+    }
+
+    /// The group metadata record writes each member id with an `INT16` length.
+    /// A group whose member id has 32768 bytes cannot write it: the flush is an
+    /// error that appends nothing, and the actor that flushes does not panic. A
+    /// member id of 32767 bytes is written.
+    #[tokio::test]
+    async fn a_classic_group_with_an_unencodable_member_id_appends_nothing() {
+        use crate::coordinator::unified::{
+            classic_state::Member, offsets_log::fake::InMemoryOffsetsLog,
+            persistence::MAX_STRING_BYTES,
+        };
+
+        let log = InMemoryOffsetsLog::default();
+        for (length, written) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let mut state = ClassicGroup::new("g");
+            state.insert_joining_member(
+                Member::new(
+                    "m".repeat(length),
+                    "client",
+                    "host",
+                    std::time::Duration::from_secs(10),
+                    std::time::Duration::from_secs(10),
+                    vec![("range".into(), bytes::Bytes::new())],
+                ),
+                "consumer",
+            );
+
+            let result = flush_classic_metadata(&state, &log).await;
+
+            check!(result.is_ok() == written, "member id of {length} bytes");
+            check!(
+                written || matches!(result, Err(crate::error::BrokerError::Protocol(_))),
+                "member id of {length} bytes is a protocol error"
+            );
+        }
+        check!(log.batches().await.len() == 1);
     }
 
     #[test]

@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn group_metadata_round_trip() {
-        let kb = encode_group_metadata_key("g1");
+        let kb = encode_group_metadata_key("g1").unwrap();
         let (ver, body) = peek_version(&kb);
         assert!(ver == KEY_STREAMS_GROUP_METADATA);
         assert!(
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn target_assignment_metadata_round_trip() {
-        let kb = encode_target_assignment_metadata_key("g1");
+        let kb = encode_target_assignment_metadata_key("g1").unwrap();
         let (ver, body) = peek_version(&kb);
         assert!(ver == KEY_STREAMS_TARGET_ASSIGNMENT_METADATA);
         assert!(

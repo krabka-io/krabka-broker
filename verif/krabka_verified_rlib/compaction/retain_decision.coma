@@ -1,19 +1,19 @@
-(* #"/workspace/crates/verified/src/compaction.rs" 156 0 163 19 *)
+(* #"/workspace/crates/verified/src/compaction.rs" 160 0 167 19 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span scompaction = "/workspace/crates/verified/src/compaction.rs" 170 51 170 95
-let%span scompaction'0 = "/workspace/crates/verified/src/compaction.rs" 187 43 187 87
-let%span scompaction'1 = "/workspace/crates/verified/src/compaction.rs" 136 10 137 38
-let%span scompaction'2 = "/workspace/crates/verified/src/compaction.rs" 138 10 140 67
-let%span scompaction'3 = "/workspace/crates/verified/src/compaction.rs" 141 10 143 93
-let%span scompaction'4 = "/workspace/crates/verified/src/compaction.rs" 144 10 144 80
-let%span scompaction'5 = "/workspace/crates/verified/src/compaction.rs" 145 10 145 101
-let%span scompaction'6 = "/workspace/crates/verified/src/compaction.rs" 146 10 147 38
-let%span scompaction'7 = "/workspace/crates/verified/src/compaction.rs" 148 10 151 67
-let%span scompaction'8 = "/workspace/crates/verified/src/compaction.rs" 152 10 154 93
-let%span scompaction'9 = "/workspace/crates/verified/src/compaction.rs" 123 10 123 71
-let%span scompaction'10 = "/workspace/crates/verified/src/compaction.rs" 108 8 114 9
+let%span scompaction = "/workspace/crates/verified/src/compaction.rs" 174 51 174 95
+let%span scompaction'0 = "/workspace/crates/verified/src/compaction.rs" 191 43 191 87
+let%span scompaction'1 = "/workspace/crates/verified/src/compaction.rs" 140 10 141 38
+let%span scompaction'2 = "/workspace/crates/verified/src/compaction.rs" 142 10 144 67
+let%span scompaction'3 = "/workspace/crates/verified/src/compaction.rs" 145 10 147 93
+let%span scompaction'4 = "/workspace/crates/verified/src/compaction.rs" 148 10 148 80
+let%span scompaction'5 = "/workspace/crates/verified/src/compaction.rs" 149 10 149 101
+let%span scompaction'6 = "/workspace/crates/verified/src/compaction.rs" 150 10 151 38
+let%span scompaction'7 = "/workspace/crates/verified/src/compaction.rs" 152 10 155 67
+let%span scompaction'8 = "/workspace/crates/verified/src/compaction.rs" 156 10 158 93
+let%span scompaction'9 = "/workspace/crates/verified/src/compaction.rs" 127 10 127 71
+let%span scompaction'10 = "/workspace/crates/verified/src/compaction.rs" 112 8 118 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -39,7 +39,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function compute_horizon_model [#"/workspace/crates/verified/src/compaction.rs" 106 0 106 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
+function compute_horizon_model [#"/workspace/crates/verified/src/compaction.rs" 110 0 110 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
  = [%#scompaction'10] if gt_log_Int (Int64.to_int now_ms + Int64.to_int delete_retention_ms) 9223372036854775807 then
     9223372036854775807
   else
@@ -65,7 +65,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let retain_decision [#"/workspace/crates/verified/src/compaction.rs" 156 0 163 19] (rec': t_RecordMeta)
+let retain_decision [#"/workspace/crates/verified/src/compaction.rs" 160 0 167 19] (rec': t_RecordMeta)
   (batch: t_BatchMeta) (is_newest_for_key: bool) (txn: t_TxnDataState) (now_ms: Int64.t) (delete_retention_ms: Int64.t)
   (return (x: t_RetainDecision)) = (! bb0
   [ bb0 = any [ br0 -> {batch.is_control = false} (! bb15) | br1 -> {batch.is_control} (! bb1) ]

@@ -144,7 +144,7 @@ pub(super) async fn flush_pending(
     if pending.is_empty() {
         return Ok(());
     }
-    let batch = pending.into_batch(&actor.state.group_id, now_ms);
+    let batch = pending.into_batch(&actor.state.group_id, now_ms)?;
     offsets_log.append(&actor.state.group_id, batch).await?;
     coordinator.update_streams_cache(&actor.state.group_id, snapshot_seed(actor));
     Ok(())

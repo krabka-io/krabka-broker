@@ -21,6 +21,7 @@ use crate::{
     coordinator::unified::{
         actor::{JoinResult, JoinResultMember},
         classic_state::{ClassicGroup as ClassicState, GroupState, Member, select_protocol},
+        persistence::MAX_STRING_BYTES,
     },
 };
 
@@ -167,6 +168,14 @@ fn join_new_member(
     // `kafka-consumer-groups --describe` prints it as CONSUMER-ID.
     let prefix = req.group_instance_id.as_deref().unwrap_or(ctx.client_id);
     let new_member_id = format!("{prefix}-{}", Uuid::new_v4());
+    // Kafka never bounds the id, and a prefix of 32731 bytes or more, which
+    // the instance id and the header client id both admit, makes one that its
+    // generated writer refuses to serialize, in the response and in the group
+    // metadata record. There the join fails with the internal error; the id is
+    // refused here, before it changes any state.
+    if new_member_id.len() > MAX_STRING_BYTES {
+        return JoinOutcome::error(codes::UNKNOWN_SERVER_ERROR, "");
+    }
     if let Some(instance_id) = req.group_instance_id.clone() {
         if let Some(old_member_id) = state
             .current_member_id_for_instance(&instance_id)
@@ -781,6 +790,127 @@ mod tests {
         check!(handle_join(&mut g, &mut request, &ctx) == parked());
         check!(request.member_id.starts_with("client-a-"));
         check!(sorted_members(&g) == vec![request.member_id.clone()]);
+    }
+
+    /// Kafka's `generateMemberId` does not bound the id it builds: the instance
+    /// id or the client id, a hyphen and a UUID of 36 characters. Both prefixes
+    /// take up to 32767 bytes, and Kafka's generated writers refuse an id over
+    /// 32767 bytes in the response and in the group metadata record, so a join
+    /// that generates one fails there with an internal error. Here it answers
+    /// `UNKNOWN_SERVER_ERROR` with no member id, and it leaves the group as it
+    /// was. The longest prefix that fits gives an id of exactly 32767 bytes.
+    #[test]
+    fn a_generated_member_id_over_32767_bytes_is_refused_before_any_state_change() {
+        /// The bytes that `generateMemberId` adds to its prefix.
+        const SUFFIX: usize = 37;
+        const LONGEST_PREFIX: usize = MAX_STRING_BYTES - SUFFIX;
+
+        struct Row {
+            name: &'static str,
+            /// `true` when the prefix is the instance id of a static member,
+            /// and `false` when it is the client id of a dynamic member.
+            static_member: bool,
+            version: i16,
+            prefix: usize,
+            refused: bool,
+        }
+        let rows = [
+            Row {
+                name: "static, the longest instance id that fits",
+                static_member: true,
+                version: 5,
+                prefix: LONGEST_PREFIX,
+                refused: false,
+            },
+            Row {
+                name: "static, one byte more",
+                static_member: true,
+                version: 5,
+                prefix: LONGEST_PREFIX + 1,
+                refused: true,
+            },
+            Row {
+                name: "static, the longest instance id",
+                static_member: true,
+                version: 9,
+                prefix: MAX_STRING_BYTES,
+                refused: true,
+            },
+            Row {
+                name: "dynamic v5, the longest client id that fits",
+                static_member: false,
+                version: 5,
+                prefix: LONGEST_PREFIX,
+                refused: false,
+            },
+            Row {
+                name: "dynamic v5, one byte more",
+                static_member: false,
+                version: 5,
+                prefix: LONGEST_PREFIX + 1,
+                refused: true,
+            },
+            Row {
+                name: "dynamic v5, the longest client id",
+                static_member: false,
+                version: 5,
+                prefix: MAX_STRING_BYTES,
+                refused: true,
+            },
+            Row {
+                name: "dynamic v3, the longest client id that fits",
+                static_member: false,
+                version: 3,
+                prefix: LONGEST_PREFIX,
+                refused: false,
+            },
+            Row {
+                name: "dynamic v3, one byte more",
+                static_member: false,
+                version: 3,
+                prefix: LONGEST_PREFIX + 1,
+                refused: true,
+            },
+        ];
+        for row in rows {
+            let long = "p".repeat(row.prefix);
+            let mut g = ClassicState::new("g");
+            let mut req = join_req("", row.static_member.then_some(long.as_str()));
+            let ctx = JoinContext {
+                client_id: if row.static_member {
+                    "client-a"
+                } else {
+                    long.as_str()
+                },
+                version: row.version,
+                ..join_ctx("h")
+            };
+
+            let outcome = handle_join(&mut g, &mut req, &ctx);
+
+            let ids: Vec<usize> = g
+                .members
+                .keys()
+                .chain(g.pending_members.keys())
+                .map(String::len)
+                .collect();
+            if row.refused {
+                check!(
+                    outcome == error(codes::UNKNOWN_SERVER_ERROR, ""),
+                    "{}",
+                    row.name
+                );
+                check!(ids.is_empty(), "{}", row.name);
+                check!(g.state == GroupState::Empty, "{}", row.name);
+            } else {
+                check!(
+                    outcome != error(codes::UNKNOWN_SERVER_ERROR, ""),
+                    "{}",
+                    row.name
+                );
+                check!(ids == vec![MAX_STRING_BYTES], "{}", row.name);
+            }
+        }
     }
 
     /// #789: a static member that joins again with an empty member id gets a

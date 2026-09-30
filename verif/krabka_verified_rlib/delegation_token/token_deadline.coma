@@ -1,15 +1,15 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 327 0 327 55 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 332 0 332 55 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 328 4 328 35
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 328 46 328 54
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 328 4 328 55
-let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 325 11 325 28
-let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 326 10 326 57
-let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 299 8 299 89
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 333 4 333 35
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 333 46 333 54
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 333 4 333 55
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 330 11 330 28
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 331 10 331 57
+let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 304 8 304 89
 let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
 let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
 
@@ -52,7 +52,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-function deadline_model [#"/workspace/crates/verified/src/delegation_token.rs" 297 0 297 55] (now_ms: Int64.t) (duration_ms: int) : int
+function deadline_model [#"/workspace/crates/verified/src/delegation_token.rs" 302 0 302 55] (now_ms: Int64.t) (duration_ms: int) : int
  = [%#sdelegation_token'4] if gt_log_Int (Int64.to_int now_ms + duration_ms) (Int64.to_int const_MAX) then
     Int64.to_int const_MAX
   else
@@ -63,7 +63,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_deadline [#"/workspace/crates/verified/src/delegation_token.rs" 327 0 327 55] (now_ms: Int64.t)
+let token_deadline [#"/workspace/crates/verified/src/delegation_token.rs" 332 0 332 55] (now_ms: Int64.t)
   (duration_ms: Int64.t) (return (x: Int64.t)) =
 {[@stop_split] [@expl:token_deadline requires] [%#sdelegation_token'2] ge_log_Int (Int64.to_int duration_ms) 0}
   (! bb0

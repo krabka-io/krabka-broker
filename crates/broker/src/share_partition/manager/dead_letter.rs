@@ -16,10 +16,15 @@
 //! A consumer that rejects at a high rate leaves many runs `Archiving` at
 //! once, and each run holds the SPSO until its write ends. Kafka's
 //! `ShareGroupDLQStateManager` coalesces the produce requests for one
-//! destination, and sends them from one thread. Here the runs that one dispatch
-//! hands over are joined where a single write can carry them, they share one
-//! task, and at most [`MAX_CONCURRENT_DEAD_LETTER_WRITES`] writes run at once
-//! across every partition the broker leads.
+//! destination, and sends them from one thread. Here the writer does the same
+//! (`share_partition::dlq`): the rounds of every write that waits for
+//! one leader go out in as few produce requests as `max.message.bytes` allows,
+//! and each write ends, and archives its run, when its own records are written.
+//! The runs that one dispatch hands over are first joined where a single write
+//! can carry them, which saves a read of the source records for each run, they
+//! share one task, and at most [`MAX_CONCURRENT_DEAD_LETTER_WRITES`] writes run
+//! at once across every partition the broker leads, so that is the most runs
+//! that share a request.
 
 use std::sync::Arc;
 

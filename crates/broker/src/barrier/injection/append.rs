@@ -38,8 +38,9 @@ pub(crate) enum MarkerAppendError {
 ///
 /// # Errors
 /// Returns a [`MarkerAppendError`] when the installed leadership generation
-/// differs from the expected one, when the partition writer is gone, or when
-/// the log rejects the batch.
+/// differs from the expected one, when the group name is longer than 32767
+/// bytes and so cannot go into a marker, when the partition writer is gone, or
+/// when the log rejects the batch.
 pub(crate) async fn append_marker(
     partition: &Partition,
     marker: &BarrierMarker,
@@ -62,7 +63,7 @@ pub(crate) async fn append_marker(
     if decision != BarrierMarkerFenceDecision::Append {
         return Err(MarkerAppendError::Fence(decision));
     }
-    let batch = build_barrier_batch(marker, partition.log_end_offset(), expected_epoch);
+    let batch = build_barrier_batch(marker, partition.log_end_offset(), expected_epoch)?;
     Ok(partition.produce_control_batch(batch).await?)
 }
 
@@ -71,7 +72,35 @@ mod tests {
     use krabka_ids::PartitionIndex;
 
     use super::*;
-    use crate::{barrier::test_support::open_partition, partition_registry::PartitionRegistry};
+    use crate::{
+        barrier::test_support::open_partition, coordinator::unified::persistence::MAX_STRING_BYTES,
+        partition_registry::PartitionRegistry,
+    };
+
+    /// The marker value carries the group name with an `i16` length. A name of
+    /// 32767 bytes goes into the log, and one of 32768 bytes is an error that
+    /// appends nothing. The marker can reach here from a `WriteBarrierMarkers`
+    /// request, so a panic would take down that connection.
+    #[tokio::test]
+    async fn a_group_of_32768_bytes_is_refused_and_appends_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PartitionRegistry::new();
+        open_partition(&registry, dir.path(), "test-barrier", 0);
+        let partition = registry.get("test-barrier", PartitionIndex(0)).unwrap();
+        partition.install_leader_change(1, 5).await;
+
+        for (length, appended) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let marker = BarrierMarker {
+                group: "g".repeat(length),
+                epoch: 1,
+                triggered_at: 1000,
+            };
+            let result = append_marker(&partition, &marker, NodeId(1), 5).await;
+            assert2::check!(result.is_ok() == appended, "{length} bytes");
+        }
+
+        assert2::check!(partition.log_end_offset() == Offset(1));
+    }
 
     #[tokio::test]
     async fn append_marker_appends_when_fencing_matches_and_fences_when_mismatched() {

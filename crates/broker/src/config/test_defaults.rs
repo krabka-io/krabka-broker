@@ -150,6 +150,7 @@ impl BrokerConfig {
             transaction_state_segment_bytes: mebibytes(100),
             transaction_state_min_isr: 1,
             transaction_max_timeout: minutes(15),
+            transaction_partition_verification_enable: true,
             barrier_state_num_partitions: 50,
             barrier_state_replication_factor: 1,
             barrier_min_injection_interval: secs(1),

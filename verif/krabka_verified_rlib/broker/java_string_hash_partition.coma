@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/broker.rs" 709 0 709 85 *)
+(* #"/workspace/crates/verified/src/broker.rs" 710 0 710 85 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
@@ -7,34 +7,34 @@ let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creu
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 710 26 710 27
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 714 19 714 24
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 715 20 715 27
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 718 14 718 35
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 719 18 719 29
-let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 717 34 717 87
-let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 716 16 716 38
-let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 720 33 720 35
-let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 720 15 720 36
-let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 720 60 720 72
-let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 720 50 720 73
-let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 720 15 720 74
-let%span sbroker'11 = "/workspace/crates/verified/src/broker.rs" 721 17 721 18
-let%span sbroker'12 = "/workspace/crates/verified/src/broker.rs" 721 8 721 18
-let%span sbroker'13 = "/workspace/crates/verified/src/broker.rs" 723 30 723 38
-let%span sbroker'14 = "/workspace/crates/verified/src/broker.rs" 724 8 724 9
-let%span sbroker'15 = "/workspace/crates/verified/src/broker.rs" 725 21 725 22
-let%span sbroker'16 = "/workspace/crates/verified/src/broker.rs" 730 9 730 35
-let%span sbroker'17 = "/workspace/crates/verified/src/broker.rs" 700 12 702 86
-let%span sbroker'18 = "/workspace/crates/verified/src/broker.rs" 704 10 704 50
-let%span sbroker'19 = "/workspace/crates/verified/src/broker.rs" 705 10 705 50
-let%span sbroker'20 = "/workspace/crates/verified/src/broker.rs" 706 10 707 52
-let%span sbroker'21 = "/workspace/crates/verified/src/broker.rs" 652 10 652 15
-let%span sbroker'22 = "/workspace/crates/verified/src/broker.rs" 651 11 651 45
-let%span sbroker'23 = "/workspace/crates/verified/src/broker.rs" 655 8 660 9
-let%span sbroker'24 = "/workspace/crates/verified/src/broker.rs" 684 11 684 31
-let%span sbroker'25 = "/workspace/crates/verified/src/broker.rs" 687 8 688 30
-let%span sbroker'26 = "/workspace/crates/verified/src/broker.rs" 670 8 676 9
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 711 26 711 27
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 715 19 715 24
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 716 20 716 27
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 719 14 719 35
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 720 18 720 29
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 718 34 718 87
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 717 16 717 38
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 721 33 721 35
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 721 15 721 36
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 721 60 721 72
+let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 721 50 721 73
+let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 721 15 721 74
+let%span sbroker'11 = "/workspace/crates/verified/src/broker.rs" 722 17 722 18
+let%span sbroker'12 = "/workspace/crates/verified/src/broker.rs" 722 8 722 18
+let%span sbroker'13 = "/workspace/crates/verified/src/broker.rs" 724 30 724 38
+let%span sbroker'14 = "/workspace/crates/verified/src/broker.rs" 725 8 725 9
+let%span sbroker'15 = "/workspace/crates/verified/src/broker.rs" 726 21 726 22
+let%span sbroker'16 = "/workspace/crates/verified/src/broker.rs" 731 9 731 35
+let%span sbroker'17 = "/workspace/crates/verified/src/broker.rs" 701 12 703 86
+let%span sbroker'18 = "/workspace/crates/verified/src/broker.rs" 705 10 705 50
+let%span sbroker'19 = "/workspace/crates/verified/src/broker.rs" 706 10 706 50
+let%span sbroker'20 = "/workspace/crates/verified/src/broker.rs" 707 10 708 52
+let%span sbroker'21 = "/workspace/crates/verified/src/broker.rs" 653 10 653 15
+let%span sbroker'22 = "/workspace/crates/verified/src/broker.rs" 652 11 652 45
+let%span sbroker'23 = "/workspace/crates/verified/src/broker.rs" 656 8 661 9
+let%span sbroker'24 = "/workspace/crates/verified/src/broker.rs" 685 11 685 31
+let%span sbroker'25 = "/workspace/crates/verified/src/broker.rs" 688 8 689 30
+let%span sbroker'26 = "/workspace/crates/verified/src/broker.rs" 671 8 677 9
 
 use creusot.int.Int32
 use creusot.int.UInt64
@@ -66,7 +66,7 @@ let len_u16 (self_: Slice64.slice UInt16.t) (return (x: UInt64.t)) = any
     = UInt64.t'int result}
     (! return {result}) ]
 
-function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker.rs" 653 0 653 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker.rs" 654 0 654 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
 
 axiom java_string_hash_prefix_model_def:
   forall units: Seq.seq UInt16.t, limit: int [java_string_hash_prefix_model units limit]. ([%#sbroker'22] 0 <= limit
@@ -94,10 +94,10 @@ let wrapping_add (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
 
 constant const_MIN: Int32.t = (-2147483648: Int32.t)
 
-function java_string_abs_model [#"/workspace/crates/verified/src/broker.rs" 668 0 668 42] (hash: Int32.t) : Int32.t =
+function java_string_abs_model [#"/workspace/crates/verified/src/broker.rs" 669 0 669 42] (hash: Int32.t) : Int32.t =
   [%#sbroker'26] if hash = const_MIN then (0: Int32.t) else if Int32.lt hash (0: Int32.t) then Int32.neg hash else hash
 
-function java_string_hash_partition_model [#"/workspace/crates/verified/src/broker.rs" 685 0 685 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
+function java_string_hash_partition_model [#"/workspace/crates/verified/src/broker.rs" 686 0 686 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
  =
   [%#sbroker'25] ComputerDivision.mod (Int32.to_int (java_string_abs_model (java_string_hash_prefix_model units (Seq.length units)))) (Int32.to_int partition_count)
 
@@ -105,7 +105,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let java_string_hash_partition [#"/workspace/crates/verified/src/broker.rs" 709 0 709 85]
+let java_string_hash_partition [#"/workspace/crates/verified/src/broker.rs" 710 0 710 85]
   (units: Slice64.slice UInt16.t) (partition_count: Int32.t) (return (x: t_Option_i32)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_13 <- Int32.le partition_count ([%#sbroker] (0: Int32.t)) ] s1

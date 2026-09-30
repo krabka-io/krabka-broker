@@ -18,13 +18,17 @@
 //! from a newer release at any level above 0 is refused, and the message names
 //! the range as `0`.
 //!
-//! Kafka's fatal fault halts the process. Here a controller that starts over
-//! such a log refuses to start with a [`RaftError::Startup`](crate::RaftError),
-//! and one that applies such a level from its leader stops itself: it cancels
-//! the listener and the engine, and every later submit fails with
-//! [`RaftError::Shutdown`](crate::RaftError). A combined broker that hosts that
-//! controller keeps its process alive without a controller, which is a
-//! divergence from Kafka's halt.
+//! Kafka's fatal fault halts the process (`ProcessTerminatingFaultHandler`,
+//! exit status 1). A library does not halt its host, so the controller
+//! reports the fault and the embedder halts. A controller that starts over such
+//! a log refuses to start with a [`RaftError::FatalFault`](crate::RaftError),
+//! and one that applies such a level from its leader stops itself: it publishes the
+//! refusal on [`ControllerHandle::watch_fatal`](crate::ControllerHandle), then
+//! cancels the listener and the engine, and every later submit fails with
+//! [`RaftError::Shutdown`](crate::RaftError). A combined broker turns that
+//! signal into a failed `Broker::start` or, once started, into its
+//! self-shutdown, and `krabka-broker` exits non-zero with the refusal, so the
+//! process never runs on without its controller.
 //!
 //! The engine applies a record and publishes the resulting image, so the guard
 //! reads the finalized levels of a published image: the one the engine

@@ -201,7 +201,7 @@ pub(super) fn log_holds_key(
     let Ok(read) = log.read(krabka_log::Offset(0), krabka_units::mebibytes(4)) else {
         return false;
     };
-    let wanted = OffsetCommitValue::encode_key(group_id, topic, partition);
+    let wanted = OffsetCommitValue::encode_key(group_id, topic, partition).unwrap();
     read.batches
         .iter()
         .flat_map(|batch| batch.records.iter())
@@ -406,7 +406,7 @@ fn logged_value(
     let read = log
         .read(krabka_log::Offset(0), krabka_units::mebibytes(4))
         .ok()?;
-    let wanted = OffsetCommitValue::encode_key(group_id, topic, partition);
+    let wanted = OffsetCommitValue::encode_key(group_id, topic, partition).unwrap();
     read.batches
         .iter()
         .flat_map(|batch| batch.records.iter())

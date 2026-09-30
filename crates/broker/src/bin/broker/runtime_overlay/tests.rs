@@ -264,6 +264,48 @@ fn group_member_limits_and_streams_switch_apply_from_cli() {
     assert!(config.streams_group.rack_aware_assignment_tags == ["zone", "rack"]);
 }
 
+/// `--transaction-partition-verification-enable` is the static layer of a
+/// dynamic Kafka config: absent it leaves Kafka's default, and either value
+/// records that the operator named the key.
+#[test]
+fn partition_verification_switch_applies_from_cli() {
+    let _guard = env_guard();
+
+    // (the flag, the value, whether the operator named the key)
+    let cases = [
+        (None, true, false),
+        (
+            Some("--transaction-partition-verification-enable=false"),
+            false,
+            true,
+        ),
+        (
+            Some("--transaction-partition-verification-enable=true"),
+            true,
+            true,
+        ),
+    ];
+    for (flag, want, named) in cases {
+        let args = Args::try_parse_from(std::iter::once("krabka-broker").chain(flag))
+            .expect("parse the switch");
+        let mut config = BrokerConfig::default();
+
+        args.apply_runtime_to(&mut config, None)
+            .expect("apply the switch");
+
+        assert!(
+            (
+                config.transaction_partition_verification_enable,
+                config
+                    .static_config_origins
+                    .supplied_kafka_keys
+                    .contains("transaction.partition.verification.enable")
+            ) == (want, named),
+            "{flag:?}"
+        );
+    }
+}
+
 fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConfig {
     toml::from_str(
         r#"

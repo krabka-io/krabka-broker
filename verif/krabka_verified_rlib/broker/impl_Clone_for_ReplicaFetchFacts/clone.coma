@@ -4,7 +4,6 @@
 
 use creusot.int.Int32
 use creusot.int.Int16
-use creusot.int.Int64
 use creusot.prelude.Any
 
 type t_ReplicaFetchFacts = {
@@ -13,7 +12,7 @@ type t_ReplicaFetchFacts = {
   target_matches: bool;
   reported_target_matches: bool;
   error_code: Int16.t;
-  diverging_end_offset: Int64.t }
+  diverging_epoch: Int32.t }
 
 meta "compute_max_steps" 1000000
 

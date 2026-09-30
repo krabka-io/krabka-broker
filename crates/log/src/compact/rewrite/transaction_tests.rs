@@ -53,7 +53,7 @@ fn rewrite_at(
     now_ms: i64,
     active: &HashMap<ProducerId, ProducerLastRecord>,
 ) -> RewriteOutput {
-    let map = build_offset_map(segment_refs, vec![]).unwrap();
+    let map = build_offset_map(segment_refs, vec![], None).unwrap();
     rewrite_segments(
         &crate::io::FileIo,
         dir,
@@ -94,7 +94,7 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
     );
     let segment_refs = vec![&seg];
     let entry = aborted_entry(2000, 10, 12);
-    let map = build_offset_map(&segment_refs, vec![entry]).unwrap();
+    let map = build_offset_map(&segment_refs, vec![entry], None).unwrap();
     assert2::assert!(map.get(b"k".as_slice()) == Some(&Offset(5)));
     assert2::assert!(!map.contains_key(b"j".as_slice()));
 

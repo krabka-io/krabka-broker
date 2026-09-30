@@ -104,7 +104,7 @@ pub(super) fn classic_group_record(
     member_id: &str,
 ) -> (bytes::Bytes, bytes::Bytes) {
     use crate::coordinator::persistence::MemberMetadata;
-    let key = GroupMetadataValue::encode_key(group_id);
+    let key = GroupMetadataValue::encode_key(group_id).unwrap();
     let value = GroupMetadataValue {
         protocol_type: "consumer".into(),
         generation: 3,
@@ -122,6 +122,7 @@ pub(super) fn classic_group_record(
             assignment: bytes::Bytes::from_static(b"asn"),
         }],
     }
-    .encode_value();
+    .encode_value()
+    .unwrap();
     (key, value)
 }

@@ -379,7 +379,7 @@ mod tests {
                 GROUP,
                 vec![(
                     RecordKey::injection_start(GROUP, 1),
-                    Some(encode_injection_start(&start).into()),
+                    Some(encode_injection_start(&start).expect("encodes").into()),
                 )],
             )
             .await
@@ -452,7 +452,7 @@ mod tests {
                     group,
                     vec![(
                         RecordKey::injection_start(group, 1),
-                        Some(encode_injection_start(&start).into()),
+                        Some(encode_injection_start(&start).expect("encodes").into()),
                     )],
                 )
                 .await
@@ -493,7 +493,7 @@ mod tests {
                 GROUP,
                 vec![(
                     RecordKey::injection_start(GROUP, i64::MAX),
-                    Some(encode_injection_start(&start).into()),
+                    Some(encode_injection_start(&start).expect("encodes").into()),
                 )],
             )
             .await
@@ -531,7 +531,7 @@ mod tests {
                 GROUP,
                 vec![(
                     RecordKey::injection_start(GROUP, 1),
-                    Some(encode_injection_start(&start).into()),
+                    Some(encode_injection_start(&start).expect("encodes").into()),
                 )],
             )
             .await

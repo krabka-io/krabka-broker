@@ -60,7 +60,7 @@ impl<'a> TransactionRequest<'a> {
             transactional_id,
             version,
             producer_id_expiration_ms: broker.config.producer_id_expiration.millis_i64(),
-            verification_enabled: partition_verification_enabled(image, broker.config.node_id),
+            verification_enabled: partition_verification_enabled(image, &broker.config),
         }
     }
 }

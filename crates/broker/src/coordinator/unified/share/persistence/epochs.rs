@@ -108,7 +108,7 @@ mod tests {
         let key = ShareGroupKey::GroupMetadata {
             group_id: "g1".into(),
         };
-        let bytes = encode_share_key(&key);
+        let bytes = encode_share_key(&key).unwrap();
         let (ver, body) = peek_version(&bytes);
         assert!(ver == KEY_SHARE_GROUP_METADATA);
         assert!(parse_share_key(ver, body).unwrap() == key);
@@ -130,7 +130,7 @@ mod tests {
         let key = ShareGroupKey::TargetAssignmentMetadata {
             group_id: "g1".into(),
         };
-        let b = encode_share_key(&key);
+        let b = encode_share_key(&key).unwrap();
         let (ver, body) = peek_version(&b);
         assert!(ver == KEY_SHARE_TARGET_ASSIGNMENT_METADATA);
         assert!(parse_share_key(ver, body).unwrap() == key);

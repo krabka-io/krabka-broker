@@ -55,69 +55,114 @@ pub enum StreamsGroupKey {
     CurrentMemberAssignment { group_id: String, member_id: String },
 }
 
-#[must_use]
-pub fn encode_group_metadata_key(group_id: &str) -> Bytes {
+/// Encodes the group-metadata key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_group_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_GROUP_METADATA);
-    put_string(&mut buf, group_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    Ok(buf.freeze())
 }
 
-#[must_use]
-pub fn encode_member_metadata_key(group_id: &str, member_id: &str) -> Bytes {
+/// Encodes the member-metadata key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_member_metadata_key(group_id: &str, member_id: &str) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_MEMBER_METADATA);
-    put_string(&mut buf, group_id);
-    put_string(&mut buf, member_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    put_string(&mut buf, member_id)?;
+    Ok(buf.freeze())
 }
 
-#[must_use]
-pub fn encode_topology_key(group_id: &str) -> Bytes {
+/// Encodes the topology key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_topology_key(group_id: &str) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_TOPOLOGY);
-    put_string(&mut buf, group_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    Ok(buf.freeze())
 }
 
-#[must_use]
-pub fn encode_partition_metadata_key(group_id: &str) -> Bytes {
+/// Encodes the partition-metadata key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_partition_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_PARTITION_METADATA);
-    put_string(&mut buf, group_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    Ok(buf.freeze())
 }
 
-#[must_use]
-pub fn encode_target_assignment_metadata_key(group_id: &str) -> Bytes {
+/// Encodes the target-assignment-metadata key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_target_assignment_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_TARGET_ASSIGNMENT_METADATA);
-    put_string(&mut buf, group_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    Ok(buf.freeze())
 }
 
-#[must_use]
-pub fn encode_target_assignment_member_key(group_id: &str, member_id: &str) -> Bytes {
+/// Encodes the target-assignment-member key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_target_assignment_member_key(
+    group_id: &str,
+    member_id: &str,
+) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER);
-    put_string(&mut buf, group_id);
-    put_string(&mut buf, member_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    put_string(&mut buf, member_id)?;
+    Ok(buf.freeze())
 }
 
-#[must_use]
-pub fn encode_current_member_assignment_key(group_id: &str, member_id: &str) -> Bytes {
+/// Encodes the current-member-assignment key.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_current_member_assignment_key(
+    group_id: &str,
+    member_id: &str,
+) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT);
-    put_string(&mut buf, group_id);
-    put_string(&mut buf, member_id);
-    buf.freeze()
+    put_string(&mut buf, group_id)?;
+    put_string(&mut buf, member_id)?;
+    Ok(buf.freeze())
 }
 
 /// Encodes a [`StreamsGroupKey`] for dispatch, with a leading `i16` key
 /// version.
-#[must_use]
-pub fn encode_streams_key(key: &StreamsGroupKey) -> Bytes {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes.
+pub fn encode_streams_key(key: &StreamsGroupKey) -> Result<Bytes, BrokerError> {
     match key {
         StreamsGroupKey::GroupMetadata { group_id } => encode_group_metadata_key(group_id),
         StreamsGroupKey::MemberMetadata {
@@ -204,11 +249,13 @@ mod tests {
     #[test]
     fn group_metadata_key_bytes_match_kafka_schema() {
         // i16 apiKey 17, then a non-flexible i16-length group id.
-        assert!(&encode_group_metadata_key("g1")[..] == b"\x00\x11\x00\x02g1");
+        assert!(&encode_group_metadata_key("g1").unwrap()[..] == b"\x00\x11\x00\x02g1");
     }
 
     #[test]
     fn member_metadata_key_bytes_match_kafka_schema() {
-        assert!(&encode_member_metadata_key("g1", "m1")[..] == b"\x00\x13\x00\x02g1\x00\x02m1");
+        assert!(
+            &encode_member_metadata_key("g1", "m1").unwrap()[..] == b"\x00\x13\x00\x02g1\x00\x02m1"
+        );
     }
 }

@@ -107,6 +107,7 @@ pub(super) async fn start_coordinators(
         Arc::clone(auto_topic_creation),
         Arc::clone(inter_broker_client),
         listener_protocol,
+        metrics.clone(),
     ));
     let share_partition_leaders = crate::share_partition::manager::SharePartitionLeaderManager::new(
         config.node_id,

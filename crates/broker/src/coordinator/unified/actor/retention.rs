@@ -50,13 +50,16 @@ use std::collections::HashSet;
 use tokio::sync::oneshot;
 
 use super::offset_delete::{SubscribedTopics, offset_delete_guard};
-use crate::coordinator::unified::{
-    GroupCoordinator, OffsetRecordBatchBuilder,
-    classic_state::GroupState as ClassicGroupState,
-    group::{CoordinatorGroup, GroupKind},
-    offsets_log::OffsetsLog,
-    persistence::{Key, OffsetCommitValue, encode_key},
-    persistence_next_gen::{NextGenKey, encode_key as encode_next_gen_key},
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, OffsetRecordBatchBuilder,
+        classic_state::GroupState as ClassicGroupState,
+        group::{CoordinatorGroup, GroupKind},
+        offsets_log::OffsetsLog,
+        persistence::{Key, OffsetCommitValue, encode_key},
+        persistence_next_gen::{NextGenKey, encode_key as encode_next_gen_key},
+    },
+    error::BrokerError,
 };
 
 /// What one reap pass did to one group.
@@ -127,13 +130,15 @@ async fn reap_expired_offsets(
     if expired.is_empty() && !(delete_group && settled_empty(group, now_ms, empty_grace_ms)) {
         return ReapOutcome::default();
     }
-    let batch = tombstone_batch(
+    if let Err(error) = append_tombstones(
+        offsets_log,
         &group.group_id,
         &expired,
         delete_group.then_some(&group.kind),
         now_ms,
-    );
-    if let Err(error) = offsets_log.append(&group.group_id, batch).await {
+    )
+    .await
+    {
         tracing::warn!(
             group_id = %group.group_id,
             %error,
@@ -268,18 +273,35 @@ fn expired_offsets(
     (expired, all_expired)
 }
 
-/// One `__consumer_offsets` batch: an offset tombstone for each expired key,
-/// then the group's own tombstones when `delete_group_of_kind` is set.
-pub(super) fn tombstone_batch(
+/// Appends [`tombstone_batch`] to the partition of `group_id`.
+///
+/// # Errors
+///
+/// Returns the error of the append, or [`BrokerError::Protocol`] when a key is
+/// not encodable because a string of it is longer than 32767 bytes.
+pub(super) async fn append_tombstones(
+    offsets_log: &dyn OffsetsLog,
     group_id: &str,
     expired: &[(String, i32)],
     delete_group_of_kind: Option<&GroupKind>,
     now_ms: i64,
-) -> krabka_protocol::records::RecordBatch {
+) -> Result<(), BrokerError> {
+    let batch = tombstone_batch(group_id, expired, delete_group_of_kind, now_ms)?;
+    offsets_log.append(group_id, batch).await
+}
+
+/// One `__consumer_offsets` batch: an offset tombstone for each expired key,
+/// then the group's own tombstones when `delete_group_of_kind` is set.
+fn tombstone_batch(
+    group_id: &str,
+    expired: &[(String, i32)],
+    delete_group_of_kind: Option<&GroupKind>,
+    now_ms: i64,
+) -> Result<krabka_protocol::records::RecordBatch, BrokerError> {
     let mut builder = OffsetRecordBatchBuilder::default();
     for (topic, partition) in expired {
         builder.push(
-            OffsetCommitValue::encode_key(group_id, topic, *partition),
+            OffsetCommitValue::encode_key(group_id, topic, *partition)?,
             None,
         );
     }
@@ -288,25 +310,25 @@ pub(super) fn tombstone_batch(
         Some(GroupKind::Classic(_)) => builder.push(
             encode_key(&Key::GroupMetadata {
                 group_id: group_id.into(),
-            }),
+            })?,
             None,
         ),
         Some(GroupKind::Consumer(_)) => {
             builder.push(
                 encode_next_gen_key(&NextGenKey::GroupMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 None,
             );
             builder.push(
                 encode_next_gen_key(&NextGenKey::TargetAssignmentMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 None,
             );
         }
     }
-    builder.finish(now_ms)
+    Ok(builder.finish(now_ms))
 }
 
 #[cfg(test)]

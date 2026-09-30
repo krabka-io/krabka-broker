@@ -1,25 +1,25 @@
-(* #"/workspace/crates/verified/src/broker.rs" 189 0 192 9 *)
+(* #"/workspace/crates/verified/src/broker.rs" 190 0 193 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 194 16 194 29
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 195 16 195 17
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 196 15 196 20
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 198 20 198 27
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 201 14 201 37
-let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 202 18 202 31
-let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 200 16 200 94
-let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 199 16 199 40
-let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 203 21 203 35
-let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 206 20 206 25
-let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 215 17 215 18
-let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 215 8 215 18
-let%span sbroker'11 = "/workspace/crates/verified/src/broker.rs" 213 19 213 24
-let%span sbroker'12 = "/workspace/crates/verified/src/broker.rs" 217 4 217 8
-let%span sbroker'13 = "/workspace/crates/verified/src/broker.rs" 182 10 187 1
-let%span sbroker'14 = "/workspace/crates/verified/src/broker.rs" 166 8 169 40
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 195 16 195 29
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 196 16 196 17
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 197 15 197 20
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 199 20 199 27
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 202 14 202 37
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 203 18 203 31
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 201 16 201 94
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 200 16 200 40
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 204 21 204 35
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 207 20 207 25
+let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 216 17 216 18
+let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 216 8 216 18
+let%span sbroker'11 = "/workspace/crates/verified/src/broker.rs" 214 19 214 24
+let%span sbroker'12 = "/workspace/crates/verified/src/broker.rs" 218 4 218 8
+let%span sbroker'13 = "/workspace/crates/verified/src/broker.rs" 183 10 188 1
+let%span sbroker'14 = "/workspace/crates/verified/src/broker.rs" 167 8 170 40
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -54,7 +54,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate preferred_change_eligible [#"/workspace/crates/verified/src/broker.rs" 164 0 164 71] (change: t_PreferredLeaderChange) =
+predicate preferred_change_eligible [#"/workspace/crates/verified/src/broker.rs" 165 0 165 71] (change: t_PreferredLeaderChange) =
   [%#sbroker'14] change.preferred_replica = Some (change.new_leader)
   /\ change.leader_in_isr /\ change.leader_alive /\ not change.leader_is_witness
 
@@ -70,7 +70,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let preferred_rebalance_admission [#"/workspace/crates/verified/src/broker.rs" 189 0 192 9]
+let preferred_rebalance_admission [#"/workspace/crates/verified/src/broker.rs" 190 0 193 9]
   (changes: Slice64.slice t_PreferredLeaderChange) (max_changes: UInt64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = len_PreferredLeaderChange [%#sbroker] {changes} (fun (_x: UInt64.t) -> [ &count <- _x ] s1)

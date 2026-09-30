@@ -33,7 +33,8 @@ pub(super) enum AppendError {
     /// The partition log is not open on this broker.
     #[error("__share_group_state-{0} not local")]
     NotLocal(PartitionIndex),
-    /// The partition log refused the append.
+    /// The record could not be encoded, or the partition log refused the
+    /// append.
     #[error(transparent)]
     Failed(BrokerError),
     /// The append took longer than `share.coordinator.write.timeout.ms`.
@@ -97,7 +98,8 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// Returns [`AppendError::NotLocal`] if the partition log is not open
-    /// locally, [`AppendError::Failed`] if `produce_batch` fails, and
+    /// locally, [`AppendError::Failed`] if the key does not encode or
+    /// `produce_batch` fails, and
     /// [`AppendError::TimedOut`] if it does not finish within the configured
     /// write timeout.
     pub(super) async fn persist_record(
@@ -120,7 +122,7 @@ impl ShareCoordinator {
             .with_compression(self.config.state_topic_compression_codec);
         batch.records.push(Record {
             offset_delta: 0,
-            key: Some(encode_state_key(&key)),
+            key: Some(encode_state_key(&key).map_err(AppendError::Failed)?),
             value,
             ..Default::default()
         });

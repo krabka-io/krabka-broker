@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 440 0 440 92 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 445 0 445 92 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 441 14 441 15
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 441 4 444 50
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 433 10 438 1
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 446 14 446 15
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 446 4 449 50
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 438 10 443 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -22,7 +22,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_is_active [#"/workspace/crates/verified/src/delegation_token.rs" 440 0 440 92] (now_ms: Int64.t)
+let token_is_active [#"/workspace/crates/verified/src/delegation_token.rs" 445 0 445 92] (now_ms: Int64.t)
   (expiry_timestamp_ms: Int64.t) (max_timestamp_ms: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_8 <- Int64.ge now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1

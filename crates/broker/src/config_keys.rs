@@ -146,7 +146,10 @@ pub(crate) use self::{
     topic_scope::{
         WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
-    trunk_log::{RemoteCopyLag, resolve_max_decompressed_record_bytes, resolve_remote_copy_lag},
+    trunk_log::{
+        RemoteCopyLag, log_max_decompressed_record, resolve_max_decompressed_record_bytes,
+        resolve_remote_copy_lag,
+    },
     validation::{
         TopicDefaults, canonical_topic_config, canonical_topic_config_map, parse_cleanup_policy,
         parse_compression_type, validate_config_combination, validate_remote_storage_disable,
@@ -253,8 +256,10 @@ pub(crate) const REMOTE_COPY_LAG_MS: &str = "remote.copy.lag.ms";
 /// back for it, and it is served only under `unstable.api.versions.enable`.
 pub(crate) const REMOTE_COPY_LAG_BYTES: &str = "remote.copy.lag.bytes";
 /// Kafka trunk's `max.decompressed.message.bytes`: the cap on one record's
-/// decompressed size. Produce enforces it on a compressed batch, and it is
-/// served only under `unstable.api.versions.enable`.
+/// decompressed size. Produce enforces it on a compressed batch, the log
+/// enforces it in compaction and in by-timestamp lookups (through
+/// `LogConfig::max_decompressed_record`), and it is served only under
+/// `unstable.api.versions.enable`.
 pub(crate) const MAX_DECOMPRESSED_MESSAGE_BYTES: &str = "max.decompressed.message.bytes";
 /// Kafka trunk's `errors.deadletterqueue.group.enable` (KIP-1191): whether
 /// share groups may write undeliverable records to this topic. A share

@@ -49,7 +49,7 @@ async fn replay_records_walks_all_batches() {
     // (topic, partition), so we can tell which batches were replayed.
     let commit_record = |partition: i32, offset: i64| Record {
         offset_delta: 0,
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition)),
+        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
         value: Some(
             OffsetCommitValue {
                 offset: Offset(offset),
@@ -128,7 +128,7 @@ fn replay_applies_only_committed_transactional_offsets() {
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
     ));
     let record = |partition: i32, offset: i64| Record {
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition)),
+        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
         value: Some(
             OffsetCommitValue {
                 offset: Offset(offset),
@@ -202,7 +202,7 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
         producer_epoch: 0,
         attributes: Attributes::default().with_transactional(true),
         records: vec![Record {
-            key: Some(OffsetCommitValue::encode_key("g", "t", 4)),
+            key: Some(OffsetCommitValue::encode_key("g", "t", 4).unwrap()),
             value: Some(
                 OffsetCommitValue {
                     offset: Offset(444),
@@ -342,7 +342,7 @@ fn replay_honours_offset_and_group_tombstones() {
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
     ));
     let commit = |partition: i32, offset: i64| Record {
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition)),
+        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
         value: Some(
             OffsetCommitValue {
                 offset: Offset(offset),
@@ -362,7 +362,7 @@ fn replay_honours_offset_and_group_tombstones() {
         ..Default::default()
     };
     let group_metadata = Record {
-        key: Some(GroupMetadataValue::encode_key("g")),
+        key: Some(GroupMetadataValue::encode_key("g").unwrap()),
         value: Some(
             GroupMetadataValue {
                 protocol_type: "consumer".into(),
@@ -372,7 +372,8 @@ fn replay_honours_offset_and_group_tombstones() {
                 current_state_timestamp_ms: 777,
                 members: Vec::new(),
             }
-            .encode_value(),
+            .encode_value()
+            .unwrap(),
         ),
         ..Default::default()
     };
@@ -383,7 +384,7 @@ fn replay_honours_offset_and_group_tombstones() {
         commit(0, 100),
         commit(1, 101),
         group_metadata,
-        tombstone(OffsetCommitValue::encode_key("g", "t", 0)),
+        tombstone(OffsetCommitValue::encode_key("g", "t", 0).unwrap()),
     ] {
         let mut batch = RecordBatch {
             records: vec![record],
@@ -404,7 +405,7 @@ fn replay_honours_offset_and_group_tombstones() {
     // The group's own tombstone drops the group and its empty-since stamp, and
     // leaves the surviving offset alone.
     let mut batch = RecordBatch {
-        records: vec![tombstone(GroupMetadataValue::encode_key("g"))],
+        records: vec![tombstone(GroupMetadataValue::encode_key("g").unwrap())],
         ..RecordBatch::default()
     };
     log.append(&mut batch).unwrap();
@@ -460,7 +461,7 @@ async fn a_fully_reaped_group_does_not_come_back_after_replay() {
     let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
     for record in [
         Record {
-            key: Some(OffsetCommitValue::encode_key("reaped", "t", 0)),
+            key: Some(OffsetCommitValue::encode_key("reaped", "t", 0).unwrap()),
             value: Some(
                 OffsetCommitValue {
                     offset: Offset(100),
@@ -475,8 +476,8 @@ async fn a_fully_reaped_group_does_not_come_back_after_replay() {
             ..Default::default()
         },
         // The sweep's batch: the last offset, then the group itself.
-        tombstone(OffsetCommitValue::encode_key("reaped", "t", 0)),
-        tombstone(GroupMetadataValue::encode_key("reaped")),
+        tombstone(OffsetCommitValue::encode_key("reaped", "t", 0).unwrap()),
+        tombstone(GroupMetadataValue::encode_key("reaped").unwrap()),
     ] {
         let mut batch = RecordBatch {
             records: vec![record],
@@ -533,7 +534,7 @@ async fn replay_keeps_the_committed_topic_id() {
     };
     let record = |partition: i32, delta: i32, entry: &OffsetEntry| Record {
         offset_delta: delta,
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition)),
+        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
         value: Some(OffsetCommitValue::from(entry).encode_value()),
         ..Default::default()
     };

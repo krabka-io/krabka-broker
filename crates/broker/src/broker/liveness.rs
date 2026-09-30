@@ -105,6 +105,48 @@ fn spawn_leadership_watcher(
     });
 }
 
+/// Latches `should_shutdown` when the controller this node hosts stops itself
+/// over a fatal fault, such as a replay of a feature level that it does not
+/// support. Kafka's `ProcessTerminatingFaultHandler` halts the process on that
+/// fault; a library cannot, so this is the seam that hands the decision to the
+/// embedder, the same one the KIP-112 all-log-dirs-offline stop uses. The
+/// binary reads the reason back through `BrokerHandle::fatal_fault` and exits
+/// non-zero. A fault that fired before this task started is still seen, since a
+/// `watch` channel keeps its last value.
+fn spawn_fatal_fault_watcher(
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    shutdown: CancellationToken,
+) {
+    let mut faults = controller.watch_fatal();
+    tokio::spawn(async move {
+        let fault = tokio::select! {
+            () = shutdown.cancelled() => return,
+            fault = async {
+                faults
+                    .wait_for(Option::is_some)
+                    .await
+                    .ok()
+                    .and_then(|fault| fault.clone())
+            } => fault,
+        };
+        // No fault: the source closed the channel, as a controller does when it
+        // stops in an orderly way, or as a source without a controller does at
+        // once.
+        let Some(fault) = fault else { return };
+        tracing::error!(
+            %fault,
+            "the metadata controller stopped over a fatal fault; shutting the broker down"
+        );
+        // `send_replace`, not `send`: nothing subscribes to the flag until the
+        // embedder calls `BrokerHandle::should_shutdown_rx`, and `send` drops
+        // the value when there is no receiver. A fault that landed before that
+        // call would leave the flag false for good, and the process would run
+        // on without its controller.
+        should_shutdown.send_replace(true);
+    });
+}
+
 pub(super) struct LivenessStartup {
     pub(super) liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
     pub(super) want_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
@@ -198,6 +240,11 @@ pub(super) fn start_liveness_services(
         Arc::clone(&liveness),
         config.node_id,
         metrics.clone(),
+        shutdown.child_token(),
+    );
+    spawn_fatal_fault_watcher(
+        controller,
+        Arc::clone(&should_shutdown),
         shutdown.child_token(),
     );
     LivenessStartup {
@@ -333,5 +380,53 @@ mod tests {
         }
         assert!(metrics.controller_leader_changes_total.get() == 1);
         shutdown.cancel();
+    }
+
+    // Whether the controller publishes its fault before or after the watcher
+    // starts, the self-shutdown flag latches, and it holds the value for an
+    // embedder that subscribes late. The channel has no receiver while the
+    // fault lands, as in a broker whose host has not yet called
+    // `should_shutdown_rx`, so a `send` in place of `send_replace` would lose
+    // the fault. The watcher holds the other reference to the sender, so the
+    // flag is read only once that reference is gone, which is when the watcher
+    // has finished.
+    #[tokio::test]
+    async fn a_fatal_fault_latches_self_shutdown_for_a_late_subscriber() {
+        for (name, published_before_the_watcher) in [
+            ("published after the watcher starts", false),
+            ("published before the watcher starts", true),
+        ] {
+            let mock = Arc::new(fake_source(
+                krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
+                None,
+            ));
+            let controller: Arc<dyn crate::metadata_source::MetadataSource> = mock.clone();
+            let latch = Arc::new(tokio::sync::watch::channel(false).0);
+            let shutdown = CancellationToken::new();
+            if published_before_the_watcher {
+                mock.set_fatal("the controller faulted");
+            }
+            spawn_fatal_fault_watcher(&controller, Arc::clone(&latch), shutdown.clone());
+            if !published_before_the_watcher {
+                assert!(
+                    !*latch.subscribe().borrow(),
+                    "{name}: latched with no fault"
+                );
+                mock.set_fatal("the controller faulted");
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while Arc::strong_count(&latch) > 1 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{name}: the watcher never finished"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(
+                *latch.subscribe().borrow(),
+                "{name}: the fault did not latch self-shutdown"
+            );
+            shutdown.cancel();
+        }
     }
 }

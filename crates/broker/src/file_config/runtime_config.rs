@@ -549,6 +549,14 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub transaction_max_timeout: Option<Time>,
+    /// Whether a partition leader checks with the transaction coordinator
+    /// that a transaction contains a partition before it appends
+    /// transactional records to it, Kafka's
+    /// `transaction.partition.verification.enable`. This is the static value.
+    /// A dynamic broker config of the same name, per-broker or cluster-wide,
+    /// overrides it, and the `server_properties` entry of that name applies
+    /// only when this key is absent. The default is `true`.
+    pub transaction_partition_verification_enable: Option<bool>,
     /// Partition count of the `__barrier_state` internal topic.
     pub barrier_state_num_partitions: Option<i32>,
     /// Replication factor of the `__barrier_state` internal topic.

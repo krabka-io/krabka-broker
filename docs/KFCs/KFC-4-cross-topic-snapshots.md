@@ -165,7 +165,7 @@ Every other outcome maps onto a code Kafka already defines.
 
 `TOPIC_ALREADY_EXISTS` is the only already-exists code Kafka gives, and a barrier group is not a topic. The alternative was a second krabka-private code, and reusing one Kafka code that a caller can already read is worth more than an exact name.
 
-A malformed topic list is refused with `INVALID_REQUEST` before the coordinator sees the entry, so what reaches `INVALID_CONFIG` is only a retention or an interval out of range.
+A malformed topic list is refused with `INVALID_REQUEST` before the coordinator sees the entry, so what reaches `INVALID_CONFIG` is only a retention or an interval out of range. A group name or a topic name over 32767 bytes is refused the same way on `AlterBarrierGroups`, and a group name over 32767 bytes on every partition of `WriteBarrierMarkers`, because the barrier records encode both as INT16-length strings.
 
 Every response carries its outcome as a code in a row or in a top-level field, and never as a transport failure. A caller reads one response shape whatever happened.
 

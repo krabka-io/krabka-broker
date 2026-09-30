@@ -519,7 +519,7 @@ mod tests {
             base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2)),
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2).unwrap()),
                 value: Some(value.encode_value()),
                 ..Default::default()
             }],
@@ -598,7 +598,7 @@ mod tests {
             base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2)),
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2).unwrap()),
                 value: Some(
                     OffsetCommitValue {
                         offset: Offset(42),
@@ -720,7 +720,7 @@ mod tests {
             .expect("local offsets partition");
         let row = |group_id, topic, partition, offset, delta| Record {
             offset_delta: delta,
-            key: Some(OffsetCommitValue::encode_key(group_id, topic, partition)),
+            key: Some(OffsetCommitValue::encode_key(group_id, topic, partition).unwrap()),
             value: Some(
                 OffsetCommitValue {
                     offset: Offset(offset),

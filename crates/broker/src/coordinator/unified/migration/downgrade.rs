@@ -270,8 +270,12 @@ mod tests {
         check!(classic.protocol_name.as_deref() == Some("range"));
         check!(classic.leader_id.as_deref() == Some("m1"));
 
-        let first = downgrade_pending_records(&state, &classic, 7).to_batch("g", 7);
-        let second = downgrade_pending_records(&state, &classic, 7).to_batch("g", 7);
+        let first = downgrade_pending_records(&state, &classic, 7)
+            .to_batch("g", 7)
+            .unwrap();
+        let second = downgrade_pending_records(&state, &classic, 7)
+            .to_batch("g", 7)
+            .unwrap();
         check!(first.records.len() == 6);
         assert!(first.records == second.records);
     }

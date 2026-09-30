@@ -7,7 +7,7 @@ use krabka_protocol::{
     ProtocolError,
     primitives::{
         fixed::{get_i16, get_i64, put_i16, put_i64},
-        string_bytes::{get_string_owned, put_string},
+        string_bytes::get_string_owned,
     },
 };
 
@@ -15,6 +15,7 @@ use super::{
     NO_EPOCH, RECORD_VERSION,
     primitives::{expect_end, expect_version},
 };
+use crate::{coordinator::unified::persistence::put_string, error::BrokerError};
 
 /// Which of the three record kinds a key names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,14 +92,17 @@ impl RecordKey {
 }
 
 /// Encode a record key.
-#[must_use]
-pub(crate) fn encode_key(key: &RecordKey) -> Vec<u8> {
+///
+/// # Errors
+/// Returns [`BrokerError::Protocol`] when the group name is longer than 32767
+/// bytes, which the `i16` length cannot carry.
+pub(crate) fn encode_key(key: &RecordKey) -> Result<Vec<u8>, BrokerError> {
     let mut out = Vec::with_capacity(12 + key.group.len());
     put_i16(&mut out, RECORD_VERSION);
     put_i16(&mut out, key.kind.code());
-    put_string(&mut out, &key.group);
+    put_string(&mut out, &key.group)?;
     put_i64(&mut out, key.epoch);
-    out
+    Ok(out)
 }
 
 /// Decode a record key.
@@ -122,6 +126,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::persistence::MAX_STRING_BYTES;
 
     #[test]
     fn every_key_kind_round_trips() {
@@ -134,7 +139,7 @@ mod tests {
             ("cut", RecordKey::cut("orders-cut", 7)),
         ];
         for (case, key) in cases {
-            let decoded = decode_key(&encode_key(&key)).ok();
+            let decoded = decode_key(&encode_key(&key).expect("encodes")).ok();
             assert!(decoded.as_ref() == Some(&key), "{case}");
         }
     }
@@ -143,14 +148,29 @@ mod tests {
     fn a_group_key_carries_no_epoch() {
         let key = RecordKey::group("orders-cut");
         assert!(key.epoch == NO_EPOCH);
-        assert!(decode_key(&encode_key(&key)).ok() == Some(key));
+        assert!(decode_key(&encode_key(&key).expect("encodes")).ok() == Some(key));
     }
 
     #[test]
     fn a_key_rejects_an_unknown_record_kind() {
-        let mut bytes = encode_key(&RecordKey::cut("orders-cut", 7));
+        let mut bytes = encode_key(&RecordKey::cut("orders-cut", 7)).expect("encodes");
         bytes[3] = 9;
         assert!(decode_key(&bytes).is_err());
+    }
+
+    /// The group name is a string with an `i16` length. The encoder writes one
+    /// of 32767 bytes and refuses a longer one with an error, because a panic
+    /// here would take down the request that named the group.
+    #[test]
+    fn a_group_name_of_32767_bytes_encodes_and_one_of_32768_is_refused() {
+        for (length, encodes) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let key = RecordKey::cut("g".repeat(length), 7);
+            let encoded = encode_key(&key);
+            assert!(encoded.is_ok() == encodes, "{length} bytes");
+            if let Ok(bytes) = encoded {
+                assert!(decode_key(&bytes).ok() == Some(key), "{length} bytes");
+            }
+        }
     }
 
     #[test]

@@ -12,12 +12,9 @@
 //! BOTH must allow the request.
 
 use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
-        streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
-    },
+use krabka_protocol::owned::{
+    streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+    streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
 };
 use tokio::sync::oneshot;
 
@@ -49,7 +46,8 @@ pub(crate) async fn handle(
     let ng = broker.group_coordinator.clone();
     {
         let mut cur: &[u8] = req_bytes;
-        let req = StreamsGroupHeartbeatRequest::decode(&mut cur, version)?;
+        let req: StreamsGroupHeartbeatRequest =
+            crate::handlers::decode_group_request(&mut cur, version)?;
 
         // KafkaApis answers UNSUPPORTED_VERSION before the group ACL when the
         // streams protocol is off: KIP-1071 gates it on a finalized
@@ -196,7 +194,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use krabka_protocol::owned::streams_group_heartbeat_response;
+    use krabka_protocol::{Decode, owned::streams_group_heartbeat_response};
     use krabka_security::Principal;
 
     /// A valid join of member `m1` with a one-subtopology topology.
