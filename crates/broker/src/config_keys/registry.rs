@@ -538,7 +538,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             Some("2147483639"),
-            "Largest decompressed size one record may have. Kafka trunk key, served only with unstable.api.versions.enable=true. A compressed batch with a record whose decompressed body is larger is refused wherever the broker decompresses it, as Kafka trunk does: on produce with INVALID_RECORD; by log compaction, which fails the pass and leaves the partition uncleanable; and by a ListOffsets by timestamp or MAX_TIMESTAMP that reads it, on the local log or the remote tier, which answers INVALID_RECORD. Lowering the limit below the size of records already stored makes those fail until it is raised again. An uncompressed record is bounded by max.message.bytes alone, and follower replication is not checked.",
+            "Largest decompressed size one record may have. Kafka trunk key, served only with unstable.api.versions.enable=true. A compressed batch with a record whose decompressed body is larger is refused wherever the broker decompresses it, as Kafka trunk does: on produce with INVALID_RECORD; by log compaction, which fails the pass and leaves the partition uncleanable until the limit changes, where trunk holds it until a broker restart; and by a ListOffsets by timestamp or MAX_TIMESTAMP that reads it, on the local log or the remote tier, which answers INVALID_RECORD. Lowering the limit below the size of records already stored makes those fail until it is raised again. An uncompressed record is bounded by max.message.bytes alone, and follower replication is not checked.",
             ValueCheck::I32Between(1, SOFT_MAX_ARRAY_LENGTH),
         )
     },

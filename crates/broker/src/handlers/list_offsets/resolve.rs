@@ -491,7 +491,7 @@ pub(super) async fn resolve_partition(
                 .log
                 .lock()
                 .expect("log mutex poisoned")
-                .max_timestamp_offset_and_ts_checked();
+                .max_timestamp_offset_and_ts();
             // A compressed record above the topic's trunk
             // `max.decompressed.message.bytes` in the batch Kafka reads to
             // resolve the maximum fails the row, as an exception out of

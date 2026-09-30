@@ -390,8 +390,9 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
 /// Kafka trunk's `LogCleaner` turns the `InvalidRecordException` that a
 /// compressed record above `max.decompressed.message.bytes` throws into an
 /// uncleanable partition. It is no `IOException`, so the log dir stays online.
-/// The sweep accounts it under the log layer's own refusal and retries, and
-/// once the limit is raised the pass succeeds.
+/// The sweep accounts it once under the log layer's own refusal and then skips
+/// the partition, as trunk's `grabFilthiestCompactedLog` does, until the limit
+/// changes; once the limit is raised the pass succeeds.
 #[tokio::test]
 async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompressed_limit() {
     use bytes::Bytes;
@@ -463,13 +464,41 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
         "a refused record is no disk failure"
     );
 
+    // Trunk's `LogCleanerManager.grabFilthiestCompactedLog` skips an
+    // uncleanable partition, and the pass would refuse the same record again
+    // after it re-read the whole consumed range. The limit is unchanged, so the
+    // sweep leaves the partition alone: no second failure is counted, the
+    // gauge still holds it, and the sweep itself failed nothing.
+    for _ in 0..2 {
+        tick_all(&registry, None, &metrics, &mut uncleanable).await;
+    }
+    check!(
+        failures(&metrics, "orders", CleanerFailureReason::Other) == 1,
+        "a partition the limit refused is not run again while the limit stands"
+    );
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 1);
+    check!(metrics.log_cleaner_runs_total.get() == 2);
+    check!(record_count(&partition) == before, "nothing was compacted");
+
+    // A different limit that still refuses the record is a different verdict,
+    // so the partition runs again and is refused again.
+    with_limit(Some(krabka_units::bytes(50)));
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
+    check!(failures(&metrics, "orders", CleanerFailureReason::Other) == 2);
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
+    check!(
+        failures(&metrics, "orders", CleanerFailureReason::Other) == 2,
+        "the new limit holds the partition in its turn"
+    );
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 1);
+
     // The operator raises the limit: the next sweep compacts the partition and
     // clears the mark.
     with_limit(None);
     tick_all(&registry, None, &metrics, &mut uncleanable).await;
 
     check!(record_count(&partition) < before, "the retry compacted");
-    check!(metrics.log_cleaner_runs_total.get() == 1);
+    check!(metrics.log_cleaner_runs_total.get() == 4);
     check!(metrics.log_cleaner_uncleanable_partitions.get() == 0);
 }
 

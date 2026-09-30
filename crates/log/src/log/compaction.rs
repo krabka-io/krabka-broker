@@ -379,11 +379,6 @@ impl Log {
             // stable offset, or by both — so this pass has nothing to rewrite.
             return Ok(());
         }
-        // Compaction rewrites sealed segments, so any record the last
-        // activation walk read may not survive it.
-        let compacted_from = self.log_start_offset();
-        self.invalidate_delivery_schedule(compacted_from);
-
         // Borrow sealed segments to run map + rewrite (`rewrite_segments`
         // reads each input segment's `.log` by path rather than through the
         // segment's own handle, so this borrow does not itself hold anything
@@ -448,6 +443,16 @@ impl Log {
             // `sealed_refs` (and the borrow of `self.segments` it holds)
             // ends here, before the consumed segments are dropped below.
         }
+
+        // Compaction rewrites sealed segments, so any record the last
+        // activation walk read may not survive it. Nothing on disk has changed
+        // until here: the offset map and every rewrite above write only
+        // `.cleaned` files and can refuse the pass (a record above
+        // `max.decompressed.message.bytes`), and a refused pass that reset the
+        // schedule would send every later sweep of the partition through a full
+        // delivery walk for nothing.
+        let compacted_from = self.log_start_offset();
+        self.invalidate_delivery_schedule(compacted_from);
 
         // Take ownership of the consumed segments out of `self.segments` and
         // drop them now, closing their `.log`/`.index`/`.timeindex` file
@@ -1155,6 +1160,54 @@ mod tests {
                     .collect();
                 assert2::check!(k1 == [b"new".as_slice()], "{name}");
             }
+        }
+    }
+
+    /// A pass rewrites records, so it resets what the last delivery walk learned
+    /// about them, and it does that only once it will change the log. A pass a
+    /// record above `max.decompressed.message.bytes` refuses touches nothing on
+    /// disk, and a refusal that dropped the watermark would send every later
+    /// sweep of the partition through a full delivery walk.
+    #[test]
+    fn only_a_pass_that_rewrites_resets_the_delivery_watermark() {
+        use krabka_compression::CompressionType;
+
+        for (name, limit, refuses) in [
+            ("refused", Some(bytes(100)), true),
+            ("rewritten", None, false),
+        ] {
+            let dir = tempdir().unwrap();
+            let cfg = LogConfig {
+                cleanup_policy: crate::CleanupPolicy::Compact,
+                delivery_policy: crate::config::DeliveryPolicy::Scheduled,
+                segment_size: bytes(1), // one batch per segment
+                max_decompressed_record: limit,
+                ..Default::default()
+            };
+            let mut log = Log::open(dir.path(), cfg).unwrap();
+            let large = [b'x'; 1_000];
+            for (key, value) in [
+                (b"k1".as_slice(), large.as_slice()),
+                (b"k1", b"new"),
+                (b"tail", b"t"),
+            ] {
+                let mut batch = keyed_batch(0, &[(0, key, value)]);
+                batch.attributes = batch.attributes.with_compression(CompressionType::Gzip);
+                log.append(&mut batch).unwrap();
+            }
+            // Every batch is stamped 0, long past, so the walk reads them all.
+            log.advance_delivery_watermark(1_000_000);
+            assert2::assert!(log.delivery_watermark() == log.log_end_offset(), "{name}");
+
+            let result = log.compact(&compaction_ctx());
+
+            assert2::check!(result.is_err() == refuses, "{name}");
+            let expected = if refuses {
+                log.log_end_offset()
+            } else {
+                log.log_start_offset()
+            };
+            assert2::check!(log.delivery_watermark() == expected, "{name}");
         }
     }
 

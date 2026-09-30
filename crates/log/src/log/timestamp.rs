@@ -145,32 +145,16 @@ impl Log {
     }
 
     /// Offset and timestamp of the record that carries the partition's
-    /// largest timestamp.
+    /// largest timestamp (KIP-734 `MAX_TIMESTAMP`), under the log's
+    /// [`max_decompressed_record`](crate::LogConfig::max_decompressed_record),
+    /// as Kafka trunk's `UnifiedLog.fetchOffsetByTimestamp(MAX_TIMESTAMP)`
+    /// answers it: Kafka decompresses only the batch that holds the log's
+    /// maximum, up to the record it returns.
     ///
     /// The scan reads sealed segments and then the active segment. Ties
     /// resolve to the earliest offset: the first segment wins, and the first
     /// record within it wins. The result is `None` when the log holds no
     /// records.
-    ///
-    /// Like [`Self::offset_for_timestamp`], this applies no
-    /// `max.decompressed.message.bytes`;
-    /// [`Self::max_timestamp_offset_and_ts_checked`] does.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
-    #[must_use]
-    pub fn max_timestamp_offset_and_ts(&self) -> Option<(Offset, i64)> {
-        let scan_window = self.config.read().unwrap().timestamp_scan_window;
-        // With no limit the scan has nothing to refuse.
-        self.scan_max_timestamp(scan_window, None).ok().flatten()
-    }
-
-    /// [`Self::max_timestamp_offset_and_ts`] under the log's
-    /// [`max_decompressed_record`](crate::LogConfig::max_decompressed_record),
-    /// as Kafka trunk's `UnifiedLog.fetchOffsetByTimestamp(MAX_TIMESTAMP)`
-    /// answers it: Kafka decompresses only the batch that holds the log's
-    /// maximum, up to the record it returns.
     ///
     /// # Errors
     ///
@@ -180,7 +164,7 @@ impl Log {
     /// # Panics
     ///
     /// Panics when another thread poisoned the log configuration lock.
-    pub fn max_timestamp_offset_and_ts_checked(&self) -> Result<Option<(Offset, i64)>, LogError> {
+    pub fn max_timestamp_offset_and_ts(&self) -> Result<Option<(Offset, i64)>, LogError> {
         let (scan_window, limit) = self.timestamp_scan_settings();
         self.scan_max_timestamp(scan_window, limit)
     }
@@ -209,15 +193,6 @@ impl Log {
             winner.offset_of_max_timestamp_with_window(scan_window, limit)?;
         }
         Ok(best.map(|(ts, offset, _)| (offset, ts)))
-    }
-
-    /// Offset of the record carrying the partition's largest timestamp,
-    /// or `log_start_offset()` when the log holds no records (KIP-734
-    /// `MAX_TIMESTAMP`).
-    #[must_use]
-    pub fn offset_of_max_timestamp(&self) -> Offset {
-        self.max_timestamp_offset_and_ts()
-            .map_or_else(|| self.log_start_offset(), |(offset, _)| offset)
     }
 }
 
@@ -258,6 +233,7 @@ mod tests {
 
         let (offset, ts) = log
             .max_timestamp_offset_and_ts()
+            .expect("no limit is set")
             .expect("a log with records has a maximum");
         // sample_batch stamps every record at the same timestamp, so the
         // maximum is shared and the earliest offset carrying it is the answer.
@@ -330,7 +306,7 @@ mod tests {
 
         let log = Log::open(dir.path(), config).unwrap();
         assert2::assert!(log.offset_for_timestamp(150) == Some((Offset(1), 200)));
-        assert2::assert!(log.max_timestamp_offset_and_ts() == Some((Offset(2), 300)));
+        assert2::assert!(log.max_timestamp_offset_and_ts().unwrap() == Some((Offset(2), 300)));
         log.close();
     }
 
@@ -367,30 +343,13 @@ mod tests {
         drop(dir);
     }
 
+    /// An empty log has no maximum: Kafka's `UnifiedLog.fetchOffsetByTimestamp`
+    /// answers `MAX_TIMESTAMP` with an empty result rather than the log start.
     #[test]
-    fn log_offset_of_max_timestamp_in_active() {
-        let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_size: bytes(1), // each record its own segment
-            ..LogConfig::default()
-        };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        // timestamps 100,300,200 at offsets 0,1,2. Max is 300 @ offset 1.
-        for ts in [100, 300, 200] {
-            let mut b = ts_batch(ts);
-            log.append(&mut b).unwrap();
-        }
-        assert2::assert!(log.offset_of_max_timestamp() == 1);
-        log.close();
-        drop(dir);
-    }
-
-    #[test]
-    fn log_offset_of_max_timestamp_empty_is_log_start() {
+    fn log_max_timestamp_of_an_empty_log_is_none() {
         let dir = tempdir().unwrap();
         let log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        assert2::assert!(log.offset_of_max_timestamp() == log.log_start_offset());
-        assert2::assert!(log.max_timestamp_offset_and_ts() == None);
+        assert2::assert!(log.max_timestamp_offset_and_ts().unwrap() == None);
         log.close();
         drop(dir);
     }
@@ -408,7 +367,7 @@ mod tests {
             log.append(&mut b).unwrap();
         }
         // Max timestamp 300 lives at offset 1.
-        assert2::assert!(log.max_timestamp_offset_and_ts() == Some((Offset(1), 300)));
+        assert2::assert!(log.max_timestamp_offset_and_ts().unwrap() == Some((Offset(1), 300)));
         log.close();
         drop(dir);
     }
@@ -509,14 +468,14 @@ mod tests {
         }
         // The maximum is in the small segment, and Kafka reads only that one,
         // whatever the other segments hold.
-        check!(answer(log.max_timestamp_offset_and_ts_checked()) == Ok(Some((Offset(1), 300))));
+        check!(answer(log.max_timestamp_offset_and_ts()) == Ok(Some((Offset(1), 300))));
 
         // The log's own bookkeeping lookups take no limit.
         check!(log.offset_for_timestamp(50) == Some((Offset(0), 100)));
 
         // Once the oversized batch holds the maximum, the lookup refuses it.
         log.append(&mut gzip_batch(400, 1_000)).unwrap();
-        check!(answer(log.max_timestamp_offset_and_ts_checked()) == Err(()));
+        check!(answer(log.max_timestamp_offset_and_ts()) == Err(()));
 
         // Raising the limit, as the operator does, answers it again; so does
         // no limit at all.
@@ -529,7 +488,7 @@ mod tests {
                 "{limit:?}"
             );
             check!(
-                answer(log.max_timestamp_offset_and_ts_checked()) == Ok(Some((Offset(3), 400))),
+                answer(log.max_timestamp_offset_and_ts()) == Ok(Some((Offset(3), 400))),
                 "{limit:?}"
             );
         }
@@ -556,7 +515,7 @@ mod tests {
         log.append(&mut batch).unwrap();
 
         check!(answer(log.offset_for_timestamp_checked(100)) == Ok(Some((Offset(0), 100))));
-        check!(answer(log.max_timestamp_offset_and_ts_checked()) == Ok(Some((Offset(0), 100))));
+        check!(answer(log.max_timestamp_offset_and_ts()) == Ok(Some((Offset(0), 100))));
         log.close();
     }
 }

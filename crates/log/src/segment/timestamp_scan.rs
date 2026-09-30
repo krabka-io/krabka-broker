@@ -27,11 +27,13 @@ impl Segment {
     /// `LogSegment.findOffsetByTimestamp`. The result is `None` when no
     /// record in this segment qualifies.
     ///
-    /// The scan applies no `max.decompressed.message.bytes`; the log's own
-    /// lookups go through [`Segment::offset_for_timestamp_with_window`], which
-    /// takes the limit.
+    /// The scan applies no `max.decompressed.message.bytes`: this is the lookup
+    /// the log's own bookkeeping uses, to read a segment's first timestamp. A
+    /// `ListOffsets` answer goes through
+    /// [`Segment::offset_for_timestamp_with_window`], which takes the limit.
     #[must_use]
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
+        // With no limit the scan has nothing to refuse.
         self.offset_for_timestamp_with_window(target_ts, DEFAULT_TIMESTAMP_SCAN_WINDOW, None)
             .ok()
             .flatten()
@@ -68,24 +70,24 @@ impl Segment {
         self.scan_from_floor_windowed(scan_from, scan_window, target_ts, limit)
     }
 
+    /// [`Segment::offset_of_max_timestamp_with_window`] over the default window
+    /// with no limit, for the tests that only care where the answer is.
+    #[cfg(test)]
+    pub(crate) fn offset_of_max_timestamp(&self) -> Option<(Offset, i64)> {
+        self.offset_of_max_timestamp_with_window(DEFAULT_TIMESTAMP_SCAN_WINDOW, None)
+            .expect("a lookup with no limit refuses nothing")
+    }
+
     /// Absolute offset and timestamp of the record that carries this
-    /// segment's `max_timestamp`.
+    /// segment's `max_timestamp`, read in `scan_window`-sized pieces, with
+    /// `limit` as Kafka trunk's `max.decompressed.message.bytes`: Kafka's
+    /// `RecordBatch.offsetOfMaxTimestamp` decompresses the batch that holds the
+    /// maximum, up to the record it returns.
     ///
     /// Ties resolve to the earliest offset, as in Kafka. The result is `None`
     /// for an empty segment. This method starts the scan at the time index's
     /// floor for the maximum, then scans forward for the first record whose
     /// timestamp equals the segment maximum.
-    #[must_use]
-    pub fn offset_of_max_timestamp(&self) -> Option<(Offset, i64)> {
-        self.offset_of_max_timestamp_with_window(DEFAULT_TIMESTAMP_SCAN_WINDOW, None)
-            .ok()
-            .flatten()
-    }
-
-    /// [`Segment::offset_of_max_timestamp`] over `scan_window`-sized reads, with
-    /// `limit` as Kafka trunk's `max.decompressed.message.bytes`: Kafka's
-    /// `RecordBatch.offsetOfMaxTimestamp` decompresses the batch that holds the
-    /// maximum, up to the record it returns.
     ///
     /// # Errors
     ///

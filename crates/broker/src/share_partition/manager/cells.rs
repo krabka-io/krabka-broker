@@ -384,6 +384,31 @@ mod tests {
                 Err(codes::OFFSET_NOT_AVAILABLE),
             ),
         ];
+        let mgr = manager_with_image_and_partitions(
+            image_with_strategies(
+                tid,
+                strategies
+                    .iter()
+                    .filter_map(|(group, value, _)| value.map(|value| (*group, value))),
+            ),
+            reg,
+        );
+
+        for (group, value, want) in strategies {
+            let got = mgr.initial_start_offset(group, tid, 0).await;
+            assert!(
+                got == want,
+                "{KEY_SHARE_AUTO_OFFSET_RESET}={value:?}: got {got:?}, want {want:?}"
+            );
+        }
+    }
+
+    /// A metadata image holding topic `t` (one partition, led here) under
+    /// `tid`, and a `share.auto.offset.reset` for each `(group, value)`.
+    fn image_with_strategies<'a>(
+        tid: uuid::Uuid,
+        strategies: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Arc<MetadataImage> {
         let mut records = vec![
             MetadataRecord::V1Topic(TopicRecord {
                 name: "t".into(),
@@ -404,27 +429,96 @@ mod tests {
                 partition_epoch: 0,
             }),
         ];
-        for (group, value, _) in strategies {
-            if let Some(value) = value {
-                records.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {
-                    group_id: group.to_string(),
-                    configs: maplit::btreemap! {
-                        KEY_SHARE_AUTO_OFFSET_RESET.to_owned() => value.to_owned()
-                    },
-                }));
-            }
+        for (group, value) in strategies {
+            records.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+                group_id: group.to_string(),
+                configs: maplit::btreemap! {
+                    KEY_SHARE_AUTO_OFFSET_RESET.to_owned() => value.to_owned()
+                },
+            }));
+        }
+        Arc::new(MetadataImage::from_records(uuid::Uuid::nil(), &records))
+    }
+
+    /// `by_duration` resolves through the same lookup as `ListOffsets` by
+    /// timestamp, so a compressed record above the topic's Kafka trunk
+    /// `max.decompressed.message.bytes` that the lookup has to read fails the
+    /// load with `INVALID_RECORD`: `UnifiedLog.fetchOffsetByTimestamp` throws
+    /// `InvalidRecordException` into the share partition's initialization.
+    ///
+    /// Two gzip batches, a small record stamped three hours ago at offset 0 and
+    /// one with a 1000-byte value stamped ninety minutes ago at offset 1.
+    #[tokio::test]
+    async fn by_duration_start_refuses_a_record_above_the_decompressed_limit() {
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tid = uuid::Uuid::from_bytes([42; 16]);
+        let now = super::now_ms();
+        let hour = 60 * 60 * 1_000;
+        let reg = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        open_data_partition(&reg, dir.path(), "t", 0, &[], Offset(2)).await;
+        let partition = reg
+            .get("t", krabka_ids::PartitionIndex(0))
+            .expect("partition");
+        for (timestamp, value_len) in [(now - 3 * hour, 10), (now - hour - hour / 2, 1_000)] {
+            let mut batch = RecordBatch {
+                base_timestamp: timestamp,
+                max_timestamp: timestamp,
+                attributes: Attributes::default()
+                    .with_compression(krabka_compression::CompressionType::Gzip),
+                records: vec![Record {
+                    value: Some(bytes::Bytes::from(vec![7_u8; value_len])),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            partition
+                .log
+                .lock()
+                .expect("partition log lock")
+                .append(&mut batch)
+                .expect("append");
         }
         let mgr = manager_with_image_and_partitions(
-            Arc::new(MetadataImage::from_records(uuid::Uuid::nil(), &records)),
+            image_with_strategies(
+                tid,
+                [
+                    ("two-hours", "by_duration:PT2H"),
+                    ("four-hours", "by_duration:PT4H"),
+                ],
+            ),
             reg,
         );
 
-        for (group, value, want) in strategies {
+        for (name, group, limit, want) in [
+            // The first batch tops out three hours ago, so the window lands in
+            // the second, which holds the oversized record.
+            (
+                "the match is oversized",
+                "two-hours",
+                Some(krabka_units::bytes(100)),
+                Err(codes::INVALID_RECORD),
+            ),
+            // The first batch matches, and the oversized one is never read.
+            (
+                "the match precedes the oversized batch",
+                "four-hours",
+                Some(krabka_units::bytes(100)),
+                Ok(Offset(0)),
+            ),
+            ("no limit", "two-hours", None, Ok(Offset(1))),
+        ] {
+            {
+                let log = partition.log.lock().expect("partition log lock");
+                let config = krabka_log::LogConfig {
+                    max_decompressed_record: limit,
+                    ..log.config_snapshot()
+                };
+                log.set_config(config);
+            }
             let got = mgr.initial_start_offset(group, tid, 0).await;
-            assert!(
-                got == want,
-                "{KEY_SHARE_AUTO_OFFSET_RESET}={value:?}: got {got:?}, want {want:?}"
-            );
+            assert!(got == want, "{name}: got {got:?}, want {want:?}");
         }
     }
 

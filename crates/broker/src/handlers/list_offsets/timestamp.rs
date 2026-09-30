@@ -4,7 +4,7 @@
 //! lookup asks the remote tier first and falls back to the local log's time
 //! index (KIP-734) when the remote tier holds nothing for the timestamp.
 
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use krabka_remote_storage::RemoteStorageError;
 use krabka_units::prelude::ByteSizeExt;
@@ -13,7 +13,7 @@ use super::{
     remote::await_remote,
     sentinels::{UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP},
 };
-use crate::{broker::Broker, codes};
+use crate::{broker::Broker, codes, partition::Partition};
 
 /// Resolve a positive request timestamp to `(offset, record timestamp)`, or to
 /// the error code the partition's row carries.
@@ -26,19 +26,55 @@ use crate::{broker::Broker, codes};
 /// reads it.
 pub(super) async fn resolve_timestamp_offset(
     broker: &Broker,
-    partition: &crate::partition::Partition,
+    partition: &Partition,
     topic_name: &str,
     partition_index: i32,
     topic_id: Option<uuid::Uuid>,
     timestamp: i64,
     remote_timeout: Duration,
 ) -> Result<(i64, i64), i16> {
-    if let (Some(reader), Some(id)) = (broker.remote_reader.as_ref(), topic_id) {
-        let topic_partition = krabka_remote_storage::TopicIdPartition::new(
-            id,
-            topic_name.to_string(),
-            partition_index,
-        );
+    let remote = broker
+        .remote_reader
+        .as_ref()
+        .zip(topic_id)
+        .map(|(reader, id)| {
+            let topic_partition = krabka_remote_storage::TopicIdPartition::new(
+                id,
+                topic_name.to_string(),
+                partition_index,
+            );
+            move |max_record_body| async move {
+                reader
+                    .offset_for_timestamp(&topic_partition, timestamp, max_record_body)
+                    .await
+            }
+        });
+    lookup_timestamp(
+        (partition, topic_name, partition_index),
+        timestamp,
+        remote_timeout,
+        remote,
+    )
+    .await
+}
+
+/// [`resolve_timestamp_offset`] with the remote tier's read handed in, so a test
+/// can answer it without a remote segment store.
+///
+/// `remote` is `None` for a broker with no remote tier. Otherwise it reads the
+/// tier for the partition, given the topic's decompressed-record limit in
+/// bytes, which this function takes from the partition's log configuration.
+async fn lookup_timestamp<Read, Answer>(
+    (partition, topic_name, partition_index): (&Partition, &str, i32),
+    timestamp: i64,
+    remote_timeout: Duration,
+    remote: Option<Read>,
+) -> Result<(i64, i64), i16>
+where
+    Read: FnOnce(Option<usize>) -> Answer,
+    Answer: Future<Output = Result<Option<(i64, i64)>, RemoteStorageError>>,
+{
+    if let Some(read) = remote {
         let max_record_body = partition
             .log
             .lock()
@@ -46,12 +82,7 @@ pub(super) async fn resolve_timestamp_offset(
             .config_snapshot()
             .max_decompressed_record
             .map(ByteSizeExt::bytes_usize);
-        match await_remote(
-            remote_timeout,
-            reader.offset_for_timestamp(&topic_partition, timestamp, max_record_body),
-        )
-        .await
-        {
+        match await_remote(remote_timeout, read(max_record_body)).await {
             None => return Err(codes::REQUEST_TIMED_OUT),
             Some(Ok(Some(offset_and_timestamp))) => return Ok(offset_and_timestamp),
             Some(Ok(None)) => {}
@@ -97,6 +128,88 @@ mod tests {
         codes,
         handlers::list_offsets::test_support::{client_for, create_topic, list_one},
     };
+
+    /// The remote tier answers first, and what it answers decides the row: a
+    /// hit is the answer, a miss or a failure falls through to the local log,
+    /// and a record it refused for `max.decompressed.message.bytes` is the
+    /// row's `INVALID_RECORD`, as `InvalidRecordException` is in Kafka. The
+    /// local log holds a match for the timestamp, so a refusal that fell
+    /// through would come back as that match.
+    #[tokio::test]
+    async fn a_record_the_remote_tier_refuses_answers_invalid_record_and_not_the_local_match() {
+        use std::sync::{Arc, Mutex};
+
+        use krabka_protocol::records::{Record, RecordBatch};
+
+        let (partition, _dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        {
+            let mut log = partition.log.lock().expect("partition log lock");
+            log.append(&mut RecordBatch {
+                base_timestamp: 1_000,
+                max_timestamp: 1_000,
+                records: vec![Record {
+                    value: Some(bytes::Bytes::from_static(b"local")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .expect("append the local record");
+            let config = krabka_log::LogConfig {
+                max_decompressed_record: Some(krabka_units::bytes(100)),
+                ..log.config_snapshot()
+            };
+            log.set_config(config);
+        }
+        let local = Ok((0, 1_000));
+
+        for (name, remote, expected) in [
+            (
+                "the remote tier refuses a record",
+                Some(Err(RemoteStorageError::RecordTooLarge {
+                    size: 1_007,
+                    limit: 100,
+                })),
+                Err(codes::INVALID_RECORD),
+            ),
+            (
+                "any other remote failure falls back to the local log",
+                Some(Err(RemoteStorageError::Io(std::io::Error::other("boom")))),
+                local,
+            ),
+            (
+                "a remote miss falls back to the local log",
+                Some(Ok(None)),
+                local,
+            ),
+            (
+                "a remote hit is the answer",
+                Some(Ok(Some((7, 7_000)))),
+                Ok((7, 7_000)),
+            ),
+            ("no remote tier reads the local log", None, local),
+        ] {
+            let limits = Mutex::new(Vec::new());
+            let remote = remote.map(|answer| {
+                |limit| {
+                    limits.lock().expect("limits lock").push(limit);
+                    std::future::ready(answer)
+                }
+            });
+            let had_remote = remote.is_some();
+
+            let got =
+                lookup_timestamp((&partition, "t", 0), 500, Duration::from_secs(5), remote).await;
+
+            assert!(got == expected, "{name}");
+            // The reader is handed the topic's limit in bytes.
+            assert!(
+                *limits.lock().expect("limits lock")
+                    == if had_remote { vec![Some(100)] } else { vec![] },
+                "{name}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn positive_timestamp_wire_response_returns_exact_remote_record() {
