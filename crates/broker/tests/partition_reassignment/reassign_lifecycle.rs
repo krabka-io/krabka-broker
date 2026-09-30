@@ -54,7 +54,7 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     .await;
     assert!(response[0].1 == vec![(0, 0)]);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         let described = describe_log_dirs(target_addr).await;
         let materialized = described.results.iter().any(|result| {

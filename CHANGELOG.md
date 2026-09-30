@@ -218,13 +218,20 @@ It matches Kafka 4.3.1 by default and Kafka trunk under the unstable flags.
   `CASE_INSENSITIVE` does, until `(?u)` or `(?U)` asks for Unicode case. That
   covers `ssl.principal.mapping.rules`, GSSAPI `auth_to_local` rules and the
   `match` of a client-metrics subscription, so `(?i)service-` no longer
-  matches `ſervice-` (long s), and `\w` and `\p{Lower}` under `(?iu)` do not
-  match it or the Kelvin sign outside a character class. The translation reads
-  `\Q...\E` before the rest as Java does, so a quoted member can begin or end
-  a class range, a `]` first in a class may start one, and a backslash before
-  `<` or `>` is that character. A backreference under `(?i)` is accepted and
-  folds ASCII case, but it also folds non-ASCII letters, which Java's does not.
-  `\N{name}` is refused (#1248).
+  matches `ſervice-` (long s). Under `(?iu)` a letter, a class member and a
+  class range match what Java's `Character.toLowerCase` of
+  `Character.toUpperCase` accepts, and not what `fancy_regex`'s simple case
+  folding does, in a character class as well: `\w`, `\W`, `\p{Lower}` and
+  `\p{Upper}` in a class do not match long s or the Kelvin sign, a range that
+  has `K` and not `k` does not match the Kelvin sign, and `İ` and `ı` match
+  `i`. The POSIX classes `\p{Alpha}`, `\p{Alnum}`, `\p{Punct}` and the rest
+  are ASCII unless `(?U)` is on, as in Java. The translation reads `\Q...\E`
+  before the rest as Java does, so a quoted member can begin or end a class
+  range, a `]` first in a class may start one, and a backslash before `<` or
+  `>` is that character. The flag `x` ends with the group it is set in. A
+  backreference under a case flag is accepted and compares as `fancy_regex`
+  does, which differs from Java's for some non-ASCII letters. `\N{name}` is
+  refused (#1248).
 - Under `share.version` 2 the dead-letter records of every pending write to a
   destination leader go out in as few Produce requests as `max.message.bytes`
   allows, with one request in flight per leader, as Kafka's
