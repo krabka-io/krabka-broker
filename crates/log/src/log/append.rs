@@ -437,13 +437,13 @@ impl Log {
     /// measure the gap from, and nothing (not even the wall clock) rolls an
     /// idle partition.
     pub(super) fn should_roll_for_incoming(
-        &self,
+        &mut self,
         incoming_size: ByteSize,
         incoming_max_timestamp: i64,
         segment_size: ByteSize,
         segment_roll_interval: Time,
     ) -> bool {
-        let Some(seg) = self.active.as_ref() else {
+        let Some(seg) = self.active.as_mut() else {
             return false;
         };
         // An empty active segment never rolls, on size or on age: there is
@@ -454,12 +454,9 @@ impl Log {
         let non_empty = seg.size() > ByteSize::ZERO;
         let size_roll = non_empty && seg.size() + incoming_size > segment_size;
         let time_roll = non_empty
-            && seg
-                .offset_for_timestamp(i64::MIN)
-                .is_some_and(|(_, first_timestamp)| {
-                    incoming_max_timestamp - first_timestamp
-                        > segment_roll_interval.millis_i64_trunc()
-                });
+            && seg.first_record_timestamp().is_some_and(|first_timestamp| {
+                incoming_max_timestamp - first_timestamp > segment_roll_interval.millis_i64_trunc()
+            });
         size_roll || time_roll
     }
 

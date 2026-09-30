@@ -5,6 +5,7 @@ import java.util.BitSet;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Properties;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
@@ -25,9 +26,10 @@ final class BrokerPerformanceWorkload {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 7) {
+        if (args.length < 7 || args.length > 9) {
             throw new IllegalArgumentException(
-                    "bootstrap topic group records bytes records_per_second timeout_seconds");
+                    "bootstrap topic group records bytes records_per_second timeout_seconds"
+                            + " [compression] [zeros|random]");
         }
         String bootstrap = args[0];
         String topic = args[1];
@@ -39,6 +41,15 @@ final class BrokerPerformanceWorkload {
         if (expected <= 0 || bytes < 16 || rate < -1) {
             throw new IllegalArgumentException("invalid workload bounds");
         }
+        String compression = args.length > 7 ? args[7] : "lz4";
+        String payload = args.length > 8 ? args[8] : "zeros";
+        if (!payload.equals("zeros") && !payload.equals("random")) {
+            throw new IllegalArgumentException("payload must be zeros or random");
+        }
+        byte[] randomPool = new byte[payload.equals("random") ? Math.max(4 * 1024 * 1024, bytes) : 0];
+        if (payload.equals("random")) {
+            new Random(42).nextBytes(randomPool);
+        }
 
         Properties consumerProperties = new Properties();
         consumerProperties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
@@ -49,7 +60,7 @@ final class BrokerPerformanceWorkload {
         producerProperties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
         producerProperties.put(ProducerConfig.ACKS_CONFIG, "all");
         producerProperties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
-        producerProperties.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");
+        producerProperties.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, compression);
         producerProperties.put(ProducerConfig.BATCH_SIZE_CONFIG, "65536");
         producerProperties.put(ProducerConfig.LINGER_MS_CONFIG, "5");
         producerProperties.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "120000");
@@ -79,6 +90,10 @@ final class BrokerPerformanceWorkload {
                         next += interval;
                     }
                     byte[] value = new byte[bytes];
+                    if (payload.equals("random")) {
+                        int offset = sequence % (randomPool.length / bytes) * bytes;
+                        System.arraycopy(randomPool, offset, value, 0, bytes);
+                    }
                     ByteBuffer.wrap(value).putLong(System.nanoTime()).putLong(sequence);
                     producer.send(new ProducerRecord<>(topic, value), (metadata, error) -> {
                         if (error == null) {

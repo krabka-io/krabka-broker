@@ -75,6 +75,7 @@ impl Segment {
             sealed: false,
             max_timestamp: i64::MIN,
             max_timestamp_offset: base_offset - 1,
+            first_timestamp: None,
             last_offset: base_offset - 1,
         })
     }
@@ -264,6 +265,7 @@ impl Segment {
             sealed: false,
             max_timestamp: i64::MIN,
             max_timestamp_offset: base_offset - 1,
+            first_timestamp: None,
             last_offset: base_offset - 1,
         })
     }

@@ -300,6 +300,7 @@ def crate_tests(
         unit_rustc_env_files = [],
         manual = [],
         no_harness = [],
+        integration_timeouts = {},
         doc_tests = True,
         doc_test_dev_deps = True,
         mutants = True,
@@ -329,6 +330,7 @@ def crate_tests(
       manual: test stems to tag `manual` — Docker-driven or otherwise
         non-hermetic suites, the Bazel equivalent of their `#[ignore]`.
       no_harness: test stems declared `harness = false` in Cargo.toml.
+      integration_timeouts: Bazel timeout overrides keyed by integration-test stem.
       doc_tests: whether to emit a `rust_doc_test`. `cargo test` runs rustdoc
         examples; without this they are simply not run.
       doc_test_dev_deps: whether doctests need the crate's dev dependencies.
@@ -427,6 +429,7 @@ def crate_tests(
             # off as a clean run -- so the flakiness stays visible instead of
             # being hidden by a `#[ignore]`.
             flaky = stem in cpu_heavy,
+            timeout = integration_timeouts.get(stem),
             tags = (["manual"] if stem in manual or stem in docker_stems else []) +
                    (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []),
             use_libtest_harness = stem not in no_harness,

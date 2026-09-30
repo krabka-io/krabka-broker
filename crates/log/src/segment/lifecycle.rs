@@ -110,6 +110,7 @@ impl Segment {
             max_timestamp_offset,
         } = snapshot;
         self.log_file.set_len(position)?;
+        self.first_timestamp = None;
         seek_to_log_size(&self.log_file, position)?;
         self.log_size = position;
         self.last_offset = last_offset;
@@ -192,6 +193,7 @@ impl Segment {
         }
 
         self.log_file.set_len(pos)?;
+        self.first_timestamp = None;
         seek_to_log_size(&self.log_file, pos)?;
         self.log_size = pos;
         self.last_offset = last_kept_offset;
