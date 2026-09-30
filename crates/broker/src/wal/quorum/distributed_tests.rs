@@ -17,6 +17,24 @@ use super::{
 };
 use crate::wal::WalStore;
 
+/// Wait until the spawned `sync_durable` has fsynced `offset` and recorded the
+/// leader's own vote for it. The fsync runs off the test thread, so a fixed
+/// pause proves nothing about whether the vote is in yet, and a follower
+/// acknowledgement that arrives before it is one vote of three, not a majority.
+async fn wait_for_leader_vote(store: &QuorumWalStore, offset: Offset) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while store
+            .engine
+            .voter_durable_offset(NodeId(1))
+            .is_none_or(|voted| voted < offset)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the leader records its own fsync as a vote");
+}
+
 #[tokio::test]
 async fn distributed_wal_waits_for_a_remote_fsync_ack() {
     let dir = tempfile::tempdir().unwrap();
@@ -53,6 +71,7 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
             .await
             .is_err()
     );
+    wait_for_leader_vote(&store, leo).await;
     assert!(!store.engine.record_follower_ack(NodeId(9), leo));
     assert!(!store.engine.record_follower_ack(NodeId(1), leo));
     assert!(
@@ -91,6 +110,7 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
             .await
             .is_err()
     );
+    wait_for_leader_vote(&store, next).await;
     store.engine.configure_distributed(NodeId(1), &[]);
     let error = sync.await.unwrap().unwrap_err();
     assert!(error.to_string().contains("placement disappeared"));
