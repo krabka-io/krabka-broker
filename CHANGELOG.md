@@ -231,7 +231,9 @@ It matches Kafka 4.3.1 by default and Kafka trunk under the unstable flags.
   `>` is that character. The flag `x` ends with the group it is set in. A
   backreference under a case flag is accepted and compares as `fancy_regex`
   does, which differs from Java's for some non-ASCII letters. `\N{name}` is
-  refused (#1248).
+  refused, and so is a `{` outside a class that does not start a quantifier's
+  bounds, such as `a{x}` or a lone `{`, which is Java's `Illegal repetition`
+  (#1248).
 - Under `share.version` 2 the dead-letter records of every pending write to a
   destination leader go out in as few Produce requests as `max.message.bytes`
   allows, with one request in flight per leader, as Kafka's

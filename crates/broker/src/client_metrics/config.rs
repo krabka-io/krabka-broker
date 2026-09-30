@@ -241,9 +241,10 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
 /// for a group opener Java refuses, a `)` that closes no group, a class range
-/// Java refuses (`[a-\w]`), a `\N{name}`, which the rewrite cannot read, or a
-/// quantifier after inline flags that leave no text (`(?i){2}`), which
-/// `fancy_regex` has no form for.
+/// Java refuses (`[a-\w]`), a `{` outside a class that does not open the
+/// bounds of a quantifier (`a{x}`), a `\N{name}`, which the rewrite cannot
+/// read, or a quantifier after inline flags that leave no text (`(?i){2}`),
+/// which `fancy_regex` has no form for.
 ///
 /// `fancy_regex` accepts Python and Oniguruma forms Java refuses, such as
 /// `(?P<name>x)`, `(?P=name)`, `(?'name'x)` and `(?~x)`, so every `(?` outside
@@ -535,15 +536,19 @@ impl Translator<'_> {
 
     /// A `{`, which starts the bounds of a quantifier, `{n}`, `{n,}` or
     /// `{n,m}`. They are copied whole, so that the digits in them are not
-    /// read as literal chars of a run.
+    /// read as literal chars of a run. Any other `{` outside a class is Java's
+    /// `Illegal repetition`, and `None` here.
     fn braces(&mut self) -> Option<()> {
         let rest = &self.chars[self.at..];
-        match rest.iter().position(|&c| c == '}') {
-            Some(end) if rest[1..end].iter().all(|&c| c.is_ascii_digit() || c == ',') => {
-                self.copy(end + 1);
-                Some(())
-            }
-            _ => self.atom(u32::from('{'), 1),
+        let end = rest.iter().position(|&c| c == '}')?;
+        let bounds = &rest[1..end];
+        if bounds.first().is_some_and(char::is_ascii_digit)
+            && bounds.iter().all(|&c| c.is_ascii_digit() || c == ',')
+        {
+            self.copy(end + 1);
+            Some(())
+        } else {
+            None
         }
     }
 
@@ -945,6 +950,29 @@ mod tests {
             ("match", "client_id=[)]", Ok(())),
             ("match", "client_id=\\)", Ok(())),
             ("match", "client_id=[\\w-.]", Ok(())),
+            // A range that runs backwards is `Illegal character range`, under a
+            // Unicode fold as under none, and a `&` alone is a class member.
+            ("match", "client_id=[z-a]", illegal("client_id=[z-a]")),
+            (
+                "match",
+                "client_id=(?iu)[z-a]",
+                illegal("client_id=(?iu)[z-a]"),
+            ),
+            ("match", "client_id=[a&b]", Ok(())),
+            ("match", "client_id=(?iu)[a&b]", Ok(())),
+            // A `{` outside a class and an escape starts the bounds of a
+            // quantifier, and any other is `Illegal repetition`.
+            ("match", "client_id=a{2}", Ok(())),
+            ("match", "client_id=[{]", Ok(())),
+            ("match", "client_id=\\{", Ok(())),
+            ("match", "client_id=\\Q{\\E", Ok(())),
+            ("match", "client_id={", illegal("client_id={")),
+            ("match", "client_id=a{x}", illegal("client_id=a{x}")),
+            (
+                "match",
+                "client_id=(?iu)a{x}",
+                illegal("client_id=(?iu)a{x}"),
+            ),
         ];
         for (key, value, expected) in cases {
             check!(validate_one(key, value) == expected, "{key}={value:?}");
@@ -1028,6 +1056,12 @@ mod tests {
             ("(?s)app.1", "app\r1", true),
             ("(?d)app.1", "app\r1", true),
             ("[.]", "\r", false),
+            ("[a&b]", "&", true),
+            ("[a&b]", "b", true),
+            ("[a&b]", "c", false),
+            ("(?iu)[a&b]", "&", true),
+            ("a{2}", "aa", true),
+            ("a{2}", "a", false),
         ];
         for (pattern, input, expected) in cases {
             let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();
