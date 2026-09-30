@@ -212,11 +212,28 @@ pub async fn wait_for_share_init(
 /// materializing its leader (`UNKNOWN_TOPIC_OR_PARTITION` /
 /// `NOT_LEADER_OR_FOLLOWER`), exactly as a real producer would.
 pub async fn produce_n(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, n: i64) {
+    let values = (0..n)
+        .map(|i| bytes::Bytes::from(format!("v{i}")))
+        .collect();
+    produce_values(client, topic, tid, partition, values).await;
+}
+
+/// [`produce_n`] for records that carry `values`, one record for each.
+pub async fn produce_values(
+    client: &Client,
+    topic: &str,
+    tid: uuid::Uuid,
+    partition: i32,
+    values: Vec<bytes::Bytes>,
+) {
+    let n = i64::try_from(values.len()).unwrap();
     for _ in 0..40 {
-        let records: Vec<Record> = (0..n)
-            .map(|i| Record {
+        let records: Vec<Record> = values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| Record {
                 offset_delta: i32::try_from(i).unwrap(),
-                value: Some(bytes::Bytes::copy_from_slice(format!("v{i}").as_bytes())),
+                value: Some(value.clone()),
                 ..Default::default()
             })
             .collect();

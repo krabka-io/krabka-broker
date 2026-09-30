@@ -32,7 +32,7 @@ use crate::{
     NONE, REJECT,
     harness::{
         bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        produce_n, topic_id, wait_for_share_init, wire,
+        produce_n, produce_values, topic_id, wait_for_share_init, wire,
     },
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
 };
@@ -74,17 +74,31 @@ async fn finalize_share_version_two(client: &Client) {
 
 /// Creates the dead-letter topic with the topic config that opts it in.
 async fn create_dead_letter_topic(broker: &BrokerHandle, client: &Client) {
+    create_dead_letter_topic_with(broker, client, &[]).await;
+}
+
+/// [`create_dead_letter_topic`], with `extra` topic configs beside the one that
+/// opts the topic in.
+async fn create_dead_letter_topic_with(
+    broker: &BrokerHandle,
+    client: &Client,
+    extra: &[(&str, &str)],
+) {
+    let configs = std::iter::once(("errors.deadletterqueue.group.enable", "true"))
+        .chain(extra.iter().copied())
+        .map(|(name, value)| CreatableTopicConfig {
+            name: name.into(),
+            value: Some(value.into()),
+            ..Default::default()
+        })
+        .collect();
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
                 name: DLQ_TOPIC.into(),
                 num_partitions: 1,
                 replication_factor: 1,
-                configs: vec![CreatableTopicConfig {
-                    name: "errors.deadletterqueue.group.enable".into(),
-                    value: Some("true".into()),
-                    ..Default::default()
-                }],
+                configs,
                 ..Default::default()
             }],
             timeout_ms: 5_000,
@@ -232,6 +246,20 @@ async fn acquired_records(
     tweak: impl FnOnce(&mut BrokerConfig),
     configure: impl AsyncFnOnce(&Client, &BrokerHandle),
 ) -> Cluster {
+    acquired_records_from(records, tweak, configure, async |client: &Client, tid| {
+        produce_n(client, "t", tid, 0, records).await;
+    })
+    .await
+}
+
+/// [`acquired_records`], with the records that `produce` writes to `t` in place
+/// of the small ones that `produce_n` writes.
+async fn acquired_records_from(
+    records: i64,
+    tweak: impl FnOnce(&mut BrokerConfig),
+    configure: impl AsyncFnOnce(&Client, &BrokerHandle),
+    produce: impl AsyncFnOnce(&Client, uuid::Uuid),
+) -> Cluster {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = trunk_config(&dir);
     tweak(&mut config);
@@ -241,7 +269,7 @@ async fn acquired_records(
     let tid = topic_id(&broker, "t");
     bootstrap_share_state(&broker, &client, GROUP).await;
     configure(&client, &broker).await;
-    produce_n(&client, "t", tid, 0, records).await;
+    produce(&client, tid).await;
     let (member, member_epoch) = join(&client, GROUP, "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
     let row = fetch_until_acquired(&client, GROUP, &member, tid, 0, 0).await;
@@ -486,6 +514,64 @@ async fn a_missing_topic_is_created_when_the_cluster_allows_it() {
             .topic_config(DLQ_TOPIC)
             .and_then(|configs| configs.get("errors.deadletterqueue.group.enable").cloned())
             == Some("true".to_owned())
+    );
+    cluster.broker.shutdown().await;
+}
+
+/// A source record that fits the read budget can be over the topic's
+/// `max.message.bytes` once the six headers and the batch header are added. The
+/// copy is best effort, so the record is written with its headers alone rather
+/// than lost to the broker's `MESSAGE_TOO_LARGE`.
+///
+/// The source value is 1,000 bytes, which is about 1,010 bytes as a record and
+/// fits the topic's 1,100. With the headers, which take about 180 bytes, and
+/// the 61-byte batch header it is about 1,250 bytes as a batch, which does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
+    let _permit = broker_test_permit().await;
+    let cluster = acquired_records_from(
+        1,
+        |_| {},
+        async |client, broker| {
+            finalize_share_version_two(client).await;
+            create_dead_letter_topic_with(broker, client, &[("max.message.bytes", "1100")]).await;
+            point_group_at_dead_letter_topic(client).await;
+        },
+        async |client, tid| {
+            let values = vec![Bytes::from(vec![b'x'; 1_000])];
+            produce_values(client, "t", tid, 0, values).await;
+        },
+    )
+    .await;
+    let Cluster {
+        broker,
+        client,
+        tid,
+        member,
+        ..
+    } = &cluster;
+
+    let ack = share_ack(client, member, *tid, 1, 0, 0, REJECT).await;
+    assert!(ack.error_code == NONE, "reject: {}", ack.error_code);
+    let records = wait_for_dead_letters(broker, client, 1).await;
+    broker.wait_until_share_spso(GROUP, *tid, 0, 1).await;
+
+    check!(
+        records
+            .iter()
+            .map(|record| (
+                record.key.clone(),
+                record.value.clone(),
+                header(record, "__dlq.errors.offset"),
+                header(record, "__dlq.errors.message"),
+            ))
+            .collect::<Vec<_>>()
+            == vec![(
+                None,
+                None,
+                Some("0".to_owned()),
+                Some("Offset rejected by client.".to_owned()),
+            )]
     );
     cluster.broker.shutdown().await;
 }
