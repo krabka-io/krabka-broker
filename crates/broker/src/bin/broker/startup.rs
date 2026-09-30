@@ -1,8 +1,13 @@
 //! The broker's startup sequence, from the parsed command line through to a
 //! controlled shutdown.
 
+use std::future::Future;
+
 use clap::Parser;
-use krabka_broker::{Broker, BrokerError, BrokerHandle};
+use krabka_broker::{
+    Broker, BrokerError, BrokerHandle,
+    telemetry::{OtlpProtocol, TelemetryGuard},
+};
 use krabka_units::convert::TimeExt as _;
 
 use crate::{
@@ -12,10 +17,13 @@ use crate::{
     signals::wait_for_termination_signal,
 };
 
+/// Where the broker's own client metrics go, when OTLP is on: the endpoint and
+/// the protocol of the exporter that the telemetry setup has just built.
+type ClientMetricsOtlp = (Option<String>, OtlpProtocol);
+
 #[tokio::main]
-// binary entrypoint: linear startup wiring
 pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = Args::parse();
+    let args = Args::parse();
 
     if args.print_config_schema {
         let schema = krabka_broker::file_config::config_schema();
@@ -33,12 +41,10 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         env!("CARGO_PKG_VERSION"),
         "krabka-broker",
     )?;
-    let client_metrics_otlp_endpoint = otlp.as_ref().map(|cfg| cfg.endpoint.clone());
-    let client_metrics_otlp_protocol = otlp
-        .as_ref()
-        .map_or(krabka_broker::telemetry::OtlpProtocol::Grpc, |cfg| {
-            cfg.protocol
-        });
+    let client_metrics_otlp = (
+        otlp.as_ref().map(|cfg| cfg.endpoint.clone()),
+        otlp.as_ref().map_or(OtlpProtocol::Grpc, |cfg| cfg.protocol),
+    );
     let telemetry = krabka_broker::telemetry::init(
         otlp,
         // The stdout filter. This is the one `BROKER_LOGGER` retargets, and
@@ -47,9 +53,47 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         "info,krabka_broker::request=debug,krabka_log=info",
         "krabka-broker",
     )?;
+
+    let outcome = Box::pin(run(args, client_metrics_otlp, &telemetry)).await;
+
+    if let Err(error) = &outcome
+        && is_fatal_fault(error.as_ref())
+    {
+        // Kafka's `ProcessTerminatingFaultHandler` logs the fault and halts the
+        // process with status 1 (`Exit.halt`), which runs no shutdown hook and
+        // waits for nothing. Returning from here would drop the tokio runtime,
+        // and that drop waits for every `spawn_blocking` task, the partition
+        // writers and the fetch reads among them. A task that hangs would keep
+        // the process alive with a dead controller behind it, so the process
+        // exits here, once the log line and the telemetry are out.
+        tracing::error!(%error, "halting: the metadata controller met a fatal fault");
+        telemetry.shutdown();
+        eprintln!("Error: {error}");
+        std::process::exit(1);
+    }
+    telemetry.shutdown();
+    outcome
+}
+
+/// Whether `error` is the fatal fault of the metadata controller that this
+/// node hosts, the one failure that Kafka halts the process over.
+fn is_fatal_fault(error: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        error.downcast_ref::<BrokerError>(),
+        Some(BrokerError::FatalFault(_))
+    )
+}
+
+// binary entrypoint: linear startup wiring
+async fn run(
+    mut args: Args,
+    (client_metrics_otlp_endpoint, client_metrics_otlp_protocol): ClientMetricsOtlp,
+    telemetry: &TelemetryGuard,
+) -> Result<(), Box<dyn std::error::Error>> {
     // The handle behind the `BROKER_LOGGER` config resource. It drives the
-    // stdout layer this call just installed, so `kafka-configs --entity-type
-    // broker-loggers --alter` retargets the filter of the running process.
+    // stdout layer that the telemetry setup installed, so `kafka-configs
+    // --entity-type broker-loggers --alter` retargets the filter of the
+    // running process.
     let log_levels = telemetry.log_levels();
     let file_config: Option<krabka_broker::file_config::FileConfig> =
         match args.config_file.as_ref() {
@@ -140,9 +184,30 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = Broker::start_with_health(config, health).await?;
     tracing::info!(addr = %handle.listen_addr(), "krabka-broker listening");
 
+    serve(
+        handle,
+        &health_for_shutdown,
+        &health_shutdown,
+        controlled_shutdown_drain_timeout.to_std(),
+        wait_for_termination_signal(),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+/// Runs the started broker until a termination signal or a self-shutdown, stops
+/// it, and returns how the process should end: `Ok` for a stop that leadership
+/// drained through, and the `FatalFault` of a controller that stopped itself.
+async fn serve(
+    handle: BrokerHandle,
+    health: &krabka_broker::HealthState,
+    health_shutdown: &tokio_util::sync::CancellationToken,
+    drain_timeout: std::time::Duration,
+    termination_signal: impl Future<Output = &'static str>,
+) -> Result<(), BrokerError> {
     let mut shutdown_rx = handle.should_shutdown_rx();
     tokio::select! {
-        signal = wait_for_termination_signal() => {
+        signal = termination_signal => {
             tracing::info!(signal, "shutdown signal received");
         }
         () = async {
@@ -167,16 +232,15 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Flip /readyz to 503 so load balancers pull the broker out of rotation
     // before the leadership hand-off starts.
-    health_for_shutdown.mark_shutting_down();
+    health.mark_shutting_down();
 
-    let outcome = stop_broker(handle, controlled_shutdown_drain_timeout.to_std()).await;
+    let outcome = stop_broker(handle, drain_timeout).await;
     // The probes outlive the broker's own drain deliberately: the kubelet is
     // still polling while `controlled_shutdown` hands leadership over, and a
     // refused connection there is indistinguishable from a crash.
     health_shutdown.cancel();
     tracing::info!("krabka-broker stopped");
-    telemetry.shutdown();
-    Ok(outcome?)
+    outcome
 }
 
 /// Stops the broker and reports how the process should end.
@@ -196,9 +260,9 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
 /// leadership hand-off, which a dead controller could not serve anyway, and no
 /// orderly stop, so no clean-shutdown proof for the next start
 /// (`BrokerHandle::shutdown` writes none after a fault). The stop that runs
-/// here only closes what it can within `drain_timeout`, so a task that hangs
-/// cannot keep the process alive, and the `FatalFault` it returns is what makes
-/// the exit status non-zero.
+/// here only closes what it can within `drain_timeout`, so an async task that
+/// hangs cannot hold up the return, and the `FatalFault` it returns is what
+/// [`broker_main`] halts the process on.
 pub(crate) async fn stop_broker(
     handle: BrokerHandle,
     drain_timeout: std::time::Duration,
@@ -268,11 +332,28 @@ mod tests {
         .expect("the self-shutdown flag closed");
     }
 
+    /// What the process would run after a start: the probe state and its
+    /// shutdown token, as `run` builds them.
+    fn probes() -> (
+        krabka_broker::HealthState,
+        tokio_util::sync::CancellationToken,
+    ) {
+        (
+            krabka_broker::HealthState::new(1_000),
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+
+    // The `PENDING_CONTROLLED_SHUTDOWN` ordinal of `HealthState::broker_state`,
+    // which `/readyz` reports 503 for.
+    const PENDING_CONTROLLED_SHUTDOWN: i64 = 6;
+
     // The post-start path of `krabka-broker`: a controller fault after the
     // broker has come up ends the process with an error that carries Kafka's
     // message, and the stop it runs leaves no clean-shutdown proof, as a
     // halted Kafka process leaves none. The zero-length bound is a stop that
-    // does not finish in time, and the error still comes back.
+    // does not finish in time, and the error still comes back. The signal never
+    // arrives, so it is the fault that ends the wait.
     #[tokio::test]
     async fn a_fault_after_start_ends_in_a_fatal_fault_error_without_a_clean_shutdown_proof() {
         for (name, bound) in [
@@ -282,8 +363,16 @@ mod tests {
             let dir = tempdir().unwrap();
             let handle = start_broker(dir.path()).await;
             make_the_controller_fault(&handle).await;
+            let (health, health_shutdown) = probes();
 
-            let outcome = stop_broker(handle, bound).await;
+            let outcome = serve(
+                handle,
+                &health,
+                &health_shutdown,
+                bound,
+                std::future::pending(),
+            )
+            .await;
 
             assert!(
                 matches!(&outcome, Err(BrokerError::FatalFault(fault)) if fault == FAULT),
@@ -293,19 +382,62 @@ mod tests {
                 !dir.path().join(CLEAN_SHUTDOWN_PROOF).exists(),
                 "{name}: a fault-driven stop left a clean-shutdown proof"
             );
+            assert!(
+                health.broker_state() == PENDING_CONTROLLED_SHUTDOWN,
+                "{name}: /readyz was not flipped before the stop"
+            );
+            assert!(health_shutdown.is_cancelled(), "{name}: probes still up");
         }
     }
 
-    // The control for the test above: with no fault the same stop succeeds and
-    // leaves the proof, so the absence above is the fault's doing.
+    // The control for the test above: a termination signal with no fault ends
+    // in success and leaves the proof, so the fault is what the error and the
+    // missing proof above come from.
     #[tokio::test]
-    async fn a_stop_without_a_fault_succeeds_and_leaves_the_clean_shutdown_proof() {
+    async fn a_signal_stops_the_broker_successfully_and_leaves_the_clean_shutdown_proof() {
         let dir = tempdir().unwrap();
         let handle = start_broker(dir.path()).await;
+        let (health, health_shutdown) = probes();
 
-        let outcome = stop_broker(handle, Duration::from_secs(30)).await;
+        let outcome = serve(
+            handle,
+            &health,
+            &health_shutdown,
+            Duration::from_secs(30),
+            async { "SIGTERM" },
+        )
+        .await;
 
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(dir.path().join(CLEAN_SHUTDOWN_PROOF).exists());
+        assert!(health.broker_state() == PENDING_CONTROLLED_SHUTDOWN);
+        assert!(health_shutdown.is_cancelled());
+    }
+
+    // `broker_main` halts the process on exactly this failure. The error comes
+    // to it boxed, as `run` boxes what `?` and `serve` return.
+    #[test]
+    fn only_the_fatal_fault_of_the_controller_halts_the_process() {
+        let rows: [(&str, Box<dyn std::error::Error>, bool); 4] = [
+            (
+                "the controller's fatal fault",
+                BrokerError::FatalFault(FAULT.to_owned()).into(),
+                true,
+            ),
+            (
+                "another failure of the start",
+                BrokerError::Startup("no leader".to_owned()).into(),
+                false,
+            ),
+            (
+                "a broker that is shutting down",
+                BrokerError::Shutdown.into(),
+                false,
+            ),
+            ("a bare message", "failed to read the config".into(), false),
+        ];
+        for (name, error, halts) in rows {
+            assert!(is_fatal_fault(error.as_ref()) == halts, "{name}: {error}");
+        }
     }
 }

@@ -134,7 +134,10 @@ fn spawn_fatal_fault_watcher(
         // stops in an orderly way, or as a source without a controller does at
         // once.
         let Some(fault) = fault else { return };
-        tracing::error!(%fault, "Encountered fatal fault: the metadata controller stopped; shutting the broker down");
+        tracing::error!(
+            %fault,
+            "the metadata controller stopped over a fatal fault; shutting the broker down"
+        );
         // `send_replace`, not `send`: nothing subscribes to the flag until the
         // embedder calls `BrokerHandle::should_shutdown_rx`, and `send` drops
         // the value when there is no receiver. A fault that landed before that

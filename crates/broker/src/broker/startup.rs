@@ -3,7 +3,7 @@
 //! recovery, coordinators, runtime services, and final assembly -- and holds
 //! the commentary that explains why that order is the one that works.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use futures_util::future::BoxFuture;
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
@@ -122,15 +122,25 @@ impl Broker {
             controller_listener,
             data_plane_listeners,
             health,
+            Self::start_after_quorum_join,
         ))
     }
 
-    async fn start_with_listeners_inner(
+    /// `after_quorum_join` is [`Self::start_after_quorum_join`] outside tests.
+    /// A test passes a tail that never finishes instead, as the wait for the
+    /// first unfence does once the controller has stopped, to see the fatal
+    /// fault end the start.
+    async fn start_with_listeners_inner<Tail, TailFuture>(
         mut config: BrokerConfig,
         controller_listener: Option<tokio::net::TcpListener>,
         mut data_plane_listeners: Vec<tokio::net::TcpListener>,
         health: HealthState,
-    ) -> Result<BrokerHandle, BrokerError> {
+        after_quorum_join: Tail,
+    ) -> Result<BrokerHandle, BrokerError>
+    where
+        Tail: FnOnce(JoinedQuorum) -> TailFuture,
+        TailFuture: Future<Output = Result<BrokerHandle, BrokerError>>,
+    {
         // Binds the default data-plane listener now, and publishes its real
         // port into `config`, when the config asks for one and the caller
         // supplied none. `start_metadata_phase` below registers this node
@@ -202,7 +212,7 @@ impl Broker {
         // later as a stalled unfence wait or a bare "controller shut down".
         or_fatal_fault(
             controller.watch_fatal(),
-            Box::pin(Self::start_after_quorum_join(JoinedQuorum {
+            Box::pin(after_quorum_join(JoinedQuorum {
                 config,
                 data_plane_listeners,
                 health,
@@ -538,6 +548,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::test_support::{UNSUPPORTED_LEVEL_FAULT, finalize_unstable_metadata_version};
 
     #[test]
     fn public_startup_futures_are_unboxed() {
@@ -562,6 +573,46 @@ mod tests {
         assert!(std::mem::size_of_val(&start_with_controller_listener) > boxed_size);
         assert!(std::mem::size_of_val(&start_with_listeners) > boxed_size);
         assert!(std::mem::size_of_val(&start_with_health) > boxed_size);
+    }
+
+    // A fault that lands after this node has joined the quorum ends a start
+    // that is still in its tail. The stand-in tail submits the unsupported
+    // level, which the controller commits and then stops over, and never
+    // finishes. The real tail ends in the wait for the first unfence, which a
+    // dead controller cannot answer, so it lasts `startup_leader_wait_timeout`,
+    // two minutes by default. The join is over by then, so this is the race
+    // around the tail and not the one around the join.
+    #[tokio::test]
+    async fn a_fault_after_the_join_ends_a_start_that_is_still_running_its_tail() {
+        let dir = tempdir().unwrap();
+        let start = Broker::start_with_listeners_inner(
+            BrokerConfig::for_tests(dir.path().to_path_buf()),
+            None,
+            Vec::new(),
+            HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG),
+            |joined: JoinedQuorum| async move {
+                // The submit's own outcome is not what is under test: it
+                // returns once the record commits, or fails once the
+                // controller has stopped.
+                let _ = joined
+                    .controller
+                    .submit_change(vec![finalize_unstable_metadata_version()])
+                    .await;
+                std::future::pending::<Result<BrokerHandle, BrokerError>>().await
+            },
+        );
+
+        let started = tokio::time::timeout(std::time::Duration::from_secs(60), start)
+            .await
+            .expect("the fault did not end a start that was still in its tail");
+
+        let Err(refused) = started else {
+            panic!("a start whose controller stopped over a fatal fault returned a handle");
+        };
+        assert!(
+            matches!(&refused, BrokerError::FatalFault(fault) if fault == UNSUPPORTED_LEVEL_FAULT),
+            "{refused}"
+        );
     }
 
     #[tokio::test]

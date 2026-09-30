@@ -11,6 +11,9 @@ use crate::{
     },
     config::BrokerConfig,
     partition::WriterMessage,
+    test_support::{
+        UNSUPPORTED_LEVEL_FAULT, finalize_unstable_metadata_version, write_bootstrap_records,
+    },
 };
 
 async fn assert_listener_stops_accepting(addr: SocketAddr) {
@@ -312,21 +315,6 @@ async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
     assert_listener_stops_accepting(addr).await;
 }
 
-/// Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one of
-/// trunk's unstable levels.
-const UNSTABLE_METADATA_VERSION: i16 = 33;
-
-const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
-    FeatureLevelRecord(name='metadata.version', featureLevel=33), \
-    but this controller only supports versions 7-30";
-
-fn finalize_unstable_metadata_version() -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-        name: "metadata.version".into(),
-        level: UNSTABLE_METADATA_VERSION,
-    })
-}
-
 /// Kafka halts a controller's process when the controller replays a feature
 /// level that it does not support. The broker cannot halt its host, so it
 /// latches the self-shutdown flag and keeps the reason for the host to exit on.
@@ -387,26 +375,6 @@ async fn a_broker_refuses_to_start_over_a_log_finalized_at_an_unsupported_level(
     };
     check!(matches!(&refused, BrokerError::FatalFault(fault) if fault == UNSUPPORTED_LEVEL_FAULT));
     check!(refused.to_string() == format!("Encountered fatal fault: {UNSUPPORTED_LEVEL_FAULT}"));
-}
-
-/// Writes `records` as the length-prefixed frames of `bootstrap.records.bin`,
-/// the file `krabka format` leaves for the first start to submit.
-fn write_bootstrap_records(log_dir: &std::path::Path, records: &[krabka_metadata::MetadataRecord]) {
-    use serde_wincode::SerdeCompat;
-    use wincode::Serialize as _;
-
-    let mut bytes = Vec::new();
-    for record in records {
-        let frame = <SerdeCompat<krabka_metadata::MetadataRecord>>::serialize(record)
-            .expect("serialize a bootstrap record");
-        bytes.extend_from_slice(
-            &u32::try_from(frame.len())
-                .expect("bootstrap frame fits in u32")
-                .to_le_bytes(),
-        );
-        bytes.extend_from_slice(&frame);
-    }
-    std::fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
 }
 
 /// A fault that lands while the node is still joining the quorum ends the start

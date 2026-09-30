@@ -9,8 +9,8 @@
 //! the unstable level as soon as the node leads its own quorum.
 //!
 //! The binary's stop after a fault that lands once it is running is a unit test
-//! beside `stop_broker`, since no command line can commit an unsupported level
-//! to a started broker.
+//! beside `serve`, since no command line can commit an unsupported level to a
+//! started broker.
 
 use std::{
     process::{Command, Stdio},
@@ -19,9 +19,10 @@ use std::{
 
 use assert2::{assert, check};
 
-/// A loopback port that nothing holds at the moment, to give the broker and the
-/// formatter. The controller listener cannot stay on the binary's default port
-/// 9093, which `cli_smoke` binds while this suite may run.
+/// A loopback port that nothing holds at the moment, for the controller
+/// listener. `krabka format` records it as the voter's endpoint, so it has to be
+/// a known number, and it cannot stay on the binary's default port 9093, which
+/// `cli_smoke` binds while this suite may run.
 fn free_loopback_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
@@ -60,10 +61,14 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_an_unsupported_level() {
     let log_dir = tmp.path().join("data");
     let controller_port = free_loopback_port();
     format_at_unstable_metadata_version(&log_dir, controller_port);
-    let client_port = free_loopback_port();
+    // The logs go to a file, not to a pipe that nothing reads while the test
+    // polls for the exit.
+    let stdout_path = tmp.path().join("stdout.log");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_krabka-broker"))
-        .arg(format!("--listen-addr=127.0.0.1:{client_port}"))
+        // The broker binds and registers its own client port, so there is no
+        // probe for it to race another process over.
+        .arg("--listen-addr=127.0.0.1:0")
         .arg(format!(
             "--controller-listen-addr=127.0.0.1:{controller_port}"
         ))
@@ -71,7 +76,9 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_an_unsupported_level() {
         .arg("--broker-id=1")
         .arg("--metrics-listen-addr=none")
         .arg("--health-listen-addr=none")
-        .stdout(Stdio::null())
+        .stdout(Stdio::from(
+            std::fs::File::create(&stdout_path).expect("create the stdout log"),
+        ))
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn krabka-broker");
@@ -99,7 +106,13 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_an_unsupported_level() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     let status = status.unwrap_or_else(|| panic!("krabka-broker kept running; stderr:\n{stderr}"));
-    check!(!status.success(), "exit status {status}");
+    // Kafka's `Exit.halt(1)`.
+    check!(status.code() == Some(1), "exit status {status}");
+    let stdout = std::fs::read_to_string(&stdout_path).expect("read the stdout log");
+    check!(
+        stdout.contains("halting: the metadata controller met a fatal fault"),
+        "stdout:\n{stdout}"
+    );
     check!(
         stderr.contains(
             "Encountered fatal fault: Tried to apply FeatureLevelRecord \
