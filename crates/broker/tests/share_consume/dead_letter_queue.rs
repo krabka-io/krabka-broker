@@ -23,6 +23,9 @@ use krabka_protocol::{
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
+        share_acknowledge_request::{
+            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
+        },
         update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     },
     records::{Record, RecordBatch, RecordsPayload},
@@ -231,6 +234,70 @@ fn header(record: &Record, key: &str) -> Option<String> {
         .map(|value| String::from_utf8_lossy(value).into_owned())
 }
 
+/// One `ShareAcknowledge` that rejects each of `ranges`, as `(first, last)`
+/// offsets of partition 0, in a batch of its own.
+async fn reject_ranges(
+    client: &Client,
+    member: &str,
+    tid: uuid::Uuid,
+    epoch: i32,
+    ranges: &[(i64, i64)],
+) {
+    let response = client
+        .send(ShareAcknowledgeRequest {
+            group_id: Some(GROUP.into()),
+            member_id: Some(member.into()),
+            share_session_epoch: epoch,
+            topics: vec![AcknowledgeTopic {
+                topic_id: wire(tid),
+                partitions: vec![AcknowledgePartition {
+                    partition_index: 0,
+                    acknowledgement_batches: ranges
+                        .iter()
+                        .map(|(first, last)| AcknowledgementBatch {
+                            first_offset: *first,
+                            last_offset: *last,
+                            acknowledge_types: vec![
+                                REJECT;
+                                usize::try_from(last - first + 1).unwrap()
+                            ],
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("ShareAcknowledge");
+    assert!(response.error_code == NONE, "{response:?}");
+    assert!(
+        response.responses[0].partitions[0].error_code == NONE,
+        "{response:?}"
+    );
+}
+
+/// What the `DeadLetterQueue*` meters of the group count on the broker: the
+/// records written, the attempts to produce, and the writes that failed.
+fn meters(metrics: &krabka_broker::metrics::BrokerMetrics) -> (u64, u64, u64) {
+    let label = krabka_broker::metrics::ShareGroupIdLabel {
+        group_id: GROUP.to_owned(),
+    };
+    (
+        metrics.share_group_dlq_records.get_or_create(&label).get(),
+        metrics
+            .share_group_dlq_produce_requests
+            .get_or_create(&label)
+            .get(),
+        metrics
+            .share_group_dlq_failed_produce_requests
+            .get_or_create(&label)
+            .get(),
+    )
+}
+
 /// Starts a trunk broker with a source topic `t` of `records` records and a
 /// member that holds all of them acquired, then returns what a test drives.
 struct Cluster {
@@ -342,6 +409,110 @@ async fn a_rejected_batch_is_dead_lettered_then_archived() {
     check!(seen == expected);
     let summary = broker.share_state_summary_for_test(GROUP, *tid, 0).await;
     check!(summary.map(|(_, _, spso, _)| spso) == Some(3));
+    // Kafka's `recordDLQRecordWrite` and `recordDLQProduce`: the three records
+    // of the one round, and one attempt to produce it.
+    broker
+        .wait_for_metrics("the dead-letter meters", |metrics| {
+            meters(metrics) == (3, 1, 0)
+        })
+        .await;
+    cluster.broker.shutdown().await;
+}
+
+/// Runs that are not neighbours are a write each, and the rounds of the writes
+/// share the produce requests to the leader of the dead-letter partition. One
+/// record comes out for each offset, and the meters count each round as a
+/// produce however the rounds were packed into requests: Kafka's
+/// `recordDLQProduce` marks each handler, not each coalesced request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
+    let _permit = broker_test_permit().await;
+    let cluster = acquired_records(
+        5,
+        |_| {},
+        async |client, broker| {
+            finalize_share_version_two(client).await;
+            create_dead_letter_topic(broker, client).await;
+            point_group_at_dead_letter_topic(client).await;
+        },
+    )
+    .await;
+    let Cluster {
+        broker,
+        client,
+        tid,
+        member,
+        ..
+    } = &cluster;
+
+    reject_ranges(client, member, *tid, 1, &[(0, 0), (2, 2), (4, 4)]).await;
+    let mut records = wait_for_dead_letters(broker, client, 3).await;
+    broker
+        .wait_for_metrics("the dead-letter meters", |metrics| {
+            meters(metrics) == (3, 3, 0)
+        })
+        .await;
+    // The records of the rounds that were packed into one request are one
+    // batch, and the order of the requests is the writers' race.
+    records.sort_by_key(|record| header(record, "__dlq.errors.offset"));
+
+    check!(
+        records
+            .iter()
+            .map(|record| (
+                header(record, "__dlq.errors.offset"),
+                record.value.clone(),
+                header(record, "__dlq.errors.delivery.count"),
+                header(record, "__dlq.errors.message"),
+            ))
+            .collect::<Vec<_>>()
+            == [0, 2, 4]
+                .map(|offset| (
+                    Some(offset.to_string()),
+                    Some(Bytes::from(format!("v{offset}"))),
+                    Some("1".to_owned()),
+                    Some("Offset rejected by client.".to_owned()),
+                ))
+                .to_vec()
+    );
+    cluster.broker.shutdown().await;
+}
+
+/// A write that the topic refuses counts as a failed write, and the run is
+/// archived regardless. The topic takes no more than 100 bytes for a message,
+/// and a dead-letter record with its six headers is more, so the leader answers
+/// `MESSAGE_TOO_LARGE`, which Kafka's `handleProduceResponse` does not retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
+    let _permit = broker_test_permit().await;
+    let cluster = acquired_records(
+        1,
+        |_| {},
+        async |client, broker| {
+            finalize_share_version_two(client).await;
+            create_dead_letter_topic_with(broker, client, &[("max.message.bytes", "100")]).await;
+            point_group_at_dead_letter_topic(client).await;
+        },
+    )
+    .await;
+    let Cluster {
+        broker,
+        client,
+        tid,
+        member,
+        ..
+    } = &cluster;
+
+    let ack = share_ack(client, member, *tid, 1, 0, 0, REJECT).await;
+    assert!(ack.error_code == NONE, "reject: {}", ack.error_code);
+    broker.wait_until_share_spso(GROUP, *tid, 0, 1).await;
+
+    broker
+        .wait_for_metrics("the dead-letter meters", |metrics| {
+            meters(metrics) == (0, 1, 1)
+        })
+        .await;
+    check!(dead_letter_records(broker, client).await.is_empty());
     cluster.broker.shutdown().await;
 }
 
@@ -469,6 +640,14 @@ async fn a_failed_write_still_archives_the_record() {
             .topic(DLQ_TOPIC)
             .is_none()
     );
+    // A topic that fails validation is refused before any request is made, so
+    // no produce is counted, as in Kafka's `dlq`, which fails the future before
+    // the handler is queued.
+    broker
+        .wait_for_metrics("no dead-letter produce", |metrics| {
+            meters(metrics) == (0, 0, 0)
+        })
+        .await;
     cluster.broker.shutdown().await;
 }
 

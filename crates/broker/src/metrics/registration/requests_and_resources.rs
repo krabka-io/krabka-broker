@@ -24,6 +24,33 @@ impl BrokerMetrics {
         );
 
         registry.register(
+            "share_group_dlq_records",
+            "Cumulative count of dead-letter records written to a share \
+             group's dead-letter queue (KIP-1191), per group. Mirrors Kafka's \
+             ShareGroupMetrics.DeadLetterQueueRecordCount.",
+            self.share_group_dlq_records.clone(),
+        );
+
+        registry.register(
+            "share_group_dlq_produce_requests",
+            "Cumulative count of attempts to produce a share group's \
+             dead-letter records, per group: one for each round of each range \
+             for each attempt. Mirrors Kafka's \
+             ShareGroupMetrics.DeadLetterQueueTotalProduceRequestsPerSec.",
+            self.share_group_dlq_produce_requests.clone(),
+        );
+
+        registry.register(
+            "share_group_dlq_failed_produce_requests",
+            "Cumulative count of dead-letter writes of a share group that \
+             ended in a failure, per group. Mirrors Kafka's \
+             ShareGroupMetrics.DeadLetterQueueFailedProduceRequestsPerSec; \
+             the ratio against share_group_dlq_produce_requests yields the \
+             per-group error rate.",
+            self.share_group_dlq_failed_produce_requests.clone(),
+        );
+
+        registry.register(
             "partition_cpu_micros",
             "Cumulative handler-thread microseconds spent processing each \
              (topic, partition). Rebalancer-targeted; rate(...) divided by \
