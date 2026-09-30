@@ -215,7 +215,8 @@ impl GroupCoordinator {
         let _ = self.metrics.set(metrics);
     }
 
-    /// Release every `consumer_group_lag` series for `group_id`.
+    /// Release every `consumer_group_lag` series for `group_id`, and the
+    /// dead-letter queue counters of a share group.
     ///
     /// A group's lifetime ends in three places — `DeleteGroups`, the streams
     /// delete, and losing the offsets partition that hosts the group — and
@@ -225,6 +226,7 @@ impl GroupCoordinator {
     pub(crate) fn forget_group_metrics(&self, group_id: &str) {
         if let Some(metrics) = self.metrics.get() {
             metrics.evict_group_series(group_id);
+            metrics.evict_share_group_dlq_series(group_id);
         }
     }
 
