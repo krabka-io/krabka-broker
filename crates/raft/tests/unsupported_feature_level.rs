@@ -117,6 +117,11 @@ async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
     .await
     .expect("boot");
     wait_for_leader(&controller).await;
+    let fatal = controller.watch_fatal();
+    check!(
+        fatal.borrow().is_none(),
+        "no fault before the level commits"
+    );
 
     // The level commits and applies, since the check reads the image the engine
     // publishes. Then the controller stops, and no later change is accepted.
@@ -144,5 +149,33 @@ async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
         // and nothing but a refused submit says that it has happened.
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // The refusal is on the fatal channel by the time a submit fails: the host
+    // that halts over it never sees the shutdown without the reason.
+    check!(fatal.borrow().as_deref() == Some(REFUSAL));
     controller.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controller_that_stops_for_any_other_reason_reports_no_fault() {
+    let dir = TempDir::new().unwrap();
+    let controller = Controller::start(config(
+        &dir,
+        Uuid::new_v4(),
+        BootstrapMode::Bootstrap,
+        UnstableFeatureVersions::Enabled,
+    ))
+    .await
+    .expect("boot");
+    wait_for_leader(&controller).await;
+    // A level within the range is not a fault.
+    controller
+        .submit_change(finalize_unstable_metadata_version())
+        .await
+        .expect("commit a supported level");
+    let mut fatal = controller.watch_fatal();
+    controller.shutdown().await;
+
+    // The channel closes without ever carrying a value.
+    check!(fatal.changed().await.is_err());
+    check!(fatal.borrow().is_none());
 }

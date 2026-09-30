@@ -165,12 +165,14 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
                 if shutdown_rx.changed().await.is_err() { break; }
             }
         } => {
-            tracing::error!("self-shutdown triggered (all log dirs offline); stopping broker");
+            tracing::error!("self-shutdown triggered; stopping broker");
         }
     }
     // Flip /readyz to 503 so load balancers pull the broker out of rotation
     // before the leadership hand-off starts.
     health_for_shutdown.mark_shutting_down();
+    // Read before the handle goes into the shutdown below.
+    let fatal_fault = handle.fatal_fault();
 
     // KIP-500 controlled shutdown: ask the controller to move leadership of
     // every partition this broker leads onto its other in-sync replicas
@@ -193,5 +195,9 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     health_shutdown.cancel();
     tracing::info!("krabka-broker stopped");
     telemetry.shutdown();
-    Ok(())
+    // A fatal fault of the controller ends Kafka's process with status 1
+    // (`ProcessTerminatingFaultHandler`). The drain above had nothing to wait
+    // for, since the fault had already latched the self-shutdown flag. Failing
+    // `main` with the fault's message is what makes the exit status non-zero.
+    fatal_fault.map_or(Ok(()), |fault| Err(fault.into()))
 }

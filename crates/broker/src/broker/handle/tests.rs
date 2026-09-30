@@ -311,3 +311,82 @@ async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
     assert!(matches!(err, BrokerError::ShutdownTimeout(timeout) if timeout.is_zero()));
     assert_listener_stops_accepting(addr).await;
 }
+
+/// Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one of
+/// trunk's unstable levels.
+const UNSTABLE_METADATA_VERSION: i16 = 33;
+
+const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
+    FeatureLevelRecord(name='metadata.version', featureLevel=33), \
+    but this controller only supports versions 7-30";
+
+fn finalize_unstable_metadata_version() -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+        name: "metadata.version".into(),
+        level: UNSTABLE_METADATA_VERSION,
+    })
+}
+
+/// Kafka halts a controller's process when the controller replays a feature
+/// level that it does not support. The broker cannot halt its host, so it
+/// latches the self-shutdown flag and keeps the reason for the host to exit on.
+#[tokio::test]
+async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
+    let dir = tempdir().unwrap();
+    // The default config supports no unstable feature level.
+    let handle = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+        .await
+        .expect("broker start");
+    let mut should_shutdown = handle.should_shutdown_rx();
+    check!(!*should_shutdown.borrow());
+    check!(handle.fatal_fault().is_none());
+
+    handle
+        .submit_metadata_record_for_test(finalize_unstable_metadata_version())
+        .await
+        .expect("the unsupported level commits before the controller stops");
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        should_shutdown.wait_for(|down| *down),
+    )
+    .await
+    .expect("the fault did not latch the self-shutdown flag within 30s")
+    .expect("the self-shutdown flag closed");
+    check!(handle.fatal_fault().as_deref() == Some(UNSUPPORTED_LEVEL_FAULT));
+
+    // The flag is latched, so there is no leadership drain to wait for.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        handle.controlled_shutdown(std::time::Duration::from_secs(300)),
+    )
+    .await
+    .expect("controlled shutdown waited for a drain that the dead controller cannot serve")
+    .expect("controlled shutdown");
+}
+
+/// A node whose log finalized a level above its range never starts. The
+/// refusal is the error of `Broker::start`, so the binary exits non-zero with
+/// Kafka's message.
+#[tokio::test]
+async fn a_broker_refuses_to_start_over_a_log_finalized_at_an_unsupported_level() {
+    let dir = tempdir().unwrap();
+    let mut first = BrokerConfig::for_tests(dir.path().to_path_buf());
+    first.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
+    let handle = Broker::start(first).await.expect("first start");
+    handle
+        .submit_metadata_record_for_test(finalize_unstable_metadata_version())
+        .await
+        .expect("finalize the unstable level");
+    handle.shutdown().await;
+
+    let mut second = BrokerConfig::for_tests(dir.path().to_path_buf());
+    second.bootstrap_mode = krabka_raft::BootstrapMode::Rejoin;
+    let Err(refused) = Broker::start(second).await else {
+        panic!("a broker without the flag started over an unstable log");
+    };
+    check!(
+        refused.to_string()
+            == format!("startup failed: startup misconfiguration: {UNSUPPORTED_LEVEL_FAULT}")
+    );
+}
