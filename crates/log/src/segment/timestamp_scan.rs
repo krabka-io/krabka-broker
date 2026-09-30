@@ -30,7 +30,7 @@ impl Segment {
     /// The scan applies no `max.decompressed.message.bytes`: this is the lookup
     /// the log's own bookkeeping uses, to read a segment's first timestamp. A
     /// `ListOffsets` answer goes through
-    /// [`Segment::offset_for_timestamp_with_window`], which takes the limit.
+    /// `Segment::offset_for_timestamp_with_window`, which takes the limit.
     #[must_use]
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
         // With no limit the scan has nothing to refuse.

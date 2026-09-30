@@ -288,6 +288,16 @@ impl BrokerHandle {
         self.broker.controller.watch_fatal().borrow().clone()
     }
 
+    /// A receiver of the fatal fault that stops this node's controller.
+    ///
+    /// [`Self::controlled_shutdown`] and [`Self::shutdown`] consume the handle,
+    /// so a caller that must know whether the controller faulted while it was
+    /// stopping the broker takes this first and reads it afterwards.
+    #[must_use]
+    pub fn fatal_fault_watch(&self) -> tokio::sync::watch::Receiver<Option<String>> {
+        self.broker.controller.watch_fatal()
+    }
+
     /// Request a graceful, controlled shutdown of this broker.
     ///
     /// Signals the heartbeat client to set `want_shut_down=true` on

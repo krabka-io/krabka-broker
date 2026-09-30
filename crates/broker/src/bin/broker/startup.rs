@@ -279,11 +279,26 @@ pub(crate) async fn stop_broker(
         }
         return Err(BrokerError::FatalFault(fault));
     }
+    // The controller can fault while the leadership drain runs, after the check
+    // above, and `controlled_shutdown` consumes the handle. Keep a watch on the
+    // fault so the process still halts on it, as Kafka's handler would have.
+    let fault_watch = handle.fatal_fault_watch();
     match handle.controlled_shutdown(drain_timeout).await {
         Ok(()) => tracing::info!("controlled shutdown complete (leadership drained)"),
         Err(e) => tracing::warn!(error = %e, "controlled shutdown incomplete; hard-stopped"),
     }
-    Ok(())
+    fault_after_shutdown(&fault_watch)
+}
+
+/// The `FatalFault` a controller published while the broker was stopping, or
+/// `Ok` when it published none.
+fn fault_after_shutdown(
+    fault_watch: &tokio::sync::watch::Receiver<Option<String>>,
+) -> Result<(), BrokerError> {
+    match fault_watch.borrow().clone() {
+        Some(fault) => Err(BrokerError::FatalFault(fault)),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -439,5 +454,18 @@ mod tests {
         for (name, error, halts) in rows {
             assert!(is_fatal_fault(error.as_ref()) == halts, "{name}: {error}");
         }
+    }
+    // The controller can fault while `controlled_shutdown` drains leadership,
+    // after `stop_broker` last looked, and the process must still halt on it.
+    #[test]
+    fn a_fault_published_while_the_broker_stopped_ends_in_a_fatal_fault_error() {
+        let (fault_tx, fault_rx) = tokio::sync::watch::channel(None);
+        assert!(fault_after_shutdown(&fault_rx).is_ok());
+
+        fault_tx.send_replace(Some(FAULT.to_owned()));
+        assert!(matches!(
+            fault_after_shutdown(&fault_rx),
+            Err(BrokerError::FatalFault(ref fault)) if fault == FAULT
+        ));
     }
 }
