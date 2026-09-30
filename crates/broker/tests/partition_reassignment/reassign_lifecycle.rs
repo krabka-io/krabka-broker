@@ -41,6 +41,8 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     let handles = [&h1, &h2, &h3];
     let target_addr = handles[target_idx].listen_addr();
     let target_dir = extras[target_idx].path();
+    // The preference is keyed by topic ID from the target broker's metadata.
+    wait_partition_exists(handles[target_idx], "preplaced", 0).await;
 
     let preference = alter_replica_log_dirs(target_addr, target_dir, "preplaced", vec![0]).await;
     assert!(preference.results[0].partitions[0].error_code == 9);
