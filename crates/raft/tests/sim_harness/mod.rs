@@ -5,7 +5,7 @@
 //! - `kraft_sim.rs` runs the core over an in-memory [`SimLog`] (the in-memory
 //!   consensus-core work stream).
 //! - `kraft_log_sim.rs` runs the *same* core over a real on-disk
-//!   [`krabka_raft::kraft::KraftLog`] (the KRaft log-integration work stream).
+//!   [`krabka_raft::kraft::KraftLog`] (the `KRaft` log-integration work stream).
 //!
 //! The harness wires N [`QuorumStateMachine`]s together through an in-memory
 //! message bus and a logical clock. It translates every emitted [`Action`] into
