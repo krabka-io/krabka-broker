@@ -144,11 +144,9 @@ pub(super) fn build_round(
             // header add to it. The copy is best effort, so the record goes
             // with its headers alone rather than have the broker refuse the
             // whole write as too large.
-            if record.key.is_some() || record.value.is_some() {
-                record.key = None;
-                record.value = None;
-                record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
-            }
+            record.key = None;
+            record.value = None;
+            record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
         }
         records.push(record);
         size = size.saturating_add(record_size);
