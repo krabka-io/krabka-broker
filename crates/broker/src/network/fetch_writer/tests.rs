@@ -259,7 +259,7 @@ fn a_topic_name_over_the_string_limit_is_refused_by_the_int16_encodings() {
         (12, MAX_STRING_BYTES + 1, true),
     ] {
         let mut response = test_support::one_partition_response(version, None);
-        response.responses[0].topic = "t".repeat(length).into();
+        response.responses[0].topic = "t".repeat(length);
         assert2::assert!(
             fetch_response_write_plan(&response, version).is_ok() == expected_ok,
             "version {version}, {length} bytes"
