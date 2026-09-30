@@ -106,7 +106,7 @@ pub(super) async fn verify_producer(
     // verified guard. The check presents the guard the log just started.
     if skips_coordinator_verification(
         supports_epoch_bump,
-        partition_verification_enabled(&broker.controller.current_image(), broker.config.node_id),
+        partition_verification_enabled(&broker.controller.current_image(), &broker.config),
     ) {
         return Ok(check);
     }

@@ -215,6 +215,11 @@ impl RuntimeFileConfig {
             cfg.transaction_max_timeout,
             positive_i32
         );
+        set_runtime_plain!(
+            runtime,
+            transaction_partition_verification_enable,
+            cfg.transaction_partition_verification_enable
+        );
         Ok(())
     }
 
