@@ -477,10 +477,14 @@ async fn reassign_partitions_additional_keeps_the_reassignment_already_running()
             "--if-not-exists",
             "--topic",
             TOPIC,
-            "--partitions",
-            "2",
-            "--replication-factor",
-            "1",
+            // Both partitions on broker 1, the bootstrap broker: an automatic
+            // placement starts at a random broker, and the test stops a
+            // non-bootstrap broker that must host neither partition. The tool
+            // asks the broker of every replica it lists for its log dir, and
+            // Metadata omits a fenced broker as Kafka's getAliveBrokerNodes
+            // does, so a partition on the stopped broker would time the tool out.
+            "--replica-assignment",
+            "1,1",
             "--command-config",
             CLIENT_PROPS,
         ],
