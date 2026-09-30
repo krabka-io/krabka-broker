@@ -21,6 +21,7 @@ use crate::{
     authorizer::AuthorizationResult,
     codes,
     coordinator::{persistence::OffsetCommitValue, unified::actor::SubscribedTopics},
+    error::BrokerError,
 };
 
 /// The per-partition rows of an `OffsetDelete` response, the tombstones to
@@ -56,7 +57,7 @@ pub(super) fn build_response_rows(
     topic_decisions: &HashMap<&str, AuthorizationResult>,
     subscribed_topics: &SubscribedTopics,
     topic_partition_counts: &HashMap<&str, i32>,
-) -> Rows {
+) -> Result<Rows, BrokerError> {
     let mut out: Vec<OffsetDeleteResponseTopic> = Vec::new();
     let mut valid: Vec<(&str, Vec<i32>)> = Vec::new();
 
@@ -97,7 +98,7 @@ pub(super) fn build_response_rows(
                 tombstones.push(Record {
                     offset_delta: delta,
                     timestamp_delta: 0,
-                    key: Some(OffsetCommitValue::encode_key(group_id, name, index)),
+                    key: Some(OffsetCommitValue::encode_key(group_id, name, index)?),
                     value: None, // null value = tombstone
                     ..Default::default()
                 });
@@ -109,11 +110,11 @@ pub(super) fn build_response_rows(
         }
     }
 
-    Rows {
+    Ok(Rows {
         topics: out,
         tombstones,
         to_remove,
-    }
+    })
 }
 
 /// Adds one partition row under the topic named `name`, creating the topic
@@ -279,7 +280,8 @@ mod tests {
         for (name, request, subscribed, want, want_removed) in rows {
             let req = req_with_topics(request);
 
-            let got = build_response_rows("g", &req.topics, &decisions, &subscribed, &counts);
+            let got =
+                build_response_rows("g", &req.topics, &decisions, &subscribed, &counts).unwrap();
 
             check!(got.topics == expected(want), "{name}");
             let removed: Vec<(&str, i32)> = got

@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn target_assignment_member_round_trip() {
-        let kb = encode_target_assignment_member_key("g1", "m1");
+        let kb = encode_target_assignment_member_key("g1", "m1").unwrap();
         let (ver, body) = peek_version(&kb);
         assert!(ver == KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER);
         assert!(
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn current_member_assignment_round_trip() {
-        let kb = encode_current_member_assignment_key("g1", "m1");
+        let kb = encode_current_member_assignment_key("g1", "m1").unwrap();
         let (ver, body) = peek_version(&kb);
         assert!(ver == KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT);
         assert!(

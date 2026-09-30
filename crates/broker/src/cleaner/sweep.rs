@@ -24,9 +24,14 @@
 //! the partitions the cleaner has lost across sweeps, and the sweep counter
 //! is left where it was so a failing pass never reports success.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
+use krabka_log::LogError;
 use krabka_metadata::MetadataImage;
+use krabka_units::prelude::{ByteSize, ByteSizeExt};
 use krabka_verified::FreezeMutationKind;
 use tracing::warn;
 
@@ -38,17 +43,51 @@ use crate::{
     partition_registry::PartitionRegistry,
 };
 
+/// What keeps a partition on the uncleanable list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cause {
+    /// A failure that a later pass may not repeat, such as a disk or a dead
+    /// writer: the sweep runs the partition again.
+    Retryable,
+    /// A compressed record above `max.decompressed.message.bytes`. The cleaner
+    /// refuses the same batch on every pass while the limit stays what it was,
+    /// and each pass reads and decodes the whole consumed range before it gets
+    /// there, so the sweep leaves the partition alone until the limit changes.
+    /// `limit` is the one that refused it.
+    RecordTooLarge { limit: usize },
+}
+
+impl Cause {
+    fn of(error: &BrokerError) -> Self {
+        match error {
+            BrokerError::Log(LogError::RecordTooLarge { limit, .. }) => {
+                Self::RecordTooLarge { limit: *limit }
+            }
+            _ => Self::Retryable,
+        }
+    }
+}
+
 /// The partitions whose most recent compaction attempt failed, carried from
 /// one sweep to the next.
 ///
 /// Kafka's `LogCleanerManager` keeps the same set, and for the same reason: a
-/// partition that failed a pass stays uncleanable until one succeeds, and a
-/// per-sweep count would report zero on the next sweep that finds it
-/// ineligible. The set is keyed by the partition's identity rather than by an
-/// `Arc<Partition>` so a partition this broker stops hosting leaves it.
+/// per-sweep count would report zero on the next sweep that finds the
+/// partition ineligible. The set is keyed by the partition's identity rather
+/// than by an `Arc<Partition>` so a partition this broker stops hosting leaves
+/// it.
+///
+/// Trunk's cleaner never runs a marked partition again until it leaves the log
+/// manager, whatever failed. krabka does that for the one failure that cannot
+/// change without an operator, a record above the decompressed-size limit: the
+/// sweep skips the partition while the limit is the one that refused it, and
+/// the first sweep after the operator changes the limit runs it again, where
+/// trunk needs a broker restart. Every other failure stays marked until a pass
+/// succeeds, and the sweep retries it each time, because a disk that comes
+/// back needs no operator step.
 #[derive(Debug, Default)]
 pub(crate) struct UncleanablePartitions {
-    inner: BTreeSet<(String, i32)>,
+    inner: BTreeMap<(String, i32), Cause>,
 }
 
 impl UncleanablePartitions {
@@ -57,10 +96,21 @@ impl UncleanablePartitions {
         self.inner.len()
     }
 
+    /// Whether the sweep must leave `key` alone: a pass on it would refuse the
+    /// same record again, because `record_limit` is still the limit that
+    /// refused it.
+    fn is_held(&self, key: &(String, i32), record_limit: Option<ByteSize>) -> bool {
+        matches!(
+            self.inner.get(key),
+            Some(Cause::RecordTooLarge { limit })
+                if record_limit.map(ByteSizeExt::bytes_usize) == Some(*limit)
+        )
+    }
+
     /// Drop every entry that `swept` does not name, which is what releases a
     /// partition this broker no longer hosts or no longer compacts.
     fn retain_swept(&mut self, swept: &BTreeSet<(String, i32)>) {
-        self.inner.retain(|key| swept.contains(key));
+        self.inner.retain(|key, _| swept.contains(key));
     }
 }
 
@@ -121,7 +171,7 @@ pub(crate) async fn tick_all(
         // learns the high watermark from the leader's Fetch response, so the
         // LSO computed from it is one every replica can derive.
         let high_watermark = partition.high_watermark().await;
-        let (compacted, due) = {
+        let (compacted, record_limit, due) = {
             // Recover the guard if the mutex was poisoned by a panic
             // elsewhere rather than killing the (discarded-JoinHandle)
             // cleaner task. The config snapshot stays readable.
@@ -134,10 +184,12 @@ pub(crate) async fn tick_all(
             // is; the delete half is the local-retention sweep's, in
             // `crate::log_retention`, which runs on its own interval and over
             // every hosted log rather than only the led ones.
-            let compacted = log.config_snapshot().cleanup_policy.contains_compact();
+            let config = log.config_snapshot();
+            let compacted = config.cleanup_policy.contains_compact();
             let last_stable_offset = log.last_stable_offset(high_watermark);
             (
                 compacted,
+                config.max_decompressed_record,
                 // Kafka's `min.cleanable.dirty.ratio`, `min.compaction.lag.ms`
                 // and `max.compaction.lag.ms`, which say whether this
                 // partition has earned a pass yet.
@@ -164,6 +216,13 @@ pub(crate) async fn tick_all(
         if freeze_stops_compaction(image, &partition.topic) {
             continue;
         }
+        // A record above the decompressed-size limit refuses the same batch on
+        // every pass, so a partition it already refused waits for the limit to
+        // change. The refusal was accounted when it happened, the gauge still
+        // counts the partition, and a sweep that skips it has failed nothing.
+        if uncleanable.is_held(&key, record_limit) {
+            continue;
+        }
         match partition.compact_log().await {
             Ok(()) => {
                 metrics.record_compaction(&partition.topic, partition.index.get());
@@ -179,7 +238,7 @@ pub(crate) async fn tick_all(
                     "compaction failed for partition",
                 );
                 metrics.record_cleaner_failure(&partition.topic, partition.index.get(), reason);
-                uncleanable.inner.insert(key);
+                uncleanable.inner.insert(key, Cause::of(&e));
                 failed = true;
             }
         }

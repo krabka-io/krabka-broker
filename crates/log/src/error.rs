@@ -91,6 +91,22 @@ pub enum LogError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// Kafka trunk's `max.decompressed.message.bytes`: a compressed batch that a
+    /// lookup or a compaction pass had to decompress holds a record whose body
+    /// is larger than [`LogConfig::max_decompressed_record`](crate::LogConfig::max_decompressed_record).
+    ///
+    /// Kafka throws `InvalidRecordException` from `DefaultRecord.readFrom`, and
+    /// the message is its own. The broker answers `INVALID_RECORD` (87) to a
+    /// `ListOffsets`, and the cleaner leaves the partition uncleanable until a
+    /// pass succeeds.
+    #[error("Invalid record size: {size} exceeds the configured maximum record size of {limit}.")]
+    RecordTooLarge {
+        /// The record's body size in bytes, Kafka's `sizeOfBodyInBytes`.
+        size: usize,
+        /// The configured maximum.
+        limit: usize,
+    },
+
     /// KFC-1 `delivery.schedule.monotonic`: the appended batch's delivery time
     /// precedes a delivery time the partition already holds, so the batch
     /// would make the partition's schedule run backwards.

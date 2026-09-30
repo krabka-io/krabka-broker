@@ -11,6 +11,7 @@
 //! then Kafka's own default.
 
 use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{
     MAX_DECOMPRESSED_MESSAGE_BYTES, REMOTE_COPY_LAG_BYTES, REMOTE_COPY_LAG_MS,
@@ -18,6 +19,7 @@ use super::{
     lookup::{topic_node_or_cluster_default, topic_node_or_cluster_synonym},
     parse::{int_value, long_value},
 };
+use crate::api_catalog::UnstableApiVersions;
 
 /// The broker key of `remote.copy.lag.ms`: `RemoteLogManagerConfig.LOG_REMOTE_COPY_LAG_MS_PROP`.
 const LOG_REMOTE_COPY_LAG_MS: &str = "log.remote.copy.lag.ms";
@@ -44,6 +46,26 @@ pub(crate) fn resolve_max_decompressed_record_bytes(
         return None;
     }
     usize::try_from(limit).ok()
+}
+
+/// The `LogConfig::max_decompressed_record` that `topic` runs with on a broker
+/// serving `unstable`: [`resolve_max_decompressed_record_bytes`] under trunk's
+/// keys, and no limit under Kafka 4.3.1, which has no such key and reads none
+/// of what an operator stores under the name.
+///
+/// This is the limit of the log's own decompressing reads, compaction and the
+/// by-timestamp lookups. `Produce` resolves the same value for its own check.
+#[must_use]
+pub(crate) fn log_max_decompressed_record(
+    image: &MetadataImage,
+    node: NodeId,
+    topic: &str,
+    unstable: UnstableApiVersions,
+) -> Option<ByteSize> {
+    (unstable == UnstableApiVersions::Enabled)
+        .then(|| resolve_max_decompressed_record_bytes(image, node, topic))
+        .flatten()
+        .map(|limit| ByteSize::from_bytes(limit as u64))
 }
 
 /// A topic's configured `remote.copy.lag.ms` and `remote.copy.lag.bytes`, as

@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/storage.rs" 112 0 112 73 *)
+(* #"/workspace/crates/verified/src/storage.rs" 114 0 114 73 *)
 
-let%span sstorage = "/workspace/crates/verified/src/storage.rs" 110 10 110 40
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 112 10 112 40
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let truncation_batch_retained [#"/workspace/crates/verified/src/storage.rs" 112 0 112 73] (batch_last: Int64.t)
+let truncation_batch_retained [#"/workspace/crates/verified/src/storage.rs" 114 0 114 73] (batch_last: Int64.t)
   (cut: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- Int64.lt batch_last cut ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l () | & batch_last: Int64.t = batch_last | & cut: Int64.t = cut ])

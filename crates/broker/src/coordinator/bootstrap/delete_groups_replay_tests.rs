@@ -48,7 +48,7 @@ fn coordinator(log: Arc<InMemoryOffsetsLog>) -> Arc<GroupCoordinator> {
 
 fn commit(topic: &str, partition: i32, offset: i64) -> Record {
     Record {
-        key: Some(OffsetCommitValue::encode_key("g", topic, partition)),
+        key: Some(OffsetCommitValue::encode_key("g", topic, partition).unwrap()),
         value: Some(
             OffsetCommitValue {
                 offset: Offset(offset),
@@ -175,7 +175,7 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
             None,
             vec![Record {
                 key: Some(group_key),
-                value: Some(empty_group.encode_value()),
+                value: Some(empty_group.encode_value().unwrap()),
                 ..Default::default()
             }],
         ))

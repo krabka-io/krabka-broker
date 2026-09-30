@@ -82,7 +82,7 @@ mod tests {
             group_id: "g1".into(),
             member_id: "m1".into(),
         };
-        let b = encode_share_key(&key);
+        let b = encode_share_key(&key).unwrap();
         let (ver, body) = peek_version(&b);
         assert!(ver == KEY_SHARE_MEMBER_METADATA);
         assert!(parse_share_key(ver, body).unwrap() == key);

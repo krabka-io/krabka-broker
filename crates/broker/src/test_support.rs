@@ -233,6 +233,41 @@ pub(crate) async fn finalize_elr_version_on(broker: &crate::Broker) {
     .expect("eligible.leader.replicas.version visible");
 }
 
+/// The record that finalizes `metadata.version` 33 (`4.4-IV2`), one of trunk's
+/// unstable levels. Kafka 4.3 supports levels up to 30, so a controller with
+/// the unstable flag off that replays this record stops over a fatal fault.
+pub(crate) fn finalize_unstable_metadata_version() -> MetadataRecord {
+    MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+        name: "metadata.version".into(),
+        level: 33,
+    })
+}
+
+/// The fault that replaying [`finalize_unstable_metadata_version`] raises.
+pub(crate) const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
+    FeatureLevelRecord(name='metadata.version', featureLevel=33), \
+    but this controller only supports versions 7-30";
+
+/// Writes `records` as the length-prefixed frames of `bootstrap.records.bin`,
+/// the file `krabka format` leaves for the first start to submit.
+pub(crate) fn write_bootstrap_records(log_dir: &std::path::Path, records: &[MetadataRecord]) {
+    use serde_wincode::SerdeCompat;
+    use wincode::Serialize as _;
+
+    let mut bytes = Vec::new();
+    for record in records {
+        let frame =
+            <SerdeCompat<MetadataRecord>>::serialize(record).expect("serialize a bootstrap record");
+        bytes.extend_from_slice(
+            &u32::try_from(frame.len())
+                .expect("bootstrap frame fits in u32")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&frame);
+    }
+    std::fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
+}
+
 /// Initialize the share state of `(group, topic_id, partition)` at state
 /// epoch 1 with no start offset, as the group coordinator does when it
 /// assigns the partition to a member (Kafka's Initialize-first flow). The
@@ -715,6 +750,7 @@ type SubmitOutcome =
 pub(crate) struct FakeMetadataSource {
     image_tx: watch::Sender<Arc<MetadataImage>>,
     leader_tx: watch::Sender<Option<NodeId>>,
+    fatal_tx: watch::Sender<Option<String>>,
     controller_bound_addr: SocketAddr,
     term: u64,
     owns_controller_epoch: bool,
@@ -756,6 +792,14 @@ impl FakeMetadataSource {
     /// observes it, and `quorum_state` reports it as `current_leader`.
     pub(crate) fn set_leader(&self, leader: Option<NodeId>) {
         self.leader_tx.send_replace(leader);
+    }
+
+    /// Publish a fatal controller fault, as a controller does before it stops
+    /// itself. Every `watch_fatal` receiver observes it. A fake that never
+    /// calls this reports no fault, and its watchers wait rather than seeing
+    /// the channel close.
+    pub(crate) fn set_fatal(&self, fault: &str) {
+        self.fatal_tx.send_replace(Some(fault.to_owned()));
     }
 
     /// The leader channel's sender, for a test that drives a spawned watcher
@@ -872,9 +916,11 @@ impl FakeMetadataSourceBuilder {
     pub(crate) fn build(self) -> FakeMetadataSource {
         let (image_tx, _) = watch::channel(self.image);
         let (leader_tx, _) = watch::channel(self.leader);
+        let (fatal_tx, _) = watch::channel(None);
         FakeMetadataSource {
             image_tx,
             leader_tx,
+            fatal_tx,
             controller_bound_addr: self.controller_bound_addr,
             term: self.term,
             owns_controller_epoch: self.owns_controller_epoch,
@@ -909,6 +955,10 @@ impl MetadataSource for FakeMetadataSource {
 
     fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
         self.leader_tx.subscribe()
+    }
+
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        self.fatal_tx.subscribe()
     }
 
     /// A quorum that has committed nothing and knows no voters. Its leader

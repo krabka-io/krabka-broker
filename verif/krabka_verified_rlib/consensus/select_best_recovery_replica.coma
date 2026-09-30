@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 211 0 211 86 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 235 0 235 86 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 212 12 212 28
-let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 213 12 213 13
-let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 216 19 216 25
-let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 217 16 217 22
-let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 221 14 221 21
-let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 220 16 220 96
-let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 219 16 219 26
-let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 218 16 218 35
-let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 223 24 223 37
-let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 224 22 224 38
-let%span sconsensus'9 = "/workspace/crates/verified/src/consensus.rs" 234 13 234 14
-let%span sconsensus'10 = "/workspace/crates/verified/src/consensus.rs" 234 8 234 14
-let%span sconsensus'11 = "/workspace/crates/verified/src/consensus.rs" 204 10 209 1
-let%span sconsensus'12 = "/workspace/crates/verified/src/consensus.rs" 191 8 194 97
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 236 12 236 28
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 237 12 237 13
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 240 19 240 25
+let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 241 16 241 22
+let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 245 14 245 21
+let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 244 16 244 96
+let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 243 16 243 26
+let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 242 16 242 35
+let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 247 24 247 37
+let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 248 22 248 38
+let%span sconsensus'9 = "/workspace/crates/verified/src/consensus.rs" 258 13 258 14
+let%span sconsensus'10 = "/workspace/crates/verified/src/consensus.rs" 258 8 258 14
+let%span sconsensus'11 = "/workspace/crates/verified/src/consensus.rs" 228 10 233 1
+let%span sconsensus'12 = "/workspace/crates/verified/src/consensus.rs" 215 8 218 97
 
 use creusot.slice.Slice64
 use creusot.int.Int32
@@ -49,7 +49,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate ranks_ge [#"/workspace/crates/verified/src/consensus.rs" 189 0 189 67] (a: t_RecoveryCandidate) (b: t_RecoveryCandidate) =
+predicate ranks_ge [#"/workspace/crates/verified/src/consensus.rs" 213 0 213 67] (a: t_RecoveryCandidate) (b: t_RecoveryCandidate) =
   [%#sconsensus'12] gt_log_Int (Int32.to_int a.last_epoch) (Int32.to_int b.last_epoch)
   \/ Int32.to_int a.last_epoch = Int32.to_int b.last_epoch
   /\ (gt_log_Int (Int64.to_int a.log_end_offset) (Int64.to_int b.log_end_offset)
@@ -60,7 +60,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_best_recovery_replica [#"/workspace/crates/verified/src/consensus.rs" 211 0 211 86]
+let select_best_recovery_replica [#"/workspace/crates/verified/src/consensus.rs" 235 0 235 86]
   (candidates: Slice64.slice t_RecoveryCandidate) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0
     [ s0 = len_RecoveryCandidate [%#sconsensus] {candidates} (fun (_x: UInt64.t) -> [ &n <- _x ] s1)

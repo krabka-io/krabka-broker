@@ -9,6 +9,11 @@
 //! `Matcher.replaceAll` reads `$1_x` as group 1 followed by `_x`, where the
 //! `regex` crate reads a group named `1_x`. [`JavaPattern`] gives both the
 //! Java answer.
+//!
+//! The pattern itself is rewritten by `java_to_fancy` first, which also gives
+//! Java's reading of `\w`, `.`, and `(?i)`: Java folds ASCII case only, unless
+//! `(?u)` asks for Unicode case as well, so `(?i)service-` does not match
+//! `ſervice-` (long s).
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -345,6 +350,529 @@ mod tests {
                 pattern(source).matches(input).ok() == Some(expected),
                 "{source:?} against {input:?}"
             );
+        }
+    }
+
+    /// `(?i)` folds ASCII case only, and `(?u)`, or `(?U)`, adds Unicode case.
+    /// `fancy_regex` folds Unicode whenever its `i` is on, so the translation
+    /// writes both cases itself. Each row is `Pattern.matches` on JDK 17, from
+    /// the `java.util.regex` documentation of `CASE_INSENSITIVE` and
+    /// `UNICODE_CASE`: long s (U+017F) and the Kelvin sign (U+212A) are the
+    /// letters that fold to `s` and `k` in Unicode and not in ASCII.
+    #[test]
+    fn matches_folds_case_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("(?i)service-", "SERVICE-", true),
+            ("(?i)service-", "service-", true),
+            ("(?i)service-", "\u{17f}ervice-", false),
+            ("(?iu)service-", "\u{17f}ervice-", true),
+            ("(?iu)service-", "SERVICE-", true),
+            ("(?i)k", "\u{212a}", false),
+            ("(?iu)k", "\u{212a}", true),
+            ("(?ui)k", "\u{212a}", true),
+            ("(?u)k", "K", false),
+            ("(?i)é", "É", false),
+            ("(?i)é", "é", true),
+            ("(?iu)é", "É", true),
+            ("(?U)(?i)k", "\u{212a}", true),
+            ("(?iU)k", "\u{212a}", true),
+            ("(?iU)(?-U)k", "\u{212a}", false),
+            ("(?iU)(?-U)k", "K", true),
+            ("(?iU)(?-u)k", "\u{212a}", false),
+            ("(?iU)(?-u)\\w", "\u{e9}", true),
+            ("(?i)a(?u)k", "A\u{212a}", true),
+            ("(?i)a(?u)k", "AK", true),
+            ("(?iu)a(?-u)k", "A\u{212a}", false),
+            ("(?iu)a(?-u)k", "AK", true),
+            ("(?i)ss", "\u{df}", false),
+            ("(?iu)ss", "\u{df}", false),
+            ("(?i)i", "\u{130}", false),
+            ("(?i)i", "\u{131}", false),
+            ("(?i)\\u00E5", "\u{212b}", false),
+            ("(?iu)\\u00E5", "\u{212b}", true),
+            ("(?i)[a-f]+", "AbCdEf", true),
+            ("(?i)[a-f]", "\u{212a}", false),
+            ("(?i)[k]", "\u{212a}", false),
+            ("(?iu)[k]", "\u{212a}", true),
+            ("(?i)[^a]", "A", false),
+            ("(?i)[^a]", "b", true),
+            ("(?i)[^a]", "\u{e9}", true),
+            ("(?i)[^k]", "\u{212a}", true),
+            ("(?iu)[^k]", "\u{212a}", false),
+            ("(?i)[X-c]", "x", true),
+            ("(?i)[X-c]", "A", true),
+            ("(?i)[X-c]", "[", true),
+            ("(?i)[X-c]", "d", false),
+            ("(?i)[+-z]", "Q", true),
+            ("(?i)[a-c&&[^b]]", "B", false),
+            ("(?i)[a-c&&[^b]]", "C", true),
+            ("(?i)[a-c&&[^b]]", "A", true),
+            ("(?i)[a-c[^x-z]]", "Y", false),
+            ("(?i)[a-c[^x-z]]", "B", true),
+            ("(?i)[\\x41-\\x43]", "b", true),
+            ("(?i)[\\u0041-\\u0043]", "b", true),
+            ("(?i)[\\Qab\\E]", "B", true),
+            ("(?i)[a-]", "A", true),
+            ("(?i)[-a]", "A", true),
+            ("(?i)[]a]", "]", true),
+            ("(?i)[]a]", "A", true),
+            ("(?i)[a-c-e]", "E", true),
+            ("(?i)[a-c-e]", "-", true),
+            ("(?i)[\\w&&[^a]]", "A", false),
+            ("(?i)[\\w&&[^a]]", "B", true),
+            ("(?i)[a\\-c]", "C", true),
+            ("(?i)[a\\-c]", "-", true),
+            ("(?i)[\\0101-\\0103]", "b", true),
+            ("(?i)[\\0101-\\0103]", "d", false),
+            ("(?i)[\\x41-c]", "b", true),
+            ("(?i)[a-c[d-f]]", "E", true),
+            ("(?i)[\u{e9}-\u{eb}]", "\u{ca}", false),
+            ("(?ix) [ a - c ]", "B", true),
+            ("(?ix) [ a - c ] # x", "d", false),
+            ("(?i)a\\.b", "A.B", true),
+            ("(?i)\\[a\\]", "[A]", true),
+            ("(?i)a{1,2}b", "aAB", true),
+            ("(?i)\u{e9}+", "\u{e9}\u{e9}", true),
+            ("(?i)\\0101\\0102", "aB", true),
+            ("(?i)\\x41", "a", true),
+            ("(?i)\\u0041", "a", true),
+            ("(?i)\\x{41}", "a", true),
+            ("(?i)\\0101", "a", true),
+            ("(?i)\\c!", "A", true),
+            ("(?i)\\Qab\\E", "AB", true),
+            ("(?i)\\Q.b\\E", ".B", true),
+            ("(?i)\\Q.b\\E", "xB", false),
+            ("(?i)\\Qk\\E", "\u{212a}", false),
+            ("(?i)\\p{Lower}", "A", true),
+            ("(?i)\\p{Lower}", "\u{e9}", false),
+            ("(?i)\\p{Upper}", "a", true),
+            ("(?i)\\p{Upper}", "\u{c9}", false),
+            ("\\p{Lower}", "a", true),
+            ("\\p{Lower}", "A", false),
+            ("\\p{Lower}", "\u{e9}", false),
+            ("\\p{Upper}", "A", true),
+            ("\\p{Upper}", "\u{c9}", false),
+            ("(?i)\\p{Lu}", "a", true),
+            ("(?i)\\p{Lu}", "\u{e9}", true),
+            ("(?i)\\p{Lu}", "1", false),
+            ("(?i)\\P{Lu}", "a", false),
+            ("(?i)\\P{Lu}", "1", true),
+            ("\\p{Lu}", "a", false),
+            ("\\p{Lu}", "A", true),
+            ("(?i)[\\p{Lower}]", "A", true),
+            ("(?i)[\\P{Lower}]", "A", false),
+            ("(?i)[\\P{Lower}]", "1", true),
+            ("(?i)\\p{IsLowercase}", "A", true),
+            ("(?i)\\p{gc=Lu}", "a", true),
+            ("(?i)\\p{IsLu}", "a", true),
+            ("(?i:a)b", "Ab", true),
+            ("(?i:a)b", "AB", false),
+            ("a(?i)b", "aB", true),
+            ("a(?i)b", "Ab", false),
+            ("a(?i:b)c", "aBc", true),
+            ("a(?i:b)c", "aBC", false),
+            ("(?i)a(?-i)b", "Ab", true),
+            ("(?i)a(?-i)b", "AB", false),
+            ("((?i)a)b", "Ab", true),
+            ("((?i)a)b", "AB", false),
+            ("(?i)a|b", "B", true),
+            ("(?i)(?i)(?-i)a", "A", false),
+            ("(?i)(?i)(?-i)a", "a", true),
+            ("(?i)a{2}", "aA", true),
+            ("(?i)(?:a|b)+", "AbBa", true),
+            ("(?i)^ab$", "AB", true),
+            ("(?i)\\bab", "AB", true),
+            ("(?i)\\w", "A", true),
+            ("(?i)a.c", "AxC", true),
+            ("(?i)(?<Name>a)", "A", true),
+            ("(?i)(?=a)A", "A", true),
+            ("(?i)(?!a)b", "B", true),
+            ("(?ix) a b # comment", "AB", true),
+            ("(?x)a b # Comment here", "ab", true),
+            ("(?x)a b # Comment here", "AB", false),
+            ("(?iu)(a)\\1", "aA", true),
+            ("(?iu)(a)\\1", "ab", false),
+            ("(?i)(a)(?-i)\\1", "aA", false),
+            ("(?i)(a)(?-i)\\1", "aa", true),
+            ("(?i)(a)(?-i:\\1)", "aA", false),
+            ("(a)\\1", "aa", true),
+            ("(a)\\1", "aA", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// A `\Q...\E` is read out before the pattern is, as Java's `RemoveQEQuoting`
+    /// does, so a quoted member takes part in a range. A `]` first in a class is a
+    /// member that may start a range, a backslash before `<` or `>` is the
+    /// character, `\w`, `\p{Lower}` and `\p{Upper}` are the ASCII letters under
+    /// `(?iu)`, and a backreference compares ASCII case-insensitively under
+    /// `(?i)`. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_reads_quotes_classes_and_references_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // \Q...\E is expanded before the pattern is read, so a quoted member takes part in a range
+            ("(?i)[\\Qa\\E-c]", "B", true),
+            ("(?i)[\\Qa\\E-c]", "b", true),
+            ("(?i)[\\Qa\\E-c]", "A", true),
+            ("(?i)[\\Qa\\E-c]", "X", false),
+            ("(?i)[a-\\Qc\\E]", "B", true),
+            ("(?i)[a-\\Qc\\E]", "X", false),
+            ("(?i)[\\Qa\\E-\\Qc\\E]", "B", true),
+            ("(?i)[\\Qa\\E-\\Qc\\E]", "X", false),
+            ("(?i)[\\Qa\\Eb-d]", "C", true),
+            ("(?i)[\\Qa\\Eb-d]", "A", true),
+            ("(?i)[\\Qa\\Eb-d]", "X", false),
+            ("(?i)[\\Q\\Ea-c]", "B", true),
+            ("(?i)[a-\\Q\\Ec]", "B", true),
+            ("(?i)[a-\\Q\\Ec]", "X", false),
+            ("[\\Qa\\E-c]", "b", true),
+            ("[\\Qa\\E-c]", "B", false),
+            ("[\\Qa\\E-c]", "X", false),
+            ("(?i)[\\Q]\\E-c]", "A", true),
+            ("(?i)[\\Q]\\E-c]", "X", false),
+            ("(?i)[\\Q1\\E-3]", "2", true),
+            // a quoted dash is not a range
+            ("(?i)[\\Qa-c\\E]", "B", false),
+            ("(?i)[\\Qa-c\\E]", "-", true),
+            ("(?i)[\\Qa-c\\E]", "C", true),
+            ("(?i)[a\\Q-\\Ec]", "B", false),
+            ("(?i)[a\\Q-\\Ec]", "-", true),
+            ("(?i)[a\\Q-\\Ec]", "C", true),
+            // a quote with no \E runs to the end of the pattern
+            ("(?i)x\\Qa", "XA", true),
+            ("(?i)x\\Qa\\E", "XA", true),
+            ("(?i)a\\Q\\E+", "AA", true),
+            ("\\Q1\\E2", "12", true),
+            ("\\Qa\\\\E", "a\\", true),
+            ("\\Q\\\\E", "\\", true),
+            ("\\Qa.b\\E", "a.b", true),
+            ("\\Qa.b\\E", "axb", false),
+            ("(?i)\\Qk\\E", "\u{212a}", false),
+            ("(?iu)\\Qk\\E", "\u{212a}", true),
+            // a backslash before < or > is the character
+            ("\\<", "<", true),
+            ("\\>", ">", true),
+            ("[\\<]", "<", true),
+            ("[\\>]", ">", true),
+            ("\\Q<\\E", "<", true),
+            ("[\\Q<\\E]", "<", true),
+            ("\\Q>\\E", ">", true),
+            // a ] first in a class is a member, and starts a range
+            ("(?i)[]-c]", "A", true),
+            ("(?i)[]-c]", "B", true),
+            ("(?i)[]-c]", "_", true),
+            ("(?i)[]-c]", "]", true),
+            ("(?i)[]-c]", "X", false),
+            ("(?i)[]-c]", "d", false),
+            ("(?i)[]-c]", "D", false),
+            ("(?i)[^]-c]", "A", false),
+            ("(?i)[^]-c]", "X", true),
+            ("(?i)[^]-c]", "d", true),
+            ("(?i)[]-cx]", "X", true),
+            ("(?i)[]-]", "-", true),
+            ("(?i)[]-]", "]", true),
+            ("(?iu)[]-c]", "A", true),
+            ("(?ix)[ ]-c ]", "A", true),
+            ("[]-c]", "a", true),
+            ("[]-c]", "A", false),
+            ("[]-c]", "]", true),
+            // \p{Lower} and \p{Upper} are the ASCII letters under (?iu), whatever fancy_regex's i would fold
+            ("(?iu)\\p{Lower}", "\u{17f}", false),
+            ("(?iu)\\p{Lower}", "\u{212a}", false),
+            ("(?iu)\\p{Lower}", "A", true),
+            ("(?iu)\\p{Lower}", "a", true),
+            ("(?iu)\\p{Upper}", "\u{17f}", false),
+            ("(?iu)\\p{Upper}", "\u{212a}", false),
+            ("(?iu)\\p{Upper}", "a", true),
+            ("(?iu)\\p{Upper}", "\u{e9}", false),
+            ("(?iu)\\P{Lower}", "\u{17f}", true),
+            ("(?iu)\\P{Lower}", "A", false),
+            ("(?iu)\\P{Lower}", "1", true),
+            ("(?iu)\\P{Upper}", "\u{212a}", true),
+            ("(?u)\\p{Lower}", "\u{17f}", false),
+            ("(?u)\\p{Lower}", "A", false),
+            // \w and \W are ASCII under (?iu), whatever fancy_regex's i would fold
+            ("(?iu)\\w", "\u{17f}", false),
+            ("(?iu)\\w", "\u{212a}", false),
+            ("(?iu)\\w", "a", true),
+            ("(?iu)\\w", "_", true),
+            ("(?iu)\\W", "\u{17f}", true),
+            ("(?iu)\\W", "\u{212a}", true),
+            ("(?iu)\\W", "a", false),
+            ("(?iu)\\W", "-", true),
+            ("(?iu)\\w+", "k\u{212a}", false),
+            ("(?iu)k\\w", "k\u{212a}", false),
+            ("(?iu)\\w\\p{Lower}", "k\u{212a}", false),
+            ("(?i)\\w", "\u{17f}", false),
+            ("(?u)\\w", "\u{17f}", false),
+            ("(?iU)\\w", "\u{17f}", true),
+            // a backreference compares ASCII case-insensitively under (?i)
+            ("(?i)(a)\\1", "aA", true),
+            ("(?i)(a)\\1", "aa", true),
+            ("(?i)(a)\\1", "ab", false),
+            ("(?i)(\\d+)-\\1", "12-12", true),
+            ("(?i)(\\d+)-\\1", "12-13", false),
+            ("(?i)(?<x>a)\\k<x>", "aA", true),
+            ("(?i)(?<x>a)\\k<x>", "ab", false),
+            ("(?i)(a+)\\1", "aaAA", true),
+            ("(?i)(a)\\1+", "aAAa", true),
+            ("(?i)(a)(\\1)", "aA", true),
+            ("(?i)(k)\\1", "kK", true),
+            ("(?i)(k)\\1", "k\u{212a}", false),
+            ("(?i:(a)\\1)", "aA", true),
+            ("a(?i:(b)\\1)", "aBb", true),
+            ("a(?i:(b)\\1)", "aBB", true),
+            ("a(?i:(b)\\1)", "AbB", false),
+            ("(?i)(a)((b))\\3\\2\\1", "aBBBA", true),
+            ("(?i)(a)((b))\\3\\2\\1", "aBbBa", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// A `^` that Java reads as a class member stays one under `(?x)`, where
+    /// the white space and comments between it and the `[` are dropped, and a
+    /// `-` that does not join two members is the character, whatever member
+    /// comes before it, `\w` and `\s` included. Each row is `Pattern.matches`
+    /// on JDK 17.
+    #[test]
+    fn matches_reads_a_literal_caret_and_dash_in_a_class_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // `^` is a negation only right after the `[`
+            ("(?x)[ ^a]", "^", true),
+            ("(?x)[ ^a]", "a", true),
+            ("(?x)[ ^a]", "b", false),
+            ("(?ix)[ ^a]", "^", true),
+            ("(?ix)[ ^a]", "A", true),
+            ("(?ix)[ ^a]", "b", false),
+            ("(?ix)[#c\n^a]", "^", true),
+            ("(?ix)[#c\n^a]", "A", true),
+            ("(?ix)[#c\n^a]", "b", false),
+            ("(?x)[ ^-b]", "^", true),
+            ("(?x)[ ^-b]", "a", true),
+            ("(?x)[ ^-b]", "c", false),
+            ("(?x)[a[ ^b]]", "^", true),
+            ("(?x)[a[ ^b]]", "b", true),
+            ("(?x)[a[ ^b]]", "c", false),
+            ("(?x)[^ a]", "a", false),
+            ("(?x)[^ a]", "b", true),
+            ("(?x)[^ ^a]", "^", false),
+            ("(?x)[^ ^a]", "b", true),
+            ("[\\[^a]", "^", true),
+            ("[\\[^a]", "b", false),
+            // outside a class it is an anchor, after a `\[` too
+            ("\\[^a", "[a", false),
+            ("\\[^a", "[^a", false),
+            ("(?x)\\[ ^a", "[^a", false),
+            // a `-` that is not a range operator, after `\w`, `\s`, a folded
+            // letter, a property, and a range
+            ("[\\w-.]", "-", true),
+            ("[\\w-.]", ".", true),
+            ("[\\w-.]", "a", true),
+            ("[\\w-.]", ",", false),
+            ("[\\w-a]", "-", true),
+            ("[\\w-a]", "a", true),
+            ("[\\w-a]", "`", false),
+            ("[\\s-.]", "-", true),
+            ("[\\s-.]", ".", true),
+            ("[\\s-.]", " ", true),
+            ("[\\s-.]", ",", false),
+            ("(?i)[a-[b]]", "-", true),
+            ("(?i)[a-[b]]", "A", true),
+            ("(?i)[a-[b]]", "B", true),
+            ("(?i)[a-[b]]", "X", false),
+            ("(?i)[a-[b]]", "[", false),
+            ("[\\p{Lower}-z]", "-", true),
+            ("[\\p{Lower}-z]", ".", false),
+            ("[\\p{L}-z]", "-", true),
+            ("[\\p{L}-z]", "\u{e9}", true),
+            ("[\\p{L}-z]", ".", false),
+            ("[\\w-\\d]", "-", true),
+            ("[\\d-a]", "-", true),
+            ("[\\d-a]", "a", true),
+            ("[\\d-a]", "b", false),
+            ("[a-b-c]", "-", true),
+            ("[a-b-c]", "c", true),
+            ("[a-b-c]", "d", false),
+            ("(?i)[a-b-c]", "-", true),
+            ("(?i)[a-b-c]", "C", true),
+            ("(?i)[a-b-c]", "D", false),
+            ("[a-c-e]", "-", true),
+            ("[a-c-e]", "b", true),
+            ("[a-c-e]", "d", false),
+            ("[a-c-e]", "e", true),
+            // first, last and negated
+            ("[-a]", "-", true),
+            ("[^-a]", "-", false),
+            ("[^-a]", "b", true),
+            ("[a-]", "-", true),
+            // a `-` as either end of a range
+            ("[+--]", ",", true),
+            ("[+--]", "-", true),
+            ("[+--]", ".", false),
+            ("(?i)[+--]", "-", true),
+            ("[--/]", ".", true),
+            ("[--/]", "0", false),
+            ("[!--]", ",", true),
+            ("[!--]", ".", false),
+            // outside a class it is a plain character
+            ("a-b", "a-b", true),
+            ("(?i)a-b", "A-B", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Under `(?x)` Java tells a `-` that ends a class from one that starts a
+    /// range by the char right after it, without skipping white space or a
+    /// comment: `(?x)[+- ]]` is the range from `+` to the first `]`, then the
+    /// class ends at the second. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_reads_a_range_that_ends_past_x_flag_white_space_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("(?x)[+- ]]", ",", true),
+            ("(?x)[+- ]]", "a", false),
+            ("(?x)[+- ]]", "]", true),
+            ("(?x)[+- ]]", "-", true),
+            ("(?x)[+- [b]]", "X]", true),
+            ("(?x)[+- [b]]", "b]", true),
+            ("(?x)[+- [b]]", "c]", false),
+            ("(?x)[+- [b]]", "-]", true),
+            ("(?x)[+-#c\n]]", "a", false),
+            ("(?x)[+-#c\n]]", ",", true),
+            ("(?x)[+-#c\n]]", "]", true),
+            ("(?x)[a-b- ]", "-", true),
+            ("(?x)[a-b- ]", "b", true),
+            ("(?x)[a-b- ]", "c", false),
+            ("(?x)[a - c]", "b", true),
+            ("(?x)[a - c]", "-", false),
+            ("(?x)[a - c]", " ", false),
+            ("(?x)[a-\n b]", "a", true),
+            ("(?x)[a-\n b]", "b", true),
+            ("(?x)[a-\n b]", "-", false),
+            ("(?x)[a-#c\nb]", "b", true),
+            ("(?x)[a-#c\nb]", "-", false),
+            ("(?x)[a-]", "-", true),
+            ("(?x)[a-[b]]", "-", true),
+            ("(?x)[a-[b]]", "b", true),
+            ("(?x)[a-[b]]", "c", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+        // The range ends at the `]` or the `[` past the white space, which
+        // Java refuses as a reversed range or an unclosed class.
+        for source in [
+            "(?x)[.- ]",
+            "(?x)[a- ]",
+            "(?x)[a-\n]",
+            "(?x)[.-\n]",
+            "(?x)[_- [b]]",
+            "(?x)[a-#c\n]]",
+        ] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
+        }
+    }
+
+    /// A `)` with no `(` before it is `Unmatched closing ')'` in Java, which
+    /// the `\A(?:...)\z` wrapper would otherwise read as the end of a group,
+    /// and a range that ends in `\w`, `\s` or `\p{..}` is `Illegal character
+    /// range` there. Each row is refused by `Pattern.compile` on JDK 17.
+    #[test]
+    fn a_stray_closing_paren_or_a_range_to_a_shorthand_does_not_compile() {
+        for source in [
+            "a)|(b",
+            "a)",
+            "(a))",
+            "a(?i))",
+            ")",
+            "(?x)a )",
+            "(?:a))",
+            "(?=a))",
+            "(?i:a))",
+            "[a--b]",
+            "[a-\\w]",
+            "[a-\\d]",
+            "[!-\\d]",
+            "[+-\\w]",
+            "[a-\\p{L}]",
+            "[a-\\s]",
+            "[!-\\W]",
+            "[--\\w]",
+            "(?i)[a-\\w]",
+            "(?x)[a- \\w]",
+        ] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
+        }
+    }
+
+    /// A `)` that Java reads as a member, or as part of a comment, is not
+    /// stray. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn a_closing_paren_that_closes_no_group_is_still_a_character_where_java_reads_one() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("[)]", ")", true),
+            ("\\)", ")", true),
+            ("\\Q)\\E", ")", true),
+            ("(?x)a #c)\n", "a", true),
+            ("(a)|(b)", "b", true),
+            ("(?i)(a)|b", "B", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// A backreference under an ASCII fold is written `(?i:\1)`, and
+    /// `fancy_regex`'s `i` compares the text of the group Unicode-insensitively
+    /// when either text is not ASCII. So `(?i)(é)\1` matches `éÉ` here, where
+    /// Java's `CIBackRef` does not, and the two agree on every ASCII text. The
+    /// divergence is documented in `java_fold`; this test pins its extent, so
+    /// that a change to it is noticed.
+    #[test]
+    fn a_backreference_under_an_ascii_fold_is_unicode_insensitive_for_non_ascii_text() {
+        // (pattern, input, whole input matches here)
+        for (source, input, expected) in [
+            ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", true),
+            ("(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true),
+        ] {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// `\N{name}` is a character in Java, which `fancy_regex` reads as `\N` and
+    /// the text of the name, so a rule that has one is refused and not misread.
+    #[test]
+    fn a_named_character_is_refused() {
+        for source in ["\\N{LATIN SMALL LETTER A}", "(?i)\\N{LATIN SMALL LETTER A}"] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
         }
     }
 

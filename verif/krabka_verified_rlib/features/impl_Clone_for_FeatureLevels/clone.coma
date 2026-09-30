@@ -5,9 +5,7 @@
 use creusot.int.Int16
 use creusot.prelude.Any
 
-type t_Option_i16 = None | Some Int16.t
-
-type t_FeatureLevels = { requested: Int16.t; finalized: t_Option_i16; max_supported: Int16.t; floor: Int16.t }
+type t_FeatureLevels = { requested: Int16.t; current': Int16.t }
 
 meta "compute_max_steps" 1000000
 

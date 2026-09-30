@@ -82,6 +82,17 @@ pub enum RaftError {
     #[error("startup misconfiguration: {0}")]
     Startup(String),
 
+    /// The controller met a fault that Kafka's `ProcessTerminatingFaultHandler`
+    /// halts the process over, such as a replay of a `FeatureLevelRecord`
+    /// above the range this controller supports. The text is the
+    /// `Encountered fatal fault: ` prefix of that handler's log line, then the
+    /// message of the exception that caused the fault. Kafka's own
+    /// `failureMessage` between the two, such as `Unable to apply
+    /// FeatureLevelRecord record at offset N on active controller, ...`, is
+    /// not part of it.
+    #[error("Encountered fatal fault: {0}")]
+    FatalFault(String),
+
     #[error("controller shut down")]
     Shutdown,
 }

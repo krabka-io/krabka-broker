@@ -88,6 +88,15 @@ krabka_broker_partition_disk_bytes{topic="orders",partition="0"} 0
 # HELP krabka_broker_share_group_backlog Share-group partition backlog in records, emitted by the group coordinator..
 # TYPE krabka_broker_share_group_backlog gauge
 krabka_broker_share_group_backlog{group_id="workers",topic="orders",partition="0"} 0
+# HELP krabka_broker_share_group_dlq_records Cumulative count of dead-letter records written to a share group's dead-letter queue (KIP-1191), per group. Mirrors Kafka's ShareGroupMetrics.DeadLetterQueueRecordCount..
+# TYPE krabka_broker_share_group_dlq_records counter
+krabka_broker_share_group_dlq_records_total{group_id="workers"} 0
+# HELP krabka_broker_share_group_dlq_produce_requests Cumulative count of attempts to produce a share group's dead-letter records, per group: one for each round of each range for each attempt. Mirrors Kafka's ShareGroupMetrics.DeadLetterQueueTotalProduceRequestsPerSec..
+# TYPE krabka_broker_share_group_dlq_produce_requests counter
+krabka_broker_share_group_dlq_produce_requests_total{group_id="workers"} 0
+# HELP krabka_broker_share_group_dlq_failed_produce_requests Cumulative count of dead-letter writes of a share group that ended in a failure, per group. Mirrors Kafka's ShareGroupMetrics.DeadLetterQueueFailedProduceRequestsPerSec; the ratio against share_group_dlq_produce_requests yields the per-group error rate..
+# TYPE krabka_broker_share_group_dlq_failed_produce_requests counter
+krabka_broker_share_group_dlq_failed_produce_requests_total{group_id="workers"} 0
 # HELP krabka_broker_partition_cpu_micros Cumulative handler-thread microseconds spent processing each (topic, partition). Rebalancer-targeted; rate(...) divided by 1_000_000 yields core occupancy..
 # TYPE krabka_broker_partition_cpu_micros counter
 krabka_broker_partition_cpu_micros_total{topic="orders",partition="0"} 0

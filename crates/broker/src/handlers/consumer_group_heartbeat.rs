@@ -6,12 +6,9 @@ use std::collections::HashSet;
 
 use bytes::Bytes;
 use krabka_metadata::AclOperation;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-    },
+use krabka_protocol::owned::{
+    consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+    consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
 };
 use tokio::sync::oneshot;
 
@@ -51,7 +48,8 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
     {
         let mut cur: &[u8] = req_bytes;
-        let req = ConsumerGroupHeartbeatRequest::decode(&mut cur, version)?;
+        let req: ConsumerGroupHeartbeatRequest =
+            crate::handlers::decode_group_request(&mut cur, version)?;
 
         // ── Protocol gate ───────────────────────────────────────────
         // Kafka's `handleConsumerGroupHeartbeat` checks whether the
@@ -318,7 +316,7 @@ mod tests {
     use assert2::assert;
     use bytes::BytesMut;
     use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
-    use krabka_protocol::Encode;
+    use krabka_protocol::{Decode, Encode};
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
 

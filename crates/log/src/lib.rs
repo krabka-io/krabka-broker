@@ -103,6 +103,7 @@ mod log;
 mod log_start_offset_checkpoint;
 pub mod name;
 mod producer_snapshot;
+mod record_limit;
 mod recovery;
 mod retention;
 mod segment;

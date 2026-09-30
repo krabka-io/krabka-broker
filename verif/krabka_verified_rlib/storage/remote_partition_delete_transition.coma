@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/storage.rs" 234 0 237 9 *)
+(* #"/workspace/crates/verified/src/storage.rs" 236 0 239 9 *)
 
-let%span sstorage = "/workspace/crates/verified/src/storage.rs" 229 10 232 1
-let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 187 4 193 5
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 231 10 234 1
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 189 4 195 5
 
 use creusot.prelude.Any
 
@@ -25,7 +25,7 @@ type tup2_RemotePartitionDeleteLifecycle_RemotePartitionDeleteLifecycle = {
   f0'0: t_RemotePartitionDeleteLifecycle;
   f1'0: t_RemotePartitionDeleteLifecycle }
 
-predicate partition_delete_forward_edge [#"/workspace/crates/verified/src/storage.rs" 183 0 186 9] (from: t_RemotePartitionDeleteLifecycle) (to': t_RemotePartitionDeleteLifecycle) =
+predicate partition_delete_forward_edge [#"/workspace/crates/verified/src/storage.rs" 185 0 188 9] (from: t_RemotePartitionDeleteLifecycle) (to': t_RemotePartitionDeleteLifecycle) =
   [%#sstorage'0] match { f0'0 = from; f1'0 = to' } with
     | {f0'0 = Marked; f1'0 = Started} | {f0'0 = Started; f1'0 = Finished} -> true
     | _ -> false
@@ -35,7 +35,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_partition_delete_transition [#"/workspace/crates/verified/src/storage.rs" 234 0 237 9]
+let remote_partition_delete_transition [#"/workspace/crates/verified/src/storage.rs" 236 0 239 9]
   (from: t_Option_RemotePartitionDeleteLifecycle) (to': t_RemotePartitionDeleteLifecycle) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- { f0 = from; f1 = to' } ] s1

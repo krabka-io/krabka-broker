@@ -23,12 +23,9 @@
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        init_producer_id_request::InitProducerIdRequest,
-        init_producer_id_response::InitProducerIdResponse,
-    },
+use krabka_protocol::owned::{
+    init_producer_id_request::InitProducerIdRequest,
+    init_producer_id_response::InitProducerIdResponse,
 };
 use krabka_units::convert::TimeExt as _;
 
@@ -75,7 +72,7 @@ pub(crate) async fn handle(
     let log_dir_status = broker.log_dir_status.clone();
 
     let mut cur: &[u8] = req_bytes;
-    let req = InitProducerIdRequest::decode(&mut cur, version)?;
+    let req: InitProducerIdRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────
     // Branch on whether this is an idempotent-only or transactional

@@ -231,6 +231,33 @@ pub fn unordered_timestamps_remote_segment_reader() -> (RemoteReader, tempfile::
     )
 }
 
+/// The sparse fixture with both batches gzip-compressed and every record of the
+/// second one carrying a `second_value_len`-byte value, so a limit between the
+/// two record sizes tells the batches apart.
+pub fn compressed_remote_segment_reader(
+    second_value_len: usize,
+) -> (RemoteReader, tempfile::TempDir) {
+    use krabka_compression::CompressionType;
+
+    let compressed = |mut batch: krabka_protocol::records::RecordBatch| {
+        batch.attributes = batch.attributes.with_compression(CompressionType::Gzip);
+        batch
+    };
+    let mut second = timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b');
+    for record in &mut second.records {
+        record.value = Some(bytes::Bytes::from(vec![b'b'; second_value_len]));
+    }
+    remote_segment_reader(
+        &compressed(timestamped_batch_at(
+            10,
+            &[1_000, 1_100, 1_600, 1_700],
+            b'a',
+        )),
+        &compressed(second),
+        2_400,
+    )
+}
+
 /// Copies a two-batch segment into a fresh tier, with the indexes Kafka would
 /// write for it at an index interval of one batch: the offset index holds each
 /// batch's last offset and start position, and the time index holds each

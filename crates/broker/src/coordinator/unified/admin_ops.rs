@@ -146,7 +146,8 @@ impl GroupCoordinator {
             group_id,
             &[],
             crate::time_util::now_ms(),
-        );
+        )
+        .map_err(|_| DeleteGroupError::Internal)?;
         self.offsets_log
             .append(group_id, batch)
             .await
@@ -192,6 +193,7 @@ impl GroupCoordinator {
             self.group_types
                 .remove_if(group_id, |_, group_type| *group_type == GroupType::Share);
             self.forget_group_metrics(group_id);
+            self.forget_share_group_dlq_metrics(group_id);
         }
         Ok(())
     }

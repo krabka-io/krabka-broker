@@ -9,7 +9,12 @@ for 15m) and `KrabkaUncleanablePartitions`
 
 A compaction pass failed on a partition this broker hosts, and the partition
 has not compacted since. The cleaner keeps sweeping; the partition keeps
-failing.
+failing, except one refused for a record above `max.decompressed.message.bytes`
+(`other`, with `Invalid record size` in the log line), which the cleaner
+leaves alone as Kafka trunk does until that limit changes. It stays in the
+uncleanable count, and the failure counter does not grow past the first
+refusal, so `KrabkaLogCleanerFailures` resolves while
+`KrabkaUncleanablePartitions` keeps firing.
 
 The replica need not be a leader. The cleaner sweeps every log this broker
 holds, as Kafka's `LogCleanerManager` does, so a follower replica of a
@@ -73,6 +78,10 @@ partition that climbs on a straight line has no upper bound.
   leader. Moving only the leadership does not help: this broker still holds
   the replica and still owes it a pass. Do not delete segment files under a
   running broker.
+- For a record above `max.decompressed.message.bytes`, raise the limit on the
+  topic, the broker or the cluster to at least the size the log line names.
+  The first sweep after the change runs the partition again. Kafka trunk holds
+  the partition until the broker restarts.
 - While the cause is being fixed, buy disk headroom by lowering the topic's
   `segment.bytes` — smaller segments seal sooner and the first successful
   pass reclaims more — or by moving the largest partitions off the broker.

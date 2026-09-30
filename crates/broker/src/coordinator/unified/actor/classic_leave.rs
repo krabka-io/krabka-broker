@@ -8,9 +8,8 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use krabka_protocol::{
-    owned::{leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse},
-    records::RecordBatch,
+use krabka_protocol::owned::{
+    leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
 };
 use tokio::sync::oneshot;
 
@@ -19,7 +18,7 @@ use super::{
     downgrade::maybe_downgrade,
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
-    retention::tombstone_batch,
+    retention::append_tombstones,
     waiters::{drain_followers_with, drain_removed_classic_waiters, maybe_complete_classic},
 };
 use crate::{
@@ -31,6 +30,7 @@ use crate::{
             consumer_state::GroupState, group::CoordinatorGroup, offsets_log::OffsetsLog,
         },
     },
+    error::BrokerError,
 };
 
 #[cfg(test)]
@@ -214,8 +214,7 @@ pub(super) async fn handle_classic_delete_message(
         return true;
     }
     let group_id = group.group_id.clone();
-    let batch = delete_group_batch(group, chrono_now_ms());
-    match offsets_log.append(&group_id, batch).await {
+    match append_group_delete(group, offsets_log, chrono_now_ms()).await {
         Ok(()) => {
             let _ = reply.send(Ok(()));
             false
@@ -228,10 +227,14 @@ pub(super) async fn handle_classic_delete_message(
     }
 }
 
-/// The records that delete `group`: its offset tombstones, then its group
-/// tombstone. The offset keys are sorted, so the batch does not depend on map
-/// order.
-fn delete_group_batch(group: &CoordinatorGroup, now_ms: i64) -> RecordBatch {
+/// Appends the records that delete `group`: its offset tombstones, then its
+/// group tombstone. The offset keys are sorted, so the batch does not depend on
+/// map order.
+async fn append_group_delete(
+    group: &CoordinatorGroup,
+    offsets_log: &dyn OffsetsLog,
+    now_ms: i64,
+) -> Result<(), BrokerError> {
     let keys: Vec<(String, i32)> = group
         .committed_offsets
         .keys()
@@ -240,5 +243,12 @@ fn delete_group_batch(group: &CoordinatorGroup, now_ms: i64) -> RecordBatch {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    tombstone_batch(&group.group_id, &keys, Some(&group.kind), now_ms)
+    append_tombstones(
+        offsets_log,
+        &group.group_id,
+        &keys,
+        Some(&group.kind),
+        now_ms,
+    )
+    .await
 }

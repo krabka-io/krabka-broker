@@ -16,13 +16,14 @@ use krabka_raft::{
 use tokio::sync::watch;
 
 mod controller_handle;
+mod fatal_fault;
 mod image_watch;
 mod observer_source;
 mod quorum_forwarder;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::image_watch::watch_image_loop;
+pub(crate) use self::{fatal_fault::or_fatal_fault, image_watch::watch_image_loop};
 pub use self::{observer_source::ObserverSource, quorum_forwarder::QuorumForwarder};
 
 #[async_trait::async_trait]
@@ -30,6 +31,17 @@ pub trait MetadataSource: Send + Sync {
     fn current_image(&self) -> Arc<MetadataImage>;
     fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>>;
     fn watch_leader(&self) -> watch::Receiver<Option<NodeId>>;
+    /// The message of the fatal fault that stopped this source's controller,
+    /// and `None` until there is one. Kafka halts the process on such a fault
+    /// (`ProcessTerminatingFaultHandler`), so the broker that hosts the source
+    /// stops itself when this changes to `Some`.
+    ///
+    /// Only a live controller can fault. The default is the channel of a
+    /// source that has none: it never carries a value, and its sender is
+    /// already dropped, so `changed` on it fails at once.
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        watch::channel(None).1
+    }
     fn quorum_state(&self) -> QuorumState;
     /// Current controller epoch when this source owns a quorum view.
     /// Broker-only observers return `None` because they track the leader id but

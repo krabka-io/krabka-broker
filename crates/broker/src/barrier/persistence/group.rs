@@ -9,7 +9,7 @@ use krabka_protocol::{
     primitives::{
         array::put_array_len,
         fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
-        string_bytes::{get_string_owned, put_string},
+        string_bytes::get_string_owned,
     },
 };
 use krabka_units::{
@@ -21,6 +21,7 @@ use super::{
     RECORD_VERSION,
     primitives::{decode_vec, expect_end, expect_version},
 };
+use crate::{coordinator::unified::persistence::put_string, error::BrokerError};
 
 /// A barrier group definition.
 ///
@@ -40,18 +41,21 @@ pub(crate) struct GroupValue {
 }
 
 /// Encode a group definition.
-#[must_use]
-pub(crate) fn encode_group(value: &GroupValue) -> Vec<u8> {
+///
+/// # Errors
+/// Returns [`BrokerError::Protocol`] when a topic name is longer than 32767
+/// bytes, which the `i16` length cannot carry.
+pub(crate) fn encode_group(value: &GroupValue) -> Result<Vec<u8>, BrokerError> {
     let mut out = Vec::new();
     put_i16(&mut out, RECORD_VERSION);
     put_array_len(&mut out, value.topics.len(), false);
     for topic in &value.topics {
-        put_string(&mut out, topic);
+        put_string(&mut out, topic)?;
     }
     put_i64(&mut out, opt_time_to_millis_i64(value.interval));
     put_i32(&mut out, value.retained_cuts);
     put_i64(&mut out, value.last_epoch);
-    out
+    Ok(out)
 }
 
 /// Decode a group definition.
@@ -82,12 +86,15 @@ mod tests {
     use krabka_units::convert::TimeExt;
 
     use super::*;
-    use crate::barrier::persistence::test_support::sample_group;
+    use crate::{
+        barrier::persistence::test_support::sample_group,
+        coordinator::unified::persistence::MAX_STRING_BYTES,
+    };
 
     #[test]
     fn a_group_value_round_trips() {
         let value = sample_group();
-        assert!(decode_group(&encode_group(&value)).ok() == Some(value));
+        assert!(decode_group(&encode_group(&value).expect("encodes")).ok() == Some(value));
     }
 
     #[test]
@@ -96,7 +103,7 @@ mod tests {
             interval: None,
             ..sample_group()
         };
-        let decoded = decode_group(&encode_group(&value)).expect("decodes");
+        let decoded = decode_group(&encode_group(&value).expect("encodes")).expect("decodes");
         assert!(decoded == value);
         assert!(decoded.interval.is_none());
     }
@@ -104,8 +111,26 @@ mod tests {
     #[test]
     fn an_interval_keeps_its_millisecond_value() {
         let value = sample_group();
-        let decoded = decode_group(&encode_group(&value)).expect("decodes");
+        let decoded = decode_group(&encode_group(&value).expect("encodes")).expect("decodes");
         assert!(decoded.interval.map(TimeExt::millis_i64) == Some(60_000));
+    }
+
+    /// A topic name is a string with an `i16` length. The encoder writes one of
+    /// 32767 bytes and refuses a longer one with an error, wherever it sits in
+    /// the list.
+    #[test]
+    fn a_topic_name_of_32767_bytes_encodes_and_one_of_32768_is_refused() {
+        for (length, encodes) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let value = GroupValue {
+                topics: vec!["orders".to_owned(), "t".repeat(length)],
+                ..sample_group()
+            };
+            let encoded = encode_group(&value);
+            assert!(encoded.is_ok() == encodes, "{length} bytes");
+            if let Ok(bytes) = encoded {
+                assert!(decode_group(&bytes).ok() == Some(value), "{length} bytes");
+            }
+        }
     }
 
     #[test]
@@ -114,6 +139,6 @@ mod tests {
             topics: Vec::new(),
             ..sample_group()
         };
-        assert!(decode_group(&encode_group(&value)).ok() == Some(value));
+        assert!(decode_group(&encode_group(&value).expect("encodes")).ok() == Some(value));
     }
 }

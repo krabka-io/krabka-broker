@@ -25,6 +25,7 @@ use crate::{
             },
         },
     },
+    error::BrokerError,
 };
 
 /// Deletes the share group that `state` holds.
@@ -46,20 +47,18 @@ pub(super) async fn delete_group(
 
     delete_share_state(state, offsets_log, coordinator).await?;
 
-    offsets_log
-        .append(
-            &state.group_id,
-            tombstone_batch(&state.group_id, chrono_now_ms()),
-        )
-        .await
-        .map_err(|error| {
-            tracing::warn!(
-                group_id = %state.group_id,
-                %error,
-                "share group tombstone append failed",
-            );
-            DeleteGroupError::Internal
-        })?;
+    let appended = match tombstone_batch(&state.group_id, chrono_now_ms()) {
+        Ok(batch) => offsets_log.append(&state.group_id, batch).await,
+        Err(error) => Err(error),
+    };
+    appended.map_err(|error| {
+        tracing::warn!(
+            group_id = %state.group_id,
+            %error,
+            "share group tombstone append failed",
+        );
+        DeleteGroupError::Internal
+    })?;
     // The actor clears the seeds while it still owns the group, so a group
     // that a later heartbeat creates with the same id starts empty.
     coordinator.share_seeds.remove(&state.group_id);
@@ -152,7 +151,12 @@ async fn delete_share_state(
 /// `ShareGroup.createGroupTombstoneRecords`: the target assignment metadata,
 /// the `ShareGroupStatePartitionMetadata`, and the group epoch. An empty
 /// group has no member records left.
-pub(super) fn tombstone_batch(group_id: &str, now_ms: i64) -> RecordBatch {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `group_id` is longer than 32767
+/// bytes.
+pub(super) fn tombstone_batch(group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
     let mut batch = OffsetRecordBatchBuilder::default();
     for key in [
         ShareGroupKey::TargetAssignmentMetadata {
@@ -165,9 +169,9 @@ pub(super) fn tombstone_batch(group_id: &str, now_ms: i64) -> RecordBatch {
             group_id: group_id.into(),
         },
     ] {
-        batch.push(encode_share_key(&key), None);
+        batch.push(encode_share_key(&key)?, None);
     }
-    batch.finish(now_ms)
+    Ok(batch.finish(now_ms))
 }
 
 #[cfg(test)]
@@ -242,6 +246,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn delete_share_group_answers_as_kafka() {
         let tombstones: Appended = tombstone_batch("sg", 0)
+            .unwrap()
             .records
             .into_iter()
             .map(|record| (record.key, record.value))
@@ -369,6 +374,7 @@ mod tests {
             .map(|record| (record.key, record.value))
             .collect();
         let tombstones: Appended = tombstone_batch("sg", 0)
+            .unwrap()
             .records
             .into_iter()
             .map(|record| (record.key, record.value))
@@ -378,5 +384,57 @@ mod tests {
         check!(!coordinator.share_group_ids().contains(&"sg".to_owned()));
         check!(coordinator.cached_share_seed("sg") == None);
         check!(coordinator.group_type("sg") == None);
+    }
+
+    /// A deleted share group takes its dead-letter counters with it. A delete
+    /// that the group's members refuse does not, and another group's counters
+    /// stay either way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deleting_a_share_group_releases_its_dead_letter_counters() {
+        let series = |metrics: &crate::metrics::BrokerMetrics, group: &str| {
+            let label = crate::metrics::ShareGroupIdLabel {
+                group_id: group.to_owned(),
+            };
+            [
+                metrics.share_group_dlq_records.get(&label).is_some(),
+                metrics
+                    .share_group_dlq_produce_requests
+                    .get(&label)
+                    .is_some(),
+                metrics
+                    .share_group_dlq_failed_produce_requests
+                    .get(&label)
+                    .is_some(),
+            ]
+        };
+        // (members, result, whether the group's series stay)
+        let rows = [
+            (1, Err(DeleteGroupError::NonEmpty), true),
+            (0, Ok(()), false),
+        ];
+
+        for (members, expected, kept) in rows {
+            let (coordinator, _log) = make_coord_with_log();
+            let metrics = crate::metrics::BrokerMetrics::new();
+            coordinator.set_metrics(metrics.clone());
+            for group in ["sg", "other"] {
+                metrics.record_share_dlq_produce(group);
+                metrics.record_share_dlq_records(group, 2);
+                metrics.record_share_dlq_produce_failed(group);
+            }
+            coordinator.mark_share("sg");
+            coordinator
+                .get_or_create_share("sg")
+                .tx
+                .send(ShareGroupActorMessage::Seed(seed(members, &[])))
+                .await
+                .expect("seed the share group");
+
+            let result = coordinator.delete_group("sg").await;
+
+            check!(result == expected, "{members} members");
+            check!(series(&metrics, "sg") == [kept; 3], "{members} members");
+            check!(series(&metrics, "other") == [true; 3], "{members} members");
+        }
     }
 }

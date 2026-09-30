@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 88 0 93 9 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 91 0 97 9 *)
 
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 94 28 94 80
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 94 4 94 80
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 82 10 82 98
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 99 11 99 86
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 98 4 99 86
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 84 10 85 83
 
 use creusot.prelude.Any
 
@@ -10,20 +10,22 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_describe_visible [#"/workspace/crates/verified/src/delegation_token.rs" 88 0 93 9]
-  (owner_filter_matches: bool) (caller_is_owner: bool) (caller_is_renewer: bool) (acl_allows: bool) (return (x: bool)) =
-(! bb0
+let token_describe_visible [#"/workspace/crates/verified/src/delegation_token.rs" 91 0 97 9]
+  (owner_filter_matches: bool) (caller_is_owner: bool) (caller_is_requester: bool) (caller_is_renewer: bool)
+  (acl_allows: bool) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {owner_filter_matches = false} (! bb2) | br1 -> {owner_filter_matches} (! bb1) ]
-  | bb1 = any [ br0 -> {caller_is_owner = false} (! bb3) | br1 -> {caller_is_owner} (! bb4) ]
-  | bb3 = any [ br0 -> {caller_is_renewer = false} (! bb5) | br1 -> {caller_is_renewer} (! bb4) ]
-  | bb4 = s0 [ s0 = [ &_ret <- [%#sdelegation_token] true ] s1 | s1 = return {_ret} ]
-  | bb5 = s0 [ s0 = [ &_ret <- acl_allows ] s1 | s1 = return {_ret} ]
+  | bb1 = any [ br0 -> {caller_is_owner = false} (! bb3) | br1 -> {caller_is_owner} (! bb5) ]
+  | bb3 = any [ br0 -> {caller_is_requester = false} (! bb4) | br1 -> {caller_is_requester} (! bb5) ]
+  | bb4 = any [ br0 -> {caller_is_renewer = false} (! bb6) | br1 -> {caller_is_renewer} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- [%#sdelegation_token] true ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- acl_allows ] s1 | s1 = return {_ret} ]
   | bb2 = s0 [ s0 = [ &_ret <- [%#sdelegation_token'0] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & owner_filter_matches: bool = owner_filter_matches
   | & caller_is_owner: bool = caller_is_owner
+  | & caller_is_requester: bool = caller_is_requester
   | & caller_is_renewer: bool = caller_is_renewer
   | & acl_allows: bool = acl_allows ])
   [ return (result: bool) -> {[@stop_split] [@expl:token_describe_visible ensures] [%#sdelegation_token'1] result
-    = (owner_filter_matches /\ (caller_is_owner \/ caller_is_renewer \/ acl_allows))}
+    = (owner_filter_matches /\ (caller_is_owner \/ caller_is_requester \/ caller_is_renewer \/ acl_allows))}
     (! return {result}) ]

@@ -28,6 +28,14 @@
 //! `FENCED_LEADER_EPOCH`, because a marker written under one leadership and
 //! stamped with another's epoch puts a false epoch in the batch header. A
 //! negative or missing epoch is malformed and is fenced too.
+//!
+//! # Refusing the whole request
+//!
+//! A caller without `ClusterAction` gets `CLUSTER_AUTHORIZATION_FAILED` on every
+//! partition. A group name of more than 32767 bytes cannot go into a marker,
+//! whose group string carries an `i16` length, and a compact string on the wire
+//! can carry one. It gets `INVALID_REQUEST` (42) on every partition, and no
+//! partition is touched.
 
 use std::sync::atomic::Ordering;
 
@@ -54,6 +62,7 @@ use crate::{
     },
     broker::Broker,
     codes,
+    coordinator::unified::persistence::MAX_STRING_BYTES,
     error::BrokerError,
     handlers::{RequestContext, encode_response},
     partition::Partition,
@@ -81,11 +90,12 @@ pub(crate) async fn handle(
     let req = WriteBarrierMarkersRequest::decode(&mut cur, version)?;
 
     let image = broker.controller.current_image();
-    if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+    let denied = cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx);
+    if let Some(code) = request_refusal(denied, &req.group) {
         let topics = req
             .topics
             .iter()
-            .map(|topic| refused_topic(topic, codes::CLUSTER_AUTHORIZATION_FAILED))
+            .map(|topic| refused_topic(topic, code))
             .collect();
         return encode_response(&response(topics), version);
     }
@@ -121,6 +131,20 @@ pub(crate) async fn handle(
     }
 
     encode_response(&response(topics), version)
+}
+
+/// The code that refuses the whole request, or `None` when it may go on.
+///
+/// Authorization comes first, so a caller that may not write markers learns
+/// nothing about the group name.
+fn request_refusal(denied: bool, group: &str) -> Option<i16> {
+    if denied {
+        Some(codes::CLUSTER_AUTHORIZATION_FAILED)
+    } else if group.len() > MAX_STRING_BYTES {
+        Some(codes::INVALID_REQUEST)
+    } else {
+        None
+    }
 }
 
 /// Append one marker into one partition, and report the outcome.
@@ -249,13 +273,14 @@ mod tests {
     /// A malformed epoch value that the receiving broker must fence.
     const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
 
-    use super::{NO_OFFSET, mark, refused_topic, row};
+    use super::{NO_OFFSET, mark, refused_topic, request_refusal, row};
     use crate::{
         barrier::{
             marker::{BarrierMarker, parse_barrier_marker},
             test_support::{open_partition, topic_records},
         },
         codes,
+        coordinator::unified::persistence::MAX_STRING_BYTES,
         partition_registry::PartitionRegistry,
     };
 
@@ -417,6 +442,68 @@ mod tests {
         let batch = &read.batches[0];
         check!(batch.attributes.is_control_batch());
         check!(parse_barrier_marker(&batch.records[0]).ok() == Some(marker()));
+    }
+
+    /// Authorization answers first, so a caller that may not write markers
+    /// learns nothing about the group name. A group name over 32767 bytes cannot
+    /// go into a marker, and it refuses the whole request.
+    #[test]
+    fn a_request_is_refused_whole_for_a_denial_or_a_group_over_32767_bytes() {
+        let longest = "g".repeat(MAX_STRING_BYTES);
+        let too_long = "g".repeat(MAX_STRING_BYTES + 1);
+        let cases = [
+            ("allowed, usual name", false, "orders-cut", None),
+            ("allowed, longest name", false, longest.as_str(), None),
+            (
+                "allowed, name one byte too long",
+                false,
+                too_long.as_str(),
+                Some(codes::INVALID_REQUEST),
+            ),
+            (
+                "denied, usual name",
+                true,
+                "orders-cut",
+                Some(codes::CLUSTER_AUTHORIZATION_FAILED),
+            ),
+            (
+                "denied, name one byte too long",
+                true,
+                too_long.as_str(),
+                Some(codes::CLUSTER_AUTHORIZATION_FAILED),
+            ),
+        ];
+        for (case, denied, group, expected) in cases {
+            check!(request_refusal(denied, group) == expected, "{case}");
+        }
+    }
+
+    /// The whole-request check is the first line of defence. A marker whose
+    /// group still cannot be written is an error row and appends nothing.
+    #[tokio::test]
+    async fn a_marker_that_cannot_be_encoded_is_an_error_row_and_appends_nothing() {
+        let dir = tempdir().expect("tempdir");
+        let registry = registry_with_leader(dir.path(), LOCAL, 3).await;
+        let image = image(&topic_records("orders", 1, LOCAL));
+        let marker = BarrierMarker {
+            group: "g".repeat(MAX_STRING_BYTES + 1),
+            ..marker()
+        };
+        let written = mark(
+            &registry,
+            &image,
+            LOCAL,
+            &marker,
+            "orders",
+            PartitionIndex(0),
+            3,
+        )
+        .await;
+        check!(written == row(PartitionIndex(0), codes::UNKNOWN_SERVER_ERROR, NO_OFFSET));
+        let partition = registry
+            .get("orders", PartitionIndex(0))
+            .expect("the partition is open");
+        check!(partition.log_end_offset() == Offset(0));
     }
 
     #[test]

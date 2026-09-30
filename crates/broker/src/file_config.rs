@@ -317,8 +317,9 @@ pub struct FileConfig {
     /// broker consults `transaction.two.phase.commit.enable`,
     /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`,
     /// `default.replication.factor`, `delete.topic.enable`,
-    /// `auto.create.topics.enable`, the KIP-1066 `cordoned.log.dirs`, and
-    /// Kafka's two internal switches. `unstable.api.versions.enable`
+    /// `auto.create.topics.enable`, `transaction.partition.verification.enable`,
+    /// the KIP-1066 `cordoned.log.dirs`, and Kafka's two internal switches.
+    /// `unstable.api.versions.enable`
     /// (default `false`) advertises and serves what krabka implements from
     /// Kafka trunk beyond 4.3.1: `ApiVersions` v5 (KIP-1242),
     /// `TxnOffsetCommit` v6 (KIP-1319), `StreamsGroupHeartbeat` and

@@ -208,6 +208,9 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
         |c| c.transaction_state_min_isr.to_string();
     "transaction.max.timeout.ms", Some("transaction_max_timeout"),
         |c| time_ms(c.transaction_max_timeout);
+    "transaction.partition.verification.enable",
+        Some("transaction_partition_verification_enable"),
+        |c| c.transaction_partition_verification_enable.to_string();
     "transaction.abort.timed.out.transaction.cleanup.interval.ms",
         Some("txn_abort_cleanup_interval"),
         |c| time_ms(c.txn_abort_cleanup_interval);

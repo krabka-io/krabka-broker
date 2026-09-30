@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 171 27 171 32 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 195 27 195 32 *)
 
 (* <consensus::RecoveryCandidate as std::clone::Clone> *)
 
@@ -13,7 +13,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RecoveryCandidate [#"/workspace/crates/verified/src/consensus.rs" 171 27 171 32] (self: t_RecoveryCandidate)
+let clone_RecoveryCandidate [#"/workspace/crates/verified/src/consensus.rs" 195 27 195 32] (self: t_RecoveryCandidate)
   (return (x: t_RecoveryCandidate)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RecoveryCandidate = Any.any_l () | & self: t_RecoveryCandidate = self ])

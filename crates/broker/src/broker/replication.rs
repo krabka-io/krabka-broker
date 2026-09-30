@@ -49,6 +49,7 @@ pub(super) fn spawn_replicator_supervisor(
             partitions: Arc::clone(partitions),
             log_dirs: storage.log_dir_status.online_subset(&config.all_log_dirs()),
             log_config: config.log_config.clone(),
+            unstable_api_versions: config.features.unstable_api_versions,
             client_id: format!("krabka-broker-{}-replicator", config.broker_id),
             shutdown: runtime.0.clone(),
             txn_coordinator: Some(Arc::clone(coordinators.0)),

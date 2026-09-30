@@ -9,18 +9,23 @@ use krabka_protocol::{
     ProtocolError,
     primitives::{
         fixed::{get_i16, put_i16},
-        string_bytes::{get_string_owned, put_string},
+        string_bytes::get_string_owned,
     },
 };
 
-use crate::error::BrokerError;
+use crate::{coordinator::unified::persistence::put_string, error::BrokerError};
 
 /// Encode the Kafka `TransactionLogKey`, version 0.
-pub(crate) fn encode_key(transactional_id: &str) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the transactional id is longer than
+/// 32767 bytes, which the key's `int16` string length cannot carry.
+pub(crate) fn encode_key(transactional_id: &str) -> Result<Vec<u8>, BrokerError> {
     let mut buf = BytesMut::new();
     put_i16(&mut buf, 0);
-    put_string(&mut buf, transactional_id);
-    buf.to_vec()
+    put_string(&mut buf, transactional_id)?;
+    Ok(buf.to_vec())
 }
 
 /// Decode a Kafka `TransactionLogKey` and return the transactional id.
@@ -49,15 +54,33 @@ mod tests {
 
     #[test]
     fn key_round_trip() {
-        let encoded = encode_key("abc");
+        let encoded = encode_key("abc").unwrap();
         assert!(decode_key(&encoded).unwrap() == "abc");
         // `00 00` version + int16 length (3) + bytes.
         assert!(encoded == &[0x00, 0x00, 0x00, 0x03, b'a', b'b', b'c']);
     }
 
+    /// The key writes the transactional id with an `int16` length: an id of
+    /// 32767 bytes encodes, and one of 32768 bytes is an error, not a panic.
+    #[test]
+    fn a_transactional_id_over_32767_bytes_does_not_encode() {
+        for (length, encodes) in [(32_767, true), (32_768, false)] {
+            let id = "t".repeat(length);
+
+            let encoded = encode_key(&id);
+
+            assert!(encoded.is_ok() == encodes, "{length} bytes");
+            if let Ok(bytes) = &encoded {
+                assert!(decode_key(bytes).unwrap() == id);
+            } else {
+                assert!(matches!(encoded, Err(BrokerError::Protocol(_))));
+            }
+        }
+    }
+
     #[test]
     fn decode_key_rejects_unknown_version_and_truncation() {
-        let key = encode_key("abc");
+        let key = encode_key("abc").unwrap();
         // unknown version
         let mut bad = key.clone();
         bad[1] = 0x09;

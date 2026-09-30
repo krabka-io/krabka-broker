@@ -145,7 +145,7 @@ impl BarrierCoordinator {
             group,
             vec![(
                 RecordKey::injection_start(group, epoch),
-                Some(encode_injection_start(&start).into()),
+                Some(encode_injection_start(&start)?.into()),
             )],
         )
         .await?;
@@ -242,10 +242,10 @@ impl BarrierCoordinator {
         let held: Vec<i64> = entry.cuts.keys().copied().collect();
         let expired = expired_cut_epochs(epoch, entry.definition.retained_cuts, &held);
         let mut records = vec![
-            (RecordKey::cut(group, epoch), Some(encode_cut(&cut).into())),
+            (RecordKey::cut(group, epoch), Some(encode_cut(&cut)?.into())),
             (
                 RecordKey::group(group),
-                Some(encode_group(&definition).into()),
+                Some(encode_group(&definition)?.into()),
             ),
             // The cut supersedes the injection-start record of its own epoch.
             (RecordKey::injection_start(group, epoch), None),

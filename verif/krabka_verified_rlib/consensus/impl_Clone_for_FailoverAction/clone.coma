@@ -9,6 +9,7 @@ type t_FailoverRecovery = None | Balanced | Aggressive
 type t_FailoverAction =
   | ElectClean
   | ElectFromElr
+  | ElectLastKnown
   | Recover t_FailoverRecovery
   | ElectUnclean
   | Unavailable

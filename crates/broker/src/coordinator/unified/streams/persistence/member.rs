@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn member_metadata_round_trip() {
-        let kb = encode_member_metadata_key("g1", "m1");
+        let kb = encode_member_metadata_key("g1", "m1").unwrap();
         let (ver, body) = peek_version(&kb);
         assert!(ver == KEY_STREAMS_MEMBER_METADATA);
         assert!(

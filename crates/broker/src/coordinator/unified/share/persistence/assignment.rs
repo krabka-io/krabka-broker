@@ -153,7 +153,7 @@ mod tests {
             group_id: "g1".into(),
             member_id: "m1".into(),
         };
-        let b = encode_share_key(&key);
+        let b = encode_share_key(&key).unwrap();
         let (ver, body) = peek_version(&b);
         assert!(ver == KEY_SHARE_TARGET_ASSIGNMENT_MEMBER);
         assert!(parse_share_key(ver, body).unwrap() == key);
@@ -186,7 +186,7 @@ mod tests {
             group_id: "g1".into(),
             member_id: "m1".into(),
         };
-        let b = encode_share_key(&key);
+        let b = encode_share_key(&key).unwrap();
         let (ver, body) = peek_version(&b);
         assert!(ver == KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT);
         assert!(parse_share_key(ver, body).unwrap() == key);

@@ -13,7 +13,9 @@ use krabka_protocol::records::{RecordBatch, TimestampType};
 use krabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
 
 use super::Segment;
-use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError};
+use crate::{
+    config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError, record_limit::check_records_read,
+};
 
 impl Segment {
     /// Absolute offset and record timestamp of the first record in this
@@ -24,55 +26,104 @@ impl Segment {
     /// needs that scan after the index lookup. This matches Kafka's
     /// `LogSegment.findOffsetByTimestamp`. The result is `None` when no
     /// record in this segment qualifies.
+    ///
+    /// The scan applies no `max.decompressed.message.bytes`: this is the lookup
+    /// the log's own bookkeeping uses, to read a segment's first timestamp. A
+    /// `ListOffsets` answer goes through
+    /// `Segment::offset_for_timestamp_with_window`, which takes the limit.
     #[must_use]
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
-        self.offset_for_timestamp_with_window(target_ts, DEFAULT_TIMESTAMP_SCAN_WINDOW)
+        // With no limit the scan has nothing to refuse.
+        self.offset_for_timestamp_with_window(target_ts, DEFAULT_TIMESTAMP_SCAN_WINDOW, None)
+            .ok()
+            .flatten()
     }
 
+    /// [`Segment::offset_for_timestamp`] over `scan_window`-sized reads, with
+    /// `limit` as Kafka trunk's `max.decompressed.message.bytes`.
+    ///
+    /// Kafka's `FileRecords.searchForTimestamp` decompresses a batch only when
+    /// its max timestamp reaches `target_ts`, and reads it only as far as the
+    /// record it returns, so a `limit` fails the lookup only for a record that
+    /// Kafka's iterator would have read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogError::RecordTooLarge`] for such a record of a compressed
+    /// batch. A scan with no `limit` never fails; an unreadable segment
+    /// answers `None`.
     pub(crate) fn offset_for_timestamp_with_window(
         &self,
         target_ts: i64,
         scan_window: ByteSize,
-    ) -> Option<(Offset, i64)> {
+        limit: Option<ByteSize>,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
         let floor_rel = self.time_index.lookup(target_ts);
-        let scan_from = self
+        let Some(scan_from) = self
             .base_offset
             .0
             .checked_add(i64::from(floor_rel))
-            .map(Offset)?;
-        self.scan_from_floor_windowed(scan_from, scan_window, target_ts)
+            .map(Offset)
+        else {
+            return Ok(None);
+        };
+        self.scan_from_floor_windowed(scan_from, scan_window, target_ts, limit)
+    }
+
+    /// [`Segment::offset_of_max_timestamp_with_window`] over the default window
+    /// with no limit, for the tests that only care where the answer is.
+    #[cfg(test)]
+    pub(crate) fn offset_of_max_timestamp(&self) -> Option<(Offset, i64)> {
+        self.offset_of_max_timestamp_with_window(DEFAULT_TIMESTAMP_SCAN_WINDOW, None)
+            .expect("a lookup with no limit refuses nothing")
     }
 
     /// Absolute offset and timestamp of the record that carries this
-    /// segment's `max_timestamp`.
+    /// segment's `max_timestamp`, read in `scan_window`-sized pieces, with
+    /// `limit` as Kafka trunk's `max.decompressed.message.bytes`: Kafka's
+    /// `RecordBatch.offsetOfMaxTimestamp` decompresses the batch that holds the
+    /// maximum, up to the record it returns.
     ///
     /// Ties resolve to the earliest offset, as in Kafka. The result is `None`
     /// for an empty segment. This method starts the scan at the time index's
     /// floor for the maximum, then scans forward for the first record whose
     /// timestamp equals the segment maximum.
-    #[must_use]
-    pub fn offset_of_max_timestamp(&self) -> Option<(Offset, i64)> {
-        self.offset_of_max_timestamp_with_window(DEFAULT_TIMESTAMP_SCAN_WINDOW)
-    }
-
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogError::RecordTooLarge`] for a record of that batch that the
+    /// `limit` refuses. A scan with no `limit` never fails.
     pub(crate) fn offset_of_max_timestamp_with_window(
         &self,
         scan_window: ByteSize,
-    ) -> Option<(Offset, i64)> {
+        limit: Option<ByteSize>,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
         if self.max_timestamp == i64::MIN {
-            return self.scan_max_timestamp_windowed(scan_window);
+            let found = self.scan_max_timestamp_windowed(scan_window);
+            // The unknown-maximum scan reads every record, so the limit is
+            // checked on the batch that holds the maximum the way the
+            // known-maximum path checks it: by looking the maximum up again.
+            if let Some((_, timestamp)) = found
+                && limit.is_some()
+            {
+                self.scan_from_floor_windowed(self.base_offset, scan_window, timestamp, limit)?;
+            }
+            return Ok(found);
         }
         let floor_rel = self.time_index.lookup(self.max_timestamp);
-        let scan_from = self
+        let Some(scan_from) = self
             .base_offset
             .0
             .checked_add(i64::from(floor_rel))
-            .map(Offset)?;
+            .map(Offset)
+        else {
+            return Ok(None);
+        };
         // Equality against `max_timestamp` is safe because Kafka's batch
         // `max_timestamp` is always a real record timestamp (the largest
         // among the batch's records), so some record's timestamp equals
         // the segment max exactly.
-        self.scan_from_floor_windowed(scan_from, scan_window, self.max_timestamp)
+        self.scan_from_floor_windowed(scan_from, scan_window, self.max_timestamp, limit)
     }
 
     /// Recover the maximum timestamp for a sealed segment opened through the
@@ -125,44 +176,68 @@ impl Segment {
     /// result while `cursor` is still within the segment, and doubles the
     /// window before it tries again. The window is therefore bounded by the
     /// largest batch, not by the whole tail.
+    ///
+    /// `limit` is Kafka trunk's `max.decompressed.message.bytes`. A batch whose
+    /// max timestamp reaches `target_ts` is the one Kafka's scan decompresses,
+    /// and it reads that batch up to the record it returns, or to its end when
+    /// none qualifies, so the limit is checked over exactly those records. A
+    /// scan that cannot proceed (an unreadable segment, an offset that
+    /// overflows) answers `None`, as it did before the limit existed.
     fn scan_from_floor_windowed(
         &self,
         floor_offset: Offset,
         window_size: ByteSize,
         target_ts: i64,
-    ) -> Option<(Offset, i64)> {
+        limit: Option<ByteSize>,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
         let mut cursor = floor_offset;
         let mut window = window_size.max(bytes(1));
         loop {
             if cursor > self.last_offset {
-                return None;
+                return Ok(None);
             }
-            let batches = self.read(cursor, window).ok()?;
+            let Ok(batches) = self.read(cursor, window) else {
+                return Ok(None);
+            };
             if batches.is_empty() {
                 // The batch at `cursor` is larger than the window, so it
                 // could not be fully decoded. Grow the window and retry
                 // the same cursor; bounded by the largest batch size.
-                let current = u32::try_from(window.bytes_u64()).ok()?;
-                window = bytes(krabka_verified::timestamp_scan_window(current)?);
+                let Some(grown) = u32::try_from(window.bytes_u64())
+                    .ok()
+                    .and_then(krabka_verified::timestamp_scan_window)
+                else {
+                    return Ok(None);
+                };
+                window = bytes(grown);
                 continue;
             }
             for batch in &batches {
-                let records = Self::timestamp_records(batch)?;
+                let Some(records) = Self::timestamp_records(batch) else {
+                    return Ok(None);
+                };
                 let timestamps: Vec<_> = records.iter().map(|(_, timestamp)| *timestamp).collect();
-                if let Some(index) = krabka_verified::first_timestamp_index(&timestamps, target_ts)
-                {
-                    return Some(records[index]);
+                let found = krabka_verified::first_timestamp_index(&timestamps, target_ts);
+                if batch.max_timestamp >= target_ts {
+                    let read = found.map_or(batch.records.len(), |index| index + 1);
+                    check_records_read(batch, read, limit)?;
+                }
+                if let Some(index) = found {
+                    return Ok(Some(records[index]));
                 }
             }
             // No match in this window; resume just past the last batch
             // read. `read` includes the batch covering `cursor`, so
             // `last_read` >= cursor and the cursor strictly advances.
             let last = batches.last().expect("non-empty checked above");
-            cursor = Offset(krabka_verified::timestamp_scan_next(
+            let Some(next) = krabka_verified::timestamp_scan_next(
                 cursor.0,
                 last.base_offset,
                 last.last_offset_delta,
-            )?);
+            ) else {
+                return Ok(None);
+            };
+            cursor = Offset(next);
         }
     }
 
@@ -354,7 +429,8 @@ mod tests {
         seg.log_file.set_len(1).unwrap();
 
         assert2::assert!(
-            seg.offset_for_timestamp_with_window(100, bytes(u32::MAX))
+            seg.offset_for_timestamp_with_window(100, bytes(u32::MAX), None)
+                .unwrap()
                 .is_none()
         );
     }
@@ -418,7 +494,9 @@ mod tests {
             ("no matching record", 10_001, None),
         ] {
             assert2::assert!(
-                seg.scan_from_floor_windowed(Offset(0), bytes(1), threshold) == expected
+                seg.scan_from_floor_windowed(Offset(0), bytes(1), threshold, None)
+                    .unwrap()
+                    == expected
             );
         }
         drop(dir);
@@ -439,7 +517,9 @@ mod tests {
         // pins the returned offset arithmetic.
         seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
         seg.append(&sample_batch(1, 3, 200), DENSE_INDEX).unwrap();
-        let got = seg.scan_from_floor_windowed(Offset(0), WINDOW, 202);
+        let got = seg
+            .scan_from_floor_windowed(Offset(0), WINDOW, 202, None)
+            .unwrap();
         assert2::assert!(got == Some((Offset(3), 202)));
         drop(dir);
     }
@@ -485,5 +565,173 @@ mod tests {
         seg.append(&b, DENSE_INDEX).unwrap();
         assert2::assert!(seg.offset_of_max_timestamp() == Some((Offset(0), 500)));
         drop(dir);
+    }
+}
+
+/// Kafka trunk's `max.decompressed.message.bytes` on the by-timestamp lookups:
+/// `FileRecords.searchForTimestamp` and `RecordBatch.offsetOfMaxTimestamp`.
+#[cfg(test)]
+mod record_limit_tests {
+    use assert2::check;
+    use bytes::Bytes;
+    use krabka_compression::CompressionType;
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_units::prelude::{ByteSize, bytes, kibibytes};
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::segment::test_support::DENSE_INDEX;
+
+    /// The body size of a record with a `1000`-byte value and nothing else:
+    /// its attributes byte, a one-byte timestamp and offset delta, a null key,
+    /// the value behind its two-byte length, and no headers.
+    const LARGE: usize = 1_007;
+    const LIMIT: ByteSize = bytes(100);
+    const WINDOW: ByteSize = kibibytes(64);
+
+    /// A batch at `base_offset` holding one record per `(timestamp, value
+    /// length)` pair, compressed with `codec`.
+    fn batch(base_offset: i64, records: &[(i64, usize)], codec: CompressionType) -> RecordBatch {
+        let base_timestamp = records[0].0;
+        RecordBatch {
+            base_offset,
+            base_timestamp,
+            max_timestamp: records.iter().map(|(ts, _)| *ts).max().unwrap(),
+            last_offset_delta: i32::try_from(records.len()).unwrap() - 1,
+            attributes: Attributes::default().with_compression(codec),
+            records: records
+                .iter()
+                .enumerate()
+                .map(|(delta, (timestamp, value_len))| Record {
+                    offset_delta: i32::try_from(delta).unwrap(),
+                    timestamp_delta: timestamp - base_timestamp,
+                    value: Some(Bytes::from(vec![7_u8; *value_len])),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn segment(batches: &[RecordBatch]) -> (tempfile::TempDir, Segment) {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        for batch in batches {
+            seg.append(batch, DENSE_INDEX).unwrap();
+        }
+        (dir, seg)
+    }
+
+    /// What a lookup answers: the record it found, or the size of the record
+    /// it refused.
+    type Lookup = Result<Option<(Offset, i64)>, usize>;
+
+    fn answer(result: Result<Option<(Offset, i64)>, LogError>) -> Lookup {
+        match result {
+            Ok(found) => Ok(found),
+            Err(LogError::RecordTooLarge { size, limit }) => {
+                check!(limit == LIMIT.bytes_usize());
+                Err(size)
+            }
+            Err(other) => panic!("unexpected error: {other}"),
+        }
+    }
+
+    /// A batch whose max timestamp is below the target is skipped without being
+    /// decompressed, and a batch is read only up to the record the lookup
+    /// returns, so the limit fails a lookup only for a record Kafka reads. An
+    /// uncompressed batch is never held to it.
+    #[test]
+    fn a_lookup_by_timestamp_refuses_only_the_records_kafka_reads() {
+        for (name, codec, limit, target, expected) in [
+            (
+                "found before the oversized batch",
+                CompressionType::Gzip,
+                Some(LIMIT),
+                1_000,
+                Ok(Some((Offset(0), 1_000))),
+            ),
+            (
+                "the oversized record is the match",
+                CompressionType::Gzip,
+                Some(LIMIT),
+                1_001,
+                Err(LARGE),
+            ),
+            (
+                "no limit",
+                CompressionType::Gzip,
+                None,
+                1_001,
+                Ok(Some((Offset(1), 1_001))),
+            ),
+            (
+                "an uncompressed batch is never held to it",
+                CompressionType::None,
+                Some(LIMIT),
+                1_001,
+                Ok(Some((Offset(1), 1_001))),
+            ),
+        ] {
+            let (_dir, seg) = segment(&[
+                batch(0, &[(1_000, 10)], codec),
+                batch(1, &[(1_001, 1_000)], codec),
+            ]);
+            let found = seg.offset_for_timestamp_with_window(target, WINDOW, limit);
+            check!(answer(found) == expected, "{name}");
+        }
+    }
+
+    /// Kafka's iterator decodes lazily, so a record after the one it returns is
+    /// never read, and one before it always is.
+    #[test]
+    fn a_lookup_stops_reading_a_batch_at_the_record_it_returns() {
+        let (_dir, seg) = segment(&[batch(
+            0,
+            &[(1_000, 10), (1_001, 1_000), (1_002, 10)],
+            CompressionType::Gzip,
+        )]);
+        for (target, expected) in [
+            (1_000, Ok(Some((Offset(0), 1_000)))),
+            (1_001, Err(LARGE)),
+            // The scan walks past the oversized record to reach the last one.
+            (1_002, Err(LARGE)),
+            // The batch's max timestamp is below the target, so Kafka skips it
+            // without decompressing it.
+            (1_003, Ok(None)),
+        ] {
+            let found = seg.offset_for_timestamp_with_window(target, WINDOW, Some(LIMIT));
+            check!(answer(found) == expected, "target {target}");
+        }
+    }
+
+    /// `RecordBatch.offsetOfMaxTimestamp` decompresses the batch that holds the
+    /// segment's maximum, and no other.
+    #[test]
+    fn a_max_timestamp_lookup_reads_only_the_batch_holding_the_maximum() {
+        let gzip = CompressionType::Gzip;
+        let (_dir, mut seg) = segment(&[
+            batch(0, &[(1_000, 1_000)], gzip),
+            batch(1, &[(1_001, 10)], gzip),
+        ]);
+        let lookup =
+            |seg: &Segment| answer(seg.offset_of_max_timestamp_with_window(WINDOW, Some(LIMIT)));
+        // The oversized record is in an older batch, which Kafka never reads.
+        check!(lookup(&seg) == Ok(Some((Offset(1), 1_001))));
+
+        // Once the oversized batch holds the maximum, the lookup refuses it.
+        seg.append(&batch(2, &[(1_002, 1_000)], gzip), DENSE_INDEX)
+            .unwrap();
+        check!(lookup(&seg) == Err(LARGE));
+
+        // A segment that never learned its maximum finds it by reading
+        // every record, and the limit holds there too.
+        seg.max_timestamp = i64::MIN;
+        check!(lookup(&seg) == Err(LARGE));
+        check!(
+            seg.offset_of_max_timestamp_with_window(WINDOW, None)
+                .unwrap()
+                == Some((Offset(2), 1_002))
+        );
     }
 }

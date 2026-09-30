@@ -31,8 +31,8 @@ use krabka_broker::metrics::{
     CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
     ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel,
     QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
-    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
-    WalVoterLabel,
+    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel, TopicLabel,
+    WalShardLabel, WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
 use prometheus_client::metrics::family::Family;
@@ -194,6 +194,9 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         replica_lag_max: _,
         consumer_group_lag: _,
         share_group_backlog: _,
+        share_group_dlq_records: _,
+        share_group_dlq_produce_requests: _,
+        share_group_dlq_failed_produce_requests: _,
         partition_cpu_micros: _,
         partitions_led: _,
         partitions_total: _,
@@ -457,6 +460,16 @@ fn seed_single_families(metrics: &BrokerMetrics) {
         topic: "orders".into(),
         partition: 0,
     }));
+    seed(
+        &ShareGroupIdLabel {
+            group_id: "workers".into(),
+        },
+        &[
+            &metrics.share_group_dlq_records,
+            &metrics.share_group_dlq_produce_requests,
+            &metrics.share_group_dlq_failed_produce_requests,
+        ],
+    );
     drop(metrics.voted_directory.get_or_create(&DirectoryLabel {
         directory_id: "00000000-0000-0000-0000-000000000001".into(),
     }));

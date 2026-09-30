@@ -149,6 +149,7 @@ pub(super) fn supervisor_fixture(
         partitions: partitions.clone(),
         log_dirs: vec![dir.path().to_path_buf()],
         log_config: LogConfig::default(),
+        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         client_id: "supervisor-test".into(),
         shutdown: CancellationToken::new(),
         txn_coordinator: None,

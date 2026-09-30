@@ -18,6 +18,7 @@ use crate::{
     },
     config::BrokerConfig,
     error::BrokerError,
+    metadata_source::or_fatal_fault,
 };
 
 struct RaftTransport {
@@ -206,7 +207,14 @@ async fn start_metadata_source(
         let controller = Arc::new(
             krabka_raft::Controller::start_with_listener(controller_config, controller_listener)
                 .await
-                .map_err(|error| BrokerError::Startup(error.to_string()))?,
+                .map_err(|error| match error {
+                    // The refusal of a log that finalized an unsupported
+                    // feature level. It reads the same as the fault that a
+                    // running controller publishes, as Kafka's handler logs
+                    // both alike.
+                    krabka_raft::RaftError::FatalFault(fault) => BrokerError::FatalFault(fault),
+                    other => BrokerError::Startup(other.to_string()),
+                })?,
         );
         let _ = controller_cell.set(Arc::clone(&controller));
         return Ok((
@@ -380,7 +388,26 @@ pub(super) async fn start_metadata_phase(
     )
     .await?;
     spawn_auto_join(config, &controller.0, inter_broker_client);
-    wait_for_metadata_leader(&*controller.0, config.startup_leader_wait_timeout.to_std()).await?;
+    // A controller that stops itself over a fatal fault fails every later
+    // submit with a bare "controller shut down", and each submit retries under
+    // backoff first. Kafka's process halts on that fault at once and with its
+    // message, so the fault ends the join and is what a failed start reports.
+    or_fatal_fault(
+        controller.0.watch_fatal(),
+        join_metadata_quorum(config, &controller.0, bootstrap_records),
+    )
+    .await?;
+    Ok((controller.0, controller.1, audit_cell))
+}
+
+/// Waits for the metadata leader, then seeds the log and registers this node
+/// with it.
+async fn join_metadata_quorum(
+    config: &mut BrokerConfig,
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
+) -> Result<(), BrokerError> {
+    wait_for_metadata_leader(&**controller, config.startup_leader_wait_timeout.to_std()).await?;
     if config.is_controller() || config.is_broker() {
         config.incarnation_id = crate::incarnation::load_or_generate(&config.log_dir);
         // Spend the clean-shutdown proof the last stop left, if it left one.
@@ -388,13 +415,13 @@ pub(super) async fn start_metadata_phase(
         // `register_broker` tell a graceful restart from a crash.
         config.previous_broker_epoch = crate::clean_shutdown::take(&config.log_dir);
     }
-    submit_bootstrap_records(config, &*controller.0, bootstrap_records).await?;
-    register_controller(config, &*controller.0).await?;
-    if let Some(epoch) = register_broker(config, &*controller.0).await? {
+    submit_bootstrap_records(config, &**controller, bootstrap_records).await?;
+    register_controller(config, &**controller).await?;
+    if let Some(epoch) = register_broker(config, &**controller).await? {
         config.broker_epoch = epoch;
     }
-    spawn_deferred_controller_registration(config, &controller.0);
-    Ok((controller.0, controller.1, audit_cell))
+    spawn_deferred_controller_registration(config, controller);
+    Ok(())
 }
 
 #[cfg(test)]

@@ -125,7 +125,7 @@ impl GroupCoordinator {
         // the type lock to Streams; the classic actor (if any) stays in
         // `self.groups` so its committed_offsets remain accessible to
         // `OffsetFetch` without a full replay cycle.
-        let batch = classic_group_metadata_tombstone_batch(group_id, now_ms);
+        let batch = classic_group_metadata_tombstone_batch(group_id, now_ms)?;
         self.offsets_log.append(group_id, batch).await?;
         self.mark_streams_after_upgrade(group_id);
         Ok(ConvertOutcome::Converted)
@@ -179,7 +179,7 @@ impl GroupCoordinator {
         // drained group's per-member records (k16/k20/k21) were already tombstoned
         // when those members left/expired, so no member ids are needed here. The
         // offset-home `groups` entry stays.
-        let batch = streams_records_tombstone_batch(group_id, &[], now_ms);
+        let batch = streams_records_tombstone_batch(group_id, &[], now_ms)?;
         self.offsets_log.append(group_id, batch).await?;
         self.mark_classic_after_streams_downgrade(group_id);
         self.streams_groups.remove(group_id);
