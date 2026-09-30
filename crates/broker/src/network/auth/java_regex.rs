@@ -9,6 +9,11 @@
 //! `Matcher.replaceAll` reads `$1_x` as group 1 followed by `_x`, where the
 //! `regex` crate reads a group named `1_x`. [`JavaPattern`] gives both the
 //! Java answer.
+//!
+//! The pattern itself is rewritten by `java_to_fancy` first, which also gives
+//! Java's reading of `\w`, `.`, and `(?i)`: Java folds ASCII case only, unless
+//! `(?u)` asks for Unicode case as well, so `(?i)service-` does not match
+//! `ſervice-` (long s).
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -344,6 +349,187 @@ mod tests {
             check!(
                 pattern(source).matches(input).ok() == Some(expected),
                 "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// `(?i)` folds ASCII case only, and `(?u)`, or `(?U)`, adds Unicode case.
+    /// `fancy_regex` folds Unicode whenever its `i` is on, so the translation
+    /// writes both cases itself. Each row is `Pattern.matches` on JDK 17, from
+    /// the `java.util.regex` documentation of `CASE_INSENSITIVE` and
+    /// `UNICODE_CASE`: long s (U+017F) and the Kelvin sign (U+212A) are the
+    /// letters that fold to `s` and `k` in Unicode and not in ASCII.
+    #[test]
+    fn matches_folds_case_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("(?i)service-", "SERVICE-", true),
+            ("(?i)service-", "service-", true),
+            ("(?i)service-", "\u{17f}ervice-", false),
+            ("(?iu)service-", "\u{17f}ervice-", true),
+            ("(?iu)service-", "SERVICE-", true),
+            ("(?i)k", "\u{212a}", false),
+            ("(?iu)k", "\u{212a}", true),
+            ("(?ui)k", "\u{212a}", true),
+            ("(?u)k", "K", false),
+            ("(?i)é", "É", false),
+            ("(?i)é", "é", true),
+            ("(?iu)é", "É", true),
+            ("(?U)(?i)k", "\u{212a}", true),
+            ("(?iU)k", "\u{212a}", true),
+            ("(?iU)(?-U)k", "\u{212a}", false),
+            ("(?iU)(?-U)k", "K", true),
+            ("(?iU)(?-u)k", "\u{212a}", false),
+            ("(?iU)(?-u)\\w", "\u{e9}", true),
+            ("(?i)a(?u)k", "A\u{212a}", true),
+            ("(?i)a(?u)k", "AK", true),
+            ("(?iu)a(?-u)k", "A\u{212a}", false),
+            ("(?iu)a(?-u)k", "AK", true),
+            ("(?i)ss", "\u{df}", false),
+            ("(?iu)ss", "\u{df}", false),
+            ("(?i)i", "\u{130}", false),
+            ("(?i)i", "\u{131}", false),
+            ("(?i)\\u00E5", "\u{212b}", false),
+            ("(?iu)\\u00E5", "\u{212b}", true),
+            ("(?i)[a-f]+", "AbCdEf", true),
+            ("(?i)[a-f]", "\u{212a}", false),
+            ("(?i)[k]", "\u{212a}", false),
+            ("(?iu)[k]", "\u{212a}", true),
+            ("(?i)[^a]", "A", false),
+            ("(?i)[^a]", "b", true),
+            ("(?i)[^a]", "\u{e9}", true),
+            ("(?i)[^k]", "\u{212a}", true),
+            ("(?iu)[^k]", "\u{212a}", false),
+            ("(?i)[X-c]", "x", true),
+            ("(?i)[X-c]", "A", true),
+            ("(?i)[X-c]", "[", true),
+            ("(?i)[X-c]", "d", false),
+            ("(?i)[+-z]", "Q", true),
+            ("(?i)[a-c&&[^b]]", "B", false),
+            ("(?i)[a-c&&[^b]]", "C", true),
+            ("(?i)[a-c&&[^b]]", "A", true),
+            ("(?i)[a-c[^x-z]]", "Y", false),
+            ("(?i)[a-c[^x-z]]", "B", true),
+            ("(?i)[\\x41-\\x43]", "b", true),
+            ("(?i)[\\u0041-\\u0043]", "b", true),
+            ("(?i)[\\Qab\\E]", "B", true),
+            ("(?i)[a-]", "A", true),
+            ("(?i)[-a]", "A", true),
+            ("(?i)[]a]", "]", true),
+            ("(?i)[]a]", "A", true),
+            ("(?i)[a-c-e]", "E", true),
+            ("(?i)[a-c-e]", "-", true),
+            ("(?i)[\\w&&[^a]]", "A", false),
+            ("(?i)[\\w&&[^a]]", "B", true),
+            ("(?i)[a\\-c]", "C", true),
+            ("(?i)[a\\-c]", "-", true),
+            ("(?i)[\\0101-\\0103]", "b", true),
+            ("(?i)[\\0101-\\0103]", "d", false),
+            ("(?i)[\\x41-c]", "b", true),
+            ("(?i)[a-c[d-f]]", "E", true),
+            ("(?i)[\u{e9}-\u{eb}]", "\u{ca}", false),
+            ("(?ix) [ a - c ]", "B", true),
+            ("(?ix) [ a - c ] # x", "d", false),
+            ("(?i)a\\.b", "A.B", true),
+            ("(?i)\\[a\\]", "[A]", true),
+            ("(?i)a{1,2}b", "aAB", true),
+            ("(?i)\u{e9}+", "\u{e9}\u{e9}", true),
+            ("(?i)\\0101\\0102", "aB", true),
+            ("(?i)\\x41", "a", true),
+            ("(?i)\\u0041", "a", true),
+            ("(?i)\\x{41}", "a", true),
+            ("(?i)\\0101", "a", true),
+            ("(?i)\\c!", "A", true),
+            ("(?i)\\Qab\\E", "AB", true),
+            ("(?i)\\Q.b\\E", ".B", true),
+            ("(?i)\\Q.b\\E", "xB", false),
+            ("(?i)\\Qk\\E", "\u{212a}", false),
+            ("(?i)\\p{Lower}", "A", true),
+            ("(?i)\\p{Lower}", "\u{e9}", false),
+            ("(?i)\\p{Upper}", "a", true),
+            ("(?i)\\p{Upper}", "\u{c9}", false),
+            ("\\p{Lower}", "a", true),
+            ("\\p{Lower}", "A", false),
+            ("\\p{Lower}", "\u{e9}", false),
+            ("\\p{Upper}", "A", true),
+            ("\\p{Upper}", "\u{c9}", false),
+            ("(?i)\\p{Lu}", "a", true),
+            ("(?i)\\p{Lu}", "\u{e9}", true),
+            ("(?i)\\p{Lu}", "1", false),
+            ("(?i)\\P{Lu}", "a", false),
+            ("(?i)\\P{Lu}", "1", true),
+            ("\\p{Lu}", "a", false),
+            ("\\p{Lu}", "A", true),
+            ("(?i)[\\p{Lower}]", "A", true),
+            ("(?i)[\\P{Lower}]", "A", false),
+            ("(?i)[\\P{Lower}]", "1", true),
+            ("(?i)\\p{IsLowercase}", "A", true),
+            ("(?i)\\p{gc=Lu}", "a", true),
+            ("(?i)\\p{IsLu}", "a", true),
+            ("(?i:a)b", "Ab", true),
+            ("(?i:a)b", "AB", false),
+            ("a(?i)b", "aB", true),
+            ("a(?i)b", "Ab", false),
+            ("a(?i:b)c", "aBc", true),
+            ("a(?i:b)c", "aBC", false),
+            ("(?i)a(?-i)b", "Ab", true),
+            ("(?i)a(?-i)b", "AB", false),
+            ("((?i)a)b", "Ab", true),
+            ("((?i)a)b", "AB", false),
+            ("(?i)a|b", "B", true),
+            ("(?i)(?i)(?-i)a", "A", false),
+            ("(?i)(?i)(?-i)a", "a", true),
+            ("(?i)a{2}", "aA", true),
+            ("(?i)(?:a|b)+", "AbBa", true),
+            ("(?i)^ab$", "AB", true),
+            ("(?i)\\bab", "AB", true),
+            ("(?i)\\w", "A", true),
+            ("(?i)a.c", "AxC", true),
+            ("(?i)(?<Name>a)", "A", true),
+            ("(?i)(?=a)A", "A", true),
+            ("(?i)(?!a)b", "B", true),
+            ("(?ix) a b # comment", "AB", true),
+            ("(?x)a b # Comment here", "ab", true),
+            ("(?x)a b # Comment here", "AB", false),
+            ("(?iu)(a)\\1", "aA", true),
+            ("(?iu)(a)\\1", "ab", false),
+            ("(?i)(a)(?-i)\\1", "aA", false),
+            ("(?i)(a)(?-i)\\1", "aa", true),
+            ("(?i)(a)(?-i:\\1)", "aA", false),
+            ("(a)\\1", "aa", true),
+            ("(a)\\1", "aA", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Java's `CIBackRef` compares the group's text ASCII-insensitively, which
+    /// `fancy_regex` cannot do: its `i` compares Unicode-insensitively, and
+    /// without it the comparison is exact. A backreference read under an ASCII
+    /// fold is refused, and one read with `(?u)`, or with no fold, is not.
+    #[test]
+    fn a_backreference_under_an_ascii_fold_is_refused() {
+        // (pattern, Java's `Pattern.compile` accepts it, this crate does)
+        for (source, compiles) in [
+            ("(?i)(a)\\1", false),
+            ("(?i)(?<x>a)\\k<x>", false),
+            ("(?-i)(?i)(a)\\1", false),
+            ("a(?i:(b)\\1)", false),
+            ("(?i)(a)(?-i)\\1", true),
+            ("(?i)(a)(?-i:\\1)", true),
+            ("(?iu)(a)\\1", true),
+            ("(?iU)(a)\\1", true),
+            ("(a)\\1", true),
+            // `\N{name}` names a char that may be a letter.
+            ("(?i)\\N{LATIN SMALL LETTER A}", false),
+        ] {
+            check!(
+                JavaPattern::compile(source).is_ok() == compiles,
+                "{source:?}"
             );
         }
     }
