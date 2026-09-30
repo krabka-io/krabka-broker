@@ -17,7 +17,7 @@ use tempfile::TempDir;
 /// cluster. Every broker boots in `Bootstrap` mode with the *same* configured
 /// `controller_quorum_voters` set, so each node seeds the full voter set and
 /// elects among the configured peers over the real KIP-595 wire. There is no
-/// auto-join, because KIP-853 dynamic reconfig is Slice 5.
+/// auto-join, because KIP-853 dynamic reconfiguration is a separate work stream.
 fn static_voter_broker_config(
     i: usize,
     own_client_addr: SocketAddr,

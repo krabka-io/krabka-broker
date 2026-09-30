@@ -1,48 +1,69 @@
-//! Java's ASCII-only `(?i)`, for [`java_to_fancy`](super::java_to_fancy).
+//! Java's case folding, for [`java_to_fancy`](super::java_to_fancy).
 //!
 //! Java's `CASE_INSENSITIVE` (`(?i)`) folds ASCII case only. It folds Unicode
 //! case as well when `UNICODE_CASE` (`(?u)`) is on, and `(?U)`
-//! (`UNICODE_CHARACTER_CLASS`) turns that on. `fancy_regex` has one `i` flag,
-//! and it always folds Unicode: `(?i)service-` matches `ſervice-` (long s)
-//! there, and not in Java. The inline `(?-u)` cannot switch it off
-//! (`ChangingUnicodeModeUnsupported`), and `RegexBuilder::unicode_mode(false)`
-//! is a switch for the whole pattern that also refuses `.`, `\W` and `\p{..}`.
+//! (`UNICODE_CHARACTER_CLASS`) turns that on. `fancy_regex` has one `i` flag.
+//! It folds Unicode case with the simple case folding tables, and it folds a
+//! whole class or a whole reference at once, with no switch for one member:
+//! `(?i)service-` matches `ſervice-` (long s) there, and not in Java, and
+//! `(?iu)[\w]` matches U+017F, which Java's `\w` does not. The inline `(?-u)`
+//! cannot switch the fold off (`ChangingUnicodeModeUnsupported`), and
+//! `RegexBuilder::unicode_mode(false)` is a switch for the whole pattern that
+//! also refuses `.`, `\W` and `\p{..}`.
 //!
-//! So while an `i` without `u` is in force the rewrite folds the case itself
-//! and leaves `fancy_regex`'s `i` off. It writes each ASCII letter as both its
-//! cases, `[aA]`, or `aA` in a character class, and a class range as the range
-//! plus the ranges of the other case of the letters it covers, which is what
-//! Java's `CIRange` matches. It leaves a non-ASCII character as it is. The
-//! escapes that name a letter, `\x41`, `\x{41}`, `\uhhhh`, `\0101` and the
+//! So the rewrite never turns `fancy_regex`'s `i` on, except for a
+//! backreference. While an `i` is in force it writes the folding out.
+//!
+//! - Without `u`, an ASCII letter is both its cases, `[aA]`, or `aA` in a
+//!   character class, and a class range is the range plus the ranges of the
+//!   other case of the letters it covers, which is what Java's `CIRange`
+//!   matches. A non-ASCII character is as it is.
+//! - With `u`, a letter, a class member and a class range are the sets of code
+//!   points that Java's `single`, `BitClass` and `CIRangeU` accept. Those
+//!   compare `Character.toLowerCase(Character.toUpperCase(ch))`, which is not
+//!   the simple case folding of `fancy_regex`: `İ` (U+0130) and `ı` (U+0131)
+//!   match `i` in Java, and a range that has `K` and not `k` does not match
+//!   the Kelvin sign (U+212A). [`java_case`](super::java_case) computes the
+//!   sets, and the class that holds them is case sensitive.
+//!
+//! The escapes that name a letter, `\x41`, `\x{41}`, `\uhhhh`, `\0101` and the
 //! text of `\Q...\E`, fold as the letter does. Java also widens the properties
 //! for a case under `(?i)`: `\p{Lower}` and `\p{Upper}` are the ASCII letters
 //! of both cases, and `\p{Lu}`, `\p{Ll}` and `\p{Lt}` are all cased letters.
-//! [`property_class`] writes those.
+//! [`property_class`] writes those. Java does not fold `\w`, `\d`, `\s`, or any
+//! other property or POSIX class, and with `i` off neither does the rewrite.
+//! The POSIX classes are ASCII in Java without `(?U)`, and the Unicode
+//! properties with it, where `fancy_regex` reads them as Unicode always.
 //!
 //! `\Q...\E` is gone before any of that is read. Java's `RemoveQEQuoting`
 //! rewrites the text of each one into escaped characters before it parses the
 //! pattern, so `[\Qa\E-c]` is the range `[a-c]`, and [`remove_qe_quoting`] does
 //! the same.
 //!
-//! An `i` with `u` stays `fancy_regex`'s own Unicode fold, which is Unicode
-//! simple case folding. Java compares `Character.toUpperCase` and
-//! `toLowerCase` instead, and the two differ for a few letters: `İ` (U+0130)
-//! and `ı` (U+0131) match `i` in Java under `(?iu)`, and not in `fancy_regex`.
-//! Two more differences are left as they are, because `fancy_regex` folds a
-//! whole class or a whole reference and has no switch inside one:
+//! A run of literals is one slice in Java and a lone literal is `single`, and
+//! they differ for `ß`: `(?iu)ß` matches `ß` only, and `(?iu)ßß` matches `ẞ`
+//! (U+1E9E) too. [`Translator`](super::Translator) tells the two apart, as Java's
+//! `atom` does, by the literal chars up to the next token that is not one, less
+//! the last of them when a quantifier follows.
 //!
-//! - `\w`, `\W`, `\p{Lower}` and `\p{Upper}` inside a character class under
-//!   `(?iu)`, as in `(?iu)[\w]`, are ASCII letters there, and `fancy_regex`'s
-//!   `i` widens the class to U+017F and U+212A, which Java's does not. Outside
-//!   a class [`unfolded`] wraps it in `(?-i:...)`, and there is no such
-//!   difference.
-//! - A backreference under an ASCII fold is written `(?i:\1)`. Java's
-//!   `CIBackRef` compares the text of the group ASCII-insensitively, and
-//!   `fancy_regex`'s `i` compares two texts Unicode-insensitively, unless both
-//!   are ASCII. The two agree on every ASCII text. They differ when the group
-//!   holds a non-ASCII letter, and the reference matches the same letter in the
-//!   other case: `(?i)(é)\1` matches `éÉ` in `fancy_regex`, and not in Java.
-//!   `fancy_regex` has no ASCII fold for a reference.
+//! One thing is left different, because `fancy_regex` has no other way to
+//! compare the text of a group. A backreference under a fold is written
+//! `(?i:\1)`, and it compares the text it refers to with the text at hand
+//! differently from Java's `CIBackRef`:
+//!
+//! - Under `(?i)` Java compares ASCII case only, and `fancy_regex`'s `i`
+//!   compares two texts Unicode-insensitively, unless both are ASCII. The two
+//!   agree on every ASCII text. They differ when the group holds a non-ASCII
+//!   letter, and the reference matches the same letter in the other case:
+//!   `(?i)(é)\1` matches `éÉ` in `fancy_regex`, and not in Java.
+//! - Under `(?iu)` Java compares `Character.toLowerCase` of
+//!   `Character.toUpperCase`, and `fancy_regex` compares simple case foldings
+//!   of two texts that are as long in bytes. They differ for `İ` and `ı`, which
+//!   Java's key makes `i`: `(?iu)(i)\1` matches `iİ` in Java, and not in
+//!   `fancy_regex`. They differ for a letter and a case that take another number
+//!   of bytes, such as `s` and `ſ`, `k` and the Kelvin sign, `ß` and `ẞ`, and `å`
+//!   and the angstrom sign: `(?iu)(s)\1` matches `sſ` in Java, and not in
+//!   `fancy_regex`. They agree on the other letters.
 
 use std::fmt::Write as _;
 
@@ -319,22 +340,28 @@ pub(super) fn push_other_case_ranges(out: &mut String, lo: u32, hi: u32) {
 /// The members of the class of `\p{name}` where `fancy_regex` reads the name
 /// differently from Java, as the text of a class body.
 ///
-/// - `Lower` and `Upper` are the ASCII letters `[a-z]` and `[A-Z]`, or both
-///   cases of them under `(?i)`, where `fancy_regex`'s are Unicode.
+/// - The POSIX names `Lower`, `Upper`, `Alpha`, `Alnum`, `Digit`, `Punct` and
+///   the rest are the ASCII characters they name, where `fancy_regex`'s are
+///   Unicode. Under `(?U)` they are the Unicode properties that Java gives
+///   them, which [`unicode_posix_members`] spells out, so that the rewrite
+///   does not depend on what `fancy_regex` makes of the name.
 /// - `Lu`, `Ll` and `Lt`, `IsLowercase`, `IsUppercase`, `IsTitlecase`,
 ///   `IsLower` and `IsUpper` take in all three cases under `(?i)`, whether or
-///   not `(?u)` is on. Under an ASCII fold `fancy_regex`'s `i` is off, so the
-///   rewrite writes the three cases.
+///   not `(?u)` is on. `fancy_regex`'s `i` is off, so the rewrite writes the
+///   three cases.
 fn property_members(name: &str, scope: Scope) -> Option<&'static str> {
-    if !scope.unicode_classes {
-        match (name, scope.case.ignore) {
-            ("Lower", false) => return Some("a-z"),
-            ("Upper", false) => return Some("A-Z"),
-            ("Lower" | "Upper", true) => return Some("a-zA-Z"),
-            _ => {}
+    let bare = !name.contains('=') && !name.starts_with("In") && !name.starts_with("Is");
+    if bare {
+        let posix = if scope.unicode_classes {
+            unicode_posix_members(name, scope.case.ignore)
+        } else {
+            ascii_posix_members(name, scope.case.ignore)
+        };
+        if posix.is_some() {
+            return posix;
         }
     }
-    if !scope.ascii_fold() {
+    if !scope.case.ignore {
         return None;
     }
     if is_cased_category(name) {
@@ -370,19 +397,49 @@ fn is_cased_property(name: &str) -> bool {
     })
 }
 
-/// `class`, an ASCII class that Java reads the same in every case, such as
-/// `\w` and `\p{Lower}`, written so that `fancy_regex`'s `i` leaves it alone.
-///
-/// Where its `i` is on (`(?iu)`) it widens the ASCII letters of a class to
-/// U+017F and U+212A, and Java's `\w` and `\p{Lower}` do not match those. Outside
-/// a character class the class goes in `(?-i:...)`. Inside one there is no
-/// way to turn `i` off for a member, and the class stays as it is.
-pub(super) fn unfolded(class: &str, in_class: bool, scope: Scope) -> String {
-    if scope.fancy_ignore_case() && !in_class {
-        format!("(?-i:{class})")
-    } else {
-        class.to_owned()
-    }
+/// The members of the POSIX class `\p{name}` as Java reads it without `(?U)`
+/// (`CharPredicates.forProperty`): the ASCII characters that the C locale
+/// names, and `name` is matched in the case it is written. `Lower` and `Upper`
+/// are the ASCII letters of both cases under `(?i)`.
+fn ascii_posix_members(name: &str, ignore_case: bool) -> Option<&'static str> {
+    Some(match (name, ignore_case) {
+        ("Lower" | "Upper", true) | ("Alpha", _) => "a-zA-Z",
+        ("Lower", false) => "a-z",
+        ("Upper", false) => "A-Z",
+        ("Digit", _) => "0-9",
+        ("Alnum", _) => "0-9a-zA-Z",
+        ("Punct", _) => "!-/:-@\\[-`{-~",
+        ("Graph", _) => "!-~",
+        ("Print", _) => "\\x20-~",
+        ("Blank", _) => "\\x20\\t",
+        ("Cntrl", _) => "\\x00-\\x1F\\x7F",
+        ("Space", _) => "\\x20\\t\\n\\x0B\\x0C\\r",
+        ("XDigit", _) => "0-9a-fA-F",
+        _ => return None,
+    })
+}
+
+/// The members of the POSIX class `\p{name}` as Java reads it under `(?U)`
+/// (`CharPredicates.forPOSIXName`): the Unicode property for each name, which is
+/// matched in any case. `Lower` and `Upper` take in all three cases under
+/// `(?i)`.
+fn unicode_posix_members(name: &str, ignore_case: bool) -> Option<&'static str> {
+    Some(match (name.to_uppercase().as_str(), ignore_case) {
+        ("LOWER" | "UPPER", true) => "\\p{Lowercase}\\p{Uppercase}\\p{Lt}",
+        ("LOWER", false) => "\\p{Lowercase}",
+        ("UPPER", false) => "\\p{Uppercase}",
+        ("ALPHA", _) => "\\p{Alphabetic}",
+        ("DIGIT", _) => "\\p{Nd}",
+        ("ALNUM", _) => "\\p{Alphabetic}\\p{Nd}",
+        ("PUNCT", _) => "\\p{P}",
+        ("GRAPH", _) => "[^\\p{Zs}\\p{Zl}\\p{Zp}\\p{Cc}\\p{Cs}\\p{Cn}]",
+        ("PRINT", _) => "[^\\p{Zl}\\p{Zp}\\p{Cc}\\p{Cs}\\p{Cn}]",
+        ("BLANK", _) => "\\p{Zs}\\t",
+        ("CNTRL", _) => "\\p{Cc}",
+        ("SPACE", _) => "\\p{White_Space}",
+        ("XDIGIT", _) => "\\p{Nd}\\p{Hex_Digit}",
+        _ => return None,
+    })
 }
 
 /// `\p{name}` or `\P{name}`, written for `fancy_regex` as [`property_members`]
@@ -394,14 +451,11 @@ pub(super) fn property_class(
     scope: Scope,
 ) -> Option<String> {
     let members = property_members(name, scope)?;
-    let class = match (negated, in_class) {
+    Some(match (negated, in_class) {
         (false, true) => members.to_owned(),
         (false, false) => format!("[{members}]"),
         (true, _) => format!("[^{members}]"),
-    };
-    // Under `(?iu)` the only members are the ASCII letters of `Lower` and
-    // `Upper`.
-    Some(unfolded(&class, in_class, scope))
+    })
 }
 
 #[cfg(test)]

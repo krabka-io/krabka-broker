@@ -21,31 +21,10 @@
 //! configured, reached on the same records Kafka reaches it on.
 
 use krabka_compression::CompressionType;
-use krabka_protocol::{
-    primitives::varint::varlong_len,
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::records::RecordBatch;
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
 use crate::error::LogError;
-
-/// The size of `record`'s body as Kafka's `DefaultRecord` writes it: the
-/// `sizeOfBodyInBytes` its length prefix declares, which is what
-/// `DefaultRecord.readFrom` compares to the limit.
-///
-/// `Record::encoded_len` is that body behind its varlong length prefix, and the
-/// prefix takes a size that grows with the body, so the body is the one length
-/// whose prefix accounts for the rest.
-#[must_use]
-pub(crate) fn record_body_len(record: &Record) -> usize {
-    let total = record.encoded_len();
-    (1..=10)
-        .find_map(|prefix| {
-            let body = total.checked_sub(prefix)?;
-            (varlong_len(i64::try_from(body).ok()?) == prefix).then_some(body)
-        })
-        .unwrap_or(total)
-}
 
 /// Refuse `batch` if Kafka's iterator would refuse it after reading its first
 /// `read` records, under `limit`.
@@ -73,7 +52,7 @@ pub(crate) fn check_records_read(
     }
     let limit = limit.bytes_usize();
     for record in batch.records.iter().take(read) {
-        let size = record_body_len(record);
+        let size = record.body_len();
         if size > limit {
             return Err(LogError::RecordTooLarge { size, limit });
         }
@@ -84,7 +63,7 @@ pub(crate) fn check_records_read(
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use krabka_protocol::records::{Attributes, RecordHeader};
+    use krabka_protocol::records::{Attributes, Record, RecordHeader};
     use krabka_units::prelude::bytes as byte_size;
 
     use super::*;
@@ -113,17 +92,19 @@ mod tests {
         }
     }
 
-    /// Kafka's `sizeOfBodyInBytes` of the record: the attributes byte, a
-    /// two-byte timestamp delta, a one-byte offset delta, `1 + 3` bytes of key,
-    /// the value behind its own length prefix, a one-byte header count and one
-    /// header of `1 + 1` bytes of key with a null value. The record's own length
-    /// prefix grows with its body, so the sizes straddle its widths: a body of
-    /// 63 bytes takes a one-byte prefix and one of 64 takes two, and 8191 takes
-    /// two where 8192 takes three.
+    /// A record whose body is `body` bytes passes a limit of `body` and is
+    /// refused, with that size, under a limit one byte lower. Kafka's
+    /// `sizeOfBodyInBytes` of the record is its attributes byte, a two-byte
+    /// timestamp delta, a one-byte offset delta, `1 + 3` bytes of key, the value
+    /// behind its own length prefix, a one-byte header count and one header of
+    /// `1 + 1` bytes of key with a null value. The sizes straddle the widths of
+    /// the record's own length prefix: a body of 63 bytes takes a one-byte
+    /// prefix and one of 64 takes two, and 8191 takes two where 8192 takes
+    /// three.
     #[test]
-    fn a_record_body_is_measured_the_way_kafka_encodes_it() {
+    fn a_record_is_held_to_the_limit_by_its_body_size() {
         for (value_len, body) in [
-            (0, 13),
+            (0, 13_u32),
             (50, 63),
             (51, 64),
             (100, 114),
@@ -131,7 +112,23 @@ mod tests {
             (8_178, 8_192),
             (70_000, 70_015),
         ] {
-            assert2::check!(record_body_len(&record(value_len)) == body, "{value_len}");
+            let held = |limit| {
+                check_records_read(
+                    &batch(CompressionType::Gzip, vec![record(value_len)]),
+                    1,
+                    Some(byte_size(limit)),
+                )
+            };
+            assert2::check!(held(body).is_ok(), "{value_len}");
+            assert2::assert!(let Err(LogError::RecordTooLarge { size, limit }) = held(body - 1));
+            assert2::check!(
+                (size, limit)
+                    == (
+                        usize::try_from(body).unwrap(),
+                        usize::try_from(body - 1).unwrap()
+                    ),
+                "{value_len}"
+            );
         }
     }
 

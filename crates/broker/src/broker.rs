@@ -212,7 +212,7 @@ pub struct Broker {
     /// detect truncation, but they issue no OFLE.
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) offset_for_leader_epoch_requests: Arc<std::sync::atomic::AtomicU64>,
-    /// `FedRAMP` MLA (Slice 1): cloneable handle to the audit pipeline.
+    /// `FedRAMP` audit pipeline work stream: cloneable handle to the audit pipeline.
     /// Handlers and lifecycle code call `emit` to record events; the
     /// `AuditWriter` background task drains them into the
     /// `KafkaTopicAuditSink`. Disabled (`AuditLog::disabled()`) when

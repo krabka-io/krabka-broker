@@ -14,7 +14,7 @@
 //! no ACLs, so the tests exercise the full wire path without a SASL handshake.
 //!
 //! They are gated to non-Windows, to match the multi-broker test convention
-//! from slices 10b, 12b, and 14.
+//! established by the existing integration suites.
 
 mod support;
 

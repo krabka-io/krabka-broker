@@ -186,7 +186,7 @@ impl<L: SimNodeLog> Sim<L> {
     /// through `ResetTimer` actions alone:
     ///
     /// - A leader runs neither an election timer nor a fetch timer. Its liveness
-    ///   is a separate check-quorum mechanism, out of scope for slice 3a.
+    ///   is a separate check-quorum mechanism, out of scope for the in-memory consensus core.
     /// - A follower or an observer runs only the fetch watchdog, and never an
     ///   election timer. But `handle_begin_quorum_epoch` emits only
     ///   `ResetTimer{Fetch}`, which leaves a previously-armed election timer

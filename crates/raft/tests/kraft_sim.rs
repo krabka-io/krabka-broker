@@ -1,7 +1,7 @@
 //! Deterministic, in-memory, multi-node simulation of the KIP-595 and KIP-996
 //! `KRaft` consensus core (`krabka_raft::kraft`).
 //!
-//! This is the headline acceptance test for slice 3a. It wires N
+//! This is the headline acceptance test for the in-memory consensus core. It wires N
 //! `QuorumStateMachine`s together through an in-memory message bus and a logical
 //! clock, which are the shared [`sim_harness`] module. It then asserts that the
 //! cluster reaches the canonical states of one leader and an agreed high

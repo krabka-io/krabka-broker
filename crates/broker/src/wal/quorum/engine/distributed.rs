@@ -74,6 +74,16 @@ impl WalShardEngine {
         self.record_observability();
     }
 
+    /// The offset `voter` has been recorded as having fsynced, if any.
+    #[cfg(test)]
+    pub(crate) fn voter_durable_offset(&self, voter: NodeId) -> Option<Offset> {
+        self.distributed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|quorum| quorum.durable_offsets.get(&voter).copied())
+    }
+
     /// Record the offset a remote voter requested after its preceding fsync.
     /// Returns `true` when the quorum-durable watermark advanced.
     pub(crate) fn record_follower_ack(&self, from: NodeId, offset: Offset) -> bool {

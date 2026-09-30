@@ -10,8 +10,7 @@
 //! 2. Return `Ok(())` after the controller acknowledges
 //!    `should_shut_down=true`. Broker 1 then leads zero partitions.
 //!
-//! The test is gated to non-Windows to match the multi-broker convention from
-//! slices 10b/12b. The openraft `debug_assert!` races on the hosted Windows
+//! The test is gated to non-Windows to match the multi-broker convention established by the existing integration suites.`debug_assert!` races on the hosted Windows
 //! task scheduler are unrelated to the protocol under test.
 
 use std::{io, net::SocketAddr, time::Duration};

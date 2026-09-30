@@ -6,29 +6,10 @@
 //! scans decode the batches in that range and pick the first one, or the first
 //! record, that satisfies the request.
 
-use krabka_protocol::{
-    primitives::varint::varlong_len,
-    records::{Attributes, Record, RecordBatch, TimestampType},
-};
+use krabka_protocol::records::{Attributes, RecordBatch, TimestampType};
 
 use super::{LogOffset, TimestampMs, corrupt_log};
 use crate::error::RemoteStorageError;
-
-/// The size of `record`'s body as Kafka's `DefaultRecord` writes it, which is
-/// what `DefaultRecord.readFrom` compares to `max.decompressed.message.bytes`.
-///
-/// `Record::encoded_len` is the body behind its varlong length prefix, and the
-/// prefix's width grows with the body, so the body is the one length whose
-/// prefix accounts for the rest.
-fn record_body_len(record: &Record) -> usize {
-    let total = record.encoded_len();
-    (1..=10)
-        .find_map(|prefix| {
-            let body = total.checked_sub(prefix)?;
-            (varlong_len(i64::try_from(body).ok()?) == prefix).then_some(body)
-        })
-        .unwrap_or(total)
-}
 
 /// Decodes remote log batches and returns the earliest record at or after both
 /// `floor_offset` and `target_timestamp`. Under `LogAppendTime`, every record
@@ -67,7 +48,7 @@ pub fn first_record_at_or_after_timestamp(
             .then_some(batch.max_timestamp);
         for record in &batch.records {
             if let Some(limit) = limit {
-                let size = record_body_len(record);
+                let size = record.body_len();
                 if size > limit {
                     return Err(RemoteStorageError::RecordTooLarge { size, limit });
                 }

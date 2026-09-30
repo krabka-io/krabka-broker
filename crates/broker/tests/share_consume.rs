@@ -1,4 +1,4 @@
-//! End-to-end integration tests for KIP-932 Slice C: share-partition consume
+//! End-to-end integration tests for KIP-932 share-partition consumption
 //! (`ShareFetch`, `api_key` 78) and acknowledge (`ShareAcknowledge`, `api_key`
 //! 79), driven against an in-process Krabka broker through `krabka-client-core`.
 //!

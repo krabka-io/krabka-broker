@@ -641,6 +641,558 @@ mod tests {
         }
     }
 
+    /// Under `(?iu)` a class member is the set that Java's predicates accept, and not what
+    /// `fancy_regex`'s `i` folds a whole class to: `\w`, `\W`, `\p{Lower}` and `\p{Upper}` in a
+    /// class are ASCII, a range that has `K` and not `k` leaves out the Kelvin sign, and `İ`
+    /// and `ı` are members of a range that has `i`. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_folds_unicode_case_in_a_class_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // \w, \W, \p{Lower}, \p{Upper} in a class are ASCII under (?iu), so the letters that fold to s and k are not members
+            ("(?iu)[\\w]", "\u{17f}", false),
+            ("(?iu)[\\w]", "\u{212a}", false),
+            ("(?iu)[\\w]", "a", true),
+            ("(?iu)[\\w]", "K", true),
+            ("(?iu)[\\w]", "_", true),
+            ("(?iu)[\\w]", "\u{e9}", false),
+            ("(?iu)[\\w-]", "\u{17f}", false),
+            ("(?iu)[\\w-]", "\u{212a}", false),
+            ("(?iu)[\\w-]", "-", true),
+            ("(?iu)[\\w-]", "z", true),
+            ("(?iu)[\\W]", "\u{17f}", true),
+            ("(?iu)[\\W]", "\u{212a}", true),
+            ("(?iu)[\\W]", "a", false),
+            ("(?iu)[\\W]", "-", true),
+            ("(?iu)[^\\w]", "\u{17f}", true),
+            ("(?iu)[^\\w]", "k", false),
+            ("(?iu)[\\p{Lower}]", "\u{17f}", false),
+            ("(?iu)[\\p{Lower}]", "\u{212a}", false),
+            ("(?iu)[\\p{Lower}]", "A", true),
+            ("(?iu)[\\p{Lower}]", "a", true),
+            ("(?iu)[\\p{Lower}]", "\u{e9}", false),
+            ("(?iu)[\\p{Upper}]", "\u{17f}", false),
+            ("(?iu)[\\p{Upper}]", "\u{212a}", false),
+            ("(?iu)[\\p{Upper}]", "a", true),
+            ("(?iu)[\\p{Upper}]", "\u{c9}", false),
+            ("(?iu)[\\P{Lower}]", "\u{17f}", true),
+            ("(?iu)[\\P{Lower}]", "A", false),
+            ("(?iu)[\\P{Lower}]", "1", true),
+            ("(?iu)[\\P{Upper}]", "\u{212a}", true),
+            ("(?iu)[\\p{Lower}k]", "\u{17f}", false),
+            ("(?iu)[\\p{Lower}k]", "\u{212a}", true),
+            ("(?iu)[\\p{Lower}s]", "\u{17f}", true),
+            ("(?iu)[\\w&&[^a]]", "A", false),
+            ("(?iu)[\\w&&[^a]]", "b", true),
+            ("(?iu)[\\w&&[^k]]", "\u{212a}", false),
+            ("(?iu)[\\w&&[^k]]", "K", false),
+            ("(?iu)[^\\p{Lower}]", "\u{17f}", true),
+            ("(?iu)[^\\p{Lower}]", "a", false),
+            ("(?iu)[^\\p{Lower}]", "1", true),
+            // a range that holds K and not k, or s and not S, compares the upper case and the lower case of the upper case of the char
+            ("(?iu)[a-z]", "\u{212a}", true),
+            ("(?iu)[a-z]", "\u{17f}", true),
+            ("(?iu)[a-z]", "\u{130}", true),
+            ("(?iu)[a-z]", "\u{131}", true),
+            ("(?iu)[a-z]", "K", true),
+            ("(?iu)[a-z]", "\u{df}", false),
+            ("(?iu)[A-Z]", "\u{212a}", false),
+            ("(?iu)[A-Z]", "\u{17f}", true),
+            ("(?iu)[A-Z]", "\u{130}", false),
+            ("(?iu)[A-Z]", "\u{131}", true),
+            ("(?iu)[A-Z]", "k", true),
+            ("(?iu)[A-K]", "\u{212a}", false),
+            ("(?iu)[A-K]", "k", true),
+            ("(?iu)[A-K]", "\u{17f}", false),
+            ("(?iu)[A-c]", "\u{212a}", false),
+            ("(?iu)[A-c]", "k", true),
+            ("(?iu)[A-c]", "C", true),
+            ("(?iu)[A-c]", "d", true),
+            ("(?iu)[A-k]", "\u{212a}", true),
+            ("(?iu)[k-k]", "\u{212a}", true),
+            ("(?iu)[K-K]", "\u{212a}", false),
+            ("(?iu)[K-K]", "k", true),
+            ("(?iu)[s-s]", "\u{17f}", true),
+            ("(?iu)[S-S]", "\u{17f}", true),
+            ("(?iu)[i-i]", "\u{130}", true),
+            ("(?iu)[I-I]", "\u{131}", true),
+            ("(?iu)[^A-Z]", "\u{212a}", true),
+            ("(?iu)[^A-Z]", "\u{17f}", false),
+            ("(?iu)[^a-z]", "\u{212a}", false),
+            ("(?iu)[^A-K]", "\u{212a}", true),
+            ("(?iu)[^A-K]", "k", false),
+            ("(?iu)[\\x{E0}-\\x{FE}]", "\u{c9}", true),
+            ("(?iu)[\\x{E0}-\\x{FE}]", "\u{178}", false),
+            ("(?iu)[\\x{C0}-\\x{DE}]", "\u{ff}", false),
+            ("(?iu)[\\x{C0}-\\x{DE}]", "\u{178}", false),
+            ("(?iu)[\\x{391}-\\x{3A9}]", "\u{3c3}", true),
+            ("(?iu)[\\x{391}-\\x{3A9}]", "\u{3c2}", true),
+            ("(?iu)[\\x{3B1}-\\x{3C9}]", "\u{3a3}", true),
+            ("(?iu)[\\x{410}-\\x{42F}]", "\u{44f}", true),
+            ("(?iu)[\\x{410}-\\x{42F}]", "\u{436}", true),
+            ("(?iu)[\\x{DF}-\\x{DF}]", "\u{1e9e}", true),
+            ("(?iu)[\\x{1E9E}-\\x{1E9E}]", "\u{df}", false),
+            // a single member: Latin-1 members go in a bit class, the other members compare keys
+            ("(?iu)[k]", "\u{212a}", true),
+            ("(?iu)[K]", "\u{212a}", true),
+            ("(?iu)[s]", "\u{17f}", true),
+            ("(?iu)[S]", "\u{17f}", true),
+            ("(?iu)[i]", "\u{130}", true),
+            ("(?iu)[i]", "\u{131}", true),
+            ("(?iu)[I]", "\u{130}", true),
+            ("(?iu)[I]", "\u{131}", true),
+            ("(?iu)[\\x{E5}]", "\u{212b}", true),
+            ("(?iu)[\\x{C5}]", "\u{212b}", true),
+            ("(?iu)[\\x{FF}]", "\u{178}", true),
+            ("(?iu)[\\x{B5}]", "\u{3bc}", true),
+            ("(?iu)[\\x{B5}]", "\u{39c}", true),
+            ("(?iu)[\\x{3BC}]", "\u{b5}", true),
+            ("(?iu)[\\x{E9}]", "\u{c9}", true),
+            ("(?iu)[\\x{C9}]", "\u{e9}", true),
+            ("(?iu)[\\x{DF}]", "\u{1e9e}", false),
+            ("(?iu)[\\x{1E9E}]", "\u{df}", true),
+            ("(?iu)[\\x{3C3}]", "\u{3c2}", true),
+            ("(?iu)[\\x{3C2}]", "\u{3a3}", true),
+            ("(?iu)[\\x{3A3}]", "\u{3c2}", true),
+            ("(?iu)[\\x{1C6}]", "\u{1c5}", true),
+            ("(?iu)[\\x{1C5}]", "\u{1c4}", true),
+            ("(?iu)[\\x{1F88}]", "\u{1f80}", true),
+            ("(?iu)[\\x{1F80}]", "\u{1f88}", true),
+            ("(?iu)[\\x{10428}]", "\u{10400}", true),
+            ("(?iu)[\\x{10400}-\\x{1044F}]", "\u{10428}", true),
+            ("(?iu)[z]", "Z", true),
+            ("(?iu)[1]", "1", true),
+            // with && and a nested class
+            ("(?iu)[a-z&&[^k]]", "\u{212a}", false),
+            ("(?iu)[a-z&&[^k]]", "K", false),
+            ("(?iu)[a-z&&[^k]]", "j", true),
+            ("(?iu)[a-z&&k]", "\u{212a}", true),
+            ("(?iu)[a-z&&k]", "K", true),
+            ("(?iu)[a-c[x-z]]", "X", true),
+            ("(?iu)[a-c[^x-z]]", "Y", false),
+            ("(?iu)[a-c[^x-z]]", "B", true),
+            ("(?iu)[^a-z&&[^k]]", "k", true),
+            ("(?iu)[^a-z&&[^k]]", "\u{212a}", true),
+            ("(?iu)[a&&-1]", "-", false),
+            ("(?iu)[a&&-1]", "a", false),
+            ("(?iu)[a-c&&b-d]", "B", true),
+            ("(?iu)[a-c&&b-d]", "A", false),
+            // under (?iU) the classes are Unicode and the members fold the same
+            ("(?iU)[\\w]", "\u{17f}", true),
+            ("(?iU)[\\w]", "\u{e9}", true),
+            ("(?iU)[a-z]", "\u{212a}", true),
+            ("(?iU)[A-Z]", "\u{212a}", false),
+            ("(?iU)[\\p{Lower}]", "A", true),
+            ("(?iU)[\\p{Upper}]", "a", true),
+            ("(?iU)[\\p{Lower}]", "\u{1c5}", true),
+            ("(?iU)[\\p{Lu}]", "a", true),
+            ("(?iU)[\\p{Lu}]", "1", false),
+            // only the ASCII fold, which does not reach these
+            ("(?i)[a-z]", "\u{212a}", false),
+            ("(?i)[a-z]", "\u{17f}", false),
+            ("(?i)[A-K]", "k", true),
+            ("(?i)[k]", "\u{212a}", false),
+            ("(?i)[\\w]", "\u{17f}", false),
+            ("(?u)[a-z]", "A", false),
+            ("(?u)[k]", "\u{212a}", false),
+            ("[a-z]", "K", false),
+            // the fold ends where the flag does
+            ("(?iu)(?-i)[a-z]", "A", false),
+            ("(?iu)(?-i)[a-z]", "\u{212a}", false),
+            ("(?iu)(?-u)[a-z]", "A", true),
+            ("(?iu)(?-u)[a-z]", "\u{212a}", false),
+            ("(?iu)(?-u)[k]", "\u{212a}", false),
+            ("(?iu:[a-z])A", "AA", true),
+            ("(?iu:[a-z])A", "Aa", false),
+            ("(?iu:[a-z])[A-Z]", "aa", false),
+            ("(?iu:[a-z])[A-Z]", "\u{212a}a", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// The surrogates are not chars, so a range that has them in the middle, or at an end, holds
+    /// the chars on either side, and a negated one leaves out the chars on either side. Each row
+    /// is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_reads_a_class_across_the_surrogates_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("(?iu)[^\\x{3c2}-\\x{10975}]", "\u{e000}", false),
+            ("(?iu)[^\\x{3c2}-\\x{10975}]", "\u{d7ff}", false),
+            ("(?iu)[^\\x{3c2}-\\x{10975}]", "\u{e001}", false),
+            ("(?iu)[^\\x{3c2}-\\x{10975}]", "\u{10976}", true),
+            ("(?iu)[^\\x{3c2}-\\x{10975}]", "a", true),
+            ("(?iu)[\\x{D7FF}-\\x{E000}]", "\u{d7ff}", true),
+            ("(?iu)[\\x{D7FF}-\\x{E000}]", "\u{e000}", true),
+            ("(?iu)[\\x{D7FF}-\\x{E000}]", "\u{e001}", false),
+            ("(?iu)[^\\x{D7FF}-\\x{E000}]", "\u{d7ff}", false),
+            ("(?iu)[^\\x{D7FF}-\\x{E000}]", "\u{e000}", false),
+            ("(?iu)[^\\x{D7FF}-\\x{E000}]", "\u{d7fe}", true),
+            ("(?iu)[^\\x{D7FF}-\\x{E000}]", "\u{e001}", true),
+            ("(?iu)[^\\x{D800}-\\x{E001}]", "\u{e000}", false),
+            ("(?iu)[^\\x{D800}-\\x{E001}]", "\u{e002}", true),
+            ("(?iu)[^\\x{41}-\\x{DBFF}]", "\u{d7ff}", false),
+            ("(?iu)[^\\x{41}-\\x{DBFF}]", "\u{e000}", true),
+            ("(?iu)[\\x{D800}-\\x{DFFF}]", "a", false),
+            ("(?iu)[^\\x{D800}-\\x{DFFF}]", "a", true),
+            ("(?iu)[^\\x{D800}-\\x{DFFF}]", "\u{e000}", true),
+            ("(?iu)[a\\x{D800}-\\x{DFFF}]", "a", true),
+            ("(?iu)[a\\x{D800}-\\x{DFFF}]", "\u{d7ff}", false),
+            ("(?iu)[^a\\x{D800}-\\x{DFFF}]", "a", false),
+            ("(?iu)[^a\\x{D800}-\\x{DFFF}]", "b", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// The POSIX classes are ASCII unless `(?U)` is on, when they are the Unicode properties, and
+    /// no case flag folds them or the other properties, except that `Lower`, `Upper`, `Lu`, `Ll`
+    /// and `Lt` take in every cased letter under `(?i)`. `fancy_regex` reads the names as Unicode
+    /// and folds a property under its `i`. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_reads_the_posix_classes_and_properties_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // the POSIX classes are ASCII without (?U), where fancy_regex reads them as Unicode
+            ("\\p{Alpha}", "a", true),
+            ("\\p{Alpha}", "Z", true),
+            ("\\p{Alpha}", "\u{e9}", false),
+            ("\\p{Alpha}", "\u{3b1}", false),
+            ("\\p{Alpha}", "1", false),
+            ("\\p{Alpha}", "_", false),
+            ("\\P{Alpha}", "\u{e9}", true),
+            ("\\P{Alpha}", "a", false),
+            ("\\p{Alnum}", "5", true),
+            ("\\p{Alnum}", "q", true),
+            ("\\p{Alnum}", "_", false),
+            ("\\p{Alnum}", "\u{e9}", false),
+            ("\\p{Alnum}", "\u{663}", false),
+            ("\\p{Digit}", "7", true),
+            ("\\p{Digit}", "\u{663}", false),
+            ("\\p{Digit}", "\u{ff17}", false),
+            ("\\p{Punct}", "!", true),
+            ("\\p{Punct}", "$", true),
+            ("\\p{Punct}", "_", true),
+            ("\\p{Punct}", "~", true),
+            ("\\p{Punct}", "`", true),
+            ("\\p{Punct}", "@", true),
+            ("\\p{Punct}", "a", false),
+            ("\\p{Punct}", "\u{a1}", false),
+            ("\\p{Punct}", "\u{2014}", false),
+            ("\\P{Punct}", "\u{a1}", true),
+            ("\\P{Punct}", "!", false),
+            ("\\p{ASCII}", "a", true),
+            ("\\p{ASCII}", "\u{7f}", true),
+            ("\\p{ASCII}", "\u{0}", true),
+            ("\\p{ASCII}", "\u{80}", false),
+            ("\\p{ASCII}", "\u{e9}", false),
+            ("\\P{ASCII}", "\u{e9}", true),
+            ("\\p{XDigit}", "f", true),
+            ("\\p{XDigit}", "F", true),
+            ("\\p{XDigit}", "9", true),
+            ("\\p{XDigit}", "g", false),
+            ("\\p{XDigit}", "\u{ff11}", false),
+            ("\\p{Blank}", " ", true),
+            ("\\p{Blank}", "\t", true),
+            ("\\p{Blank}", "\n", false),
+            ("\\p{Blank}", "\u{a0}", false),
+            ("\\p{Cntrl}", "\u{1f}", true),
+            ("\\p{Cntrl}", "\u{7f}", true),
+            ("\\p{Cntrl}", "\u{0}", true),
+            ("\\p{Cntrl}", " ", false),
+            ("\\p{Cntrl}", "\u{80}", false),
+            ("\\p{Graph}", "!", true),
+            ("\\p{Graph}", "~", true),
+            ("\\p{Graph}", " ", false),
+            ("\\p{Graph}", "\u{e9}", false),
+            ("\\p{Print}", " ", true),
+            ("\\p{Print}", "~", true),
+            ("\\p{Print}", "\u{7f}", false),
+            ("\\p{Print}", "\u{e9}", false),
+            ("\\p{Space}", " ", true),
+            ("\\p{Space}", "\u{b}", true),
+            ("\\p{Space}", "\u{a0}", false),
+            ("\\p{Space}", "\u{2003}", false),
+            ("[\\p{Alpha}]", "\u{e9}", false),
+            ("[\\p{Alpha}]", "b", true),
+            ("[\\p{Alpha}\\d]", "7", true),
+            ("[\\p{Alnum}_]", "_", true),
+            ("[\\p{Alnum}_]", "\u{e9}", false),
+            ("[\\p{Punct}]", "\u{a1}", false),
+            ("[\\p{Punct}]", ";", true),
+            ("[^\\p{Punct}]", ";", false),
+            ("[^\\p{Punct}]", "\u{a1}", true),
+            ("[\\P{Punct}]", ";", false),
+            ("[\\p{ASCII}]", "\u{e9}", false),
+            ("[\\p{ASCII}-]", "-", true),
+            ("[\\p{XDigit}]", "\u{ff11}", false),
+            ("[\\p{Blank}]", "\u{a0}", false),
+            ("[\\p{Space}x]", "\u{a0}", false),
+            ("[\\p{Cntrl}]", "\u{80}", false),
+            ("[\\p{Graph}]", "\u{e9}", false),
+            ("[\\p{Print}]", "\u{e9}", false),
+            ("[\\p{Alpha}&&[^a]]", "a", false),
+            ("[\\p{Alpha}&&[^a]]", "b", true),
+            // the case flags do not fold them, and under (?i) Lower and Upper are the ASCII letters of both cases
+            ("(?i)\\p{Alpha}", "\u{17f}", false),
+            ("(?i)\\p{Alpha}", "\u{212a}", false),
+            ("(?iu)\\p{Alpha}", "\u{17f}", false),
+            ("(?iu)\\p{Alpha}", "\u{212a}", false),
+            ("(?iu)\\p{ASCII}", "\u{17f}", false),
+            ("(?iu)\\p{ASCII}", "\u{212a}", false),
+            ("(?iu)\\p{ASCII}", "K", true),
+            ("(?iu)\\p{Punct}", "\u{212a}", false),
+            ("(?iu)\\p{Digit}", "1", true),
+            ("(?iu)[\\p{Alnum}]", "\u{17f}", false),
+            ("(?iu)[\\p{Alnum}]", "\u{212a}", false),
+            ("(?iu)[\\p{ASCII}]", "\u{212a}", false),
+            ("(?iu)[\\p{XDigit}]", "\u{212a}", false),
+            ("(?iu)[\\p{Punct}k]", "\u{212a}", true),
+            ("(?i)\\p{Lower}", "A", true),
+            ("(?i)\\p{Upper}", "a", true),
+            ("(?i)\\p{Lower}", "\u{e9}", false),
+            ("(?iu)\\p{Lower}", "\u{17f}", false),
+            ("(?iu)\\p{Upper}", "\u{212a}", false),
+            // the properties that are not the ASCII ones are not folded either
+            ("(?iu)\\p{IsGreek}", "\u{345}", false),
+            ("(?iu)\\p{IsLatin}", "\u{212a}", true),
+            ("(?iu)\\p{IsLatin}", "\u{17f}", true),
+            ("(?iu)\\p{L}", "\u{17f}", true),
+            ("(?iu)\\p{Nd}", "\u{663}", true),
+            ("(?iu)[\\p{IsGreek}]", "\u{345}", false),
+            ("(?iu)\\p{Lu}", "a", true),
+            ("(?iu)\\p{Lu}", "\u{df}", true),
+            ("(?iu)\\p{Lu}", "\u{138}", true),
+            ("(?iu)\\p{Lu}", "1", false),
+            ("(?iu)\\p{Ll}", "A", true),
+            ("(?iu)\\p{Lt}", "a", true),
+            ("(?iu)\\P{Lu}", "a", false),
+            ("(?iu)\\P{Lu}", "1", true),
+            ("(?iu)[\\p{Lu}]", "\u{df}", true),
+            ("(?iu)[\\p{Lu}]", "\u{138}", true),
+            ("(?iu)[^\\p{Lu}]", "\u{df}", false),
+            ("(?iu)[^\\p{Lu}]", "1", true),
+            ("(?iu)\\p{IsLowercase}", "A", true),
+            ("(?iu)\\p{IsUppercase}", "a", true),
+            ("(?iu)\\p{IsLowercase}", "\u{2102}", true),
+            ("(?iu)\\p{gc=Lu}", "\u{138}", true),
+            ("(?iu)\\p{IsLu}", "\u{138}", true),
+            ("(?iu)\\p{Lower}", "A", true),
+            // under (?U) the POSIX classes are the Unicode properties
+            ("(?U)\\p{Alpha}", "\u{e9}", true),
+            ("(?U)\\p{Alpha}", "1", false),
+            ("(?U)\\p{Alnum}", "\u{e9}", true),
+            ("(?U)\\p{Alnum}", "\u{663}", true),
+            ("(?U)\\p{Alnum}", "_", false),
+            ("(?U)\\p{Digit}", "\u{663}", true),
+            ("(?U)\\p{Digit}", "a", false),
+            ("(?U)\\p{Punct}", "\u{a1}", true),
+            ("(?U)\\p{Punct}", "$", false),
+            ("(?U)\\p{Punct}", "!", true),
+            ("(?U)\\p{Space}", "\u{a0}", true),
+            ("(?U)\\p{Space}", "\u{85}", true),
+            ("(?U)\\p{Space}", "\u{2028}", true),
+            ("(?U)\\p{Space}", "a", false),
+            ("(?U)\\p{XDigit}", "\u{ff11}", true),
+            ("(?U)\\p{XDigit}", "\u{663}", true),
+            ("(?U)\\p{XDigit}", "g", false),
+            ("(?U)\\p{Blank}", "\u{a0}", true),
+            ("(?U)\\p{Blank}", "\t", true),
+            ("(?U)\\p{Blank}", "\n", false),
+            ("(?U)\\p{Cntrl}", "\u{80}", true),
+            ("(?U)\\p{Cntrl}", " ", false),
+            ("(?U)\\p{Graph}", "\u{e9}", true),
+            ("(?U)\\p{Graph}", " ", false),
+            ("(?U)\\p{Graph}", "\u{a0}", false),
+            ("(?U)\\p{Graph}", "\u{2028}", false),
+            ("(?U)\\p{Print}", "\u{e9}", true),
+            ("(?U)\\p{Print}", " ", true),
+            ("(?U)\\p{Print}", "\u{a0}", true),
+            ("(?U)\\p{Print}", "\n", false),
+            ("(?U)\\p{Print}", "\u{2028}", false),
+            ("(?U)\\p{Lower}", "\u{e9}", true),
+            ("(?U)\\p{Lower}", "A", false),
+            ("(?U)\\p{Upper}", "\u{c9}", true),
+            ("(?U)\\p{alpha}", "\u{e9}", true),
+            ("(?U)\\P{Graph}", " ", true),
+            ("(?U)\\P{Graph}", "a", false),
+            ("(?U)[\\p{Alpha}]", "\u{e9}", true),
+            ("(?U)[\\p{Graph}]", "\u{e9}", true),
+            ("(?U)[\\P{Graph}x]", " ", true),
+            ("(?U)[\\P{Graph}x]", "x", true),
+            ("(?U)[\\P{Graph}x]", "a", false),
+            ("(?iU)\\p{Lower}", "A", true),
+            ("(?iU)\\p{Lower}", "\u{1c5}", true),
+            ("(?iU)\\p{Upper}", "a", true),
+            ("(?iU)\\p{Lower}", "\u{2102}", true),
+            ("(?iU)\\p{Alpha}", "\u{212a}", true),
+            ("(?iU)\\p{Punct}", "\u{a1}", true),
+            ("(?iU)\\p{Graph}", "\u{212a}", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Under `(?iu)` a literal matches the code points with its key, `Character.toLowerCase` of
+    /// `Character.toUpperCase`, which is not the simple case folding that `fancy_regex`'s `i`
+    /// compares: `İ` and `ı` match `i`. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_folds_unicode_case_of_a_literal_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // a literal compares Character.toLowerCase(Character.toUpperCase(ch)), not the simple case folding of fancy_regex
+            ("(?iu)i", "\u{130}", true),
+            ("(?iu)i", "\u{131}", true),
+            ("(?iu)I", "\u{130}", true),
+            ("(?iu)I", "\u{131}", true),
+            ("(?iu)\u{130}", "i", true),
+            ("(?iu)\u{130}", "\u{131}", true),
+            ("(?iu)\u{131}", "I", true),
+            ("(?iu)\u{131}", "\u{130}", true),
+            ("(?iu)i", "I", true),
+            ("(?iu)id", "\u{130}D", true),
+            ("(?iu)k", "\u{212a}", true),
+            ("(?iu)K", "\u{212a}", true),
+            ("(?iu)\u{212a}", "k", true),
+            ("(?iu)s", "\u{17f}", true),
+            ("(?iu)\u{17f}", "S", true),
+            ("(?iu)\u{e5}", "\u{212b}", true),
+            ("(?iu)\u{212b}", "\u{c5}", true),
+            ("(?iu)\u{3c3}", "\u{3c2}", true),
+            ("(?iu)\u{3c2}", "\u{3a3}", true),
+            ("(?iu)\u{3a3}", "\u{3c3}", true),
+            ("(?iu)\u{b5}", "\u{39c}", true),
+            ("(?iu)\u{b5}", "\u{3bc}", true),
+            ("(?iu)\u{1c5}", "\u{1c6}", true),
+            ("(?iu)\u{1f80}", "\u{1f88}", true),
+            ("(?iu)\u{1f88}", "\u{1f80}", true),
+            ("(?iu)\u{1f80}", "\u{1f80}", true),
+            ("(?iu)\u{ff}", "\u{178}", true),
+            ("(?iu)\u{10428}", "\u{10400}", true),
+            ("(?iu)\u{e9}", "\u{c9}", true),
+            ("(?iu)\u{436}", "\u{416}", true),
+            ("(?iu)1", "1", true),
+            ("(?iu)ss", "\u{df}", false),
+            ("(?iu)SS", "\u{1e9e}", false),
+            ("(?iu)\u{df}", "\u{df}", true),
+            // with the fold off, in ASCII, or ended, the letters stay apart
+            ("(?i)i", "\u{130}", false),
+            ("(?i)i", "\u{131}", false),
+            ("(?i)k", "\u{212a}", false),
+            ("(?u)i", "I", false),
+            ("(?u)i", "\u{130}", false),
+            ("(?iu)(?-i)i", "I", false),
+            ("(?iu)(?-i)i", "\u{130}", false),
+            ("(?iu)(?-u)i", "\u{130}", false),
+            ("(?iu)(?-u)i", "I", true),
+            ("(?iu:i)", "\u{130}", true),
+            ("(?iu:i)i", "\u{130}i", true),
+            ("(?iu:i)i", "\u{130}I", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Java reads a literal in a run of two or more as a slice, which also matches `ẞ` for `ß`,
+    /// and a lone literal, or one that a quantifier follows, on its own. Each row is
+    /// `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_reads_a_run_of_literals_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // a lone ß matches only itself, and one in a run of two or more also matches ẞ
+            ("(?iu)\u{df}", "\u{1e9e}", false),
+            ("(?iu)\u{df}", "\u{df}", true),
+            ("(?iu)\u{df}\u{df}", "\u{1e9e}\u{1e9e}", true),
+            ("(?iu)\u{df}a", "\u{1e9e}a", true),
+            ("(?iu)a\u{df}", "a\u{1e9e}", true),
+            ("(?iu)\u{df}*", "\u{1e9e}", false),
+            ("(?iu)\u{df}a*", "\u{1e9e}", false),
+            ("(?iu)\u{df}a*", "\u{1e9e}a", false),
+            ("(?iu)\u{df}ab*", "\u{1e9e}ab", true),
+            ("(?iu)\u{df}ab*", "\u{1e9e}a", true),
+            ("(?iu)a\u{df}*", "a\u{1e9e}", false),
+            ("(?iu)a\u{df}*", "a", true),
+            ("(?iu)a{2}\u{df}", "aa\u{1e9e}", false),
+            ("(?iu)a{2}\u{df}\u{df}", "aa\u{1e9e}\u{1e9e}", true),
+            ("(?iu)(\u{df})", "\u{1e9e}", false),
+            ("(?iu)(\u{df}\u{df})", "\u{1e9e}\u{1e9e}", true),
+            ("(?iu)\u{df}|\u{df}", "\u{1e9e}", false),
+            ("(?iu)\u{df}.", "\u{1e9e}x", false),
+            ("(?iu)\u{df}\\.", "\u{1e9e}.", true),
+            ("(?iu)\u{df}\\w", "\u{1e9e}x", false),
+            ("(?iu)\u{df}{1,2}", "\u{1e9e}", false),
+            ("(?iu)\u{df}\u{df}?", "\u{1e9e}", false),
+            ("(?iu)\u{df}\u{df}?", "\u{1e9e}\u{1e9e}", false),
+            ("(?iu)x\u{df}", "x\u{1e9e}", true),
+            ("(?iu)\u{df}+x", "\u{1e9e}x", false),
+            ("(?iu)\u{df}x", "\u{1e9e}x", true),
+            ("(?iu)(?:\u{df})\u{df}", "\u{1e9e}\u{1e9e}", false),
+            ("(?iu)(?:\u{df})", "\u{1e9e}", false),
+            ("(?iu)\u{df}$", "\u{1e9e}", false),
+            ("(?iu)^\u{df}", "\u{1e9e}", false),
+            ("(?iu)\u{df}[a]", "\u{1e9e}a", false),
+            ("(?iu)\u{df}\\x{DF}", "\u{1e9e}\u{1e9e}", true),
+            ("(?iu)\\x{DF}", "\u{1e9e}", false),
+            ("(?iu)\\Q\u{df}\\E", "\u{1e9e}", false),
+            ("(?iu)\\Q\u{df}\u{df}\\E", "\u{1e9e}\u{1e9e}", true),
+            ("(?iux)\u{df} \u{df}", "\u{1e9e}\u{1e9e}", true),
+            ("(?iux)\u{df} #c\n\u{df}", "\u{1e9e}\u{1e9e}", true),
+            ("(?iux)\u{df} #c\n", "\u{1e9e}", false),
+            ("(?iu)\u{1e9e}", "\u{df}", true),
+            ("(?iu)\u{1e9e}\u{1e9e}", "\u{df}\u{df}", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// The flag `x` ends with the group it is set in, and the whitespace and the `#` after that
+    /// are text. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_ends_flag_x_with_its_group_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // the flag x ends with the group it is set in
+            ("(?u)(?<n>.(?x))A(?i)I ", "&A\u{131} ", true),
+            ("(?u)(?<n>.(?x))A(?i)I ", "&A\u{131}", false),
+            ("(?u)(?<n>.(?x))A(?i)I", "&A\u{131}", true),
+            ("(?u)(.(?x))A#", "xA#", true),
+            ("(?u)(.(?x))A#", "xA", false),
+            ("(?x)(.(?x))A#c\nB", "xAB", true),
+            ("(?x:a )b", "ab", true),
+            ("(?x:a )b", "a b", false),
+            ("(?x:a)#b", "a#b", true),
+            ("(?x:a)#b", "a", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
     /// A `^` that Java reads as a class member stays one under `(?x)`, where
     /// the white space and comments between it and the `[` are dropped, and a
     /// `-` that does not join two members is the character, whatever member
@@ -859,11 +1411,75 @@ mod tests {
         for (source, input, expected) in [
             ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", true),
             ("(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true),
+            ("(?i)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true),
         ] {
             check!(
                 pattern(source).matches(input).ok() == Some(expected),
                 "{source:?} against {input:?}"
             );
+        }
+    }
+
+    /// Under `(?iu)` Java's `CIBackRef` compares the keys of the chars, and
+    /// `fancy_regex`'s `(?i:\1)` compares the simple case foldings, and only
+    /// when the two texts are as long in bytes. So a reference to `i` does not
+    /// match `İ` or `ı` here, and a reference to `s` does not match `ſ`, `k` the
+    /// Kelvin sign, `ß` `ẞ`, or `å` the angstrom sign, which Java's does. The
+    /// divergence is documented in `java_fold`; this test pins its extent, so
+    /// that a change to it is noticed. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn a_backreference_under_a_unicode_fold_compares_what_fancy_regex_does() {
+        // (pattern, input, whole input matches in Java)
+        let differs = [
+            ("(?iu)(i)\\1", "i\u{130}"),
+            ("(?iu)(i)\\1", "i\u{131}"),
+            ("(?iu)(\u{130})\\1", "\u{130}i"),
+            ("(?iu)(s)\\1", "s\u{17f}"),
+            ("(?iu)(k)\\1", "k\u{212a}"),
+            ("(?iu)(\u{df})\\1", "\u{df}\u{1e9e}"),
+            ("(?iu)(\u{e5})\\1", "\u{e5}\u{212b}"),
+        ];
+        for (source, input) in differs {
+            check!(
+                pattern(source).matches(input).ok() == Some(false),
+                "{source:?} against {input:?}"
+            );
+        }
+        // (pattern, input, whole input matches, in Java and here)
+        let agrees = [
+            ("(?iu)(a)\\1", "aA", true),
+            ("(?iu)(a)\\1", "ab", false),
+            ("(?iu)(k)\\1", "kK", true),
+            ("(?iu)(\u{e9})\\1", "\u{e9}\u{c9}", true),
+            ("(?iu)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true),
+            ("(?iu)(\u{3c3})\\1", "\u{3c3}\u{3a3}", true),
+            ("(?iu)(\u{1c6})\\1", "\u{1c6}\u{1c5}", true),
+            ("(?iu)(\\p{L}+)\\1", "\u{e9}\u{c9}", true),
+        ];
+        for (source, input, expected) in agrees {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Java reads `(?i){2}` as a repeat of the empty match, and `(?i)*` as a
+    /// dangling quantifier. A flag group that leaves no text in the rewrite
+    /// would hand its quantifier to the text before it, or make the braces
+    /// text, so a quantifier after one is refused.
+    #[test]
+    fn a_quantifier_after_a_flag_that_leaves_no_text_is_refused() {
+        for source in [
+            "(?i){2}",
+            "(?iu){2}a",
+            "(?iu)*",
+            "(?i)+a",
+            "(?d)?",
+            "(?ix) {2}a",
+            "(?ix) *",
+        ] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
         }
     }
 

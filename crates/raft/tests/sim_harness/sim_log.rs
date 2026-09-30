@@ -1,4 +1,4 @@
-//! The in-memory fake per-node log (slice 3a). It is separate from the trait it
+//! The in-memory fake per-node log (the in-memory consensus-core work stream). It is separate from the trait it
 //! satisfies so that the real-log binary compiles the trait without also
 //! carrying the fake's implementation in the same file.
 

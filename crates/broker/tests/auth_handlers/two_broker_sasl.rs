@@ -141,9 +141,9 @@ async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
         dir1.path(),
         BootstrapMode::Bootstrap,
     );
-    // KIP-595 Slice 3c static bootstrap: both brokers boot with the same
+    // KIP-595 static-quorum bootstrap: both brokers boot with the same
     // static voter set and elect among themselves over the SASL controller
-    // wire — no add_learner / change_membership (KIP-853, Slice 5). Start
+    // wire — no add_learner / change_membership (KIP-853 dynamic voter reconfiguration). Start
     // them concurrently: `Broker::start` blocks until a leader is committed,
     // which needs a voter majority up, so a sequential `start().await` on
     // broker0 alone would deadlock.

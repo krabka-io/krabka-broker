@@ -42,7 +42,7 @@ pub struct CoordinatorGroup {
     /// They do not depend on the protocol. A group's offsets key by
     /// `(topic, partition)` whichever protocol its members speak, so they live
     /// on the container instead of inside either state machine. A later type
-    /// change, in slices C to E, can therefore carry the committed offsets
+    /// change, during share-group consumption and acknowledgement, can therefore carry the committed offsets
     /// through a conversion untouched.
     pub committed_offsets: HashMap<(String, i32), OffsetEntry>,
     /// Wall-clock millisecond at which the group last lost its final member,

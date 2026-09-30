@@ -16,7 +16,7 @@ use crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry};
 /// Writes audit records to a single partition of the audit topic that this
 /// broker leads.
 ///
-/// Slice 1: the sink resolves the partition index once at construction.
+/// Audit sink construction: the sink resolves the partition index once at construction.
 pub struct KafkaTopicAuditSink {
     partitions: Arc<PartitionRegistry>,
     topic: String,

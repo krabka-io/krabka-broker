@@ -1,16 +1,16 @@
 # Ecosystem qualification
 
-[`qualification/milestone-23.json`](../qualification/milestone-23.json) is the
+[`qualification/ecosystem-eight-gate-baseline.json`](../qualification/ecosystem-eight-gate-baseline.json) is the
 qualified baseline: krabka-broker v0.6.1 with krabka-operator v0.4.1 and the
 rest of its sibling set, which passed all eight gates in
 [`qualification-36293960620`](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36293960620).
 It is the default manifest for the workflow and for `aspect
 check-qualification`. Schema 2 binds each executed check to a candidate and the
-exact qualification adapters, and requires the Milestone 22 disaster-recovery
-gate owned by issue 555 and the Milestone 23 schema-evolution,
-registry-migration, and snapshot-retention gates owned by issues 556-558.
+exact qualification adapters. It requires the disaster-recovery gate owned by
+issue 555 and the schema-evolution, registry-migration, and snapshot-retention
+gates owned by issues 556-558.
 
-[`qualification/milestone-20.json`](../qualification/milestone-20.json) is the
+[`qualification/original-four-gate-baseline.json`](../qualification/original-four-gate-baseline.json) is the
 completed historical schema-1 candidate for the original four gates. Keep its
 revisions, evidence and report intact.
 
@@ -36,7 +36,7 @@ invent a draft manifest or mutable image tag to make a run appear green.
 
 ```sh
 gh workflow run qualification.yml \
-  -f manifest=qualification/milestone-23.json \
+  -f manifest=qualification/ecosystem-eight-gate-baseline.json \
   -F execute=true \
   -f broker_revision="$DELIVERED_COMMIT" \
   -f broker_digest="$DELIVERED_IMAGE_DIGEST"
@@ -57,7 +57,7 @@ Kind. Their timeouts bound the run rather than turning a timeout into a pass.
 
 | Gate | Executed boundary |
 | :--- | :--- |
-| Installation | The pinned public Compose and Helm recipes with candidate images and downloaded, checksum-verified charts; produce/readback and uninstall. The existing Go and Java integration suites run against the installed broker, and the pinned broker's RF=3 schema suite plus incompatible-protocol build probe rerun the M19 supporting checks. |
+| Installation | The pinned public Compose and Helm recipes with candidate images and downloaded, checksum-verified charts; produce/readback and uninstall. The existing Go and Java integration suites run against the installed broker, and the pinned broker's RF=3 schema suite plus incompatible-protocol build probe rerun the original compatibility supporting checks. |
 | Operator lifecycle | The pinned operator `packaging/kind-lifecycle.sh`, using published chart contents and the candidate broker, operator and rebalancer images; upgrade, disruption, scale-down, certificate rotation and acknowledged-record reconciliation. |
 | Authenticated CLI | The pinned CLI's real `candidate_broker` test, against a disposable three-broker SASL cluster. Its one executable lookup is adapted in the isolated checkout to invoke the downloaded CLI binary instead of a rebuilt binary; the patch is retained. |
 | Observability recovery | The pinned demo Compose recipe with explicit candidate broker, o11y and demo-app image overrides on linux/amd64, followed by its `qualify-failover.sh`; signal queries, WAL recovery, offset reconciliation and alert firing/resolution. |
@@ -75,10 +75,9 @@ checks in the command log.
 
 A test process exiting successfully is insufficient: adapters check named live
 test results or behavioral outcomes and record the checks that actually ran.
-Skipped or zero-test runs cannot produce a valid gate receipt. Historical M19
-recovery/CDC evidence remains historical; this workflow does not relabel those
-old runs as fresh candidate results. The monthly schedule is enabled only after
-the first schema-2 M23 manifest is checked in as the immutable baseline.
+Skipped or zero-test runs cannot produce a valid gate receipt. Historical recovery and CDC evidence remains historical; this workflow does not
+relabel those old runs as fresh candidate results. The monthly schedule is enabled only after
+the first schema-2 eight-gate manifest is checked in as the immutable baseline.
 
 ## Local execution and evidence
 
