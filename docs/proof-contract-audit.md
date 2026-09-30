@@ -862,3 +862,20 @@ batch; all 1,064 unrelated prior artifact files remain byte-identical. All four
 new consumers appear in mutation discovery, and every verified Rust source
 remains below 300 lines. Six boolean-only contracts remain open. Full workspace
 Bazel CI and the full mutation sweep are separate from these local checks.
+
+## Quota trace CI follow-up
+
+PR #1260's exact failed Creusot job left two obligations in one of its
+534 files, `metered_consumes_conserve_elapsed_credit` unproved. Setup's
+unsupported command fell back successfully; the failure was in the solver's
+large conservation context. A private proved ledger lemma now lifts refill
+conservation through a whole-token grant before the trace composes it with
+its accumulated balance. The trace contract and runtime behavior are unchanged;
+no assumptions or trusted annotations are added.
+
+The isolated published snapshot plus this repair proves all 535 files in
+the exact CI image, digest `76ba64e5066553606a438b28ffc4cce7ae45cab2c2f9dd1855d5ef4ffe9be9c8`,
+with four CPUs. Both affected proofs also pass a no-cache one-CPU run in that
+image. Existing independent quota ledger tests, all-target workspace Clippy
+with warnings denied, formatting and the Creusot/mutation skip gates pass.
+Remote CI for the repair is reported separately.
