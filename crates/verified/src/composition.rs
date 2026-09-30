@@ -130,14 +130,20 @@ use wal_recovery::{checkpoint_truncation_bounds_fetch, published_trim_bounds_rec
 mod offset_index;
 use offset_index::validated_index_bounds_lookup;
 
+mod offset_seek;
+use offset_seek::indexed_offset_scan_preserves_first_batch;
+
 mod audit;
-use audit::loss_settlement_is_idempotent;
+use audit::{admitted_loss_marker_preserves_pending, loss_settlement_is_idempotent};
 
 mod time_index;
 use time_index::validated_time_cursors_are_monotone;
 
 mod epoch;
 use epoch::validated_epochs_bound_truncated_fetch;
+
+mod epoch_replay;
+use epoch_replay::resolved_epoch_bounds_retained_replay;
 
 mod snapshot_replay;
 use snapshot_replay::{
@@ -152,6 +158,9 @@ use restored_aborts::restored_aborts_remain_bounded_when_fetch_shrinks;
 
 mod delivery;
 use delivery::{scheduled_prefix_bounds_fetch, segment_maximum_proves_delivery};
+
+mod scheduled_stability;
+use scheduled_stability::scheduled_stable_prefix_bounds_fetch;
 
 mod replication;
 use replication::fenced_replication_bounds_fetch;

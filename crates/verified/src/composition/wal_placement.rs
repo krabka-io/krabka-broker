@@ -2,14 +2,36 @@ use creusot_std::prelude::*;
 
 use super::{election_has_quorum, select_wal_voters, wal_voter_set_valid};
 
-/// Full production placement establishes the installer's identity invariant;
-/// incomplete/zero placements fail closed. No supplied uniqueness boolean is used.
-#[ensures(result)]
+type InstalledPlacement = (Vec<(u64, u64)>, Vec<u64>, bool);
+type RackLossPlacement = (Vec<(u64, u64)>, Vec<u64>, bool, bool);
+
+/// Return the actual placement, projected node IDs and exact installer admission.
+/// Greedy placement is maximal, not globally maximum on conflicting metadata.
+/// Faithful node/rack projection and durable membership transitions are external.
+#[ensures(result.0@.len() <= requested@)]
+#[ensures((result.0@.len() == 0) == (requested@ == 0
+    || forall<i: Int> 0 <= i && i < candidates@.len() ==> candidates@[i].0 != local_node))]
+#[ensures(result.0@.len() > 0 ==> result.0@[0].0 == local_node)]
+#[ensures(forall<i: Int> 0 <= i && i < result.0@.len()
+    ==> exists<j: Int> 0 <= j && j < candidates@.len() && result.0@[i] == candidates@[j])]
+#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.0@.len()
+    ==> result.0@[i].0 != result.0@[j].0 && result.0@[i].1 != result.0@[j].1)]
+#[ensures(0 < result.0@.len() && result.0@.len() < requested@ ==>
+    forall<i: Int> 0 <= i && i < candidates@.len() ==>
+        exists<j: Int> 0 <= j && j < result.0@.len()
+            && (candidates@[i].0 == result.0@[j].0 || candidates@[i].1 == result.0@[j].1))]
+#[ensures(result.1@.len() == result.0@.len()
+    && forall<i: Int> 0 <= i && i < result.1@.len() ==> result.1@[i] == result.0@[i].0)]
+#[ensures(result.2 == (requested@ > 0 && result.0@.len() == requested@))]
+#[ensures(result.2 == (requested@ > 0 && result.1@.len() == requested@
+    && result.1@[0] == local_node
+    && forall<i: Int, j: Int> 0 <= i && i < j && j < result.1@.len()
+        ==> result.1@[i] != result.1@[j]))]
 pub(super) fn constructed_wal_placement_is_installable(
     candidates: &[(u64, u64)],
     local_node: u64,
     requested: usize,
-) -> bool {
+) -> InstalledPlacement {
     let selected = select_wal_voters(candidates, local_node, requested);
     let mut nodes: Vec<u64> = Vec::new();
     let mut i = 0usize;
@@ -20,47 +42,84 @@ pub(super) fn constructed_wal_placement_is_installable(
         nodes.push(selected[i].0);
         i += 1;
     }
-    wal_voter_set_valid(&nodes, local_node, requested)
-        == (requested > 0 && selected.len() == requested)
+    let installed = wal_voter_set_valid(&nodes, local_node, requested);
+    (selected, nodes, installed)
 }
 
-/// A complete placement of at least three voters leaves the original majority
-/// satisfiable after any one configured rack disappears. This connects the
-/// actual placement, not a round-robin model, to quorum arithmetic. Remaining
-/// brokers must still communicate and fsync; rack labels must name real domains.
+/// Consume installer admission and return every surviving voter in placement
+/// order. An installed placement retains its original majority after any one
+/// configured rack disappears. The last flag requires installation, so an
+/// incomplete configuration never exports an available installed quorum.
+/// Physical rack identity, communication and fsync remain host obligations.
 #[requires(requested@ >= 3)]
-#[ensures(result)]
+#[ensures(result.0@.len() <= requested@)]
+#[ensures((result.0@.len() == 0) == (forall<i: Int>
+    0 <= i && i < candidates@.len() ==> candidates@[i].0 != local_node))]
+#[ensures(result.0@.len() > 0 ==> result.0@[0].0 == local_node)]
+#[ensures(forall<i: Int> 0 <= i && i < result.0@.len()
+    ==> exists<j: Int> 0 <= j && j < candidates@.len() && result.0@[i] == candidates@[j])]
+#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.0@.len()
+    ==> result.0@[i].0 != result.0@[j].0 && result.0@[i].1 != result.0@[j].1)]
+#[ensures(0 < result.0@.len() && result.0@.len() < requested@ ==>
+    forall<i: Int> 0 <= i && i < candidates@.len() ==>
+        exists<j: Int> 0 <= j && j < result.0@.len()
+            && (candidates@[i].0 == result.0@[j].0 || candidates@[i].1 == result.0@[j].1))]
+#[ensures(result.2 == (result.0@.len() == requested@) && result.3 == result.2)]
+#[ensures(result.0@.len() - 1 <= result.1@.len() && result.1@.len() <= result.0@.len())]
+#[ensures(forall<i: Int> 0 <= i && i < result.1@.len()
+    ==> exists<j: Int> 0 <= j && j < result.0@.len()
+        && result.1@[i] == result.0@[j].0 && result.0@[j].1 != failed_rack)]
+#[ensures(forall<i: Int> 0 <= i && i < result.0@.len() && result.0@[i].1 != failed_rack
+    ==> exists<j: Int> 0 <= j && j < result.1@.len() && result.1@[j] == result.0@[i].0)]
+#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.1@.len()
+    ==> result.1@[i] != result.1@[j])]
+#[ensures(forall<i: Int, j: Int, a: Int, b: Int>
+    0 <= i && i < j && j < result.1@.len() && 0 <= a && a < result.0@.len()
+        && 0 <= b && b < result.0@.len()
+        && result.1@[i] == result.0@[a].0 && result.1@[j] == result.0@[b].0 ==> a < b)]
+#[ensures(result.3 ==> result.1@.len() >= requested@ / 2 + 1)]
 pub(super) fn wal_placement_survives_one_rack_loss(
     candidates: &[(u64, u64)],
     local_node: u64,
     requested: usize,
     failed_rack: u64,
-) -> bool {
-    let selected = select_wal_voters(candidates, local_node, requested);
-    if selected.len() != requested {
-        // An incomplete placement cannot be installed by the other theorem.
-        return true;
-    }
-    let mut surviving = 0usize;
+) -> RackLossPlacement {
+    let (selected, nodes, installed) =
+        constructed_wal_placement_is_installable(candidates, local_node, requested);
+    let mut survivors: Vec<u64> = Vec::new();
+    #[cfg(creusot)]
     let mut removed: Option<usize> = None;
     let mut i = 0usize;
     #[invariant(i@ <= selected@.len())]
-    #[invariant(surviving@ + (if removed == None { 0 } else { 1 }) == i@)]
+    #[invariant(survivors@.len() + (if removed == None { 0 } else { 1 }) == i@)]
     #[invariant(match removed {
         Some(index) => index@ < i@ && selected@[index@].1 == failed_rack,
         None => true,
     })]
+    #[invariant(forall<j: Int> 0 <= j && j < survivors@.len()
+        ==> exists<k: Int> 0 <= k && k < i@
+            && survivors@[j] == selected@[k].0 && selected@[k].1 != failed_rack)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ && selected@[j].1 != failed_rack
+        ==> exists<k: Int> 0 <= k && k < survivors@.len() && survivors@[k] == selected@[j].0)]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < survivors@.len()
+        ==> survivors@[j] != survivors@[k])]
+    #[invariant(forall<j: Int, k: Int, a: Int, b: Int>
+        0 <= j && j < k && k < survivors@.len() && 0 <= a && a < selected@.len()
+            && 0 <= b && b < selected@.len()
+            && survivors@[j] == selected@[a].0 && survivors@[k] == selected@[b].0 ==> a < b)]
     #[variant(selected@.len() - i@)]
     while i < selected.len() {
         if selected[i].1 == failed_rack {
-            if removed.is_some() {
-                return false;
+            proof_assert!(removed == None);
+            #[cfg(creusot)]
+            {
+                removed = Some(i);
             }
-            removed = Some(i);
         } else {
-            surviving += 1;
+            survivors.push(nodes[i]);
         }
         i += 1;
     }
-    election_has_quorum(selected.len(), surviving)
+    let quorum = installed && election_has_quorum(selected.len(), survivors.len());
+    (selected, survivors, installed, quorum)
 }

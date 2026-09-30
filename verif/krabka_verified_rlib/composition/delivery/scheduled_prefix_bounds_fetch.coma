@@ -1,70 +1,62 @@
-(* #"/workspace/crates/verified/src/composition/delivery.rs" 31 0 37 9 *)
+(* #"/workspace/crates/verified/src/composition/delivery.rs" 76 0 82 28 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 63
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 178 97
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 179 10 179 83
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 182 58
-let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 74
-let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 188 1
-let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 189 10 189 36
-let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 59
-let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 126 16 126 42
-let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 141 8 147 9
-let%span sdelivery = "/workspace/crates/verified/src/composition/delivery.rs" 38 18 38 80
-let%span sdelivery'0 = "/workspace/crates/verified/src/composition/delivery.rs" 41 16 41 22
-let%span sdelivery'1 = "/workspace/crates/verified/src/composition/delivery.rs" 48 14 48 33
-let%span sdelivery'2 = "/workspace/crates/verified/src/composition/delivery.rs" 49 14 49 27
-let%span sdelivery'3 = "/workspace/crates/verified/src/composition/delivery.rs" 45 16 47 84
-let%span sdelivery'4 = "/workspace/crates/verified/src/composition/delivery.rs" 44 16 44 70
-let%span sdelivery'5 = "/workspace/crates/verified/src/composition/delivery.rs" 43 16 43 64
-let%span sdelivery'6 = "/workspace/crates/verified/src/composition/delivery.rs" 42 16 42 36
-let%span sdelivery'7 = "/workspace/crates/verified/src/composition/delivery.rs" 50 28 50 38
-let%span sdelivery'8 = "/workspace/crates/verified/src/composition/delivery.rs" 50 13 50 17
-let%span sdelivery'9 = "/workspace/crates/verified/src/composition/delivery.rs" 50 19 50 24
-let%span sdelivery'10 = "/workspace/crates/verified/src/composition/delivery.rs" 51 25 51 64
-let%span sdelivery'11 = "/workspace/crates/verified/src/composition/delivery.rs" 58 62 58 76
-let%span sdelivery'12 = "/workspace/crates/verified/src/composition/delivery.rs" 58 43 58 47
-let%span sdelivery'13 = "/workspace/crates/verified/src/composition/delivery.rs" 58 16 58 82
-let%span sdelivery'14 = "/workspace/crates/verified/src/composition/delivery.rs" 64 13 64 14
-let%span sdelivery'15 = "/workspace/crates/verified/src/composition/delivery.rs" 64 8 64 14
-let%span sdelivery'16 = "/workspace/crates/verified/src/composition/delivery.rs" 52 19 52 23
-let%span sdelivery'17 = "/workspace/crates/verified/src/composition/delivery.rs" 55 19 55 23
-let%span sdelivery'18 = "/workspace/crates/verified/src/composition/delivery.rs" 67 15 67 19
-let%span sdelivery'19 = "/workspace/crates/verified/src/composition/delivery.rs" 69 22 69 96
-let%span sdelivery'20 = "/workspace/crates/verified/src/composition/delivery.rs" 71 36 71 41
-let%span sdelivery'21 = "/workspace/crates/verified/src/composition/delivery.rs" 71 43 71 47
-let%span sdelivery'22 = "/workspace/crates/verified/src/composition/delivery.rs" 71 19 71 70
-let%span sdelivery'23 = "/workspace/crates/verified/src/composition/delivery.rs" 72 36 72 40
-let%span sdelivery'24 = "/workspace/crates/verified/src/composition/delivery.rs" 72 42 72 46
-let%span sdelivery'25 = "/workspace/crates/verified/src/composition/delivery.rs" 72 19 72 69
-let%span sdelivery'26 = "/workspace/crates/verified/src/composition/delivery.rs" 77 15 77 20
-let%span sdelivery'27 = "/workspace/crates/verified/src/composition/delivery.rs" 79 8 79 9
-let%span sdelivery'28 = "/workspace/crates/verified/src/composition/delivery.rs" 81 14 81 33
-let%span sdelivery'29 = "/workspace/crates/verified/src/composition/delivery.rs" 82 14 82 27
-let%span sdelivery'30 = "/workspace/crates/verified/src/composition/delivery.rs" 80 16 80 36
-let%span sdelivery'31 = "/workspace/crates/verified/src/composition/delivery.rs" 83 58 83 72
-let%span sdelivery'32 = "/workspace/crates/verified/src/composition/delivery.rs" 83 39 83 43
-let%span sdelivery'33 = "/workspace/crates/verified/src/composition/delivery.rs" 83 12 83 78
-let%span sdelivery'34 = "/workspace/crates/verified/src/composition/delivery.rs" 84 39 84 49
-let%span sdelivery'35 = "/workspace/crates/verified/src/composition/delivery.rs" 84 39 84 51
-let%span sdelivery'36 = "/workspace/crates/verified/src/composition/delivery.rs" 88 13 88 14
-let%span sdelivery'37 = "/workspace/crates/verified/src/composition/delivery.rs" 88 8 88 14
-let%span sdelivery'38 = "/workspace/crates/verified/src/composition/delivery.rs" 86 19 86 24
-let%span sdelivery'39 = "/workspace/crates/verified/src/composition/delivery.rs" 90 4 90 8
-let%span sdelivery'40 = "/workspace/crates/verified/src/composition/delivery.rs" 28 11 28 47
-let%span sdelivery'41 = "/workspace/crates/verified/src/composition/delivery.rs" 29 11 29 58
-let%span sdelivery'42 = "/workspace/crates/verified/src/composition/delivery.rs" 30 10 30 16
-let%span sdelivery'43 = "/workspace/crates/verified/src/composition/delivery.rs" 10 10 12 51
-let%span sdelivery'44 = "/workspace/crates/verified/src/delivery.rs" 12 10 14 52
-let%span sdelivery'45 = "/workspace/crates/verified/src/delivery.rs" 49 11 49 33
-let%span sdelivery'46 = "/workspace/crates/verified/src/delivery.rs" 50 10 50 91
-let%span sdelivery'47 = "/workspace/crates/verified/src/delivery.rs" 51 10 51 54
-let%span sdelivery'48 = "/workspace/crates/verified/src/delivery.rs" 52 10 53 29
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 125 10 134 1
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 177 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 178 10 179 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 180 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 181 10 183 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 184 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 185 10 189 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 191 10 191 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 127 16 127 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 142 8 148 9
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sdelivery = "/workspace/crates/verified/src/composition/delivery.rs" 83 18 83 80
+let%span sdelivery'0 = "/workspace/crates/verified/src/composition/delivery.rs" 86 16 86 22
+let%span sdelivery'1 = "/workspace/crates/verified/src/composition/delivery.rs" 101 14 101 33
+let%span sdelivery'2 = "/workspace/crates/verified/src/composition/delivery.rs" 102 14 102 27
+let%span sdelivery'3 = "/workspace/crates/verified/src/composition/delivery.rs" 98 16 100 74
+let%span sdelivery'4 = "/workspace/crates/verified/src/composition/delivery.rs" 95 16 97 40
+let%span sdelivery'5 = "/workspace/crates/verified/src/composition/delivery.rs" 94 16 94 70
+let%span sdelivery'6 = "/workspace/crates/verified/src/composition/delivery.rs" 91 16 93 84
+let%span sdelivery'7 = "/workspace/crates/verified/src/composition/delivery.rs" 89 16 90 62
+let%span sdelivery'8 = "/workspace/crates/verified/src/composition/delivery.rs" 88 16 88 64
+let%span sdelivery'9 = "/workspace/crates/verified/src/composition/delivery.rs" 87 16 87 36
+let%span sdelivery'10 = "/workspace/crates/verified/src/composition/delivery.rs" 103 28 103 38
+let%span sdelivery'11 = "/workspace/crates/verified/src/composition/delivery.rs" 103 13 103 17
+let%span sdelivery'12 = "/workspace/crates/verified/src/composition/delivery.rs" 103 19 103 24
+let%span sdelivery'13 = "/workspace/crates/verified/src/composition/delivery.rs" 104 19 104 58
+let%span sdelivery'14 = "/workspace/crates/verified/src/composition/delivery.rs" 104 19 104 59
+let%span sdelivery'15 = "/workspace/crates/verified/src/composition/delivery.rs" 109 62 109 76
+let%span sdelivery'16 = "/workspace/crates/verified/src/composition/delivery.rs" 109 43 109 47
+let%span sdelivery'17 = "/workspace/crates/verified/src/composition/delivery.rs" 109 16 109 82
+let%span sdelivery'18 = "/workspace/crates/verified/src/composition/delivery.rs" 115 13 115 14
+let%span sdelivery'19 = "/workspace/crates/verified/src/composition/delivery.rs" 115 8 115 14
+let%span sdelivery'20 = "/workspace/crates/verified/src/composition/delivery.rs" 120 22 120 96
+let%span sdelivery'21 = "/workspace/crates/verified/src/composition/delivery.rs" 122 36 122 41
+let%span sdelivery'22 = "/workspace/crates/verified/src/composition/delivery.rs" 122 43 122 47
+let%span sdelivery'23 = "/workspace/crates/verified/src/composition/delivery.rs" 122 19 122 70
+let%span sdelivery'24 = "/workspace/crates/verified/src/composition/delivery.rs" 123 36 123 40
+let%span sdelivery'25 = "/workspace/crates/verified/src/composition/delivery.rs" 123 42 123 46
+let%span sdelivery'26 = "/workspace/crates/verified/src/composition/delivery.rs" 123 19 123 69
+let%span sdelivery'27 = "/workspace/crates/verified/src/composition/delivery.rs" 55 11 55 47
+let%span sdelivery'28 = "/workspace/crates/verified/src/composition/delivery.rs" 56 11 56 58
+let%span sdelivery'29 = "/workspace/crates/verified/src/composition/delivery.rs" 57 10 75 1
+let%span sdelivery'30 = "/workspace/crates/verified/src/composition/delivery.rs" 35 10 37 51
+let%span sdelivery'31 = "/workspace/crates/verified/src/composition/delivery.rs" 14 16 15 38
+let%span sdelivery'32 = "/workspace/crates/verified/src/delivery.rs" 12 10 14 52
+let%span sdelivery'33 = "/workspace/crates/verified/src/delivery.rs" 49 11 49 33
+let%span sdelivery'34 = "/workspace/crates/verified/src/delivery.rs" 50 10 50 91
+let%span sdelivery'35 = "/workspace/crates/verified/src/delivery.rs" 51 10 51 54
+let%span sdelivery'36 = "/workspace/crates/verified/src/delivery.rs" 52 10 53 29
+let%span sdelivery'37 = "/workspace/crates/verified/src/composition/delivery.rs" 24 8 28 93
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 126 10 135 1
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -83,7 +75,7 @@ constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
 let segment_maximum_proves_delivery (activations: Slice64.slice Int64.t) (uncertainty: Int64.t) (now: Int64.t)
   (return (x: bool)) = any
-  [ return (result: bool) -> {[@stop_split] [@expl:segment_maximum_proves_delivery ensures] [%#sdelivery'43] result
+  [ return (result: bool) -> {[@stop_split] [@expl:segment_maximum_proves_delivery ensures] [%#sdelivery'30] result
     = (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view activations)
       -> ge_log_Int (Int64.to_int uncertainty) 0
       /\ Int64.to_int (Seq.get (Slice64.view activations) i) + Int64.to_int uncertainty <= Int64.to_int const_MAX
@@ -108,6 +100,10 @@ let len_tup2_i64_i32 (self_: Slice64.slice tup2_i64_i32) (return (x: UInt64.t)) 
     = UInt64.t'int result}
     (! return {result}) ]
 
+predicate scheduled_activation_due [#"/workspace/crates/verified/src/composition/delivery.rs" 13 0 13 91] (activation: int) (uncertainty: int) (now: int) =
+  [%#sdelivery'31] ge_log_Int uncertainty 0
+  /\ activation + uncertainty <= Int64.to_int const_MAX /\ activation + uncertainty <= now
+
 type t_Option_i64 = None | Some Int64.t
 
 let restore_batch_step (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = any
@@ -123,41 +119,64 @@ let restore_batch_step (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int3
       end}
     (! return {result}) ]
 
-let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
-  [ _k (f0'0: Int64.t) -> {Some f0'0 = _x} (! return {f0'0})
-  | _chk -> (! {[@expl:elim Some] match _x with
-      | Some _ -> true
+type t_Option_Infallible = None'0 | Some'0 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'0 -> true
+      | Some'0 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
       | _ -> false
       end}
     any) ]
 
 let scheduled_delivery_visible (scheduled: bool) (uncertainty_ms: Int64.t) (activation_ms: Int64.t) (now_ms: Int64.t)
   (return (x: bool)) = any
-  [ return (result: bool) -> {[@stop_split] [@expl:scheduled_delivery_visible ensures] [%#sdelivery'44] result
+  [ return (result: bool) -> {[@stop_split] [@expl:scheduled_delivery_visible ensures] [%#sdelivery'32] result
     = (not scheduled
     \/ ge_log_Int (Int64.to_int uncertainty_ms) 0
     /\ Int64.to_int activation_ms + Int64.to_int uncertainty_ms <= Int64.to_int const_MAX
     /\ Int64.to_int activation_ms + Int64.to_int uncertainty_ms <= Int64.to_int now_ms)}
     (! return {result}) ]
 
-function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int
-
-let delivery_watermark_advance (log_start'0: Int64.t) (current': Int64.t) (candidate: Int64.t) (log_end'0: Int64.t)
-  (return (x: Int64.t)) =
-{[@stop_split] [@expl:delivery_watermark_advance requires] [%#sdelivery'45] Int64.to_int log_start'0
-  <= Int64.to_int log_end'0}
-  any
-  [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:delivery_watermark_advance ensures] ([@stop_split] [@expl:delivery_watermark_advance ensures #0] [%#sdelivery'46] Int64.to_int result
-      = MinMax.min (MinMax.max (Int64.to_int candidate) (clamp_to (Int64.to_int current') (Int64.to_int log_start'0) (Int64.to_int log_end'0))) (Int64.to_int log_end'0))
-    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #1] [%#sdelivery'47] Int64.to_int log_start'0
-        <= Int64.to_int result
-      /\ Int64.to_int result <= Int64.to_int log_end'0)
-    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #2] [%#sdelivery'48] Int64.to_int current'
-        <= Int64.to_int candidate
-      /\ Int64.to_int log_start'0 <= Int64.to_int candidate /\ Int64.to_int candidate <= Int64.to_int log_end'0
-    -> Int64.to_int result = Int64.to_int candidate)}
-    (! return {result}) ]
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
 
 type t_FetchVisibility = {
   out_of_range: bool;
@@ -168,10 +187,41 @@ type t_FetchVisibility = {
   response_hw: Int64.t;
   response_lso: Int64.t }
 
-function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 125 0 125 40] (a: int) (b: int) : int
+type tup3_i64_FetchVisibility_FetchVisibility = { f0'0: Int64.t; f1'0: t_FetchVisibility; f2'0: t_FetchVisibility }
+
+type t_Option_tup3_i64_FetchVisibility_FetchVisibility = None'1 | Some'1 tup3_i64_FetchVisibility_FetchVisibility
+
+let from_residual_Option_tup3_i64_FetchVisibility_FetchVisibility (residual: t_Option_Infallible)
+  (return (x: t_Option_tup3_i64_FetchVisibility_FetchVisibility)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup3_i64_FetchVisibility_FetchVisibility) ->
+  {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None'1}
+    (! return {result}) ]
+
+function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int
+
+let delivery_watermark_advance (log_start'0: Int64.t) (current': Int64.t) (candidate: Int64.t) (log_end'0: Int64.t)
+  (return (x: Int64.t)) =
+{[@stop_split] [@expl:delivery_watermark_advance requires] [%#sdelivery'33] Int64.to_int log_start'0
+  <= Int64.to_int log_end'0}
+  any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:delivery_watermark_advance ensures] ([@stop_split] [@expl:delivery_watermark_advance ensures #0] [%#sdelivery'34] Int64.to_int result
+      = MinMax.min (MinMax.max (Int64.to_int candidate) (clamp_to (Int64.to_int current') (Int64.to_int log_start'0) (Int64.to_int log_end'0))) (Int64.to_int log_end'0))
+    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #1] [%#sdelivery'35] Int64.to_int log_start'0
+        <= Int64.to_int result
+      /\ Int64.to_int result <= Int64.to_int log_end'0)
+    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #2] [%#sdelivery'36] Int64.to_int current'
+        <= Int64.to_int candidate
+      /\ Int64.to_int log_start'0 <= Int64.to_int candidate /\ Int64.to_int candidate <= Int64.to_int log_end'0
+    -> Int64.to_int result = Int64.to_int candidate)}
+    (! return {result}) ]
+
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 126 0 126 40] (a: int) (b: int) : int
  = [%#sfetch'7] if a <= b then a else b
 
-function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 139 0 139 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 140 0 140 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
  = [%#sfetch'8] if is_follower then
     Int64.to_int w.log_end
   else
@@ -213,16 +263,33 @@ let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWater
     = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
     (! return {result}) ]
 
+predicate scheduled_batches_valid [#"/workspace/crates/verified/src/composition/delivery.rs" 22 0 22 93] (batches: Seq.seq tup2_i64_i32) (start: int) (end': int) =
+  [%#sdelivery'37] (forall i: int. 0 <= i /\ i < Seq.length batches
+      -> ge_log_Int (Int32.to_int (Seq.get batches i).f1) 0
+      /\ start <= Int64.to_int (Seq.get batches i).f0
+      /\ Int64.to_int (Seq.get batches i).f0 + Int32.to_int (Seq.get batches i).f1 + 1 <= end'
+      /\ (gt_log_Int i 0
+      -> Int64.to_int (Seq.get batches (i - 1)).f0 + Int32.to_int (Seq.get batches (i - 1)).f1 + 1
+      <= Int64.to_int (Seq.get batches i).f0))
+  /\ (if Seq.length batches = 0 then
+    start = end'
+  else
+    Int64.to_int (Seq.get batches (Seq.length batches - 1)).f0
+        + Int32.to_int (Seq.get batches (Seq.length batches - 1)).f1
+      + 1
+    = end'
+  )
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let scheduled_prefix_bounds_fetch [#"/workspace/crates/verified/src/composition/delivery.rs" 31 0 37 9]
+let scheduled_prefix_bounds_fetch [#"/workspace/crates/verified/src/composition/delivery.rs" 76 0 82 28]
   (batches: Slice64.slice tup2_i64_i32) (activations: Slice64.slice Int64.t) (uncertainty: Int64.t) (now: Int64.t)
-  (w: t_FetchWatermarks) (return (x: bool)) =
-{[@stop_split] [@expl:scheduled_prefix_bounds_fetch requires] ([@stop_split] [@expl:scheduled_prefix_bounds_fetch requires #0] [%#sdelivery'40] Seq.length (Slice64.view batches)
+  (w: t_FetchWatermarks) (return (x: t_Option_tup3_i64_FetchVisibility_FetchVisibility)) =
+{[@stop_split] [@expl:scheduled_prefix_bounds_fetch requires] ([@stop_split] [@expl:scheduled_prefix_bounds_fetch requires #0] [%#sdelivery'27] Seq.length (Slice64.view batches)
     = Seq.length (Slice64.view activations))
-  /\ ([@stop_split] [@expl:scheduled_prefix_bounds_fetch requires #1] [%#sdelivery'41] 0 <= Int64.to_int w.log_start
+  /\ ([@stop_split] [@expl:scheduled_prefix_bounds_fetch requires #1] [%#sdelivery'28] 0 <= Int64.to_int w.log_start
   /\ Int64.to_int w.log_start <= Int64.to_int w.log_end)}
   (! bb0
   [ bb0 = s0
@@ -237,115 +304,105 @@ let scheduled_prefix_bounds_fetch [#"/workspace/crates/verified/src/composition/
       {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#sdelivery'1] Seq.length (Slice64.view batches)
       - UInt64.t'int i)}
       bb2invariant
-    | bb2invariant = {[@expl:loop invariant #0] [%#sdelivery'6] UInt64.t'int i <= Seq.length (Slice64.view batches)}
-      {[@expl:loop invariant #1] [%#sdelivery'5] Int64.to_int w.log_start <= Int64.to_int cursor
+    | bb2invariant = {[@expl:loop invariant #0] [%#sdelivery'9] UInt64.t'int i <= Seq.length (Slice64.view batches)}
+      {[@expl:loop invariant #1] [%#sdelivery'8] Int64.to_int w.log_start <= Int64.to_int cursor
       /\ Int64.to_int cursor <= Int64.to_int w.log_end}
-      {[@expl:loop invariant #2] [%#sdelivery'4] Int64.to_int w.log_start <= Int64.to_int candidate
+      {[@expl:loop invariant #2] [%#sdelivery'7] Int64.to_int cursor
+      = (if UInt64.t'int i = 0 then
+        Int64.to_int w.log_start
+      else
+        Int64.to_int (Seq.get (Slice64.view batches) (UInt64.t'int i - 1)).f0
+          + Int32.to_int (Seq.get (Slice64.view batches) (UInt64.t'int i - 1)).f1
+        + 1
+      )}
+      {[@expl:loop invariant #3] [%#sdelivery'6] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> ge_log_Int (Int32.to_int (Seq.get (Slice64.view batches) j).f1) 0
+        /\ Int64.to_int w.log_start <= Int64.to_int (Seq.get (Slice64.view batches) j).f0
+        /\ Int64.to_int (Seq.get (Slice64.view batches) j).f0 + Int32.to_int (Seq.get (Slice64.view batches) j).f1 + 1
+          <= Int64.to_int w.log_end
+        /\ (gt_log_Int j 0
+        -> Int64.to_int (Seq.get (Slice64.view batches) (j - 1)).f0
+            + Int32.to_int (Seq.get (Slice64.view batches) (j - 1)).f1
+          + 1
+        <= Int64.to_int (Seq.get (Slice64.view batches) j).f0)}
+      {[@expl:loop invariant #4] [%#sdelivery'5] Int64.to_int w.log_start <= Int64.to_int candidate
       /\ Int64.to_int candidate <= Int64.to_int w.log_end}
-      {[@expl:loop invariant #3] [%#sdelivery'3] forall j: int. 0 <= j
+      {[@expl:loop invariant #5] [%#sdelivery'4] forall j: int. 0 <= j
           /\ j < UInt64.t'int i
-          /\ not (ge_log_Int (Int64.to_int uncertainty) 0
-          /\ Int64.to_int (Seq.get (Slice64.view activations) j) + Int64.to_int uncertainty <= Int64.to_int const_MAX
-          /\ Int64.to_int (Seq.get (Slice64.view activations) j) + Int64.to_int uncertainty <= Int64.to_int now)
+          /\ not scheduled_activation_due (Int64.to_int (Seq.get (Slice64.view activations) j)) (Int64.to_int uncertainty) (Int64.to_int now)
         -> Int64.to_int candidate <= Int64.to_int (Seq.get (Slice64.view batches) j).f0}
+      {[@expl:loop invariant #6] [%#sdelivery'3] Int64.to_int candidate = Int64.to_int w.log_end
+      \/ (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i
+        /\ Int64.to_int candidate = Int64.to_int (Seq.get (Slice64.view batches) j).f0
+        /\ not scheduled_activation_due (Int64.to_int (Seq.get (Slice64.view activations) j)) (Int64.to_int uncertainty) (Int64.to_int now))}
       (! [ &variant_old_bb2 <- [%#sdelivery'1] Seq.length (Slice64.view batches) - UInt64.t'int i ] s0)
-      [ s0 = len_tup2_i64_i32 [%#sdelivery'2] {batches} (fun (_x: UInt64.t) -> [ &_46 <- _x ] s1)
-      | s1 = [ &_44 <- UInt64.lt i _46 ] s2
-      | s2 = any [ br0 -> {_44 = false} (! bb22) | br1 -> {_44} (! bb5) ] ]
+      [ s0 = len_tup2_i64_i32 [%#sdelivery'2] {batches} (fun (_x: UInt64.t) -> [ &_72 <- _x ] s1)
+      | s1 = [ &_70 <- UInt64.lt i _72 ] s2
+      | s2 = any [ br0 -> {_70 = false} (! bb25) | br1 -> {_70} (! bb5) ] ]
       [ bb5 = s0
-        [ s0 = [ &_50 <- i ] s1
-        | s1 = [ &_51 <- Slice64.length batches ] s2
-        | s2 = [ &_52 <- UInt64.lt _50 _51 ] s3
-        | s3 = {[@expl:index in bounds] [%#sdelivery'7] _52} s4
-        | s4 = Slice64.get [%#sdelivery'8] <tup2_i64_i32> {batches} {_50}
+        [ s0 = [ &_76 <- i ] s1
+        | s1 = [ &_77 <- Slice64.length batches ] s2
+        | s2 = [ &_78 <- UInt64.lt _76 _77 ] s3
+        | s3 = {[@expl:index in bounds] [%#sdelivery'10] _78} s4
+        | s4 = Slice64.get [%#sdelivery'11] <tup2_i64_i32> {batches} {_76}
             (fun (r: tup2_i64_i32) -> [ &base <- r.f0 ] s5)
-        | s5 = Slice64.get [%#sdelivery'9] <tup2_i64_i32> {batches} {_50}
+        | s5 = Slice64.get [%#sdelivery'12] <tup2_i64_i32> {batches} {_76}
             (fun (r: tup2_i64_i32) -> [ &delta <- r.f1 ] s6)
-        | s6 = restore_batch_step [%#sdelivery'10] {cursor} {base} {delta} (fun (_x: t_Option_i64) -> [ &_55 <- _x ] s7)
-        | s7 = any [ br0 -> {_55 = None} (! bb10) | br1 (x0: Int64.t) -> {_55 = Some x0} (! bb9) ] ]
-      | bb9 = s0
-        [ s0 = elim_Some {_55} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
-        | s1 = [ &_61 <- Int64.gt next w.log_end ] s2
-        | s2 = any [ br0 -> {_61 = false} (! bb12) | br1 -> {_61} (! bb11) ] ]
-      | bb12 = any [ br0 -> {all_due = false} (! bb13) | br1 -> {all_due} (! bb21) ]
-      | bb13 = s0
-        [ s0 = [ &_70 <- i ] s1
-        | s1 = [ &_71 <- Slice64.length activations ] s2
-        | s2 = [ &_72 <- UInt64.lt _70 _71 ] s3
-        | s3 = {[@expl:index in bounds] [%#sdelivery'11] _72} s4
-        | s4 = Slice64.get [%#sdelivery'11] <Int64.t> {activations} {_70} (fun (r: Int64.t) -> [ &_69 <- r ] s5)
-        | s5 = scheduled_delivery_visible [%#sdelivery'13] {[%#sdelivery'12] true} {uncertainty} {_69} {now}
-            (fun (_x: bool) -> [ &_67 <- _x ] s6)
-        | s6 = any [ br0 -> {_67 = false} (! bb17) | br1 -> {_67} (! bb21) ] ]
-      | bb17 = s0
-        [ s0 = [ &_74 <- Int64.lt base candidate ] s1
-        | s1 = any [ br0 -> {_74 = false} (! bb21) | br1 -> {_74} (! bb18) ] ]
-      | bb18 = s0 [ s0 = [ &candidate <- base ] s1 | s1 = bb21 ]
-      | bb21 = s0
+        | s6 = restore_batch_step [%#sdelivery'13] {cursor} {base} {delta} (fun (_x: t_Option_i64) -> [ &_81 <- _x ] s7)
+        | s7 = branch_Option_i64 [%#sdelivery'14] {_81}
+            (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_80 <- _x ] s8)
+        | s8 = any
+          [ br0 (x0: Int64.t) -> {_80 = Continue x0} (! bb11)
+          | br1 (x0: t_Option_Infallible) -> {_80 = Break x0} (! bb12) ] ]
+      | bb11 = s0
+        [ s0 = elim_Continue {_80} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+        | s1 = [ &next <- val' ] s2
+        | s2 = [ &_91 <- Int64.gt next w.log_end ] s3
+        | s3 = any [ br0 -> {_91 = false} (! bb15) | br1 -> {_91} (! bb14) ] ]
+      | bb15 = any [ br0 -> {all_due = false} (! bb16) | br1 -> {all_due} (! bb24) ]
+      | bb16 = s0
+        [ s0 = [ &_100 <- i ] s1
+        | s1 = [ &_101 <- Slice64.length activations ] s2
+        | s2 = [ &_102 <- UInt64.lt _100 _101 ] s3
+        | s3 = {[@expl:index in bounds] [%#sdelivery'15] _102} s4
+        | s4 = Slice64.get [%#sdelivery'15] <Int64.t> {activations} {_100} (fun (r: Int64.t) -> [ &_99 <- r ] s5)
+        | s5 = scheduled_delivery_visible [%#sdelivery'17] {[%#sdelivery'16] true} {uncertainty} {_99} {now}
+            (fun (_x: bool) -> [ &_97 <- _x ] s6)
+        | s6 = any [ br0 -> {_97 = false} (! bb20) | br1 -> {_97} (! bb24) ] ]
+      | bb20 = s0
+        [ s0 = [ &_104 <- Int64.lt base candidate ] s1
+        | s1 = any [ br0 -> {_104 = false} (! bb24) | br1 -> {_104} (! bb21) ] ]
+      | bb21 = s0 [ s0 = [ &candidate <- base ] s1 | s1 = bb24 ]
+      | bb24 = s0
         [ s0 = [ &cursor <- next ] s1
-        | s1 = UInt64.add [%#sdelivery'15] {i} {[%#sdelivery'14] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s2)
+        | s1 = UInt64.add [%#sdelivery'19] {i} {[%#sdelivery'18] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s2)
         | s2 = bb2 ] ] ]
-  | bb10 = s0 [ s0 = [ &_ret <- [%#sdelivery'16] true ] s1 | s1 = return {_ret} ]
-  | bb11 = s0 [ s0 = [ &_ret <- [%#sdelivery'17] true ] s1 | s1 = return {_ret} ]
-  | bb22 = s0
-    [ s0 = [ &_81 <- cursor <> w.log_end ] s1 | s1 = any [ br0 -> {_81 = false} (! bb24) | br1 -> {_81} (! bb23) ] ]
-  | bb23 = s0 [ s0 = [ &_ret <- [%#sdelivery'18] true ] s1 | s1 = return {_ret} ]
-  | bb24 = s0
-    [ s0 = delivery_watermark_advance [%#sdelivery'19] {w.log_start} {w.log_start} {candidate} {w.log_end}
+  | bb12 = s0
+    [ s0 = elim_Break {_80} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_FetchVisibility_FetchVisibility [%#sdelivery'14] {residual}
+        (fun (_x: t_Option_tup3_i64_FetchVisibility_FetchVisibility) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- None'1 ] s1 | s1 = return {_ret} ]
+  | bb25 = s0
+    [ s0 = [ &_111 <- cursor <> w.log_end ] s1 | s1 = any [ br0 -> {_111 = false} (! bb27) | br1 -> {_111} (! bb26) ] ]
+  | bb26 = s0 [ s0 = [ &_ret <- None'1 ] s1 | s1 = return {_ret} ]
+  | bb27 = s0
+    [ s0 = delivery_watermark_advance [%#sdelivery'20] {w.log_start} {w.log_start} {candidate} {w.log_end}
         (fun (_x: Int64.t) -> [ &deliverable'0 <- _x ] s1)
     | s1 = [ &bounded <- { log_start = w.log_start;
                            hw = w.hw;
                            lso = w.lso;
                            log_end = w.log_end;
                            deliverable = deliverable'0 } ] s2
-    | s2 = fetch_visibility [%#sdelivery'22] {[%#sdelivery'20] false} {[%#sdelivery'21] true} {bounded} {w.log_start}
+    | s2 = fetch_visibility [%#sdelivery'23] {[%#sdelivery'21] false} {[%#sdelivery'22] true} {bounded} {w.log_start}
         (fun (_x: t_FetchVisibility) -> [ &consumer <- _x ] s3)
-    | s3 = fetch_visibility [%#sdelivery'25] {[%#sdelivery'23] true} {[%#sdelivery'24] true} {bounded} {w.log_start}
+    | s3 = fetch_visibility [%#sdelivery'26] {[%#sdelivery'24] true} {[%#sdelivery'25] true} {bounded} {w.log_start}
         (fun (_x: t_FetchVisibility) -> [ &follower <- _x ] s4)
-    | s4 = [ &_99 <- deliverable'0 <> candidate ] s5
-    | s5 = any [ br0 -> {_99 = false} (! bb29) | br1 -> {_99} (! bb33) ] ]
-  | bb29 = s0
-    [ s0 = [ &_102 <- Int64.gt consumer.limit_offset candidate ] s1
-    | s1 = any [ br0 -> {_102 = false} (! bb31) | br1 -> {_102} (! bb33) ] ]
-  | bb31 = s0
-    [ s0 = [ &_105 <- follower.limit_offset <> w.log_end ] s1
-    | s1 = any [ br0 -> {_105 = false} (! bb34) | br1 -> {_105} (! bb33) ] ]
-  | bb33 = s0 [ s0 = [ &_ret <- [%#sdelivery'26] false ] s1 | s1 = return {_ret} ]
-  | bb34 = s0 [ s0 = [ &i <- [%#sdelivery'27] (0: UInt64.t) ] s1 | s1 = bb35 ]
-  | bb35 = bb35invariant
-    [ bb35 =
-      {[@expl:loop variant] well_founded_relation_Int variant_old_bb35 ([%#sdelivery'28] Seq.length (Slice64.view batches)
-      - UInt64.t'int i)}
-      bb35invariant
-    | bb35invariant = {[@expl:loop invariant] [%#sdelivery'30] UInt64.t'int i <= Seq.length (Slice64.view batches)}
-      (! [ &variant_old_bb35 <- [%#sdelivery'28] Seq.length (Slice64.view batches) - UInt64.t'int i ] s0)
-      [ s0 = len_tup2_i64_i32 [%#sdelivery'29] {batches} (fun (_x: UInt64.t) -> [ &_119 <- _x ] s1)
-      | s1 = [ &_117 <- UInt64.lt i _119 ] s2
-      | s2 = any [ br0 -> {_117 = false} (! bb47) | br1 -> {_117} (! bb38) ] ]
-      [ bb38 = s0
-        [ s0 = [ &_125 <- i ] s1
-        | s1 = [ &_126 <- Slice64.length activations ] s2
-        | s2 = [ &_127 <- UInt64.lt _125 _126 ] s3
-        | s3 = {[@expl:index in bounds] [%#sdelivery'31] _127} s4
-        | s4 = Slice64.get [%#sdelivery'31] <Int64.t> {activations} {_125} (fun (r: Int64.t) -> [ &_124 <- r ] s5)
-        | s5 = scheduled_delivery_visible [%#sdelivery'33] {[%#sdelivery'32] true} {uncertainty} {_124} {now}
-            (fun (_x: bool) -> [ &_122 <- _x ] s6)
-        | s6 = any [ br0 -> {_122 = false} (! bb42) | br1 -> {_122} (! bb46) ] ]
-      | bb42 = s0
-        [ s0 = [ &_132 <- i ] s1
-        | s1 = [ &_133 <- Slice64.length batches ] s2
-        | s2 = [ &_134 <- UInt64.lt _132 _133 ] s3
-        | s3 = {[@expl:index in bounds] [%#sdelivery'34] _134} s4
-        | s4 = Slice64.get [%#sdelivery'35] <tup2_i64_i32> {batches} {_132}
-            (fun (r: tup2_i64_i32) -> [ &_131 <- r.f0 ] s5)
-        | s5 = [ &_129 <- Int64.gt consumer.limit_offset _131 ] s6
-        | s6 = any [ br0 -> {_129 = false} (! bb46) | br1 -> {_129} (! bb44) ] ]
-      | bb46 = s0
-        [ s0 = UInt64.add [%#sdelivery'37] {i} {[%#sdelivery'36] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
-        | s1 = bb35 ] ] ]
-  | bb44 = s0 [ s0 = [ &_ret <- [%#sdelivery'38] false ] s1 | s1 = return {_ret} ]
-  | bb47 = s0 [ s0 = [ &_ret <- [%#sdelivery'39] true ] s1 | s1 = return {_ret} ] ]
-  [ & _ret: bool = Any.any_l ()
+    | s4 = [ &_128 <- { f0'0 = deliverable'0; f1'0 = consumer; f2'0 = follower } ] s5
+    | s5 = [ &_ret <- Some'1 _128 ] s6
+    | s6 = return {_ret} ] ]
+  [ & _ret: t_Option_tup3_i64_FetchVisibility_FetchVisibility = Any.any_l ()
   | & batches: Slice64.slice tup2_i64_i32 = batches
   | & activations: Slice64.slice Int64.t = activations
   | & uncertainty: Int64.t = uncertainty
@@ -355,43 +412,59 @@ let scheduled_prefix_bounds_fetch [#"/workspace/crates/verified/src/composition/
   | & cursor: Int64.t = Any.any_l ()
   | & candidate: Int64.t = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _44: bool = Any.any_l ()
-  | & _46: UInt64.t = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
   | & base: Int64.t = Any.any_l ()
   | & delta: Int32.t = Any.any_l ()
-  | & _50: UInt64.t = Any.any_l ()
-  | & _51: UInt64.t = Any.any_l ()
-  | & _52: bool = Any.any_l ()
+  | & _76: UInt64.t = Any.any_l ()
+  | & _77: UInt64.t = Any.any_l ()
+  | & _78: bool = Any.any_l ()
   | & next: Int64.t = Any.any_l ()
-  | & _55: t_Option_i64 = Any.any_l ()
-  | & _61: bool = Any.any_l ()
-  | & _67: bool = Any.any_l ()
-  | & _69: Int64.t = Any.any_l ()
-  | & _70: UInt64.t = Any.any_l ()
-  | & _71: UInt64.t = Any.any_l ()
-  | & _72: bool = Any.any_l ()
-  | & _74: bool = Any.any_l ()
-  | & _81: bool = Any.any_l ()
+  | & _80: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _81: t_Option_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
+  | & _91: bool = Any.any_l ()
+  | & _97: bool = Any.any_l ()
+  | & _99: Int64.t = Any.any_l ()
+  | & _100: UInt64.t = Any.any_l ()
+  | & _101: UInt64.t = Any.any_l ()
+  | & _102: bool = Any.any_l ()
+  | & _104: bool = Any.any_l ()
+  | & _111: bool = Any.any_l ()
   | & deliverable'0: Int64.t = Any.any_l ()
   | & bounded: t_FetchWatermarks = Any.any_l ()
   | & consumer: t_FetchVisibility = Any.any_l ()
   | & follower: t_FetchVisibility = Any.any_l ()
-  | & _99: bool = Any.any_l ()
-  | & _102: bool = Any.any_l ()
-  | & _105: bool = Any.any_l ()
-  | & _117: bool = Any.any_l ()
-  | & _119: UInt64.t = Any.any_l ()
-  | & _122: bool = Any.any_l ()
-  | & _124: Int64.t = Any.any_l ()
-  | & _125: UInt64.t = Any.any_l ()
-  | & _126: UInt64.t = Any.any_l ()
-  | & _127: bool = Any.any_l ()
-  | & _129: bool = Any.any_l ()
-  | & _131: Int64.t = Any.any_l ()
-  | & _132: UInt64.t = Any.any_l ()
-  | & _133: UInt64.t = Any.any_l ()
-  | & _134: bool = Any.any_l ()
-  | & variant_old_bb2: int = Any.any_l ()
-  | & variant_old_bb35: int = Any.any_l () ])
-  [ return (result: bool) -> {[@stop_split] [@expl:scheduled_prefix_bounds_fetch ensures] [%#sdelivery'42] result}
+  | & _128: tup3_i64_FetchVisibility_FetchVisibility = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l () ])
+  [ return (result: t_Option_tup3_i64_FetchVisibility_FetchVisibility) ->
+  {[@stop_split] [@expl:scheduled_prefix_bounds_fetch ensures] [%#sdelivery'29] match result with
+      | None'1 -> not scheduled_batches_valid (Slice64.view batches) (Int64.to_int w.log_start) (Int64.to_int w.log_end)
+      | Some'1 {f0'0 = frontier; f1'0 = consumer; f2'0 = follower} -> scheduled_batches_valid (Slice64.view batches) (Int64.to_int w.log_start) (Int64.to_int w.log_end)
+      /\ Int64.to_int w.log_start <= Int64.to_int frontier
+      /\ Int64.to_int frontier <= Int64.to_int w.log_end
+      /\ (forall i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view batches)
+            /\ not scheduled_activation_due (Int64.to_int (Seq.get (Slice64.view activations) i)) (Int64.to_int uncertainty) (Int64.to_int now)
+          -> Int64.to_int frontier <= Int64.to_int (Seq.get (Slice64.view batches) i).f0)
+      /\ (Int64.to_int frontier = Int64.to_int w.log_end
+        \/ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view batches)
+          /\ Int64.to_int frontier = Int64.to_int (Seq.get (Slice64.view batches) i).f0
+          /\ not scheduled_activation_due (Int64.to_int (Seq.get (Slice64.view activations) i)) (Int64.to_int uncertainty) (Int64.to_int now)))
+      /\ Int64.to_int consumer.limit_offset
+        = MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)) (Int64.to_int frontier)
+      /\ consumer.response_hw = w.hw
+      /\ Int64.to_int consumer.response_lso = MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)
+      /\ Int64.to_int consumer.effective_lso = MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)
+      /\ consumer.read_committed_aborts
+      /\ not consumer.out_of_range
+      /\ consumer.empty = ge_log_Int (Int64.to_int w.log_start) (MinMax.min (Int64.to_int w.hw) (Int64.to_int frontier))
+      /\ follower.limit_offset = w.log_end
+      /\ follower.response_hw = w.hw
+      /\ Int64.to_int follower.response_lso = MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)
+      /\ follower.effective_lso = w.lso
+      /\ not follower.read_committed_aborts /\ not follower.out_of_range /\ follower.empty = (w.log_start = w.log_end)
+      end}
     (! return {result}) ]

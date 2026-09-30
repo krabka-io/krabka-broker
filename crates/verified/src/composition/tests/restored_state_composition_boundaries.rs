@@ -56,15 +56,8 @@ fn restored_state_composition_boundaries() {
             == (LeaderEpoch(2), Offset(105))
     );
     for requested in [-1, 0, 2, 3, 5, 6] {
-        assert!(validated_epochs_bound_truncated_fetch(
-            &epochs, requested, 100, w
-        ));
-        assert!(validated_epochs_bound_truncated_fetch(
-            &[],
-            requested,
-            100,
-            w
-        ));
+        assert!(validated_epochs_bound_truncated_fetch(&epochs, requested, 100, w).is_ok());
+        assert!(validated_epochs_bound_truncated_fetch(&[], requested, 100, w).is_ok());
     }
     let malformed_epochs = [
         EpochEntry {
@@ -76,12 +69,7 @@ fn restored_state_composition_boundaries() {
             start_offset: Offset(105),
         },
     ];
-    assert!(validated_epochs_bound_truncated_fetch(
-        &malformed_epochs,
-        3,
-        100,
-        w
-    ));
+    assert!(validated_epochs_bound_truncated_fetch(&malformed_epochs, 3, 100, w).is_err());
     let range = ProducerReloadRange {
         log_start: 0,
         local_start: 2,
@@ -177,14 +165,14 @@ fn composition_boundary_witnesses() {
             assert!(supporters >= 2);
         }
     }
-    for entries in [
-        &[][..],
-        &[(1, 2), (3, 5), (8, 9)],
-        &[(1, 2), (1, 3)],
-        &[(1, 10)],
+    for (entries, valid) in [
+        (&[][..], true),
+        (&[(1, 2), (3, 5), (8, 9)][..], true),
+        (&[(1, 2), (1, 3)][..], false),
+        (&[(1, 10)][..], false),
     ] {
         for target in [0, 1, 2, 3, 8, u32::MAX] {
-            assert!(validated_index_bounds_lookup(entries, target, 8, 10));
+            assert!(validated_index_bounds_lookup(entries, target, 8, 10).is_ok() == valid);
         }
     }
     for (generation, count, marker_generation, marker_count) in [
@@ -194,13 +182,14 @@ fn composition_boundary_witnesses() {
         (1, 5, 2, 2),
         (u64::MAX - 1, 5, u64::MAX - 1, 2),
     ] {
-        assert!(loss_settlement_is_idempotent(
+        let (settled, replayed) = loss_settlement_is_idempotent(
             AuditLosses { generation, count },
             AuditLosses {
                 generation: marker_generation,
                 count: marker_count,
             },
-        ));
+        );
+        assert!(settled == replayed);
     }
     // Witness the theorem's generation-exhaustion boundary explicitly.
     let saturated = AuditLosses {

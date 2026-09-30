@@ -2,19 +2,25 @@
   "profile": [],
   "proofs": {
     "Coma": {
+      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.009 },
       "vc_delivery_watermark_advance": {
         "prover": "alt-ergo",
         "time": 0.008
       },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.011 },
       "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.018 },
+      "vc_from_residual_Option_tup3_i64_FetchVisibility_FetchVisibility": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
       "vc_len_tup2_i64_i32": { "prover": "alt-ergo", "time": 0.007 },
       "vc_restore_batch_step": { "prover": "alt-ergo", "time": 0.012 },
       "vc_scheduled_delivery_visible": {
         "prover": "alt-ergo",
         "time": 0.012
       },
-      "vc_scheduled_prefix_bounds_fetch": { "prover": "z3", "time": 0.012 },
+      "vc_scheduled_prefix_bounds_fetch": { "prover": "z3", "time": 0.132 },
       "vc_segment_maximum_proves_delivery": {
         "prover": "alt-ergo",
         "time": 0.01

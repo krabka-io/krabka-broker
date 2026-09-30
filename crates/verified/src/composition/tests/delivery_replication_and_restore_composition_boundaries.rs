@@ -34,22 +34,17 @@ fn delivery_replication_and_restore_composition_boundaries() {
         (&[(0, 1), (1, 1)][..], &[10, 20][..]),
     ] {
         for (uncertainty, now) in [(-1, 100), (0, 0), (0, 100), (2, 100), (i64::MAX, i64::MAX)] {
-            assert!(scheduled_prefix_bounds_fetch(
-                batches,
-                activations,
-                uncertainty,
-                now,
-                w
-            ));
+            let result = scheduled_prefix_bounds_fetch(batches, activations, uncertainty, now, w);
+            assert!(
+                result.is_some()
+                    == (batches == [(0, 1), (2, 1), (4, 1)] || batches == [(0, 1), (4, 1)])
+            );
         }
     }
-    assert!(scheduled_prefix_bounds_fetch(
-        &[],
-        &[],
-        0,
-        0,
-        FetchWatermarks { log_end: 0, ..w }
-    ));
+    assert!(
+        scheduled_prefix_bounds_fetch(&[], &[], 0, 0, FetchWatermarks { log_end: 0, ..w })
+            .is_some()
+    );
     let facts = ReplicaFetchFacts {
         request_leader_epoch: 2,
         current_leader_epoch: 2,

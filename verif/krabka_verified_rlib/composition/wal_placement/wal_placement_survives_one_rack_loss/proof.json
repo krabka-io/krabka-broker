@@ -2,17 +2,55 @@
   "profile": [],
   "proofs": {
     "Coma": {
+      "vc_constructed_wal_placement_is_installable": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
       "vc_election_has_quorum": { "prover": "alt-ergo", "time": 0.004 },
       "vc_index_Vec_tup2_u64_u64_Global": {
         "prover": "alt-ergo",
         "time": 0.003
       },
-      "vc_is_some_usize": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_index_Vec_u64_Global": { "prover": "alt-ergo", "time": 0.006 },
       "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.003 },
-      "vc_select_wal_voters": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_len_u64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_new_u64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_push_u64": { "prover": "alt-ergo", "time": 0.007 },
       "vc_wal_placement_survives_one_rack_loss": {
-        "prover": "alt-ergo",
-        "time": 0.053
+        "tactic": "compute_specified",
+        "children": [
+          {
+            "tactic": "split_vc",
+            "children": [
+              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.009 },
+              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.013 },
+              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "z3", "time": 0.007 },
+              { "prover": "alt-ergo", "time": 0.015 },
+              { "prover": "alt-ergo", "time": 0.014 },
+              { "prover": "alt-ergo", "time": 0.009 },
+              { "prover": "alt-ergo", "time": 0.026 },
+              { "prover": "alt-ergo", "time": 0.02 },
+              { "prover": "alt-ergo", "time": 0.077 },
+              { "prover": "z3", "time": 0.875 },
+              { "prover": "alt-ergo", "time": 0.293 },
+              {
+                "tactic": "split_vc",
+                "children": [
+                  { "prover": "alt-ergo", "time": 0.098 },
+                  { "prover": "alt-ergo", "time": 0.015 }
+                ]
+              },
+              { "prover": "alt-ergo", "time": 0.098 },
+              { "prover": "alt-ergo", "time": 0.064 }
+            ]
+          }
+        ]
       }
     }
   }

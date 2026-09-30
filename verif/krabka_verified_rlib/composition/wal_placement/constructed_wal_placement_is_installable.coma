@@ -1,17 +1,10 @@
-(* #"/workspace/crates/verified/src/composition/wal_placement.rs" 7 0 11 9 *)
+(* #"/workspace/crates/verified/src/composition/wal_placement.rs" 30 0 34 23 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
 let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 163 10 163 37
-let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 164 10 165 89
-let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 166 10 166 58
-let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 167 10 168 86
-let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 169 10 170 68
-let%span sselect_wal_voters'4 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 171 10 174 85
-let%span sselect_wal_voters'5 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 99 10 102 37
 let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
 let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
 let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
@@ -19,23 +12,35 @@ let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
 let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
 let%span svec'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span swal_placement = "/workspace/crates/verified/src/composition/wal_placement.rs" 12 19 12 71
-let%span swal_placement'0 = "/workspace/crates/verified/src/composition/wal_placement.rs" 13 30 13 40
-let%span swal_placement'1 = "/workspace/crates/verified/src/composition/wal_placement.rs" 14 16 14 22
-let%span swal_placement'2 = "/workspace/crates/verified/src/composition/wal_placement.rs" 17 14 17 34
-let%span swal_placement'3 = "/workspace/crates/verified/src/composition/wal_placement.rs" 18 14 18 28
-let%span swal_placement'4 = "/workspace/crates/verified/src/composition/wal_placement.rs" 16 16 16 79
-let%span swal_placement'5 = "/workspace/crates/verified/src/composition/wal_placement.rs" 15 16 15 59
-let%span swal_placement'6 = "/workspace/crates/verified/src/composition/wal_placement.rs" 19 27 19 30
-let%span swal_placement'7 = "/workspace/crates/verified/src/composition/wal_placement.rs" 19 8 19 33
-let%span swal_placement'8 = "/workspace/crates/verified/src/composition/wal_placement.rs" 20 13 20 14
-let%span swal_placement'9 = "/workspace/crates/verified/src/composition/wal_placement.rs" 20 8 20 14
-let%span swal_placement'10 = "/workspace/crates/verified/src/composition/wal_placement.rs" 22 24 22 30
-let%span swal_placement'11 = "/workspace/crates/verified/src/composition/wal_placement.rs" 22 4 22 54
-let%span swal_placement'12 = "/workspace/crates/verified/src/composition/wal_placement.rs" 23 24 23 25
-let%span swal_placement'13 = "/workspace/crates/verified/src/composition/wal_placement.rs" 23 29 23 43
-let%span swal_placement'14 = "/workspace/crates/verified/src/composition/wal_placement.rs" 23 11 23 57
-let%span swal_placement'15 = "/workspace/crates/verified/src/composition/wal_placement.rs" 6 10 6 16
+let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 164 10 164 37
+let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 165 10 166 89
+let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 167 10 167 58
+let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 168 10 169 86
+let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 170 10 171 68
+let%span sselect_wal_voters'4 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 172 10 175 85
+let%span sselect_wal_voters'5 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 100 10 103 37
+let%span swal_placement = "/workspace/crates/verified/src/composition/wal_placement.rs" 35 19 35 71
+let%span swal_placement'0 = "/workspace/crates/verified/src/composition/wal_placement.rs" 36 30 36 40
+let%span swal_placement'1 = "/workspace/crates/verified/src/composition/wal_placement.rs" 37 16 37 22
+let%span swal_placement'2 = "/workspace/crates/verified/src/composition/wal_placement.rs" 40 14 40 34
+let%span swal_placement'3 = "/workspace/crates/verified/src/composition/wal_placement.rs" 41 14 41 28
+let%span swal_placement'4 = "/workspace/crates/verified/src/composition/wal_placement.rs" 39 16 39 79
+let%span swal_placement'5 = "/workspace/crates/verified/src/composition/wal_placement.rs" 38 16 38 59
+let%span swal_placement'6 = "/workspace/crates/verified/src/composition/wal_placement.rs" 42 27 42 30
+let%span swal_placement'7 = "/workspace/crates/verified/src/composition/wal_placement.rs" 42 8 42 33
+let%span swal_placement'8 = "/workspace/crates/verified/src/composition/wal_placement.rs" 43 13 43 14
+let%span swal_placement'9 = "/workspace/crates/verified/src/composition/wal_placement.rs" 43 8 43 14
+let%span swal_placement'10 = "/workspace/crates/verified/src/composition/wal_placement.rs" 45 40 45 46
+let%span swal_placement'11 = "/workspace/crates/verified/src/composition/wal_placement.rs" 45 20 45 70
+let%span swal_placement'12 = "/workspace/crates/verified/src/composition/wal_placement.rs" 11 10 11 39
+let%span swal_placement'13 = "/workspace/crates/verified/src/composition/wal_placement.rs" 12 10 13 89
+let%span swal_placement'14 = "/workspace/crates/verified/src/composition/wal_placement.rs" 14 10 14 62
+let%span swal_placement'15 = "/workspace/crates/verified/src/composition/wal_placement.rs" 15 10 16 88
+let%span swal_placement'16 = "/workspace/crates/verified/src/composition/wal_placement.rs" 17 10 18 76
+let%span swal_placement'17 = "/workspace/crates/verified/src/composition/wal_placement.rs" 19 10 22 89
+let%span swal_placement'18 = "/workspace/crates/verified/src/composition/wal_placement.rs" 23 10 24 86
+let%span swal_placement'19 = "/workspace/crates/verified/src/composition/wal_placement.rs" 25 10 25 71
+let%span swal_placement'20 = "/workspace/crates/verified/src/composition/wal_placement.rs" 26 10 29 41
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -155,12 +160,18 @@ let wal_voter_set_valid (voters: Slice64.slice UInt64.t) (local_node: UInt64.t) 
       -> Seq.get (Slice64.view voters) i <> Seq.get (Slice64.view voters) j))}
     (! return {result}) ]
 
+type tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool = {
+  f0'0: t_Vec_tup2_u64_u64_Global;
+  f1'0: t_Vec_u64_Global;
+  f2'0: bool }
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/composition/wal_placement.rs" 7 0 11 9]
-  (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t) (return (x: bool)) = (! bb0
+let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/composition/wal_placement.rs" 30 0 34 23]
+  (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t)
+  (return (x: tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool)) = (! bb0
   [ bb0 = s0
     [ s0 = select_wal_voters [%#swal_placement] {candidates} {local_node} {requested}
         (fun (_x: t_Vec_tup2_u64_u64_Global) -> [ &selected <- _x ] s1)
@@ -179,50 +190,83 @@ let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/c
         -> Seq.get (view_Vec_u64_Global nodes) j = (Seq.get (view_Vec_tup2_u64_u64_Global selected) j).f0}
       (! [ &variant_old_bb3 <- [%#swal_placement'2] Seq.length (view_Vec_tup2_u64_u64_Global selected)
       - UInt64.t'int i ] s0)
-      [ s0 = len_tup2_u64_u64 [%#swal_placement'3] {selected} (fun (_x: UInt64.t) -> [ &_27 <- _x ] s1)
-      | s1 = [ &_25 <- UInt64.lt i _27 ] s2
-      | s2 = any [ br0 -> {_25 = false} (! bb9) | br1 -> {_25} (! bb6) ] ]
+      [ s0 = len_tup2_u64_u64 [%#swal_placement'3] {selected} (fun (_x: UInt64.t) -> [ &_46 <- _x ] s1)
+      | s1 = [ &_44 <- UInt64.lt i _46 ] s2
+      | s2 = any [ br0 -> {_44 = false} (! bb9) | br1 -> {_44} (! bb6) ] ]
       [ bb6 = s0
         [ s0 = index_Vec_tup2_u64_u64_Global [%#swal_placement'6] {selected} {i}
-            (fun (_x: tup2_u64_u64) -> [ &_32 <- _x ] s1)
+            (fun (_x: tup2_u64_u64) -> [ &_51 <- _x ] s1)
         | s1 = MutBorrow.borrow_mut <t_Vec_u64_Global> {nodes}
-            (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_30 <- _bor ] [ &nodes <- _bor.final ] s2)
-        | s2 = push_u64 [%#swal_placement'7] {_30} {_32.f0} (fun (_x: ()) -> [ &_29 <- _x ] s3)
+            (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_49 <- _bor ] [ &nodes <- _bor.final ] s2)
+        | s2 = push_u64 [%#swal_placement'7] {_49} {_51.f0} (fun (_x: ()) -> [ &_48 <- _x ] s3)
         | s3 = UInt64.add [%#swal_placement'9] {i} {[%#swal_placement'8] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &i <- _x ] s4)
         | s4 = bb3 ] ] ]
   | bb9 = s0
-    [ s0 = [ &_40 <- nodes ] s1
-    | s1 = deref_Vec_u64_Global [%#swal_placement'10] {_40} (fun (_x: Slice64.slice UInt64.t) -> [ &_38 <- _x ] s2)
-    | s2 = wal_voter_set_valid [%#swal_placement'11] {_38} {local_node} {requested}
-        (fun (_x: bool) -> [ &_36 <- _x ] s3)
-    | s3 = [ &_44 <- UInt64.gt requested ([%#swal_placement'12] (0: UInt64.t)) ] s4
-    | s4 = any [ br0 -> {_44 = false} (! bb13) | br1 -> {_44} (! bb12) ] ]
-  | bb12 = s0
-    [ s0 = len_tup2_u64_u64 [%#swal_placement'13] {selected} (fun (_x: UInt64.t) -> [ &_46 <- _x ] s1)
-    | s1 = [ &_43 <- _46 = requested ] s2
-    | s2 = bb15 ]
-  | bb13 = s0 [ s0 = [ &_43 <- [%#swal_placement'14] false ] s1 | s1 = bb15 ]
-  | bb15 = s0 [ s0 = [ &_ret <- _36 = _43 ] s1 | s1 = return {_ret} ] ]
-  [ & _ret: bool = Any.any_l ()
+    [ s0 = [ &_59 <- nodes ] s1
+    | s1 = deref_Vec_u64_Global [%#swal_placement'10] {_59} (fun (_x: Slice64.slice UInt64.t) -> [ &_57 <- _x ] s2)
+    | s2 = wal_voter_set_valid [%#swal_placement'11] {_57} {local_node} {requested}
+        (fun (_x: bool) -> [ &installed <- _x ] s3)
+    | s3 = [ &_ret <- { f0'0 = selected; f1'0 = nodes; f2'0 = installed } ] s4
+    | s4 = return {_ret} ] ]
+  [ & _ret: tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool = Any.any_l ()
   | & candidates: Slice64.slice tup2_u64_u64 = candidates
   | & local_node: UInt64.t = local_node
   | & requested: UInt64.t = requested
   | & selected: t_Vec_tup2_u64_u64_Global = Any.any_l ()
   | & nodes: t_Vec_u64_Global = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _25: bool = Any.any_l ()
-  | & _27: UInt64.t = Any.any_l ()
-  | & _29: () = Any.any_l ()
-  | & _30: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
-  | & _32: tup2_u64_u64 = Any.any_l ()
-  | & _36: bool = Any.any_l ()
-  | & _38: Slice64.slice UInt64.t = Any.any_l ()
-  | & _40: t_Vec_u64_Global = Any.any_l ()
-  | & _43: bool = Any.any_l ()
   | & _44: bool = Any.any_l ()
   | & _46: UInt64.t = Any.any_l ()
+  | & _48: () = Any.any_l ()
+  | & _49: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
+  | & _51: tup2_u64_u64 = Any.any_l ()
+  | & installed: bool = Any.any_l ()
+  | & _57: Slice64.slice UInt64.t = Any.any_l ()
+  | & _59: t_Vec_u64_Global = Any.any_l ()
   | & variant_old_bb3: int = Any.any_l () ])
-  [ return (result: bool) ->
-  {[@stop_split] [@expl:constructed_wal_placement_is_installable ensures] [%#swal_placement'15] result}
+  [ return (result: tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool) ->
+  {[@stop_split] [@expl:constructed_wal_placement_is_installable ensures] ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #0] [%#swal_placement'12] Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+      <= UInt64.t'int requested)
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #1] [%#swal_placement'13] (Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+        = 0)
+      = (UInt64.t'int requested = 0
+      \/ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+        -> (Seq.get (Slice64.view candidates) i).f0 <> local_node)))
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #2] [%#swal_placement'14] gt_log_Int (Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)) 0
+      -> (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) 0).f0 = local_node)
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #3] [%#swal_placement'15] forall i: int. 0
+            <= i
+          /\ i < Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+        -> (exists j: int. 0 <= j
+          /\ j < Seq.length (Slice64.view candidates)
+          /\ Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) i = Seq.get (Slice64.view candidates) j))
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #4] [%#swal_placement'16] forall i: int, j: int. 0
+            <= i
+          /\ i < j /\ j < Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+        -> (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) i).f0
+          <> (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) j).f0
+        /\ (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) i).f1
+        <> (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) j).f1)
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #5] [%#swal_placement'17] 0
+          < Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+        /\ Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0) < UInt64.t'int requested
+      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+        -> (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+          /\ ((Seq.get (Slice64.view candidates) i).f0 = (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) j).f0
+          \/ (Seq.get (Slice64.view candidates) i).f1 = (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) j).f1))))
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #6] [%#swal_placement'18] Seq.length (view_Vec_u64_Global result.f1'0)
+        = Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_u64_Global result.f1'0)
+        -> Seq.get (view_Vec_u64_Global result.f1'0) i = (Seq.get (view_Vec_tup2_u64_u64_Global result.f0'0) i).f0))
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #7] [%#swal_placement'19] result.f2'0
+      = (gt_log_Int (UInt64.t'int requested) 0
+      /\ Seq.length (view_Vec_tup2_u64_u64_Global result.f0'0) = UInt64.t'int requested))
+    /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #8] [%#swal_placement'20] result.f2'0
+    = (gt_log_Int (UInt64.t'int requested) 0
+    /\ Seq.length (view_Vec_u64_Global result.f1'0) = UInt64.t'int requested
+    /\ Seq.get (view_Vec_u64_Global result.f1'0) 0 = local_node
+    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global result.f1'0)
+      -> Seq.get (view_Vec_u64_Global result.f1'0) i <> Seq.get (view_Vec_u64_Global result.f1'0) j)))}
     (! return {result}) ]

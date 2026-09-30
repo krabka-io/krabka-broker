@@ -1,0 +1,176 @@
+(* #"/workspace/crates/verified/src/composition/audit.rs" 55 0 61 31 *)
+
+let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 36 10 47 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span saudit = "/workspace/crates/verified/src/composition/audit.rs" 62 20 68 5
+let%span saudit'0 = "/workspace/crates/verified/src/composition/audit.rs" 72 30 72 74
+let%span saudit'1 = "/workspace/crates/verified/src/composition/audit.rs" 73 20 79 5
+let%span saudit'2 = "/workspace/crates/verified/src/composition/audit.rs" 81 8 81 12
+let%span saudit'3 = "/workspace/crates/verified/src/composition/audit.rs" 82 8 82 9
+let%span saudit'4 = "/workspace/crates/verified/src/composition/audit.rs" 80 15 86 5
+let%span saudit'5 = "/workspace/crates/verified/src/composition/audit.rs" 36 11 36 40
+let%span saudit'6 = "/workspace/crates/verified/src/composition/audit.rs" 37 11 37 81
+let%span saudit'7 = "/workspace/crates/verified/src/composition/audit.rs" 38 10 54 1
+let%span saudit'8 = "/workspace/crates/verified/src/composition/audit.rs" 9 11 9 40
+let%span saudit'9 = "/workspace/crates/verified/src/composition/audit.rs" 10 10 10 88
+let%span saudit'10 = "/workspace/crates/verified/src/composition/audit.rs" 11 10 13 23
+let%span saudit'11 = "/workspace/crates/verified/src/composition/audit.rs" 14 10 15 88
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_AuditLosses = { generation: UInt64.t; count: UInt64.t }
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_AuditLossMarkerAdmission = Admit UInt64.t | Reject
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let audit_loss_marker_admission (header_matches: bool) (field_count: UInt64.t) (count'0: UInt64.t)
+  (generation'0: t_Option_u64) (previous_generation: UInt64.t) (return (x: t_AuditLossMarkerAdmission)) = any
+  [ return (result: t_AuditLossMarkerAdmission) ->
+  {[@stop_split] [@expl:audit_loss_marker_admission ensures] [%#sspool_append_decision] match result with
+      | Admit admitted -> header_matches
+      /\ UInt64.t'int field_count = 2
+      /\ gt_log_Int (UInt64.t'int count'0) 0
+      /\ generation'0 = Some admitted /\ gt_log_Int (UInt64.t'int admitted) (UInt64.t'int previous_generation)
+      | Reject -> not (header_matches
+      /\ UInt64.t'int field_count = 2
+      /\ gt_log_Int (UInt64.t'int count'0) 0
+      /\ match generation'0 with
+        | Some generation'1 -> gt_log_Int (UInt64.t'int generation'1) (UInt64.t'int previous_generation)
+        | None -> false
+        end)
+      end}
+    (! return {result}) ]
+
+type tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission = {
+  f0: t_AuditLosses;
+  f1: t_AuditLosses;
+  f2: t_AuditLossMarkerAdmission;
+  f3: t_AuditLossMarkerAdmission }
+
+type t_Option_tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission =
+  | None'0
+  | Some'0 tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission
+
+let elim_Admit (_x: t_AuditLossMarkerAdmission) (return (generation'0: UInt64.t)) = any
+  [ _k (generation'0: UInt64.t) -> {Admit generation'0 = _x} (! return {generation'0})
+  | _chk -> (! {[@expl:elim Admit] match _x with
+      | Admit _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_AuditLosses_AuditLosses = { f0'0: t_AuditLosses; f1'0: t_AuditLosses }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+let loss_settlement_is_idempotent (state: t_AuditLosses) (marker: t_AuditLosses)
+  (return (x: tup2_AuditLosses_AuditLosses)) =
+{[@stop_split] [@expl:loss_settlement_is_idempotent requires] [%#saudit'8] UInt64.t'int state.generation
+  < UInt64.t'int const_MAX}
+  any
+  [ return (result: tup2_AuditLosses_AuditLosses) ->
+  {[@stop_split] [@expl:loss_settlement_is_idempotent ensures] ([@stop_split] [@expl:loss_settlement_is_idempotent ensures #0] [%#saudit'9] result.f0'0.count
+        = result.f1'0.count
+      /\ result.f0'0.generation = result.f1'0.generation)
+    /\ ([@stop_split] [@expl:loss_settlement_is_idempotent ensures #1] [%#saudit'10] UInt64.t'int result.f0'0.count
+      = (if state.generation = marker.generation then
+        if UInt64.t'int marker.count <= UInt64.t'int state.count then
+          UInt64.t'int state.count - UInt64.t'int marker.count
+        else
+          0
+
+      else
+        UInt64.t'int state.count
+      ))
+    /\ ([@stop_split] [@expl:loss_settlement_is_idempotent ensures #2] [%#saudit'11] UInt64.t'int result.f0'0.generation
+    = (if state.generation = marker.generation /\ UInt64.t'int marker.count < UInt64.t'int state.count then
+      UInt64.t'int state.generation + 1
+    else
+      UInt64.t'int state.generation
+    ))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let admitted_loss_marker_preserves_pending [#"/workspace/crates/verified/src/composition/audit.rs" 55 0 61 31]
+  (state: t_AuditLosses) (marker: t_AuditLosses) (previous: UInt64.t) (header_matches: bool) (field_count: UInt64.t)
+  (return (x: t_Option_tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission)) =
+{[@stop_split] [@expl:admitted_loss_marker_preserves_pending requires] ([@stop_split] [@expl:admitted_loss_marker_preserves_pending requires #0] [%#saudit'5] UInt64.t'int state.generation
+    < UInt64.t'int const_MAX)
+  /\ ([@stop_split] [@expl:admitted_loss_marker_preserves_pending requires #1] [%#saudit'6] marker.generation
+    = state.generation
+  /\ UInt64.t'int marker.count <= UInt64.t'int state.count)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_24 <- Some (marker.generation) ] s1
+    | s1 = audit_loss_marker_admission [%#saudit] {header_matches} {field_count} {marker.count} {_24} {previous}
+        (fun (_x: t_AuditLossMarkerAdmission) -> [ &admission <- _x ] s2)
+    | s2 = any [ br0 (x0: UInt64.t) -> {admission = Admit x0} (! bb4) | br1 -> {admission = Reject} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ]
+  | bb4 = s0
+    [ s0 = elim_Admit {admission} (fun (rgeneration: UInt64.t) -> [ &generation'0 <- rgeneration ] s1)
+    | s1 = loss_settlement_is_idempotent [%#saudit'0] {state} {marker}
+        (fun (_x: tup2_AuditLosses_AuditLosses) -> [ &_32 <- _x ] s2)
+    | s2 = [ &settled <- _32.f0'0 ] s3
+    | s3 = [ &replayed <- _32.f1'0 ] s4
+    | s4 = [ &_39 <- Some (marker.generation) ] s5
+    | s5 = audit_loss_marker_admission [%#saudit'1] {header_matches} {field_count} {marker.count} {_39} {generation'0}
+        (fun (_x: t_AuditLossMarkerAdmission) -> [ &duplicate <- _x ] s6)
+    | s6 = [ &_44 <- Some (replayed.generation) ] s7
+    | s7 = audit_loss_marker_admission [%#saudit'4] {[%#saudit'2] true} {[%#saudit'3] (2: UInt64.t)} {replayed.count}
+        {_44} {generation'0} (fun (_x: t_AuditLossMarkerAdmission) -> [ &next <- _x ] s8)
+    | s8 = [ &_47 <- { f0 = settled; f1 = replayed; f2 = duplicate; f3 = next } ] s9
+    | s9 = [ &_ret <- Some'0 _47 ] s10
+    | s10 = return {_ret} ] ]
+  [ & _ret: t_Option_tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission = Any.any_l ()
+  | & state: t_AuditLosses = state
+  | & marker: t_AuditLosses = marker
+  | & previous: UInt64.t = previous
+  | & header_matches: bool = header_matches
+  | & field_count: UInt64.t = field_count
+  | & admission: t_AuditLossMarkerAdmission = Any.any_l ()
+  | & _24: t_Option_u64 = Any.any_l ()
+  | & generation'0: UInt64.t = Any.any_l ()
+  | & settled: t_AuditLosses = Any.any_l ()
+  | & replayed: t_AuditLosses = Any.any_l ()
+  | & _32: tup2_AuditLosses_AuditLosses = Any.any_l ()
+  | & duplicate: t_AuditLossMarkerAdmission = Any.any_l ()
+  | & _39: t_Option_u64 = Any.any_l ()
+  | & next: t_AuditLossMarkerAdmission = Any.any_l ()
+  | & _44: t_Option_u64 = Any.any_l ()
+  | & _47: tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission = Any.any_l () ])
+  [ return (result: t_Option_tup4_AuditLosses_AuditLosses_AuditLossMarkerAdmission_AuditLossMarkerAdmission) ->
+  {[@stop_split] [@expl:admitted_loss_marker_preserves_pending ensures] [%#saudit'7] match result with
+      | None'0 -> not header_matches
+      \/ UInt64.t'int field_count <> 2
+      \/ UInt64.t'int marker.count = 0 \/ UInt64.t'int marker.generation <= UInt64.t'int previous
+      | Some'0 {f0 = settled; f1 = replayed; f2 = duplicate; f3 = next} -> header_matches
+      /\ UInt64.t'int field_count = 2
+      /\ gt_log_Int (UInt64.t'int marker.count) 0
+      /\ gt_log_Int (UInt64.t'int marker.generation) (UInt64.t'int previous)
+      /\ UInt64.t'int settled.count + UInt64.t'int marker.count = UInt64.t'int state.count
+      /\ settled.count = replayed.count
+      /\ settled.generation = replayed.generation
+      /\ UInt64.t'int settled.generation
+        = (if gt_log_Int (UInt64.t'int settled.count) 0 then
+          UInt64.t'int marker.generation + 1
+        else
+          UInt64.t'int marker.generation
+        )
+      /\ duplicate = Reject
+      /\ match next with
+        | Reject -> UInt64.t'int settled.count = 0
+        | Admit generation'0 -> gt_log_Int (UInt64.t'int settled.count) 0
+        /\ generation'0 = settled.generation /\ gt_log_Int (UInt64.t'int generation'0) (UInt64.t'int marker.generation)
+        end
+      end}
+    (! return {result}) ]
