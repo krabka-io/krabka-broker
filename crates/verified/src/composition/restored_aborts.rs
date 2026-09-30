@@ -89,5 +89,8 @@ pub(super) fn restored_aborts_remain_bounded_when_fetch_shrinks(
         previous_last = Some(entry.last_offset);
         i += 1;
     }
+    // Close the admitted prefix explicitly before exporting whole-index validity.
+    proof_assert!(i@ == entries@.len());
+    proof_assert!(entries@.subsequence(0, i@) == entries@);
     Some(selected)
 }
