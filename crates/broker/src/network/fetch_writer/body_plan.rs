@@ -19,6 +19,8 @@ use krabka_protocol::{
     tagged_fields::{WriteTaggedFields, encode_to_bytes},
 };
 
+use crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+
 /// One ordered segment of a `FetchResponse` body write plan.
 #[derive(Debug, Clone)]
 pub(super) enum FetchWriteOp {
@@ -101,6 +103,14 @@ fn encode_fetch_topic(
     if (0..=12).contains(&version) {
         if flex {
             put_compact_string(buf, &topic.topic);
+        } else if topic.topic.len() > MAX_STRING_BYTES {
+            // A v12 request carries its topic as a compact string of any length
+            // and the fetch session keeps the name, so a later v7 to v11 request
+            // on that session would make `put_string` panic. Kafka's reader
+            // refuses such a name on the wire.
+            return Err(ProtocolError::InvalidValue(
+                "STRING longer than 32767 bytes",
+            ));
         } else {
             put_string(buf, &topic.topic);
         }
