@@ -192,6 +192,7 @@ impl GroupCoordinator {
             self.group_types
                 .remove_if(group_id, |_, group_type| *group_type == GroupType::Share);
             self.forget_group_metrics(group_id);
+            self.forget_share_group_dlq_metrics(group_id);
         }
         Ok(())
     }

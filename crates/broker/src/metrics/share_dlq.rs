@@ -35,8 +35,8 @@ impl BrokerMetrics {
 
     /// Releases the dead-letter series of `group_id`.
     ///
-    /// The coordinator calls it where it forgets the group's lag series, since
-    /// a deleted group is not a metadata-image event.
+    /// The coordinator calls it when `DeleteGroups` deletes a share group,
+    /// since a deleted group is not a metadata-image event.
     pub(crate) fn evict_share_group_dlq_series(&self, group_id: &str) {
         let label = label(group_id);
         self.share_group_dlq_records.remove(&label);

@@ -51,7 +51,7 @@ use krabka_units::convert::ByteSizeExt as _;
 
 use super::{
     DlqError, DlqRequest, DlqSink,
-    coalesce::{Coalescer, Produce, ProduceTransport},
+    coalesce::{Admitted, Coalescer, Produce, ProduceTransport},
     record::{RangeContext, RoundBounds, build_round, destination_partition},
     source::{Fetched, fetch},
     validate::{ClusterSettings, GroupSettings, TopicState, validate},
@@ -486,6 +486,12 @@ impl DlqWriter {
 /// retries a round on its own, and marks `recordDLQProduce` when a request
 /// takes it, `recordDLQRecordWrite` when its records are written, and
 /// `recordDLQProduceFailed` when the write is given up.
+///
+/// A produce answer that has no row for the round's partition is a failed
+/// write here. Kafka's `handleProduceResponse` fails the write without marking
+/// `recordDLQProduceFailed` in that case, which only a broker that breaks the
+/// protocol can bring about, so the meter here says what happened to the
+/// records.
 async fn produce_round<T: ProduceTransport>(
     sender: &Coalescer<T>,
     metrics: &BrokerMetrics,
@@ -494,6 +500,10 @@ async fn produce_round<T: ProduceTransport>(
     leader: impl Fn() -> NodeId,
     batch: &RecordBatch,
 ) -> Result<(), DlqError> {
+    let admitted: Admitted = {
+        let (metrics, group) = (metrics.clone(), group.to_owned());
+        Arc::new(move || metrics.record_share_dlq_produce(&group))
+    };
     let written = with_backoff(
         &format!(
             "produce to the DLQ topic {}-{}",
@@ -506,10 +516,9 @@ async fn produce_round<T: ProduceTransport>(
                 partition: target.partition,
                 max_message_bytes: target.max_message_bytes,
                 batch: batch.clone(),
+                admitted: Arc::clone(&admitted),
             };
-            let sent = sender.produce(leader(), produce).await;
-            metrics.record_share_dlq_produce(group);
-            match sent {
+            match sender.produce(leader(), produce).await {
                 Ok(response) => classify_produce(&response, target),
                 Err(reason) => Attempt::Retry(reason),
             }
@@ -995,6 +1004,38 @@ mod tests {
                 "{reason}"
             );
         }
+    }
+
+    /// The produce is counted when a request takes the round, as Kafka's
+    /// `coalesceProduceRequests` marks `recordDLQProduce`, and not when the
+    /// response arrives: a request that is still in flight counts, and the
+    /// records do not, until they are written.
+    #[tokio::test(start_paused = true)]
+    async fn a_produce_counts_while_its_request_is_in_flight() {
+        let broker = FakeBroker::held_answering(|index, request| {
+            Ok(answer_rows(request, index, |_, _, _| codes::NONE))
+        });
+        let sender = Coalescer::new(broker.clone());
+        let metrics = BrokerMetrics::new();
+        let (target, batch) = round_of(1, 2);
+        let write = produce_round(&sender, &metrics, "g1", &target, || NodeId(1), &batch);
+        tokio::pin!(write);
+
+        tokio::select! {
+            _ = &mut write => unreachable!("the request is held"),
+            () = async {
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+        let in_flight = (broker.sent().len(), meters(&metrics, "g1"));
+        broker.release();
+        let written = write.await;
+
+        assert!(
+            (in_flight, written, meters(&metrics, "g1")) == ((1, (0, 1, 0)), Ok(()), (2, 1, 0))
+        );
     }
 
     /// A connection that records whether it is open, and which dial made it.

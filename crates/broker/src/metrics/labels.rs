@@ -121,13 +121,16 @@ pub struct ShareGroupLabel {
 /// One share group, paired with the `share_group_dlq_*` counter families:
 /// Kafka's `group` tag on the `DeadLetterQueue*` meters of `ShareGroupMetrics`.
 ///
-/// A series exists only for a group that has a record written, or a write
-/// failed, in the group's dead-letter queue by this broker, and the group has
-/// to opt in with `errors.deadletterqueue.topic.name`, so cardinality is
-/// bounded by the share groups that use a queue. `BrokerMetrics::evict_group_series`
-/// releases a group's series when the group is deleted here. A broker that
-/// only led the group's partitions keeps them until it restarts, as Kafka's
-/// per-group meter maps are kept until the broker closes.
+/// A series exists only for a group that this broker has made an attempt to
+/// dead-letter a record for, and the group has to opt in with
+/// `errors.deadletterqueue.topic.name`, so cardinality is bounded by the share
+/// groups that use a queue. `BrokerMetrics::evict_share_group_dlq_series`
+/// releases a group's series when the group is deleted on this broker as its
+/// coordinator, and only then: a broker that stops coordinating the group's
+/// offsets partition still leads share partitions of it, and keeps counting. A
+/// broker that only led the group's partitions keeps its series until it
+/// restarts, as Kafka's per-group meter maps are kept until the broker closes,
+/// and so does one whose write was still in flight when the group was deleted.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupIdLabel {
     pub group_id: String,

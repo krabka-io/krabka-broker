@@ -20,7 +20,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 use async_trait::async_trait;
@@ -53,7 +53,7 @@ pub(super) trait ProduceTransport: Send + Sync + 'static {
 
 /// One round of a range: a batch of dead-letter records for one partition of
 /// the dead-letter topic.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct Produce {
     pub(super) topic: String,
     pub(super) topic_id: uuid::Uuid,
@@ -63,7 +63,15 @@ pub(super) struct Produce {
     /// The records of the round, numbered from zero, all stamped with the
     /// batch's timestamp: what `record::build_round` builds.
     pub(super) batch: RecordBatch,
+    /// Runs when a request takes the round, before its answer, and later than
+    /// the call if the round waits for the request in flight.
+    pub(super) admitted: Admitted,
 }
+
+/// What runs when a request takes a round: Kafka's `recordProduceMetric`,
+/// which `coalesceProduceRequests` calls for a handler when its data is
+/// admitted into the outgoing request, and not for a handler it defers.
+pub(super) type Admitted = Arc<dyn Fn() + Send + Sync>;
 
 /// A round that waits for a request, and where its answer goes.
 struct Pending {
@@ -105,7 +113,7 @@ impl<T: ProduceTransport> Coalescer<T> {
     pub(super) async fn produce(&self, node: NodeId, produce: Produce) -> Answer {
         let (done, answer) = oneshot::channel();
         let start = {
-            let mut queues = self.inner.queues.lock().expect("dead-letter queues lock");
+            let mut queues = self.inner.queues();
             let queue = queues.entry(node).or_default();
             queue.waiting.push(Pending { produce, done });
             !std::mem::replace(&mut queue.sending, true)
@@ -119,15 +127,58 @@ impl<T: ProduceTransport> Coalescer<T> {
     }
 }
 
+impl<T> Inner<T> {
+    /// The queues, locked. A panic under the lock leaves them as
+    /// [`AbandonedDrain`] can repair, so a poisoned lock is still usable.
+    fn queues(&self) -> MutexGuard<'_, HashMap<NodeId, Queue>> {
+        self.queues.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Ends the drain of a node that stops before its queue is empty: a panic in
+/// [`pack`] or the transport, or the runtime dropping the task.
+///
+/// Without it `sending` would stay set, no drain would run for the node again,
+/// and every writer to it would wait for an answer that never comes, holding
+/// its permit, with its run left `ARCHIVING`. It clears `sending` and drops the
+/// rounds that wait, which answers each of their writers with an error, so each
+/// retries and starts a drain of its own. The rounds of the request that was
+/// being sent are dropped by the unwinding, and are answered the same way.
+struct AbandonedDrain<'a, T> {
+    inner: &'a Inner<T>,
+    node: NodeId,
+    /// Set by the drain when it ends by finding the queue empty, which
+    /// `take` has already recorded.
+    finished: bool,
+}
+
+impl<T> Drop for AbandonedDrain<'_, T> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Some(queue) = self.inner.queues().get_mut(&self.node) {
+            queue.waiting.clear();
+            queue.sending = false;
+        }
+    }
+}
+
 impl<T: ProduceTransport> Inner<T> {
     /// Sends the waiting rounds of `node`, one request after another, until
     /// none wait. The request in flight is the only one to the node, so the
     /// rounds that arrive during it are what the next request carries.
     async fn drain(self: Arc<Self>, node: NodeId) {
+        let mut guard = AbandonedDrain {
+            inner: &self,
+            node,
+            finished: false,
+        };
         loop {
             // The writers that are ready to send get to join the request.
             tokio::task::yield_now().await;
             let Some(Packed { request, answers }) = self.take(node) else {
+                guard.finished = true;
                 return;
             };
             let response = self.transport.send(node, request).await.map(Arc::new);
@@ -142,7 +193,7 @@ impl<T: ProduceTransport> Inner<T> {
     /// The next request of `node`, or `None` when nothing waits, which ends
     /// the drain. A round that did not fit stays for the request after it.
     fn take(&self, node: NodeId) -> Option<Packed> {
-        let mut queues = self.queues.lock().expect("dead-letter queues lock");
+        let mut queues = self.queues();
         let queue = queues.entry(node).or_default();
         let (packed, deferred) = pack(std::mem::take(&mut queue.waiting));
         queue.waiting = deferred;
@@ -264,6 +315,7 @@ fn pack(mut waiting: Vec<Pending>) -> (Packed, Vec<Pending>) {
     let mut answers = Vec::with_capacity(waiting.len());
     let mut deferred = Vec::new();
     for Pending { produce, done } in waiting {
+        let admitted = Arc::clone(&produce.admitted);
         let existing = partitions.iter_mut().find(|batch| {
             batch.topic_id == produce.topic_id && batch.partition == produce.partition
         });
@@ -274,7 +326,10 @@ fn pack(mut waiting: Vec<Pending>) -> (Packed, Vec<Pending>) {
             None
         };
         match refused {
-            None => answers.push(done),
+            None => {
+                admitted();
+                answers.push(done);
+            }
             Some(produce) => deferred.push(Pending { produce, done }),
         }
     }
@@ -347,9 +402,20 @@ pub(super) mod test_support {
 
         /// A broker whose requests stay in flight until [`Self::release`].
         pub(in crate::share_partition::dlq) fn held() -> Self {
+            Self::held_answering(|_, _| Ok(ProduceResponse::default()))
+        }
+
+        /// A broker that holds each request until [`Self::release`], and then
+        /// answers as `script` says.
+        pub(in crate::share_partition::dlq) fn held_answering(
+            script: impl Fn(usize, &ProduceRequest) -> Result<ProduceResponse, String>
+            + Send
+            + Sync
+            + 'static,
+        ) -> Self {
             Self {
                 gate: Arc::new(Semaphore::new(0)),
-                ..Self::answering(|_, _| Ok(ProduceResponse::default()))
+                ..Self::answering(script)
             }
         }
 
@@ -403,7 +469,21 @@ mod tests {
             partition,
             max_message_bytes: limit,
             batch: batch_of(timestamp, timestamp, &records),
+            admitted: Arc::new(|| {}),
         }
+    }
+
+    /// `produce`, with a count of the requests that took it as it stands.
+    fn counted(produce: Produce) -> (Produce, Arc<std::sync::atomic::AtomicUsize>) {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let admitted = Arc::clone(&count);
+        let produce = Produce {
+            admitted: Arc::new(move || {
+                admitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }),
+            ..produce
+        };
+        (produce, count)
     }
 
     /// A batch of records, each with a timestamp delta and a value.
@@ -672,5 +752,105 @@ mod tests {
         assert!(failed == vec![Err("connection refused".to_owned()); 2]);
         assert!(next == Ok(reached()));
         assert!(broker.sent().len() == 2);
+    }
+
+    /// A request that panics does not wedge the queue of its broker. The
+    /// rounds in it, and the rounds that wait behind it, are answered with an
+    /// error, so that their writers retry, and the round after them is sent.
+    /// Without that, a writer would wait for an answer for ever and its run
+    /// would stay `ARCHIVING`.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_that_panics_answers_each_round_and_the_queue_goes_on() {
+        let broker = FakeBroker::held_answering(|index, _| match index {
+            0 => panic!("the transport broke"),
+            _ => Ok(ProduceResponse::default()),
+        });
+        let coalescer = Arc::new(Coalescer::new(broker.clone()));
+        let send = |partition: i32, value: &'static str| {
+            let coalescer = Arc::clone(&coalescer);
+            tokio::spawn(async move {
+                coalescer
+                    .produce(NodeId(1), round(1, partition, 1_000, &[value], ROOMY))
+                    .await
+            })
+        };
+        let limit = std::time::Duration::from_secs(60);
+
+        let in_flight = send(0, "a0");
+        settle().await;
+        let waiting = send(1, "b0");
+        settle().await;
+        broker.release();
+        let stopped = tokio::time::timeout(limit, async {
+            [in_flight.await.unwrap(), waiting.await.unwrap()]
+        })
+        .await;
+        let next = tokio::time::timeout(
+            limit,
+            coalescer.produce(NodeId(1), round(1, 2, 1_000, &["c0"], ROOMY)),
+        )
+        .await;
+
+        assert!(stopped == Ok(std::array::from_fn(|_| Err(STOPPED.to_owned()))));
+        assert!(next == Ok(Ok(reached())));
+        assert!(broker.sent().len() == 2);
+    }
+
+    /// What a round is answered with when its sender is gone.
+    const STOPPED: &str = "the dead-letter sender stopped";
+
+    /// A round counts when a request takes it, as Kafka's
+    /// `coalesceProduceRequests` counts a handler: while that request is in
+    /// flight, not while the round waits for the request in flight before it,
+    /// and not while the batch is too full for it and it waits for the request
+    /// after.
+    #[tokio::test(start_paused = true)]
+    async fn a_round_counts_when_a_request_takes_it() {
+        // A limit that one record of a batch fits under, and two do not.
+        let two = batch_of(1_000, 1_000, &[(0, "b0"), (0, "c0")]);
+        let limit = i32::try_from(two.encoded_len()).unwrap() - 1;
+        let rounds = ["a0", "b0", "c0"].map(|value| counted(round(1, 0, 1_000, &[value], limit)));
+        let counts: Vec<_> = rounds.iter().map(|(_, count)| Arc::clone(count)).collect();
+        let read = |counts: &[Arc<std::sync::atomic::AtomicUsize>]| -> Vec<usize> {
+            counts
+                .iter()
+                .map(|count| count.load(std::sync::atomic::Ordering::SeqCst))
+                .collect()
+        };
+        // What the rounds count at the moment each request is answered.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let broker = FakeBroker::held_answering({
+            let (counts, seen) = (counts.clone(), Arc::clone(&seen));
+            move |_, _| {
+                seen.lock().expect("seen lock").push(read(&counts));
+                Ok(ProduceResponse::default())
+            }
+        });
+        let coalescer = Arc::new(Coalescer::new(broker.clone()));
+        let send = |produce: Produce| {
+            let coalescer = Arc::clone(&coalescer);
+            tokio::spawn(async move { coalescer.produce(NodeId(1), produce).await })
+        };
+        let [(first, _), (second, _), (third, _)] = rounds;
+
+        let first = send(first);
+        settle().await;
+        let in_flight = read(&counts);
+        let (second, third) = (send(second), send(third));
+        settle().await;
+        let waiting = read(&counts);
+        broker.release();
+        let answers = [
+            first.await.unwrap(),
+            second.await.unwrap(),
+            third.await.unwrap(),
+        ];
+
+        assert!(in_flight == vec![1, 0, 0]);
+        assert!(waiting == vec![1, 0, 0]);
+        assert!(answers.to_vec() == vec![Ok(reached()); 3]);
+        assert!(
+            *seen.lock().expect("seen lock") == vec![vec![1, 0, 0], vec![1, 1, 0], vec![1, 1, 1]]
+        );
     }
 }

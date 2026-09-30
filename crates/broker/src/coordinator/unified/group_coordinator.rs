@@ -215,8 +215,7 @@ impl GroupCoordinator {
         let _ = self.metrics.set(metrics);
     }
 
-    /// Release every `consumer_group_lag` series for `group_id`, and the
-    /// dead-letter queue counters of a share group.
+    /// Release every `consumer_group_lag` series for `group_id`.
     ///
     /// A group's lifetime ends in three places — `DeleteGroups`, the streams
     /// delete, and losing the offsets partition that hosts the group — and
@@ -226,6 +225,19 @@ impl GroupCoordinator {
     pub(crate) fn forget_group_metrics(&self, group_id: &str) {
         if let Some(metrics) = self.metrics.get() {
             metrics.evict_group_series(group_id);
+        }
+    }
+
+    /// Release the `share_group_dlq_*` counters of the share group `group_id`
+    /// that `DeleteGroups` deleted.
+    ///
+    /// Only the delete calls this. A broker that loses the group's offsets
+    /// partition, and so stops coordinating it, still leads share partitions of
+    /// the group and keeps writing their dead-letter records, so the unload
+    /// leaves the counters alone: they would restart from zero on its next
+    /// write.
+    pub(crate) fn forget_share_group_dlq_metrics(&self, group_id: &str) {
+        if let Some(metrics) = self.metrics.get() {
             metrics.evict_share_group_dlq_series(group_id);
         }
     }

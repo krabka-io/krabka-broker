@@ -419,11 +419,12 @@ async fn a_rejected_batch_is_dead_lettered_then_archived() {
     cluster.broker.shutdown().await;
 }
 
-/// Runs that are not neighbours are a write each, and the rounds of the writes
-/// share the produce requests to the leader of the dead-letter partition. One
-/// record comes out for each offset, and the meters count each round as a
-/// produce however the rounds were packed into requests: Kafka's
-/// `recordDLQProduce` marks each handler, not each coalesced request.
+/// Runs that are not neighbours are a write each. One record comes out for
+/// each offset, and the meters count each round as a produce, however the
+/// writes were packed into requests: Kafka's `recordDLQProduce` marks each
+/// handler, not each coalesced request. Whether the writes share a request is
+/// the race of the writers, so this does not assert it: the unit tests of
+/// `dlq::coalesce` and `dlq::writer` do.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
     let _permit = broker_test_permit().await;
