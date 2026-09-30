@@ -4,15 +4,18 @@
 //! The subscription itself is [`watch_image_loop`], shared with
 //! `throttle::refresh`; only the per-image work differs.
 
-use std::{sync::Arc, time::Instant};
+use std::{future::Future, net::IpAddr, sync::Arc};
 
 use krabka_metadata::{EntityKey, MetadataImage};
 use krabka_units::convert::ByteRateExt as _;
-use tokio::sync::watch;
+use tokio::{
+    sync::{Notify, watch},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::{IpNames, buckets::QuotaBuckets};
+use super::{IpNames, buckets::QuotaBuckets, ip_names::system_lookup};
 use crate::metadata_source::watch_image_loop;
 
 pub async fn run(
@@ -20,28 +23,73 @@ pub async fn run(
     buckets: Arc<QuotaBuckets>,
     shutdown: CancellationToken,
 ) {
+    run_with(images, buckets, shutdown, system_lookup).await;
+}
+
+/// [`run`] with the resolver that looks a host name up.
+async fn run_with<Lookup, Found>(
+    images: watch::Receiver<Arc<MetadataImage>>,
+    buckets: Arc<QuotaBuckets>,
+    shutdown: CancellationToken,
+    lookup: Lookup,
+) where
+    Lookup: Fn(String) -> Found,
+    Found: Future<Output = Option<IpAddr>>,
+{
     let latest = images.clone();
-    watch_image_loop(images, "quota refresh", shutdown, |image| {
+    let image_arrived = Notify::new();
+    let apply_images = watch_image_loop(images, "quota refresh", shutdown, |image| {
         // Kafka resolves an `ip` entity's name when it applies the record
-        // (#1214). Literals resolve here, and a host name is looked up off
-        // this loop and applied to the buckets when it has an address. A name
-        // that a lookup is running for, or that failed a moment ago, is not
-        // looked up again by this image.
-        let unresolved = buckets.ip_names().update(image);
+        // (#1214). Literals resolve here, and the lookup of a host name runs
+        // in `resolve_hosts`, off this loop, so a slow resolver never holds
+        // back a rate change.
+        buckets.ip_names().update(image);
         refresh_buckets(image, &buckets);
-        let due = buckets.ip_names().claim(unresolved, Instant::now());
+        image_arrived.notify_one();
+    });
+    tokio::select! {
+        () = apply_images => {}
+        () = resolve_hosts(&latest, &buckets, &image_arrived, &lookup) => {}
+    }
+}
+
+/// Looks up the host names of the latest image that have no address yet, and
+/// applies each address to the buckets. It is the only place a lookup starts,
+/// so two lookups of one name never run at once, and an image that arrives
+/// during one waits behind it instead of starting another.
+///
+/// A name whose lookup failed is looked up again when its wait is over,
+/// whether or not another image arrives: Kafka resolves the name once, when it
+/// applies the record, so a transient resolver failure must not leave the
+/// address's quota unenforced until the next metadata change. It stops once
+/// the name's entity is gone from the image, and sleeps until the next image
+/// when no name is waiting.
+async fn resolve_hosts<Lookup, Found>(
+    images: &watch::Receiver<Arc<MetadataImage>>,
+    buckets: &QuotaBuckets,
+    image_arrived: &Notify,
+    lookup: &Lookup,
+) where
+    Lookup: Fn(String) -> Found,
+    Found: Future<Output = Option<IpAddr>>,
+{
+    let names = buckets.ip_names();
+    loop {
+        let image = Arc::clone(&images.borrow());
+        let due = names.claim(names.update(&image), Instant::now());
         if !due.is_empty() {
-            let buckets = Arc::clone(&buckets);
-            let latest = latest.clone();
-            tokio::spawn(async move {
-                buckets.ip_names().resolve(&due).await;
-                let image = Arc::clone(&latest.borrow());
-                buckets.ip_names().update(&image);
-                refresh_buckets(&image, &buckets);
-            });
+            names.resolve(&due, lookup).await;
+            let image = Arc::clone(&images.borrow());
+            names.update(&image);
+            refresh_buckets(&image, buckets);
         }
-    })
-    .await;
+        match names.next_retry() {
+            Some(at) => {
+                let _ = tokio::time::timeout_at(at, image_arrived.notified()).await;
+            }
+            None => image_arrived.notified().await,
+        }
+    }
 }
 
 /// The token rate a bucket for `quota_key` runs at, in the unit its consumer
@@ -112,11 +160,16 @@ fn configured_rate(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+
     use assert2::assert;
     use krabka_metadata::EntityKey;
 
     use super::{super::bucket_rate, *};
-    use crate::quota::test_support::image_with_quota as quota_image;
+    use crate::{quota::test_support::image_with_quota as quota_image, throttle::TokenBucket};
 
     fn img_with_quota(
         entity: Vec<(&str, Option<&str>)>,
@@ -256,6 +309,178 @@ mod tests {
         task.await.expect("the refresh task stops on cancellation");
 
         assert!(rate == bucket_rate(3.0));
+    }
+
+    /// A resolver a test scripts: it fails its first `failures` lookups and then
+    /// answers `address`, takes `delay` to answer either way, and counts the
+    /// lookups and the most that ran at once.
+    struct Resolver {
+        failures: usize,
+        address: IpAddr,
+        delay: Duration,
+        calls: AtomicUsize,
+        running: AtomicUsize,
+        most_running: AtomicUsize,
+    }
+
+    impl Resolver {
+        fn new(failures: usize, delay: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                failures,
+                address: IpAddr::from([10, 0, 0, 9]),
+                delay,
+                calls: AtomicUsize::new(0),
+                running: AtomicUsize::new(0),
+                most_running: AtomicUsize::new(0),
+            })
+        }
+
+        async fn lookup(&self, _host: String) -> Option<IpAddr> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let running = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most_running.fetch_max(running, Ordering::SeqCst);
+            tokio::time::sleep(self.delay).await;
+            self.running.fetch_sub(1, Ordering::SeqCst);
+            (call >= self.failures).then_some(self.address)
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    /// The refresh task running against `resolver`, with a bucket of the
+    /// address `resolver` answers, made at the rate 1.
+    struct Running {
+        images: watch::Sender<Arc<MetadataImage>>,
+        bucket: Arc<TokenBucket>,
+        shutdown: CancellationToken,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Running {
+        fn start(image: Arc<MetadataImage>, resolver: &Arc<Resolver>) -> Self {
+            let buckets = Arc::new(QuotaBuckets::new());
+            let key: EntityKey = vec![("ip".into(), Some(resolver.address.to_string()))];
+            let bucket = buckets.get_or_create("connection_creation_rate", &key, 1.0);
+            let (images, rx) = watch::channel(image);
+            let shutdown = CancellationToken::new();
+            let resolver = Arc::clone(resolver);
+            let task = tokio::spawn(run_with(rx, buckets, shutdown.clone(), move |host| {
+                let resolver = Arc::clone(&resolver);
+                async move { resolver.lookup(host).await }
+            }));
+            Self {
+                images,
+                bucket,
+                shutdown,
+                task,
+            }
+        }
+
+        async fn stop(self) {
+            self.shutdown.cancel();
+            self.task
+                .await
+                .expect("the refresh task stops on cancellation");
+        }
+    }
+
+    fn db_image() -> Arc<MetadataImage> {
+        img_with_quota(vec![("ip", Some("db"))], "connection_creation_rate", 3.0)
+    }
+
+    fn other_image() -> Arc<MetadataImage> {
+        img_with_quota(vec![("user", Some("alice"))], "producer_byte_rate", 1.0)
+    }
+
+    /// A host name whose lookup failed is looked up again when its wait is
+    /// over, with no image to prompt it: one lookup at the start, then after
+    /// 1 s and after 2 s more (the wait doubles), and none once it answers.
+    /// Before, the lookup ran only when an image arrived, so a transient
+    /// resolver failure on a quiet cluster left the address unenforced.
+    #[tokio::test(start_paused = true)]
+    async fn run_looks_a_failed_host_up_again_without_another_image() {
+        let resolver = Resolver::new(2, Duration::ZERO);
+        let running = Running::start(db_image(), &resolver);
+
+        let mut seen = Vec::new();
+        // (how long to let the clock run, then what to expect)
+        for step in [500, 1_000, 2_000, 600_000] {
+            tokio::time::sleep(Duration::from_millis(step)).await;
+            seen.push((resolver.calls(), running.bucket.byte_rate()));
+        }
+        running.stop().await;
+
+        assert2::check!(
+            seen == vec![
+                (1, bucket_rate(0.0)),
+                (2, bucket_rate(0.0)),
+                (3, bucket_rate(3.0)),
+                (3, bucket_rate(3.0)),
+            ]
+        );
+    }
+
+    /// Images that arrive while a lookup runs, or while its name waits out a
+    /// failure, start no lookup of that name: one runs at a time, and the
+    /// retry comes at the end of the wait and not before.
+    #[tokio::test(start_paused = true)]
+    async fn images_do_not_start_a_lookup_of_a_host_that_is_running_or_waiting() {
+        let resolver = Resolver::new(usize::MAX, Duration::from_secs(3));
+        let running = Running::start(db_image(), &resolver);
+
+        // While the first lookup runs, ten more images arrive.
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            running
+                .images
+                .send(db_image())
+                .expect("the task is running");
+        }
+        let mut calls = Vec::new();
+        // The lookup ends at 3 s and the retry is due at 4 s.
+        for step in [2_200, 300, 1_000] {
+            tokio::time::sleep(Duration::from_millis(step)).await;
+            running
+                .images
+                .send(db_image())
+                .expect("the task is running");
+            calls.push(resolver.calls());
+        }
+        running.stop().await;
+
+        assert2::check!(
+            (calls, resolver.most_running.load(Ordering::SeqCst)) == (vec![1, 1, 2], 1)
+        );
+    }
+
+    /// A failed host whose entity has left the image is not looked up again,
+    /// however long the task waits, and a record that puts it back is looked up
+    /// at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_host_whose_entity_is_gone_is_not_retried() {
+        let resolver = Resolver::new(usize::MAX, Duration::ZERO);
+        let running = Running::start(db_image(), &resolver);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let first = resolver.calls();
+
+        running
+            .images
+            .send(other_image())
+            .expect("the task is running");
+        tokio::time::sleep(Duration::from_secs(3_600)).await;
+        let while_gone = resolver.calls();
+
+        running
+            .images
+            .send(db_image())
+            .expect("the task is running");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let put_back = resolver.calls();
+        running.stop().await;
+
+        assert2::check!((first, while_gone, put_back) == (1, 1, 2));
     }
 
     /// An image change sets a byte-rate bucket to the configured rate,
