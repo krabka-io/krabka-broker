@@ -22,7 +22,7 @@
 //!    config. Fetch delivers the full 8 KB.
 //!
 //! The suite is gated to non-Windows to match the multi-broker test convention
-//! from slices 10b/12b/14/15.
+//! established by the existing integration suites.
 //!
 //! Tests 1 and 2 live in `config_propagation`, tests 3 and 4 in `fetch_size`.
 //! The helpers they share are split by layer: `wire` for the framing and the

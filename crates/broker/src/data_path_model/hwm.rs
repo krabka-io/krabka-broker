@@ -86,7 +86,7 @@ pub(super) fn real_hwm(s: &DpState, base: Instant, min_isr: usize) -> i64 {
     rs.recompute_hw_for_leader_append(Offset(leader_leo)).0
 }
 
-/// Drive the REAL diskless WAL durable-HW core. Slice 1 uses local fsync only,
+/// Drive the REAL diskless WAL durable-HW core. The diskless runtime foundation uses local fsync only,
 /// so the model constrains the ISR to the leader broker and releases exactly
 /// the durable WAL prefix.
 pub(super) fn real_wal_hwm(leader: u8, durable_leo: i64, base: Instant) -> i64 {

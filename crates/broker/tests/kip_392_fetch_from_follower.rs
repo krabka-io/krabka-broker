@@ -55,7 +55,7 @@ const RACK_A: &str = "rack-a"; // broker 1 (leader)
 const RACK_B: &str = "rack-b"; // broker 2 (follower)
 
 /// Boot an `n`-broker cluster where each broker carries a distinct `rack` and
-/// the `RackAware` replica selector. The boot uses KIP-595 Slice 3c static
+/// the `RackAware` replica selector. The boot uses KIP-595 static-quorum
 /// multi-voter bootstrap. All brokers boot in `Bootstrap` mode with the same
 /// static voter set and elect among themselves, with no `add_learner` and no
 /// `change_membership`. This function injects the KIP-392 config into each

@@ -1,5 +1,5 @@
 //! Multi-node `KraftController` async driver simulation. This is the isolation
-//! acceptance for the KIP-595 consensus engine (Slice 3c, Task 6).
+//! acceptance for the KIP-595 static-quorum consensus engine.
 //!
 //! Three real [`KraftController`](krabka_raft::kraft::KraftController)s run over
 //! tempdir [`KraftLog`](krabka_raft::kraft::KraftLog)s on a tokio multi-thread

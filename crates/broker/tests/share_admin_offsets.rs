@@ -1,4 +1,4 @@
-//! End-to-end integration tests for the KIP-932 Slice D admin offset RPCs.
+//! End-to-end integration tests for the KIP-932 share-group admin offset RPCs.
 //!
 //! The RPCs are `DescribeShareGroupOffsets` (`api_key` 90),
 //! `AlterShareGroupOffsets` (91), and `DeleteShareGroupOffsets` (92).

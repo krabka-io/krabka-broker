@@ -1,4 +1,4 @@
-//! The KIP-595 Slice 6 acceptance spike: two Krabka controllers and one JVM
+//! The KIP-595 JVM mixed-quorum acceptance spike: two Krabka controllers and one JVM
 //! controller form a static three-voter quorum, and the JVM joins the
 //! Krabka-led quorum as a follower and replicates its committed metadata.
 //!
@@ -227,7 +227,7 @@ async fn static_mixed_jvm_krabka_quorum() {
          (n1={last_l1:?} n2={last_l2:?})"
     );
 
-    // The acceptance bar (Slice 6): the JVM controller joins the Krabka-led
+    // The JVM mixed-quorum acceptance bar: the JVM controller joins the Krabka-led
     // static quorum as a follower, never fatal-faults, and replicates the
     // leader's committed metadata (HWM catch-up + a FeaturesImage carrying
     // metadata.version=25).

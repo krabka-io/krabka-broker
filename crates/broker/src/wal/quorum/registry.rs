@@ -18,7 +18,7 @@ use super::{
     },
 };
 
-/// Per-partition WAL shard identity for Slice 6a.
+/// Per-partition WAL shard identity for distributed WAL registry work stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ShardId {
     pub(crate) topic_id: uuid::Uuid,

@@ -1,7 +1,7 @@
 //! Diskless WAL crash-restart model for partial durability windows.
 //!
-//! This model is small on purpose. It composes the [Slice 5] crash windows
-//! with the [Slice 6] diskless WAL quorum and stateless appenders. The
+//! This model is small on purpose. It composes the [crash-window recovery] rules
+//! with the [distributed WAL quorum] and stateless appenders. The
 //! [diskless WAL design] defines both slices.
 //!
 //! `KRaft` can reserve offsets before the bytes fsync. An object PUT can come
@@ -32,8 +32,8 @@
 //! would hold by construction; `diskless::recovery`'s unit tests rebuild the
 //! dedup state from a real recovered log instead.
 //!
-//! [Slice 5]: ../docs/diskless-wal-design.md#slice-5-crash-windows-and-recovery
-//! [Slice 6]: ../docs/diskless-wal-design.md#slice-6-the-diskless-wal-quorum-and-stateless-appenders
+//! [crash-window recovery]: ../docs/diskless-wal-design.md#crash-window-recovery
+//! [distributed WAL quorum]: ../docs/diskless-wal-design.md#distributed-wal-quorum-and-stateless-appenders
 //! [diskless WAL design]: ../docs/diskless-wal-design.md
 
 use stateright::{Checker, Model, Property};

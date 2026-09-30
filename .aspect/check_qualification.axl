@@ -335,7 +335,7 @@ check_qualification = task(
     summary = "Validate qualification or execute one immutable candidate gate",
     implementation = _impl,
     args = {
-        "manifest": args.string(default = "qualification/milestone-23.json"),
+        "manifest": args.string(default = "qualification/ecosystem-eight-gate-baseline.json"),
         "final": args.boolean(default = False, description = "Require immutable artifacts and passed evidence."),
         "new_candidate": args.string(default = "", description = "Copy the manifest into a fresh draft at this repository-relative path."),
         "gate": args.string(default = "", description = "Execute one candidate gate; each invocation uses an isolated work directory."),

@@ -30,7 +30,7 @@
 //! 2. [`kip320_jvm_follower_truncates_from_krabka_leader`][]: induced divergence.
 //!    The test runs a mixed JVM+Krabka cluster: one
 //!    `mirror.gcr.io/apache/kafka:4.0.0` broker and a Krabka broker that share
-//!    a Krabka-led `KRaft` metadata quorum, per the Slice-6 mixed-quorum work
+//!    a Krabka-led `KRaft` metadata quorum, per the JVM mixed-quorum work
 //!    in `jvm_static_quorum_spike.rs`. The test forces a real divergent
 //!    suffix. It produces a committed prefix, takes the partition offline with
 //!    a forged `PartitionRecord` that names a dead phantom leader and so also

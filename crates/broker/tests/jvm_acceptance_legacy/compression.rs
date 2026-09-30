@@ -124,7 +124,7 @@ async fn jvm_legacy_010_compressed_round_trip() {
     broker.shutdown().await;
 }
 
-/// Slice 2d follow-up: snappy-compressed legacy round-trip.
+/// Snappy legacy-compression follow-up: snappy-compressed legacy round-trip.
 ///
 /// A Kafka 0.10.1 console-producer with `compression.type=snappy` sends
 /// ~50 records as a single outer-wrapped snappy `MessageSet`. A Kafka 2.6
@@ -133,7 +133,7 @@ async fn jvm_legacy_010_compressed_round_trip() {
 /// snappy to a v2 `RecordBatch`.
 ///
 /// NOTE: 0.10.x-era snappy-java framing is fragile against newer JVMs. For
-/// that reason slice 2d deferred this test and exercised only gzip live.
+/// that reason the legacy-compression work stream deferred this test and exercised only gzip live.
 /// This test stays here as the documented follow-up. If it proves flaky in
 /// CI, pin a specific snappy-java version rather than delete it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

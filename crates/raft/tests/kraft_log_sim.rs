@@ -1,4 +1,4 @@
-//! Slice 3b headline acceptance: the slice-3a consensus core drives a real,
+//! `KRaft` log-integration headline acceptance: the in-memory consensus core drives a real,
 //! on-disk [`KraftLog`] in the deterministic multi-node simulation.
 //!
 //! This reuses the exact `Sim` scheduler and action translation from the shared

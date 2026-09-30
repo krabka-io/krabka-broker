@@ -12,7 +12,7 @@
 //!    assert the per-user `error_code = 91` (`RESOURCE_NOT_FOUND`).
 //!
 //! These tests are gated to non-Windows to match the multi-broker test
-//! convention from slices 10b/12b/14/15/15b/16.
+//! convention established by the existing integration suites.
 //!
 //! The binary root carries only the module tree. `scram_wire` holds the framing
 //! and the SASL/PLAIN handshake, `scram_cluster` boots the broker and seeds the

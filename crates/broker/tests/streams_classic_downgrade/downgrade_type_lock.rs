@@ -67,7 +67,7 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     );
 }
 
-/// After a conversion from classic to streams (slice 1), `ListGroups` reports
+/// After a classic-to-streams conversion, `ListGroups` reports
 /// the converted group as `streams`. The classic path can NOT delete it while
 /// the streams group has a live member.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

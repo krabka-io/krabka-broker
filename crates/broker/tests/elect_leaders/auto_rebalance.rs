@@ -42,8 +42,8 @@ async fn auto_rebalance_restores_preferred_leader() {
     // We can't pass rebalance config overrides through `start_n_node`, so we
     // replicate its static multi-voter bring-up here and apply the rebalance
     // fields after building each BrokerConfig. All three brokers boot in
-    // `Bootstrap` mode with the same static voter set (KIP-595 Slice 3c);
-    // KIP-853 auto-join is Slice 5.
+    // `Bootstrap` mode with the same static voter set (KIP-595 static-quorum bootstrap);
+    // KIP-853 auto-join is the dynamic voter reconfiguration work stream.
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(3).await;
     let voters: Vec<(u64, std::net::SocketAddr)> = (0u64..3)

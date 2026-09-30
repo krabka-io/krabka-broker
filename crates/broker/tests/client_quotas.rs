@@ -38,7 +38,7 @@
 //! context field and has a focused handler test for tuple matching.
 //!
 //! These tests are gated to non-Windows to match the multi-broker test
-//! convention from slices 10b/12b/14/15/15b.
+//! convention established by the existing integration suites.
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

@@ -2,7 +2,7 @@
 
 The diskless data path makes a partition durable through a quorum of broker-local write-ahead logs and an object store, instead of through the partition's ISR and its local segments.
 
-This document follows the [design document style guide](../../../docs/style_guides/design_doc_style_guide.md). It records the durability model, the placement rules, the fencing and authorization rules, the reclaim and trim rules, and the slices the [`diskless_crash_model`](../src/diskless_crash_model.rs) composes. Every claim names the module that enforces it.
+This document follows the [design document style guide](../../../docs/style_guides/design_doc_style_guide.md). It records the durability model, the placement rules, the fencing and authorization rules, the reclaim and trim rules, and the recovery and quorum work streams that the [`diskless_crash_model`](../src/diskless_crash_model.rs) composes. Every claim names the module that enforces it.
 
 ## Design Goals
 
@@ -33,11 +33,11 @@ The control flow for one produce is:
 
 Remote voters run a pull-based follower task, in [`wal/quorum/follower.rs`](../src/wal/quorum/follower.rs), that fetches the leader's uncommitted tail, fsyncs it, records the durable range in a checkpoint file, and reports the fsynced frontier back through its next fetch offset.
 
-## Slices
+## Implementation work streams
 
-The implementation landed in six slices. The crash model in [`diskless_crash_model.rs`](../src/diskless_crash_model.rs) names Slice 5 and Slice 6, and the `Slice 1` comment on the diskless flag in [`partition.rs`](../src/partition.rs) names the first one. The numbering below is the reference those comments resolve to.
+The implementation is organized by the concrete responsibilities below. The crash model in [`diskless_crash_model.rs`](../src/diskless_crash_model.rs) composes the crash-recovery and distributed-WAL work streams, while [`partition.rs`](../src/partition.rs) identifies the diskless runtime foundation directly by name.
 
-### Slice 1: The diskless topic flag and partition runtime
+### Diskless topic configuration and partition runtime
 
 The per-topic key `krabka.diskless` in [`config_keys/diskless.rs`](../src/config_keys/diskless.rs) turns the path on. The comparison is exact: only the value `true` counts. A partition reads the flag once, when it is opened, and builds either the WAL runtime or the local-log runtime from it. So `validate_diskless_unchanged` refuses every alter that would flip the resolved flag, and the error text tells the operator to create a new topic instead.
 
@@ -45,7 +45,7 @@ Two combinations are refused at topic creation and alteration by `validate_diskl
 
 [`broker/partition_spawn.rs`](../src/broker/partition_spawn.rs) builds the runtime. For a diskless partition it constructs `QuorumWalStore::for_distributed_partition`, registers the engine in the `WalShardRegistry`, seeds the partition high watermark from the engine's recovered durable watermark, and spawns a task that forwards every durable-watermark advance into `ReplicaState`.
 
-### Slice 2: Controller-assigned offsets
+### Controller-assigned offset sequencing
 
 `ControllerSequencer` in [`wal/offset_sequencer.rs`](../src/wal/offset_sequencer.rs) submits one `V1PartitionOffsetAdvance { topic, partition, count }` record per produce group. The controller's submit path, in [`crates/raft/src/kraft/controller/submit.rs`](../../raft/src/kraft/controller/submit.rs), refuses the record until the leader's own epoch marker is committed (`wal_reservation_epoch_ready`), folds every uncommitted reservation for the same partition into the next offset (`wal_reservation_frontier`), reserves the range with `reserve_offsets`, and releases the `OffsetReservation` only after the batch commits and applies. The response carries the controller's leader epoch.
 
@@ -53,7 +53,7 @@ The broker binds the single response row to the exact topic, partition, and coun
 
 This is what the crash model calls a stateless appender: the reservation is a controller decision, not a local counter, so the sequence of reservations stays gap-free and unique across restarts and across leader changes.
 
-### Slice 3: The object flusher and the index log
+### Object flushing and index logging
 
 The flusher runs on every broker, in [`diskless/flusher.rs`](../src/diskless/flusher.rs), and acts only on the diskless partitions the broker currently leads. It waits for the index projection to replay the index topic before its first tick. A tick that ran earlier would read a stale frontier, upload a prefix the store already holds under a fresh key, and leave the earlier object unreferenced forever.
 
@@ -119,7 +119,7 @@ forward, so neither a stale retry nor a compacted replay that delivers an older
 record last can widen what a consumer sees, and a deleted topic's floors are
 tombstoned alongside its ranges.
 
-### Slice 4: Reads from the hot tail and the object store
+### Hot-tail and object-store reads
 
 A fetch on a diskless partition first consults the `HotTailCache` in [`diskless/hot_tail.rs`](../src/diskless/hot_tail.rs). `QuorumWalStore::sync_durable` inserts every batch that just became quorum-durable, so the cache only ever holds committed bytes. The lookup in [`handlers/fetch/read.rs`](../src/handlers/fetch/read.rs) runs only for `read_uncommitted` fetches, answers with whole batches, and honours the fetch window's limit offset, so it can never hand out a batch the log read path would have held back. Trim, truncate, and reset all invalidate the partition's cache entries through `WalStore::invalidate_hot_tail`.
 
@@ -127,7 +127,7 @@ A fetch whose offset is below the local log start would answer `OFFSET_OUT_OF_RA
 
 `ListOffsets` earliest includes the smallest offset the index still answers for -- the smallest indexed first offset, raised to the partition's `DeleteRecords` floor -- through the `list_offsets_earliest` kernel, so a consumer that seeks to the beginning lands on an object-backed offset rather than the trimmed local start, and never below a floor an operator set.
 
-### Slice 5: Crash windows and recovery
+### Crash-window recovery
 
 The diskless path has three crash windows that an ordinary partition does not have, and one that it shares.
 
@@ -142,7 +142,7 @@ When a follower is promoted to leader, [`wal/quorum/follower/promotion.rs`](../s
 
 The shared window is the trim. `Trim` in the crash model places each trim with the flusher's `diskless_trim_decision` kernel, and the `trim_at_committed_index_frontier` property states that the local log start it chooses never passes what the committed index covers or the quorum-durable frontier.
 
-### Slice 6: The diskless WAL quorum and stateless appenders
+### Distributed WAL quorum and stateless appenders
 
 The production engine is constructed by `WalShardEngine::new_distributed` with the partition's canonical log as its only local replica and an odd, positive voter count from `diskless_wal_local_replica_count`. Everything else about the quorum comes from metadata:
 
@@ -221,7 +221,7 @@ The diskless path is a Krabka extension. No Kafka client sees a new API, error c
 
 ## Testing
 
-- The [quorum WAL model](../src/wal/quorum/engine/model.rs) drives the test-only in-process harness's append, sync, acknowledgement, recovery, and truncation over three voters and eight ordered operations; the production follower-ack path is covered by unit tests, not by the model. The [diskless crash model](../src/diskless_crash_model.rs) composes the Slice 5 crash windows with the Slice 6 quorum rule and the stateless appenders. Both are listed in the [Stateright inventory](../../../docs/verification.md#stateright-model-check-tier).
+- The [quorum WAL model](../src/wal/quorum/engine/model.rs) drives the test-only in-process harness's append, sync, acknowledgement, recovery, and truncation over three voters and eight ordered operations; the production follower-ack path is covered by unit tests, not by the model. The [diskless crash model](../src/diskless_crash_model.rs) composes the crash-window recovery rules with the distributed WAL quorum rule and the stateless appenders. Both are listed in the [Stateright inventory](../../../docs/verification.md#stateright-model-check-tier).
 - The proved kernels are listed in the [Creusot ledger](../../../docs/verification.md#creusot-proof-ledger): `wal_fetch_admission`, `select_wal_voter_index`, and `exact_wal_batch_range` in [`crates/verified/src/wal.rs`](../../verified/src/wal.rs); `diskless_trim_decision`, `diskless_logical_range`, `diskless_span_extension`, `diskless_batch_step`, and `diskless_object_reclaimable` in [`crates/verified/src/diskless.rs`](../../verified/src/diskless.rs); the four `wal_reservation_*` and `reserve_offsets` kernels in [`crates/verified/src/offset_allocator.rs`](../../verified/src/offset_allocator.rs); and `recompute_high_watermark` and `majority_watermark` in [`crates/verified/src/consensus.rs`](../../verified/src/consensus.rs).
 - The engine's [durability](../src/wal/quorum/durability_tests.rs), [distributed](../src/wal/quorum/distributed_tests.rs), [fetch](../src/wal/quorum/fetch_tests.rs), and [recovery](../src/wal/quorum/recovery_tests.rs) tests, the follower and promotion tests beside their modules, and the flusher, index, hot-tail, and cold-read tests beside theirs cover the I/O the models do not drive.
 - [`tests/diskless_e2e.rs`](../tests/diskless_e2e.rs) boots three in-process brokers on distinct racks with a shared local object store and a topic-backed index, creates a `krabka.diskless=true` topic through the real `CreateTopics` handler, and sends every produce and fetch over the wire. It stubs none of the network, the placement, or the object store.
