@@ -34,7 +34,7 @@ use super::{
 /// ID with no entry by allocating a fresh identity without calling this
 /// kernel, and every entry it does pass here has a nonnegative epoch, because
 /// allocation hands out nonnegative epochs and
-/// [`transaction_pid_install_decision`] rejects a replayed entry with a
+/// [`crate::transaction::transaction_pid_install_decision`] rejects a replayed entry with a
 /// negative current or staged epoch.
 #[ensures((result == InitProducerIdIdentityDecision::BumpWithoutIdentity)
     == (request_pid@ == -1))]

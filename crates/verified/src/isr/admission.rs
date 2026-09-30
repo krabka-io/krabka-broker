@@ -123,7 +123,7 @@ fn kafka_is_caught_up(facts: IsrMemberFacts) -> bool {
     pearlite! { facts.log_end_matches_leader || facts.caught_up_within_lag }
 }
 
-/// krabka's former ISR scan rule, superseded by [`isr_candidate_selected`].
+/// krabka's former ISR scan rule, superseded by [`crate::isr::isr_candidate_selected`].
 ///
 /// The leader always stays. An in-sync follower stays exactly while Kafka's
 /// `ReplicaState.isCaughtUp` holds. An out-of-sync follower is admitted when
@@ -131,7 +131,7 @@ fn kafka_is_caught_up(facts: IsrMemberFacts) -> bool {
 /// `Partition.isFollowerInSync`. The broker no longer calls this; the one
 /// remaining caller is the leader-failover model's expansion stand-in, and
 /// this function and [`IsrMemberFacts`] go once that model moves to
-/// [`isr_candidate_selected`].
+/// [`crate::isr::isr_candidate_selected`].
 #[ensures(match facts.role {
     IsrMemberRole::Unassigned => !result,
     IsrMemberRole::Leader => result,
