@@ -1,29 +1,29 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 623 0 628 8 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 599 0 604 8 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 629 84 629 88
-let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 629 4 629 89
-let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 612 11 612 69
-let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 613 11 613 31
-let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 614 11 615 41
-let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 616 10 616 29
-let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 617 10 617 29
-let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 618 10 619 20
-let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 620 10 621 73
-let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 539 11 539 69
-let%span sconsensus'9 = "/workspace/crates/verified/src/consensus.rs" 540 11 540 64
-let%span sconsensus'10 = "/workspace/crates/verified/src/consensus.rs" 541 11 541 35
-let%span sconsensus'11 = "/workspace/crates/verified/src/consensus.rs" 542 11 543 41
-let%span sconsensus'12 = "/workspace/crates/verified/src/consensus.rs" 544 10 544 33
-let%span sconsensus'13 = "/workspace/crates/verified/src/consensus.rs" 545 10 545 29
-let%span sconsensus'14 = "/workspace/crates/verified/src/consensus.rs" 546 10 548 20
-let%span sconsensus'15 = "/workspace/crates/verified/src/consensus.rs" 549 10 551 85
-let%span sconsensus'16 = "/workspace/crates/verified/src/consensus.rs" 296 10 296 17
-let%span sconsensus'17 = "/workspace/crates/verified/src/consensus.rs" 298 16 298 74
-let%span sconsensus'18 = "/workspace/crates/verified/src/consensus.rs" 279 10 279 15
-let%span sconsensus'19 = "/workspace/crates/verified/src/consensus.rs" 282 8 288 9
-let%span sconsensus'20 = "/workspace/crates/verified/src/consensus.rs" 271 8 271 48
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 605 84 605 88
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 605 4 605 89
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 588 11 588 69
+let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 589 11 589 31
+let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 590 11 591 41
+let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 592 10 592 29
+let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 593 10 593 29
+let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 594 10 595 20
+let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 596 10 597 73
+let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 515 11 515 69
+let%span sconsensus'9 = "/workspace/crates/verified/src/consensus.rs" 516 11 516 64
+let%span sconsensus'10 = "/workspace/crates/verified/src/consensus.rs" 517 11 517 35
+let%span sconsensus'11 = "/workspace/crates/verified/src/consensus.rs" 518 11 519 41
+let%span sconsensus'12 = "/workspace/crates/verified/src/consensus.rs" 520 10 520 33
+let%span sconsensus'13 = "/workspace/crates/verified/src/consensus.rs" 521 10 521 29
+let%span sconsensus'14 = "/workspace/crates/verified/src/consensus.rs" 522 10 524 20
+let%span sconsensus'15 = "/workspace/crates/verified/src/consensus.rs" 525 10 527 85
+let%span sconsensus'16 = "/workspace/crates/verified/src/consensus.rs" 272 10 272 17
+let%span sconsensus'17 = "/workspace/crates/verified/src/consensus.rs" 274 16 274 74
+let%span sconsensus'18 = "/workspace/crates/verified/src/consensus.rs" 255 10 255 15
+let%span sconsensus'19 = "/workspace/crates/verified/src/consensus.rs" 258 8 264 9
+let%span sconsensus'20 = "/workspace/crates/verified/src/consensus.rs" 247 8 247 48
 
 use creusot.int.Int64
 use creusot.slice.Slice64
@@ -40,10 +40,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 269 0 269 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 245 0 245 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sconsensus'20] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 280 0 280 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 256 0 256 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -54,7 +54,7 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
     )
 
-function count_ge [#"/workspace/crates/verified/src/consensus.rs" 297 0 297 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus.rs" 273 0 273 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end s v leader_counts]. count_ge log_end s v leader_counts
@@ -89,7 +89,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let majority_watermark [#"/workspace/crates/verified/src/consensus.rs" 623 0 628 8] (log_end: Int64.t)
+let majority_watermark [#"/workspace/crates/verified/src/consensus.rs" 599 0 604 8] (log_end: Int64.t)
   (follower_offsets: Slice64.slice Int64.t) (majority: UInt64.t) (current': Int64.t) (return (x: Int64.t)) =
 {[@stop_split] [@expl:majority_watermark requires] ([@stop_split] [@expl:majority_watermark requires #0] [%#sconsensus'1] 1
       <= UInt64.t'int majority

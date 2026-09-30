@@ -30,8 +30,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let failover_action [#"/workspace/crates/verified/src/consensus.rs" 162 0 162 62] (facts: t_FailoverFacts)
-  (return (x: t_FailoverAction)) = (! bb0
+let failover_action [#"/workspace/crates/verified/src/consensus.rs" 162 0 162 62]
+  (facts: t_FailoverFacts) (return (x: t_FailoverAction)) = (! bb0
   [ bb0 = any [ br0 -> {facts.leader_dead = false} (! bb1) | br1 -> {facts.leader_dead} (! bb5) ]
   | bb5 = any
     [ br0 -> {facts.live_isr = Empty} (! bb9)

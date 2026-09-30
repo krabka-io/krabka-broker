@@ -1,0 +1,215 @@
+(* #"/workspace/crates/verified/src/composition.rs" 103 0 103 80 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 276 10 276 63
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 277 10 278 97
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 279 10 279 83
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 280 10 282 58
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 283 10 283 74
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 284 10 288 1
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 289 10 289 36
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 290 10 290 59
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 226 16 226 42
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 241 8 247 9
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 104 20 104 60
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 106 15 106 19
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 108 38 108 43
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 108 45 108 49
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 108 21 108 93
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 110 15 110 20
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 112 16 112 22
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 114 14 114 32
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 115 14 115 26
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 113 16 113 35
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 116 37 116 46
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 119 13 119 14
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 119 8 119 14
+let%span scomposition'12 = "/workspace/crates/verified/src/composition.rs" 117 19 117 24
+let%span scomposition'13 = "/workspace/crates/verified/src/composition.rs" 121 4 121 8
+let%span scomposition'14 = "/workspace/crates/verified/src/composition.rs" 102 10 102 16
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 532 10 540 1
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use seq.Seq
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let first_unstable_offset (starts: Slice64.slice Int64.t) (log_end'0: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:first_unstable_offset ensures] [%#stransaction] match result with
+      | Some lso'0 -> Int64.to_int lso'0 <= Int64.to_int log_end'0
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+          -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int log_end'0)
+      /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso'0 = Int64.to_int log_end'0
+      \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
+      /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts)
+          /\ Int64.to_int lso'0 = Int64.to_int (Seq.get (Slice64.view starts) i))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+        -> Int64.to_int lso'0 <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+      | None -> exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view starts)
+        /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int log_end'0)
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function offset_min [#"/workspace/crates/verified/src/broker.rs" 225 0 225 40] (a: int) (b: int) : int
+ = [%#sbroker'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker.rs" 239 0 239 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sbroker'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sbroker] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sbroker'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sbroker'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sbroker'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sbroker'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sbroker'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sbroker'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sbroker'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let committed_fetch_excludes_unstable [#"/workspace/crates/verified/src/composition.rs" 103 0 103 80]
+  (starts: Slice64.slice Int64.t) (w: t_FetchWatermarks) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = first_unstable_offset [%#scomposition] {starts} {w.log_end} (fun (_x: t_Option_i64) -> [ &_6 <- _x ] s1)
+    | s1 = any [ br0 -> {_6 = None} (! bb4) | br1 (x0: Int64.t) -> {_6 = Some x0} (! bb3) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#scomposition'0] true ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = elim_Some {_6} (fun (r0: Int64.t) -> [ &lso'0 <- r0 ] s1)
+    | s1 = [ &_11 <- { log_start = w.log_start;
+                       hw = w.hw;
+                       lso = lso'0;
+                       log_end = w.log_end;
+                       deliverable = w.deliverable } ] s2
+    | s2 = fetch_visibility [%#scomposition'3] {[%#scomposition'1] false} {[%#scomposition'2] true} {_11} {w.log_start}
+        (fun (_x: t_FetchVisibility) -> [ &visibility <- _x ] s3)
+    | s3 = [ &_15 <- Int64.gt visibility.limit_offset w.hw ] s4
+    | s4 = any [ br0 -> {_15 = false} (! bb7) | br1 -> {_15} (! bb9) ] ]
+  | bb7 = s0
+    [ s0 = [ &_18 <- Int64.gt visibility.limit_offset w.deliverable ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb10) | br1 -> {_18} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- [%#scomposition'4] false ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &i <- [%#scomposition'5] (0: UInt64.t) ] s1 | s1 = bb11 ]
+  | bb11 = bb11invariant
+    [ bb11 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb11 ([%#scomposition'6] Seq.length (Slice64.view starts)
+      - UInt64.t'int i)}
+      bb11invariant
+    | bb11invariant = {[@expl:loop invariant] [%#scomposition'8] UInt64.t'int i <= Seq.length (Slice64.view starts)}
+      (! [ &variant_old_bb11 <- [%#scomposition'6] Seq.length (Slice64.view starts) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#scomposition'7] {starts} (fun (_x: UInt64.t) -> [ &_34 <- _x ] s1)
+      | s1 = [ &_32 <- UInt64.lt i _34 ] s2
+      | s2 = any [ br0 -> {_32 = false} (! bb18) | br1 -> {_32} (! bb14) ] ]
+      [ bb14 = s0
+        [ s0 = [ &_40 <- i ] s1
+        | s1 = [ &_41 <- Slice64.length starts ] s2
+        | s2 = [ &_42 <- UInt64.lt _40 _41 ] s3
+        | s3 = {[@expl:index in bounds] [%#scomposition'9] _42} s4
+        | s4 = Slice64.get [%#scomposition'9] <Int64.t> {starts} {_40} (fun (r: Int64.t) -> [ &_39 <- r ] s5)
+        | s5 = [ &_37 <- Int64.gt visibility.limit_offset _39 ] s6
+        | s6 = any [ br0 -> {_37 = false} (! bb17) | br1 -> {_37} (! bb16) ] ]
+      | bb17 = s0
+        [ s0 = UInt64.add [%#scomposition'11] {i} {[%#scomposition'10] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb11 ] ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- [%#scomposition'12] false ] s1 | s1 = return {_ret} ]
+  | bb18 = s0 [ s0 = [ &_ret <- [%#scomposition'13] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & starts: Slice64.slice Int64.t = starts
+  | & w: t_FetchWatermarks = w
+  | & lso'0: Int64.t = Any.any_l ()
+  | & _6: t_Option_i64 = Any.any_l ()
+  | & visibility: t_FetchVisibility = Any.any_l ()
+  | & _11: t_FetchWatermarks = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _39: Int64.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & variant_old_bb11: int = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:committed_fetch_excludes_unstable ensures] [%#scomposition'14] result}
+    (! return {result}) ]

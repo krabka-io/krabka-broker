@@ -1,0 +1,286 @@
+(* #"/workspace/crates/verified/src/composition.rs" 56 0 56 56 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 57 17 57 60
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 58 26 58 66
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 59 34 59 35
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 60 30 60 46
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 60 49 60 50
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 60 30 60 50
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 60 8 60 51
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 66 53 66 54
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 66 56 66 57
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 66 78 66 79
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 66 27 66 80
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 72 19 72 57
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 72 19 72 70
+let%span scomposition'12 = "/workspace/crates/verified/src/composition.rs" 74 34 74 85
+let%span scomposition'13 = "/workspace/crates/verified/src/composition.rs" 75 28 75 33
+let%span scomposition'14 = "/workspace/crates/verified/src/composition.rs" 67 12 76 17
+let%span scomposition'15 = "/workspace/crates/verified/src/composition.rs" 79 13 79 18
+let%span scomposition'16 = "/workspace/crates/verified/src/composition.rs" 78 30 78 34
+let%span scomposition'17 = "/workspace/crates/verified/src/composition.rs" 55 10 55 16
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 18 10 31 1
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 94 10 94 87
+let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 95 10 96 55
+let%span slocal_recovery = "/workspace/crates/verified/src/local_recovery.rs" 150 10 168 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 84 10 90 1
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sstorage] match result with
+      | Some {f0 = last; f1 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ Int64.to_int supplied_base = Int64.to_int expected_base
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base <> Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+let produce_durability_frontier (base_offset: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:produce_durability_frontier ensures] [%#sproduce] match result with
+      | Some'0 frontier -> ge_log_Int (Int64.to_int base_offset) 0
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int frontier = Int64.to_int base_offset + Int32.to_int last_offset_delta + 1
+      /\ Int64.to_int base_offset < Int64.to_int frontier
+      | None'0 -> Int64.to_int base_offset < 0
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int base_offset + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+let reserve_offsets (next: Int64.t) (count: Int64.t) (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator] (result
+        <> None)
+      = (ge_log_Int (Int64.to_int next) 0
+      /\ gt_log_Int (Int64.to_int count) 0 /\ Int64.to_int next + Int64.to_int count <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'0] forall base: Int64.t, next_after: Int64.t. result
+        = Some { f0 = base; f1 = next_after }
+      -> Int64.to_int base = Int64.to_int next /\ Int64.to_int next_after = Int64.to_int next + Int64.to_int count)}
+    (! return {result}) ]
+
+type tup3_Option_tup2_i64_i64_Option_i64_Option_tup2_i64_i64 = {
+  f0'0: t_Option_tup2_i64_i64;
+  f1'0: t_Option_i64;
+  f2'0: t_Option_tup2_i64_i64 }
+
+let elim_Some (_x: t_Option_tup2_i64_i64) (return (f0'1: tup2_i64_i64)) = any
+  [ _k (f0'1: tup2_i64_i64) -> {Some f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Some'0 (_x: t_Option_i64) (return (f0'1: Int64.t)) = any
+  [ _k (f0'1: Int64.t) -> {Some'0 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_LocalRecoveryStep = { valid_end: UInt64.t; last_offset: Int64.t; next_offset: Int64.t }
+
+type t_Option_LocalRecoveryStep = None'1 | Some'1 t_LocalRecoveryStep
+
+constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
+
+let local_recovery_batch_step (position: UInt64.t) (file_end: UInt64.t) (expected_offset: Int64.t) (batch_base: Int64.t)
+  (last_offset_delta: Int32.t) (encoded_len: UInt64.t) (return (x: t_Option_LocalRecoveryStep)) = any
+  [ return (result: t_Option_LocalRecoveryStep) ->
+  {[@stop_split] [@expl:local_recovery_batch_step ensures] [%#slocal_recovery] match result with
+      | Some'1 step -> UInt64.t'int position <= UInt64.t'int file_end
+      /\ gt_log_Int (UInt64.t'int encoded_len) 0
+      /\ UInt64.t'int step.valid_end = UInt64.t'int position + UInt64.t'int encoded_len
+      /\ UInt64.t'int step.valid_end <= UInt64.t'int file_end
+      /\ ge_log_Int (Int64.to_int batch_base) (Int64.to_int expected_offset)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int step.last_offset = Int64.to_int batch_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int step.next_offset = Int64.to_int step.last_offset + 1
+      /\ gt_log_Int (Int64.to_int step.next_offset) (Int64.to_int expected_offset)
+      | None'1 -> gt_log_Int (UInt64.t'int position) (UInt64.t'int file_end)
+      \/ UInt64.t'int encoded_len = 0
+      \/ gt_log_Int (UInt64.t'int position + UInt64.t'int encoded_len) (UInt64.t'int const_MAX'0)
+      \/ gt_log_Int (UInt64.t'int position + UInt64.t'int encoded_len) (UInt64.t'int file_end)
+      \/ Int64.to_int batch_base < Int64.to_int expected_offset
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+let timestamp_scan_next (cursor: Int64.t) (batch_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:timestamp_scan_next ensures] [%#stimestamp] match result with
+      | Some'0 next -> gt_log_Int (Int64.to_int next) (Int64.to_int cursor)
+      /\ Int64.to_int next = Int64.to_int batch_base + Int32.to_int last_offset_delta + 1
+      | None'0 -> Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      \/ Int64.to_int batch_base + Int32.to_int last_offset_delta < Int64.to_int cursor
+      end}
+    (! return {result}) ]
+
+type t_Option_Int = None'2 | Some'2 int
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+function deep_model_Option_i64 [@inline:trivial] (self: t_Option_i64) : t_Option_Int = [%#soption] match self with
+    | Some'0 t -> Some'2 (deep_model_i64 t)
+    | None'0 -> None'2
+    end
+
+meta "rewrite_def" function deep_model_Option_i64
+
+function deep_model_ref_Option_i64 [@inline:trivial] (self: t_Option_i64) : t_Option_Int =
+  [%#smodel] deep_model_Option_i64 self
+
+meta "rewrite_def" function deep_model_ref_Option_i64
+
+let eq_Option_i64 (self_: t_Option_i64) (rhs: t_Option_i64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:eq ensures] [%#scmp] result
+    = (deep_model_ref_Option_i64 self_ = deep_model_ref_Option_i64 rhs)}
+    (! return {result}) ]
+
+let elim_Some'1 (_x: t_Option_LocalRecoveryStep) (return (f0'1: t_LocalRecoveryStep)) = any
+  [ _k (f0'1: t_LocalRecoveryStep) -> {Some'1 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let append_frontiers_agree [#"/workspace/crates/verified/src/composition.rs" 56 0 56 56]
+  (base: Int64.t) (delta: Int32.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = local_append_coordinates [%#scomposition] {base} {base} {delta}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &append <- _x ] s1)
+    | s1 = produce_durability_frontier [%#scomposition'0] {base} {delta}
+        (fun (_x: t_Option_i64) -> [ &acknowledgement <- _x ] s2)
+    | s2 = [ &_12 <- Int32.ge delta ([%#scomposition'1] (0: Int32.t)) ] s3
+    | s3 = any [ br0 -> {_12 = false} (! bb6) | br1 -> {_12} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = from_i64 [%#scomposition'2] {delta} (fun (_x: Int64.t) -> [ &_16 <- _x ] s1)
+    | s1 = Int64.add [%#scomposition'4] {_16} {[%#scomposition'3] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_15 <- _x ] s2)
+    | s2 = reserve_offsets [%#scomposition'5] {base} {_15}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &reservation <- _x ] s3)
+    | s3 = bb7 ]
+  | bb6 = s0 [ s0 = [ &reservation <- None ] s1 | s1 = bb7 ]
+  | bb7 = s0
+    [ s0 = [ &_18 <- { f0'0 = append; f1'0 = acknowledgement; f2'0 = reservation } ] s1
+    | s1 = any [ br0 -> {_18.f0'0 = None} (! bb12) | br1 (x0: tup2_i64_i64) -> {_18.f0'0 = Some x0} (! bb9) ] ]
+  | bb9 = any [ br0 -> {_18.f1'0 = None'0} (! bb8) | br1 (x0: Int64.t) -> {_18.f1'0 = Some'0 x0} (! bb10) ]
+  | bb10 = any [ br0 -> {_18.f2'0 = None} (! bb8) | br1 (x0: tup2_i64_i64) -> {_18.f2'0 = Some x0} (! bb16) ]
+  | bb16 = s0
+    [ s0 = elim_Some {_18.f0'0} (fun (r0: tup2_i64_i64) -> [ &last <- r0.f0 ] s1)
+    | s1 = elim_Some {_18.f0'0} (fun (r0: tup2_i64_i64) -> [ &next <- r0.f1 ] s2)
+    | s2 = elim_Some'0 {_18.f1'0} (fun (r0: Int64.t) -> [ &ack <- r0 ] s3)
+    | s3 = elim_Some {_18.f2'0} (fun (r0: tup2_i64_i64) -> [ &first <- r0.f0 ] s4)
+    | s4 = elim_Some {_18.f2'0} (fun (r0: tup2_i64_i64) -> [ &end' <- r0.f1 ] s5)
+    | s5 = local_recovery_batch_step [%#scomposition'9] {[%#scomposition'6] (0: UInt64.t)}
+        {[%#scomposition'7] (1: UInt64.t)} {base} {base} {delta} {[%#scomposition'8] (1: UInt64.t)}
+        (fun (_x: t_Option_LocalRecoveryStep) -> [ &recovery <- _x ] s6)
+    | s6 = [ &_36 <- first = base ] s7
+    | s7 = any [ br0 -> {_36 = false} (! bb32) | br1 -> {_36} (! bb18) ] ]
+  | bb18 = s0
+    [ s0 = [ &_39 <- Int64.le base last ] s1 | s1 = any [ br0 -> {_39 = false} (! bb32) | br1 -> {_39} (! bb19) ] ]
+  | bb19 = s0
+    [ s0 = [ &_42 <- Int64.lt last ack ] s1 | s1 = any [ br0 -> {_42 = false} (! bb32) | br1 -> {_42} (! bb20) ] ]
+  | bb20 = s0 [ s0 = [ &_45 <- next = ack ] s1 | s1 = any [ br0 -> {_45 = false} (! bb32) | br1 -> {_45} (! bb21) ] ]
+  | bb21 = s0 [ s0 = [ &_48 <- end' = ack ] s1 | s1 = any [ br0 -> {_48 = false} (! bb32) | br1 -> {_48} (! bb22) ] ]
+  | bb22 = s0
+    [ s0 = timestamp_scan_next [%#scomposition'10] {base} {base} {delta} (fun (_x: t_Option_i64) -> [ &_53 <- _x ] s1)
+    | s1 = [ &_58 <- Some'0 ack ] s2
+    | s2 = eq_Option_i64 [%#scomposition'11] {_53} {_58} (fun (_x: bool) -> [ &_51 <- _x ] s3)
+    | s3 = any [ br0 -> {_51 = false} (! bb32) | br1 -> {_51} (! bb25) ] ]
+  | bb25 = any
+    [ br0 -> {recovery = None'1} (! bb35) | br1 (x0: t_LocalRecoveryStep) -> {recovery = Some'1 x0} (! bb36) ]
+  | bb36 = s0
+    [ s0 = elim_Some'1 {recovery} (fun (r0: t_LocalRecoveryStep) -> [ &step <- r0 ] s1)
+    | s1 = [ &_62 <- step.last_offset = last ] s2
+    | s2 = any [ br0 -> {_62 = false} (! bb38) | br1 -> {_62} (! bb37) ] ]
+  | bb37 = s0 [ s0 = [ &_ret <- step.next_offset = ack ] s1 | s1 = return {_ret} ]
+  | bb38 = s0 [ s0 = [ &_ret <- [%#scomposition'12] false ] s1 | s1 = return {_ret} ]
+  | bb35 = s0 [ s0 = [ &_ret <- [%#scomposition'13] false ] s1 | s1 = return {_ret} ]
+  | bb32 = s0 [ s0 = [ &_ret <- [%#scomposition'14] false ] s1 | s1 = return {_ret} ]
+  | bb12 = any [ br0 -> {_18.f1'0 = None'0} (! bb13) | br1 (x0: Int64.t) -> {_18.f1'0 = Some'0 x0} (! bb8) ]
+  | bb13 = any [ br0 -> {_18.f2'0 = None} (! bb15) | br1 (x0: tup2_i64_i64) -> {_18.f2'0 = Some x0} (! bb8) ]
+  | bb8 = s0 [ s0 = [ &_ret <- [%#scomposition'15] false ] s1 | s1 = return {_ret} ]
+  | bb15 = s0 [ s0 = [ &_ret <- [%#scomposition'16] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & base: Int64.t = base
+  | & delta: Int32.t = delta
+  | & append: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & acknowledgement: t_Option_i64 = Any.any_l ()
+  | & reservation: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _15: Int64.t = Any.any_l ()
+  | & _16: Int64.t = Any.any_l ()
+  | & _18: tup3_Option_tup2_i64_i64_Option_i64_Option_tup2_i64_i64 = Any.any_l ()
+  | & last: Int64.t = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & ack: Int64.t = Any.any_l ()
+  | & first: Int64.t = Any.any_l ()
+  | & end': Int64.t = Any.any_l ()
+  | & recovery: t_Option_LocalRecoveryStep = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _53: t_Option_i64 = Any.any_l ()
+  | & _58: t_Option_i64 = Any.any_l ()
+  | & step: t_LocalRecoveryStep = Any.any_l ()
+  | & _62: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:append_frontiers_agree ensures] [%#scomposition'17] result}
+    (! return {result}) ]

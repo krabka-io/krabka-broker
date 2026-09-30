@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/storage.rs" 305 0 309 22 *)
+(* #"/workspace/crates/verified/src/storage.rs" 303 0 307 22 *)
 
-let%span sstorage = "/workspace/crates/verified/src/storage.rs" 286 10 303 1
-let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 170 4 176 5
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 284 10 301 1
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 168 4 174 5
 
 use creusot.prelude.Any
 
@@ -27,7 +27,7 @@ type tup2_RemoteSegmentLifecycle_RemoteSegmentLifecycle = {
   f0'0: t_RemoteSegmentLifecycle;
   f1'0: t_RemoteSegmentLifecycle }
 
-predicate segment_forward_edge [#"/workspace/crates/verified/src/storage.rs" 169 0 169 89] (from: t_RemoteSegmentLifecycle) (to': t_RemoteSegmentLifecycle) =
+predicate segment_forward_edge [#"/workspace/crates/verified/src/storage.rs" 167 0 167 89] (from: t_RemoteSegmentLifecycle) (to': t_RemoteSegmentLifecycle) =
   [%#sstorage'0] match { f0'0 = from; f1'0 = to' } with
     | {f0'0 = CopyStarted; f1'0 = CopyFinished} | {f0'0 = CopyStarted; f1'0 = DeleteStarted} | {f0'0 = CopyFinished; f1'0 = DeleteStarted} | {f0'0 = DeleteStarted; f1'0 = DeleteFinished} -> true
     | _ -> false
@@ -37,7 +37,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_cache_action [#"/workspace/crates/verified/src/storage.rs" 305 0 309 22]
+let remote_cache_action [#"/workspace/crates/verified/src/storage.rs" 303 0 307 22]
   (current': t_Option_RemoteSegmentLifecycle) (target: t_RemoteSegmentLifecycle) (exact_retry: bool)
   (return (x: t_RemoteCacheAction)) = (! bb0
   [ bb0 = s0

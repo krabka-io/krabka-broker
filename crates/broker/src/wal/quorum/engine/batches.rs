@@ -47,6 +47,27 @@ pub(in crate::wal::quorum) fn read_log_batches_exact(
     exact_batches(split_batches(&raw.bytes)?, start, target)
 }
 
+/// Read whole batches containing a logical floor, while requiring an exact end.
+/// Callers copying into an empty log must reset at the returned first batch base
+/// and restore their logical floor after the physical append.
+pub(in crate::wal::quorum) fn read_log_batches_covering(
+    source: &Log,
+    start: Offset,
+    target: Offset,
+) -> Result<Vec<BatchBytes>, BrokerError> {
+    let raw = source.read_raw(start, target, ByteSize::from_bytes(u64::MAX))?;
+    let batches = split_batches(&raw.bytes)?;
+    let bases: Vec<i64> = batches.iter().map(|batch| batch.base_offset.0).collect();
+    let lasts: Vec<i64> = batches.iter().map(|batch| batch.last_offset.0).collect();
+    if krabka_verified::wal::wal_covering_batch_range(&bases, &lasts, start.0, target.0).is_none() {
+        return Err(BrokerError::Replication(format!(
+            "wal source does not contain whole batches covering {}..{}",
+            start.0, target.0
+        )));
+    }
+    Ok(batches)
+}
+
 pub(super) fn exact_batches(
     batches: Vec<BatchBytes>,
     start: Offset,

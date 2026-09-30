@@ -6,8 +6,8 @@
         "prover": "alt-ergo",
         "time": 0.012
       },
-      "vc_remote_retention_prefix": { "prover": "alt-ergo", "time": 0.079 },
-      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.026 }
+      "vc_remote_retention_prefix": { "prover": "alt-ergo", "time": 0.026 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.008 }
     }
   }
 }

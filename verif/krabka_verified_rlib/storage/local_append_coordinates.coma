@@ -5,9 +5,6 @@ let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
 let%span sstorage = "/workspace/crates/verified/src/storage.rs" 40 23 40 24
 let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 40 81 40 82
 let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 43 41 43 69
@@ -17,6 +14,9 @@ let%span sstorage'4 = "/workspace/crates/verified/src/storage.rs" 44 32 44 33
 let%span sstorage'5 = "/workspace/crates/verified/src/storage.rs" 44 15 44 34
 let%span sstorage'6 = "/workspace/crates/verified/src/storage.rs" 44 15 44 35
 let%span sstorage'7 = "/workspace/crates/verified/src/storage.rs" 20 10 33 1
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
 
 use creusot.int.Int64
 use creusot.int.Int32
@@ -115,8 +115,9 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let local_append_coordinates [#"/workspace/crates/verified/src/storage.rs" 35 0 39 23] (expected_base: Int64.t)
-  (supplied_base: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_tup2_i64_i64)) = (! bb0
+let local_append_coordinates [#"/workspace/crates/verified/src/storage.rs" 35 0 39 23]
+  (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_tup2_i64_i64)) =
+(! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt expected_base ([%#sstorage] (0: Int64.t)) ] s1
     | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb6) ] ]

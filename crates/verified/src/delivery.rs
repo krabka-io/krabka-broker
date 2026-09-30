@@ -48,6 +48,9 @@ fn clamp_to(value: Int, low: Int, high: Int) -> Int {
 /// watermark backwards or past the log end.
 #[requires(log_start@ <= log_end@)]
 #[ensures(result@ == candidate@.max(clamp_to(current@, log_start@, log_end@)).min(log_end@))]
+#[ensures(log_start@ <= result@ && result@ <= log_end@)]
+#[ensures(current@ <= candidate@ && log_start@ <= candidate@ && candidate@ <= log_end@
+    ==> result@ == candidate@)]
 #[must_use]
 pub fn delivery_watermark_advance(
     log_start: i64,

@@ -25,7 +25,8 @@ impl WalShardEngine {
         let previous_voters = distributed
             .as_ref()
             .map_or_else(Vec::new, |quorum| quorum.voters.clone());
-        if voters.first() != Some(&me) || voters.len() != self.expected_voters {
+        let voter_ids: Vec<_> = voters.iter().map(|voter| voter.0).collect();
+        if !krabka_verified::wal::wal_voter_set_valid(&voter_ids, me.0, self.expected_voters) {
             *distributed = None;
             drop(distributed);
             self.durable_advanced.notify_waiters();

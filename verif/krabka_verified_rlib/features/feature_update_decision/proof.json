@@ -3,9 +3,9 @@
   "proofs": {
     "Coma": {
       "vc_elim_MetadataVersion": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_elim_Other": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.012 },
-      "vc_feature_update_decision": { "prover": "z3", "time": 0.011 }
+      "vc_elim_Other": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_feature_update_decision": { "prover": "z3", "time": 0.009 }
     }
   }
 }

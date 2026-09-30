@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_token_mutation_decision": { "prover": "alt-ergo", "time": 0.026 }
+      "vc_token_mutation_decision": { "prover": "alt-ergo", "time": 0.021 }
     }
   }
 }

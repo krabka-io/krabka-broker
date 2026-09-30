@@ -295,6 +295,17 @@ impl Log {
         batch: &mut RecordBatch,
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
+        self.append_preserving_offset_inner(batch, transaction_stamp, None)
+    }
+
+    /// Shared semantic bookkeeping; control passthrough supplies its original
+    /// wire bytes so decoding its marker does not re-encode the stored batch.
+    pub(super) fn append_preserving_offset_inner(
+        &mut self,
+        batch: &RecordBatch,
+        transaction_stamp: Option<u64>,
+        verbatim: Option<&[u8]>,
+    ) -> Result<(), LogError> {
         let base_offset = Offset(batch.base_offset);
         let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
             self.append_at_expected_offset().0,
@@ -321,8 +332,10 @@ impl Log {
                 cfg.flush_on_append,
             )
         };
-        let incoming_size =
-            ByteSize::from_bytes(u64::try_from(batch.encoded_len()).unwrap_or(u64::MAX));
+        let incoming_size = ByteSize::from_bytes(
+            u64::try_from(verbatim.map_or_else(|| batch.encoded_len(), <[u8]>::len))
+                .unwrap_or(u64::MAX),
+        );
         if self.should_roll_for_incoming(
             incoming_size,
             batch.max_timestamp,
@@ -337,7 +350,18 @@ impl Log {
                 .active
                 .as_mut()
                 .expect("active segment must exist after Log::open");
-            active.append(batch, index_interval)?;
+            if let Some(bytes) = verbatim {
+                active.append_verbatim(
+                    bytes,
+                    base_offset,
+                    batch.last_offset_delta,
+                    batch.max_timestamp,
+                    LeaderEpoch(batch.partition_leader_epoch),
+                    index_interval,
+                )?;
+            } else {
+                active.append(batch, index_interval)?;
+            }
 
             let pid = ProducerId(batch.producer_id);
             let is_transactional = batch.attributes.is_transactional() && pid.get() >= 0;

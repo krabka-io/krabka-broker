@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 140 27 140 32 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 135 27 135 32 *)
 
 (* <delegation_token::TokenCreateDecision as std::clone::Clone> *)
 
@@ -13,7 +13,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TokenCreateDecision [#"/workspace/crates/verified/src/delegation_token.rs" 140 27 140 32]
+let clone_TokenCreateDecision [#"/workspace/crates/verified/src/delegation_token.rs" 135 27 135 32]
   (self: t_TokenCreateDecision) (return (x: t_TokenCreateDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TokenCreateDecision = Any.any_l () | & self: t_TokenCreateDecision = self ])

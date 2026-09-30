@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/retention.rs" 239 0 243 10 *)
+(* #"/workspace/crates/verified/src/retention.rs" 245 0 249 10 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -7,21 +7,22 @@ let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sretention = "/workspace/crates/verified/src/retention.rs" 248 18 248 24
-let%span sretention'0 = "/workspace/crates/verified/src/retention.rs" 252 14 252 36
-let%span sretention'1 = "/workspace/crates/verified/src/retention.rs" 253 16 253 30
-let%span sretention'2 = "/workspace/crates/verified/src/retention.rs" 250 16 251 59
-let%span sretention'3 = "/workspace/crates/verified/src/retention.rs" 249 16 249 39
-let%span sretention'4 = "/workspace/crates/verified/src/retention.rs" 254 22 254 35
-let%span sretention'5 = "/workspace/crates/verified/src/retention.rs" 258 19 258 52
-let%span sretention'6 = "/workspace/crates/verified/src/retention.rs" 259 25 259 26
-let%span sretention'7 = "/workspace/crates/verified/src/retention.rs" 260 12 260 32
-let%span sretention'8 = "/workspace/crates/verified/src/retention.rs" 264 15 264 16
-let%span sretention'9 = "/workspace/crates/verified/src/retention.rs" 264 8 264 16
-let%span sretention'10 = "/workspace/crates/verified/src/retention.rs" 245 15 245 16
-let%span sretention'11 = "/workspace/crates/verified/src/retention.rs" 233 10 237 1
-let%span sretention'12 = "/workspace/crates/verified/src/retention.rs" 203 10 203 28
-let%span sretention'13 = "/workspace/crates/verified/src/retention.rs" 206 8 220 9
+let%span sretention = "/workspace/crates/verified/src/retention.rs" 254 18 254 24
+let%span sretention'0 = "/workspace/crates/verified/src/retention.rs" 258 14 258 36
+let%span sretention'1 = "/workspace/crates/verified/src/retention.rs" 259 16 259 30
+let%span sretention'2 = "/workspace/crates/verified/src/retention.rs" 256 16 257 59
+let%span sretention'3 = "/workspace/crates/verified/src/retention.rs" 255 16 255 39
+let%span sretention'4 = "/workspace/crates/verified/src/retention.rs" 260 22 260 35
+let%span sretention'5 = "/workspace/crates/verified/src/retention.rs" 264 19 264 52
+let%span sretention'6 = "/workspace/crates/verified/src/retention.rs" 265 25 265 26
+let%span sretention'7 = "/workspace/crates/verified/src/retention.rs" 266 12 266 32
+let%span sretention'8 = "/workspace/crates/verified/src/retention.rs" 270 15 270 16
+let%span sretention'9 = "/workspace/crates/verified/src/retention.rs" 270 8 270 16
+let%span sretention'10 = "/workspace/crates/verified/src/retention.rs" 251 15 251 16
+let%span sretention'11 = "/workspace/crates/verified/src/retention.rs" 238 10 242 1
+let%span sretention'12 = "/workspace/crates/verified/src/retention.rs" 243 10 243 36
+let%span sretention'13 = "/workspace/crates/verified/src/retention.rs" 208 10 208 28
+let%span sretention'14 = "/workspace/crates/verified/src/retention.rs" 211 8 225 9
 
 use creusot.int.UInt64
 use seq.Seq
@@ -49,11 +50,11 @@ let len_RemoteRetentionSegment (self_: Slice64.slice t_RemoteRetentionSegment) (
     = UInt64.t'int result}
     (! return {result}) ]
 
-function remote_retention_model [#"/workspace/crates/verified/src/retention.rs" 204 0 204 94] (segments: Seq.seq t_RemoteRetentionSegment) (i: int) (debt: int) : int
+function remote_retention_model [#"/workspace/crates/verified/src/retention.rs" 209 0 209 94] (segments: Seq.seq t_RemoteRetentionSegment) (i: int) (debt: int) : int
 
 axiom remote_retention_model_def:
   forall segments: Seq.seq t_RemoteRetentionSegment, i: int, debt: int [remote_retention_model segments i debt]. remote_retention_model segments i debt
-    = ([%#sretention'13] if ge_log_Int i (Seq.length segments) then
+    = ([%#sretention'14] if ge_log_Int i (Seq.length segments) then
       i
     else
       if (Seq.get segments i).log_start_breached then
@@ -70,9 +71,9 @@ axiom remote_retention_model_def:
             remote_retention_model segments (i + 1) (debt - UInt64.t'int (Seq.get segments i).size)
           else
             i
-        
-      
-    
+
+
+
     )
 
 constant const_MIN: UInt64.t = (0: UInt64.t)
@@ -95,8 +96,9 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_retention_prefix [#"/workspace/crates/verified/src/retention.rs" 239 0 243 10] (deletes_allowed: bool)
-  (segments: Slice64.slice t_RemoteRetentionSegment) (size_debt: UInt64.t) (return (x: UInt64.t)) = (! bb0
+let remote_retention_prefix [#"/workspace/crates/verified/src/retention.rs" 245 0 249 10]
+  (deletes_allowed: bool) (segments: Slice64.slice t_RemoteRetentionSegment) (size_debt: UInt64.t)
+  (return (x: UInt64.t)) = (! bb0
   [ bb0 = any [ br0 -> {deletes_allowed = false} (! bb1) | br1 -> {deletes_allowed} (! bb2) ]
   | bb2 = s0 [ s0 = [ &debt <- size_debt ] s1 | s1 = [ &len <- [%#sretention] (0: UInt64.t) ] s2 | s2 = bb3 ]
   | bb3 = bb3invariant
@@ -108,29 +110,29 @@ let remote_retention_prefix [#"/workspace/crates/verified/src/retention.rs" 239 
       {[@expl:loop invariant #1] [%#sretention'2] remote_retention_model (Slice64.view segments) (UInt64.t'int len) (UInt64.t'int debt)
       = remote_retention_model (Slice64.view segments) 0 (UInt64.t'int size_debt)}
       (! [ &variant_old_bb3 <- [%#sretention'0] Seq.length (Slice64.view segments) - UInt64.t'int len ] s0)
-      [ s0 = len_RemoteRetentionSegment [%#sretention'1] {segments} (fun (_x: UInt64.t) -> [ &_29 <- _x ] s1)
-      | s1 = [ &_27 <- UInt64.lt len _29 ] s2
-      | s2 = any [ br0 -> {_27 = false} (! bb21) | br1 -> {_27} (! bb6) ] ]
+      [ s0 = len_RemoteRetentionSegment [%#sretention'1] {segments} (fun (_x: UInt64.t) -> [ &_31 <- _x ] s1)
+      | s1 = [ &_29 <- UInt64.lt len _31 ] s2
+      | s2 = any [ br0 -> {_29 = false} (! bb21) | br1 -> {_29} (! bb6) ] ]
       [ bb6 = s0
-        [ s0 = [ &_32 <- len ] s1
-        | s1 = [ &_33 <- Slice64.length segments ] s2
-        | s2 = [ &_34 <- UInt64.lt _32 _33 ] s3
-        | s3 = {[@expl:index in bounds] [%#sretention'4] _34} s4
-        | s4 = Slice64.get [%#sretention'4] <t_RemoteRetentionSegment> {segments} {_32}
+        [ s0 = [ &_34 <- len ] s1
+        | s1 = [ &_35 <- Slice64.length segments ] s2
+        | s2 = [ &_36 <- UInt64.lt _34 _35 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'4] _36} s4
+        | s4 = Slice64.get [%#sretention'4] <t_RemoteRetentionSegment> {segments} {_34}
             (fun (r: t_RemoteRetentionSegment) -> [ &segment <- r ] s5)
         | s5 = any
           [ br0 -> {segment.log_start_breached = false} (! bb9) | br1 -> {segment.log_start_breached} (! bb19) ] ]
       | bb9 = any [ br0 -> {segment.time_expired = false} (! bb12) | br1 -> {segment.time_expired} (! bb10) ]
       | bb10 = s0
-        [ s0 = saturating_sub [%#sretention'5] {debt} {segment.size} (fun (_x: UInt64.t) -> [ &_38 <- _x ] s1)
-        | s1 = [ &debt <- _38 ] s2
+        [ s0 = saturating_sub [%#sretention'5] {debt} {segment.size} (fun (_x: UInt64.t) -> [ &_40 <- _x ] s1)
+        | s1 = [ &debt <- _40 ] s2
         | s2 = bb19 ]
       | bb12 = s0
-        [ s0 = [ &_41 <- UInt64.gt debt ([%#sretention'6] (0: UInt64.t)) ] s1
-        | s1 = any [ br0 -> {_41 = false} (! bb21) | br1 -> {_41} (! bb13) ] ]
+        [ s0 = [ &_43 <- UInt64.gt debt ([%#sretention'6] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_43 = false} (! bb21) | br1 -> {_43} (! bb13) ] ]
       | bb13 = s0
-        [ s0 = [ &_43 <- UInt64.le segment.size debt ] s1
-        | s1 = any [ br0 -> {_43 = false} (! bb21) | br1 -> {_43} (! bb14) ] ]
+        [ s0 = [ &_45 <- UInt64.le segment.size debt ] s1
+        | s1 = any [ br0 -> {_45 = false} (! bb21) | br1 -> {_45} (! bb14) ] ]
       | bb14 = s0
         [ s0 = UInt64.sub [%#sretention'7] {debt} {segment.size} (fun (_x: UInt64.t) -> [ &debt <- _x ] s1)
         | s1 = bb19 ]
@@ -146,17 +148,19 @@ let remote_retention_prefix [#"/workspace/crates/verified/src/retention.rs" 239 
   | & size_debt: UInt64.t = size_debt
   | & debt: UInt64.t = Any.any_l ()
   | & len: UInt64.t = Any.any_l ()
-  | & _27: bool = Any.any_l ()
-  | & _29: UInt64.t = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
   | & segment: t_RemoteRetentionSegment = Any.any_l ()
-  | & _32: UInt64.t = Any.any_l ()
-  | & _33: UInt64.t = Any.any_l ()
-  | & _34: bool = Any.any_l ()
-  | & _38: UInt64.t = Any.any_l ()
-  | & _41: bool = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
   | & _43: bool = Any.any_l ()
+  | & _45: bool = Any.any_l ()
   | & variant_old_bb3: int = Any.any_l () ])
   [ return (result: UInt64.t) ->
-  {[@stop_split] [@expl:remote_retention_prefix ensures] [%#sretention'11] UInt64.t'int result
-    = (if deletes_allowed then remote_retention_model (Slice64.view segments) 0 (UInt64.t'int size_debt) else 0)}
+  {[@stop_split] [@expl:remote_retention_prefix ensures] ([@stop_split] [@expl:remote_retention_prefix ensures #0] [%#sretention'11] UInt64.t'int result
+      = (if deletes_allowed then remote_retention_model (Slice64.view segments) 0 (UInt64.t'int size_debt) else 0))
+    /\ ([@stop_split] [@expl:remote_retention_prefix ensures #1] [%#sretention'12] UInt64.t'int result
+    <= Seq.length (Slice64.view segments))}
     (! return {result}) ]

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/broker.rs" 328 27 328 32 *)
+(* #"/workspace/crates/verified/src/broker.rs" 327 27 327 32 *)
 
 (* <broker::DeleteRecordsTrimFacts as std::clone::Clone> *)
 
@@ -17,7 +17,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_DeleteRecordsTrimFacts [#"/workspace/crates/verified/src/broker.rs" 328 27 328 32]
+let clone_DeleteRecordsTrimFacts [#"/workspace/crates/verified/src/broker.rs" 327 27 327 32]
   (self: t_DeleteRecordsTrimFacts) (return (x: t_DeleteRecordsTrimFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_DeleteRecordsTrimFacts = Any.any_l () | & self: t_DeleteRecordsTrimFacts = self ])

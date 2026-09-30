@@ -58,7 +58,7 @@ impl Segment {
         scan_window: ByteSize,
         limit: Option<ByteSize>,
     ) -> Result<Option<(Offset, i64)>, LogError> {
-        let floor_rel = self.time_index.lookup(target_ts);
+        let floor_rel = self.time_index.scan_start(target_ts);
         let Some(scan_from) = self
             .base_offset
             .0
@@ -85,8 +85,8 @@ impl Segment {
     /// maximum, up to the record it returns.
     ///
     /// Ties resolve to the earliest offset, as in Kafka. The result is `None`
-    /// for an empty segment. This method starts the scan at the time index's
-    /// floor for the maximum, then scans forward for the first record whose
+    /// for an empty segment. This method starts before the first occurrence
+    /// of the maximum, then scans forward for the first record whose
     /// timestamp equals the segment maximum.
     ///
     /// # Errors
@@ -110,7 +110,7 @@ impl Segment {
             }
             return Ok(found);
         }
-        let floor_rel = self.time_index.lookup(self.max_timestamp);
+        let floor_rel = self.time_index.scan_start(self.max_timestamp);
         let Some(scan_from) = self
             .base_offset
             .0

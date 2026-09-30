@@ -33,8 +33,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replica_fetch_mutation [#"/workspace/crates/verified/src/broker.rs" 122 0 122 79] (facts: t_ReplicaFetchFacts)
-  (return (x: t_ReplicaFetchMutation)) = (! bb0
+let replica_fetch_mutation [#"/workspace/crates/verified/src/broker.rs" 122 0 122 79]
+  (facts: t_ReplicaFetchFacts) (return (x: t_ReplicaFetchMutation)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_4 <- facts.request_leader_epoch <> facts.current_leader_epoch ] s1
     | s1 = any [ br0 -> {_4 = false} (! bb2) | br1 -> {_4} (! bb4) ] ]
@@ -65,6 +65,6 @@ let replica_fetch_mutation [#"/workspace/crates/verified/src/broker.rs" 122 0 12
         Retry
       else
         if ge_log_Int (Int32.to_int facts.diverging_epoch) 0 then Truncate else Append
-    
+
     )}
     (! return {result}) ]

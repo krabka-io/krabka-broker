@@ -46,8 +46,9 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 92 0 96 23] (completion_ready: bool)
-  (leader_removed: bool) (eligible_handoffs: Slice64.slice bool) (return (x: t_ReassignmentAction)) = (! bb0
+let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 92 0 96 23]
+  (completion_ready: bool) (leader_removed: bool) (eligible_handoffs: Slice64.slice bool)
+  (return (x: t_ReassignmentAction)) = (! bb0
   [ bb0 = any [ br0 -> {completion_ready = false} (! bb1) | br1 -> {completion_ready} (! bb2) ]
   | bb2 = any [ br0 -> {leader_removed = false} (! bb4) | br1 -> {leader_removed} (! bb3) ]
   | bb3 = s0 [ s0 = [ &i <- [%#sreassignment] (0: UInt64.t) ] s1 | s1 = bb5 ]

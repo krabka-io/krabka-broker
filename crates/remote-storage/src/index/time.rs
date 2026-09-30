@@ -118,6 +118,81 @@ mod tests {
     }
 
     #[test]
+    fn archived_segment_timestamp_scan_matches_local_and_record_oracle() {
+        use krabka_ids::Offset;
+        use krabka_log::Segment;
+        use krabka_protocol::records::{Record, RecordBatch};
+        use krabka_units::prelude::{bytes, kibibytes};
+
+        use crate::{
+            first_record_at_or_after_timestamp, parse_offset_index, position_for_relative_offset,
+        };
+
+        let timestamps = [[100, 100], [500, 100], [100, 300]];
+        for interval in [bytes(0), kibibytes(64)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut segment = Segment::create(dir.path(), Offset(100)).unwrap();
+            let mut records = Vec::new();
+            for (batch_index, timestamps) in timestamps.iter().enumerate() {
+                let base = 100 + i64::try_from(batch_index).unwrap() * 3;
+                let mut batch = RecordBatch {
+                    base_offset: base,
+                    last_offset_delta: 1,
+                    base_timestamp: timestamps[0],
+                    max_timestamp: *timestamps.iter().max().unwrap(),
+                    ..Default::default()
+                };
+                for (delta, timestamp) in timestamps.iter().enumerate() {
+                    let delta = i32::try_from(delta).unwrap();
+                    batch.records.push(Record {
+                        offset_delta: delta,
+                        timestamp_delta: timestamp - timestamps[0],
+                        ..Default::default()
+                    });
+                    records.push((base + i64::from(delta), *timestamp));
+                }
+                segment.append(&batch, interval).unwrap();
+            }
+            segment.flush().unwrap();
+            let time_bytes =
+                std::fs::read(dir.path().join("00000000000000000100.timeindex")).unwrap();
+            let offset_bytes =
+                std::fs::read(dir.path().join("00000000000000000100.index")).unwrap();
+            let log_bytes = std::fs::read(dir.path().join("00000000000000000100.log")).unwrap();
+            let mut padded = time_bytes.clone();
+            padded.extend_from_slice(&[0; 24]);
+            for time_bytes in [&time_bytes[..], &padded[..]] {
+                for target in [i64::MIN, 100, 150, 300, 500, i64::MAX] {
+                    let relative = relative_offset_floor_for_timestamp(
+                        parse_time_index(time_bytes).unwrap(),
+                        target,
+                    );
+                    let position = position_for_relative_offset(
+                        parse_offset_index(&offset_bytes).unwrap(),
+                        relative,
+                    );
+                    let remote = first_record_at_or_after_timestamp(
+                        &log_bytes[usize::try_from(position).unwrap()..],
+                        100 + i64::from(relative),
+                        target,
+                        None,
+                    )
+                    .unwrap();
+                    let expected = records
+                        .iter()
+                        .copied()
+                        .find(|(_, timestamp)| *timestamp >= target);
+                    let local = segment
+                        .offset_for_timestamp(target)
+                        .map(|(offset, timestamp)| (offset.0, timestamp));
+                    assert!(remote == expected);
+                    assert!(local == expected);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn timestamp_floor_ignores_trailing_index_padding() {
         let entries = time_entries(&[(1_000, 0), (2_000, 10), (0, 0), (0, 0)]);
         assert!(relative_offset_floor_for_timestamp(&entries, 3_000) == 10);

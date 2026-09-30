@@ -1,7 +1,8 @@
 //! The follower's own replica log: where it lives under a log directory, and
-//! the trim, reset, and append operations that move it forward. Every mutation
-//! is fsynced and then recorded in the durable-offset checkpoint, so the log
-//! never advertises more than this broker has on disk.
+//! the trim, reset, and append operations that move it forward. Appended bytes
+//! are fsynced before the durable-offset checkpoint advances. Trim publishes
+//! its new checkpoint floor before deleting a prefix or advancing the log's
+//! own floor, so recovery can finish an interrupted trim.
 
 use std::{
     path::{Path, PathBuf},
@@ -26,7 +27,7 @@ use crate::wal::quorum::{
     shard_dir,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct FollowerLog {
     pub(super) log: ShardLog,
     durable_offset_path: PathBuf,
@@ -107,22 +108,28 @@ impl FollowerLog {
         if offset <= self.start_offset() {
             return Ok(());
         }
-        let log = self.log.clone();
-        let durable_offset_path = self.durable_offset_path.clone();
-        run_blocking(move || {
-            let mut log = log.lock();
-            log.trim_to_offset(offset)?;
-            log.sync()?;
-            write_durable_offset(
-                &durable_offset_path,
-                DurableRange {
-                    start: log.log_start_offset(),
-                    end: log.log_end_offset(),
-                },
-            )?;
-            Ok(())
-        })
-        .await
+        let follower = self.clone();
+        run_blocking(move || follower.trim_to_blocking(offset)).await
+    }
+
+    pub(super) fn trim_to_blocking(&self, offset: Offset) -> Result<(), crate::BrokerError> {
+        let mut log = self.log.lock();
+        if offset <= log.log_start_offset() {
+            return Ok(());
+        }
+        let end = log.log_end_offset();
+        let floor = Offset(krabka_verified::truncation_frontier(end.0, offset.0));
+        // Sync before checkpointing even if a previous append's checkpoint
+        // failed. Publish the trim intent before the log can remove bytes or
+        // write its own floor; either on-disk floor then fits this WAL range.
+        log.sync()?;
+        write_durable_offset(
+            &self.durable_offset_path,
+            DurableRange { start: floor, end },
+        )?;
+        log.trim_to_offset(floor)?;
+        log.sync()?;
+        Ok(())
     }
 
     pub(super) async fn reset_to(&self, offset: Offset) -> Result<(), crate::BrokerError> {
@@ -285,6 +292,116 @@ mod tests {
     use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_trim_keeps_a_recoverable_durable_range() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+
+        use krabka_log::IoTarget;
+
+        #[derive(Debug)]
+        struct InterruptedTrim(Arc<AtomicU8>);
+        impl InterruptedTrim {
+            fn fails(&self, phase: u8) -> bool {
+                self.0
+                    .compare_exchange(phase, 0, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            }
+        }
+        impl krabka_log::LogIo for InterruptedTrim {
+            fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
+                if self.fails(1) {
+                    return Err(std::io::Error::other("interrupted before byte sync"));
+                }
+                file.sync_data()
+            }
+            fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+                if target == IoTarget::LogStartOffsetCheckpoint && self.fails(2) {
+                    return Err(std::io::Error::other(
+                        "interrupted before floor publication",
+                    ));
+                }
+                std::fs::rename(from, to)
+            }
+            fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+                std::fs::File::open(dir)?.sync_all()?;
+                if self.fails(3) {
+                    return Err(std::io::Error::other("interrupted after floor publication"));
+                }
+                Ok(())
+            }
+        }
+
+        for prior_end in [1, 3] {
+            for requested in [1, 3, 4] {
+                for failure in 1..=4 {
+                    let dir = tempfile::tempdir().unwrap();
+                    let fault = Arc::new(AtomicU8::new(0));
+                    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+                    log.append(&mut RecordBatch {
+                        records: vec![Record::default()],
+                        ..RecordBatch::default()
+                    })
+                    .unwrap();
+                    let mut tail = RecordBatch {
+                        last_offset_delta: 1,
+                        records: (0..2)
+                            .map(|offset_delta| Record {
+                                offset_delta,
+                                ..Record::default()
+                            })
+                            .collect(),
+                        ..RecordBatch::default()
+                    };
+                    if prior_end == 3 {
+                        log.append(&mut tail).unwrap();
+                    }
+                    log.sync().unwrap();
+                    let follower = FollowerLog::for_log(log);
+                    if prior_end == 1 {
+                        follower.log.lock().append(&mut tail).unwrap();
+                    }
+                    follower
+                        .log
+                        .lock()
+                        .test_set_io(Arc::new(InterruptedTrim(fault.clone())));
+                    fault.store(failure, Ordering::SeqCst);
+                    let temporary = follower
+                        .durable_offset_path
+                        .with_extension("checkpoint.tmp");
+                    if failure == 4 {
+                        std::fs::create_dir(&temporary).unwrap();
+                    }
+                    assert!(follower.trim_to_blocking(Offset(requested)).is_err());
+                    let published = matches!(failure, 2 | 3);
+                    let floor = if published { requested.min(3) } else { 0 };
+                    let end = if published { 3 } else { prior_end };
+                    assert!(
+                        std::fs::read_to_string(&follower.durable_offset_path).unwrap()
+                            == format!("{floor} {end}\n")
+                    );
+                    if failure == 4 {
+                        std::fs::remove_dir(temporary).unwrap();
+                    }
+                    drop(follower);
+
+                    let reopened =
+                        FollowerLog::open_at(dir.path().to_path_buf(), &LogConfig::default())
+                            .unwrap();
+                    assert!(reopened.start_offset() == Offset(floor));
+                    assert!(reopened.end_offset() == Offset(end));
+                    reopened.trim_to_blocking(Offset(requested)).unwrap();
+                    drop(reopened);
+                    let again =
+                        FollowerLog::open_at(dir.path().to_path_buf(), &LogConfig::default())
+                            .unwrap();
+                    assert!(again.start_offset() == Offset(requested.min(end)));
+                    assert!(again.end_offset() == Offset(end));
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn follower_appends_and_syncs_a_contiguous_fetch() {

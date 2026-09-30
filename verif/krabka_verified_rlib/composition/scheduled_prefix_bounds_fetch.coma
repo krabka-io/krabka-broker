@@ -1,0 +1,399 @@
+(* #"/workspace/crates/verified/src/composition.rs" 656 0 662 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 276 10 276 63
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 277 10 278 97
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 279 10 279 83
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 280 10 282 58
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 283 10 283 74
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 284 10 288 1
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 289 10 289 36
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 290 10 290 59
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 226 16 226 42
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 241 8 247 9
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 663 18 663 80
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 666 16 666 22
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 673 14 673 33
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 674 14 674 27
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 670 16 672 84
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 669 16 669 70
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 668 16 668 64
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 667 16 667 36
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 675 28 675 38
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 675 13 675 17
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 675 19 675 24
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 676 25 676 64
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 683 62 683 76
+let%span scomposition'12 = "/workspace/crates/verified/src/composition.rs" 683 43 683 47
+let%span scomposition'13 = "/workspace/crates/verified/src/composition.rs" 683 16 683 82
+let%span scomposition'14 = "/workspace/crates/verified/src/composition.rs" 689 13 689 14
+let%span scomposition'15 = "/workspace/crates/verified/src/composition.rs" 689 8 689 14
+let%span scomposition'16 = "/workspace/crates/verified/src/composition.rs" 677 19 677 23
+let%span scomposition'17 = "/workspace/crates/verified/src/composition.rs" 680 19 680 23
+let%span scomposition'18 = "/workspace/crates/verified/src/composition.rs" 692 15 692 19
+let%span scomposition'19 = "/workspace/crates/verified/src/composition.rs" 694 22 694 96
+let%span scomposition'20 = "/workspace/crates/verified/src/composition.rs" 696 36 696 41
+let%span scomposition'21 = "/workspace/crates/verified/src/composition.rs" 696 43 696 47
+let%span scomposition'22 = "/workspace/crates/verified/src/composition.rs" 696 19 696 70
+let%span scomposition'23 = "/workspace/crates/verified/src/composition.rs" 697 36 697 40
+let%span scomposition'24 = "/workspace/crates/verified/src/composition.rs" 697 42 697 46
+let%span scomposition'25 = "/workspace/crates/verified/src/composition.rs" 697 19 697 69
+let%span scomposition'26 = "/workspace/crates/verified/src/composition.rs" 702 15 702 20
+let%span scomposition'27 = "/workspace/crates/verified/src/composition.rs" 704 8 704 9
+let%span scomposition'28 = "/workspace/crates/verified/src/composition.rs" 706 14 706 33
+let%span scomposition'29 = "/workspace/crates/verified/src/composition.rs" 707 14 707 27
+let%span scomposition'30 = "/workspace/crates/verified/src/composition.rs" 705 16 705 36
+let%span scomposition'31 = "/workspace/crates/verified/src/composition.rs" 708 58 708 72
+let%span scomposition'32 = "/workspace/crates/verified/src/composition.rs" 708 39 708 43
+let%span scomposition'33 = "/workspace/crates/verified/src/composition.rs" 708 12 708 78
+let%span scomposition'34 = "/workspace/crates/verified/src/composition.rs" 709 39 709 49
+let%span scomposition'35 = "/workspace/crates/verified/src/composition.rs" 709 39 709 51
+let%span scomposition'36 = "/workspace/crates/verified/src/composition.rs" 713 13 713 14
+let%span scomposition'37 = "/workspace/crates/verified/src/composition.rs" 713 8 713 14
+let%span scomposition'38 = "/workspace/crates/verified/src/composition.rs" 711 19 711 24
+let%span scomposition'39 = "/workspace/crates/verified/src/composition.rs" 715 4 715 8
+let%span scomposition'40 = "/workspace/crates/verified/src/composition.rs" 653 11 653 47
+let%span scomposition'41 = "/workspace/crates/verified/src/composition.rs" 654 11 654 58
+let%span scomposition'42 = "/workspace/crates/verified/src/composition.rs" 655 10 655 16
+let%span scomposition'43 = "/workspace/crates/verified/src/composition.rs" 639 10 641 51
+let%span sdelivery = "/workspace/crates/verified/src/delivery.rs" 12 10 14 52
+let%span sdelivery'0 = "/workspace/crates/verified/src/delivery.rs" 49 11 49 33
+let%span sdelivery'1 = "/workspace/crates/verified/src/delivery.rs" 50 10 50 91
+let%span sdelivery'2 = "/workspace/crates/verified/src/delivery.rs" 51 10 51 54
+let%span sdelivery'3 = "/workspace/crates/verified/src/delivery.rs" 52 10 53 29
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 187 10 196 1
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use seq.Seq
+use creusot.int.UInt64
+use creusot.int.Int32
+use int.MinMax
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let segment_maximum_proves_delivery (activations: Slice64.slice Int64.t) (uncertainty: Int64.t) (now: Int64.t)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:segment_maximum_proves_delivery ensures] [%#scomposition'43] result
+    = (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view activations)
+      -> ge_log_Int (Int64.to_int uncertainty) 0
+      /\ Int64.to_int (Seq.get (Slice64.view activations) i) + Int64.to_int uncertainty <= Int64.to_int const_MAX
+      /\ Int64.to_int (Seq.get (Slice64.view activations) i) + Int64.to_int uncertainty <= Int64.to_int now)}
+    (! return {result}) ]
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup2_i64_i32 = { f0: Int64.t; f1: Int32.t }
+
+let len_tup2_i64_i32 (self_: Slice64.slice tup2_i64_i32) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+let restore_batch_step (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:restore_batch_step ensures] [%#srestore] match result with
+      | Some next -> ge_log_Int (Int32.to_int last_delta) 0
+      /\ ge_log_Int (Int64.to_int base) (Int64.to_int minimum_base)
+      /\ Int64.to_int next = Int64.to_int base + Int32.to_int last_delta + 1
+      /\ gt_log_Int (Int64.to_int next) (Int64.to_int base) /\ Int64.to_int next <= Int64.to_int const_MAX
+      | None -> Int32.to_int last_delta < 0
+      \/ Int64.to_int base < Int64.to_int minimum_base
+      \/ gt_log_Int (Int64.to_int base + Int32.to_int last_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let scheduled_delivery_visible (scheduled: bool) (uncertainty_ms: Int64.t) (activation_ms: Int64.t) (now_ms: Int64.t)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:scheduled_delivery_visible ensures] [%#sdelivery] result
+    = (not scheduled
+    \/ ge_log_Int (Int64.to_int uncertainty_ms) 0
+    /\ Int64.to_int activation_ms + Int64.to_int uncertainty_ms <= Int64.to_int const_MAX
+    /\ Int64.to_int activation_ms + Int64.to_int uncertainty_ms <= Int64.to_int now_ms)}
+    (! return {result}) ]
+
+function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int
+
+let delivery_watermark_advance (log_start'0: Int64.t) (current': Int64.t) (candidate: Int64.t) (log_end'0: Int64.t)
+  (return (x: Int64.t)) =
+{[@stop_split] [@expl:delivery_watermark_advance requires] [%#sdelivery'0] Int64.to_int log_start'0
+  <= Int64.to_int log_end'0}
+  any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:delivery_watermark_advance ensures] ([@stop_split] [@expl:delivery_watermark_advance ensures #0] [%#sdelivery'1] Int64.to_int result
+      = MinMax.min (MinMax.max (Int64.to_int candidate) (clamp_to (Int64.to_int current') (Int64.to_int log_start'0) (Int64.to_int log_end'0))) (Int64.to_int log_end'0))
+    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #1] [%#sdelivery'2] Int64.to_int log_start'0
+        <= Int64.to_int result
+      /\ Int64.to_int result <= Int64.to_int log_end'0)
+    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #2] [%#sdelivery'3] Int64.to_int current'
+        <= Int64.to_int candidate
+      /\ Int64.to_int log_start'0 <= Int64.to_int candidate /\ Int64.to_int candidate <= Int64.to_int log_end'0
+    -> Int64.to_int result = Int64.to_int candidate)}
+    (! return {result}) ]
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+function offset_min [#"/workspace/crates/verified/src/broker.rs" 225 0 225 40] (a: int) (b: int) : int
+ = [%#sbroker'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker.rs" 239 0 239 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sbroker'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sbroker] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sbroker'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sbroker'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sbroker'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sbroker'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sbroker'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sbroker'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sbroker'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let scheduled_prefix_bounds_fetch [#"/workspace/crates/verified/src/composition.rs" 656 0 662 9]
+  (batches: Slice64.slice tup2_i64_i32) (activations: Slice64.slice Int64.t) (uncertainty: Int64.t) (now: Int64.t)
+  (w: t_FetchWatermarks) (return (x: bool)) =
+{[@stop_split] [@expl:scheduled_prefix_bounds_fetch requires] ([@stop_split] [@expl:scheduled_prefix_bounds_fetch requires #0] [%#scomposition'40] Seq.length (Slice64.view batches)
+    = Seq.length (Slice64.view activations))
+  /\ ([@stop_split] [@expl:scheduled_prefix_bounds_fetch requires #1] [%#scomposition'41] 0 <= Int64.to_int w.log_start
+  /\ Int64.to_int w.log_start <= Int64.to_int w.log_end)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = segment_maximum_proves_delivery [%#scomposition] {activations} {uncertainty} {now}
+        (fun (_x: bool) -> [ &all_due <- _x ] s1)
+    | s1 = [ &cursor <- w.log_start ] s2
+    | s2 = [ &candidate <- w.log_end ] s3
+    | s3 = [ &i <- [%#scomposition'0] (0: UInt64.t) ] s4
+    | s4 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#scomposition'1] Seq.length (Slice64.view batches)
+      - UInt64.t'int i)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#scomposition'6] UInt64.t'int i <= Seq.length (Slice64.view batches)}
+      {[@expl:loop invariant #1] [%#scomposition'5] Int64.to_int w.log_start <= Int64.to_int cursor
+      /\ Int64.to_int cursor <= Int64.to_int w.log_end}
+      {[@expl:loop invariant #2] [%#scomposition'4] Int64.to_int w.log_start <= Int64.to_int candidate
+      /\ Int64.to_int candidate <= Int64.to_int w.log_end}
+      {[@expl:loop invariant #3] [%#scomposition'3] forall j: int. 0 <= j
+          /\ j < UInt64.t'int i
+          /\ not (ge_log_Int (Int64.to_int uncertainty) 0
+          /\ Int64.to_int (Seq.get (Slice64.view activations) j) + Int64.to_int uncertainty <= Int64.to_int const_MAX
+          /\ Int64.to_int (Seq.get (Slice64.view activations) j) + Int64.to_int uncertainty <= Int64.to_int now)
+        -> Int64.to_int candidate <= Int64.to_int (Seq.get (Slice64.view batches) j).f0}
+      (! [ &variant_old_bb2 <- [%#scomposition'1] Seq.length (Slice64.view batches) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_i64_i32 [%#scomposition'2] {batches} (fun (_x: UInt64.t) -> [ &_46 <- _x ] s1)
+      | s1 = [ &_44 <- UInt64.lt i _46 ] s2
+      | s2 = any [ br0 -> {_44 = false} (! bb22) | br1 -> {_44} (! bb5) ] ]
+      [ bb5 = s0
+        [ s0 = [ &_50 <- i ] s1
+        | s1 = [ &_51 <- Slice64.length batches ] s2
+        | s2 = [ &_52 <- UInt64.lt _50 _51 ] s3
+        | s3 = {[@expl:index in bounds] [%#scomposition'7] _52} s4
+        | s4 = Slice64.get [%#scomposition'8] <tup2_i64_i32> {batches} {_50}
+            (fun (r: tup2_i64_i32) -> [ &base <- r.f0 ] s5)
+        | s5 = Slice64.get [%#scomposition'9] <tup2_i64_i32> {batches} {_50}
+            (fun (r: tup2_i64_i32) -> [ &delta <- r.f1 ] s6)
+        | s6 = restore_batch_step [%#scomposition'10] {cursor} {base} {delta}
+            (fun (_x: t_Option_i64) -> [ &_55 <- _x ] s7)
+        | s7 = any [ br0 -> {_55 = None} (! bb10) | br1 (x0: Int64.t) -> {_55 = Some x0} (! bb9) ] ]
+      | bb9 = s0
+        [ s0 = elim_Some {_55} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
+        | s1 = [ &_61 <- Int64.gt next w.log_end ] s2
+        | s2 = any [ br0 -> {_61 = false} (! bb12) | br1 -> {_61} (! bb11) ] ]
+      | bb12 = any [ br0 -> {all_due = false} (! bb13) | br1 -> {all_due} (! bb21) ]
+      | bb13 = s0
+        [ s0 = [ &_70 <- i ] s1
+        | s1 = [ &_71 <- Slice64.length activations ] s2
+        | s2 = [ &_72 <- UInt64.lt _70 _71 ] s3
+        | s3 = {[@expl:index in bounds] [%#scomposition'11] _72} s4
+        | s4 = Slice64.get [%#scomposition'11] <Int64.t> {activations} {_70} (fun (r: Int64.t) -> [ &_69 <- r ] s5)
+        | s5 = scheduled_delivery_visible [%#scomposition'13] {[%#scomposition'12] true} {uncertainty} {_69} {now}
+            (fun (_x: bool) -> [ &_67 <- _x ] s6)
+        | s6 = any [ br0 -> {_67 = false} (! bb17) | br1 -> {_67} (! bb21) ] ]
+      | bb17 = s0
+        [ s0 = [ &_74 <- Int64.lt base candidate ] s1
+        | s1 = any [ br0 -> {_74 = false} (! bb21) | br1 -> {_74} (! bb18) ] ]
+      | bb18 = s0 [ s0 = [ &candidate <- base ] s1 | s1 = bb21 ]
+      | bb21 = s0
+        [ s0 = [ &cursor <- next ] s1
+        | s1 = UInt64.add [%#scomposition'15] {i} {[%#scomposition'14] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s2)
+        | s2 = bb2 ] ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- [%#scomposition'16] true ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- [%#scomposition'17] true ] s1 | s1 = return {_ret} ]
+  | bb22 = s0
+    [ s0 = [ &_81 <- cursor <> w.log_end ] s1 | s1 = any [ br0 -> {_81 = false} (! bb24) | br1 -> {_81} (! bb23) ] ]
+  | bb23 = s0 [ s0 = [ &_ret <- [%#scomposition'18] true ] s1 | s1 = return {_ret} ]
+  | bb24 = s0
+    [ s0 = delivery_watermark_advance [%#scomposition'19] {w.log_start} {w.log_start} {candidate} {w.log_end}
+        (fun (_x: Int64.t) -> [ &deliverable'0 <- _x ] s1)
+    | s1 = [ &bounded <- { log_start = w.log_start;
+                           hw = w.hw;
+                           lso = w.lso;
+                           log_end = w.log_end;
+                           deliverable = deliverable'0 } ] s2
+    | s2 = fetch_visibility [%#scomposition'22] {[%#scomposition'20] false} {[%#scomposition'21] true} {bounded}
+        {w.log_start} (fun (_x: t_FetchVisibility) -> [ &consumer <- _x ] s3)
+    | s3 = fetch_visibility [%#scomposition'25] {[%#scomposition'23] true} {[%#scomposition'24] true} {bounded}
+        {w.log_start} (fun (_x: t_FetchVisibility) -> [ &follower <- _x ] s4)
+    | s4 = [ &_99 <- deliverable'0 <> candidate ] s5
+    | s5 = any [ br0 -> {_99 = false} (! bb29) | br1 -> {_99} (! bb33) ] ]
+  | bb29 = s0
+    [ s0 = [ &_102 <- Int64.gt consumer.limit_offset candidate ] s1
+    | s1 = any [ br0 -> {_102 = false} (! bb31) | br1 -> {_102} (! bb33) ] ]
+  | bb31 = s0
+    [ s0 = [ &_105 <- follower.limit_offset <> w.log_end ] s1
+    | s1 = any [ br0 -> {_105 = false} (! bb34) | br1 -> {_105} (! bb33) ] ]
+  | bb33 = s0 [ s0 = [ &_ret <- [%#scomposition'26] false ] s1 | s1 = return {_ret} ]
+  | bb34 = s0 [ s0 = [ &i <- [%#scomposition'27] (0: UInt64.t) ] s1 | s1 = bb35 ]
+  | bb35 = bb35invariant
+    [ bb35 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb35 ([%#scomposition'28] Seq.length (Slice64.view batches)
+      - UInt64.t'int i)}
+      bb35invariant
+    | bb35invariant = {[@expl:loop invariant] [%#scomposition'30] UInt64.t'int i <= Seq.length (Slice64.view batches)}
+      (! [ &variant_old_bb35 <- [%#scomposition'28] Seq.length (Slice64.view batches) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_i64_i32 [%#scomposition'29] {batches} (fun (_x: UInt64.t) -> [ &_119 <- _x ] s1)
+      | s1 = [ &_117 <- UInt64.lt i _119 ] s2
+      | s2 = any [ br0 -> {_117 = false} (! bb47) | br1 -> {_117} (! bb38) ] ]
+      [ bb38 = s0
+        [ s0 = [ &_125 <- i ] s1
+        | s1 = [ &_126 <- Slice64.length activations ] s2
+        | s2 = [ &_127 <- UInt64.lt _125 _126 ] s3
+        | s3 = {[@expl:index in bounds] [%#scomposition'31] _127} s4
+        | s4 = Slice64.get [%#scomposition'31] <Int64.t> {activations} {_125} (fun (r: Int64.t) -> [ &_124 <- r ] s5)
+        | s5 = scheduled_delivery_visible [%#scomposition'33] {[%#scomposition'32] true} {uncertainty} {_124} {now}
+            (fun (_x: bool) -> [ &_122 <- _x ] s6)
+        | s6 = any [ br0 -> {_122 = false} (! bb42) | br1 -> {_122} (! bb46) ] ]
+      | bb42 = s0
+        [ s0 = [ &_132 <- i ] s1
+        | s1 = [ &_133 <- Slice64.length batches ] s2
+        | s2 = [ &_134 <- UInt64.lt _132 _133 ] s3
+        | s3 = {[@expl:index in bounds] [%#scomposition'34] _134} s4
+        | s4 = Slice64.get [%#scomposition'35] <tup2_i64_i32> {batches} {_132}
+            (fun (r: tup2_i64_i32) -> [ &_131 <- r.f0 ] s5)
+        | s5 = [ &_129 <- Int64.gt consumer.limit_offset _131 ] s6
+        | s6 = any [ br0 -> {_129 = false} (! bb46) | br1 -> {_129} (! bb44) ] ]
+      | bb46 = s0
+        [ s0 = UInt64.add [%#scomposition'37] {i} {[%#scomposition'36] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb35 ] ] ]
+  | bb44 = s0 [ s0 = [ &_ret <- [%#scomposition'38] false ] s1 | s1 = return {_ret} ]
+  | bb47 = s0 [ s0 = [ &_ret <- [%#scomposition'39] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & batches: Slice64.slice tup2_i64_i32 = batches
+  | & activations: Slice64.slice Int64.t = activations
+  | & uncertainty: Int64.t = uncertainty
+  | & now: Int64.t = now
+  | & w: t_FetchWatermarks = w
+  | & all_due: bool = Any.any_l ()
+  | & cursor: Int64.t = Any.any_l ()
+  | & candidate: Int64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & base: Int64.t = Any.any_l ()
+  | & delta: Int32.t = Any.any_l ()
+  | & _50: UInt64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _55: t_Option_i64 = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & _67: bool = Any.any_l ()
+  | & _69: Int64.t = Any.any_l ()
+  | & _70: UInt64.t = Any.any_l ()
+  | & _71: UInt64.t = Any.any_l ()
+  | & _72: bool = Any.any_l ()
+  | & _74: bool = Any.any_l ()
+  | & _81: bool = Any.any_l ()
+  | & deliverable'0: Int64.t = Any.any_l ()
+  | & bounded: t_FetchWatermarks = Any.any_l ()
+  | & consumer: t_FetchVisibility = Any.any_l ()
+  | & follower: t_FetchVisibility = Any.any_l ()
+  | & _99: bool = Any.any_l ()
+  | & _102: bool = Any.any_l ()
+  | & _105: bool = Any.any_l ()
+  | & _117: bool = Any.any_l ()
+  | & _119: UInt64.t = Any.any_l ()
+  | & _122: bool = Any.any_l ()
+  | & _124: Int64.t = Any.any_l ()
+  | & _125: UInt64.t = Any.any_l ()
+  | & _126: UInt64.t = Any.any_l ()
+  | & _127: bool = Any.any_l ()
+  | & _129: bool = Any.any_l ()
+  | & _131: Int64.t = Any.any_l ()
+  | & _132: UInt64.t = Any.any_l ()
+  | & _133: UInt64.t = Any.any_l ()
+  | & _134: bool = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l ()
+  | & variant_old_bb35: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:scheduled_prefix_bounds_fetch ensures] [%#scomposition'42] result}
+    (! return {result}) ]

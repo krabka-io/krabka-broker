@@ -1,0 +1,15 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_ne_Option_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_reservations_do_not_overlap": {
+        "prover": "alt-ergo",
+        "time": 0.043
+      },
+      "vc_reserve_offsets": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_wal_reservation_frontier": { "prover": "alt-ergo", "time": 0.006 }
+    }
+  }
+}
