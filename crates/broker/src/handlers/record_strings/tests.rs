@@ -1,0 +1,235 @@
+use assert2::assert;
+use bytes::BytesMut;
+use krabka_protocol::{
+    Encode,
+    owned::{
+        alter_share_group_offsets_request::{
+            self, AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestTopic,
+        },
+        consumer_group_heartbeat_request::{self, ConsumerGroupHeartbeatRequest},
+        delete_groups_request::{self, DeleteGroupsRequest},
+        delete_share_group_offsets_request::{
+            self, DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
+        },
+        heartbeat_request::{self, HeartbeatRequest},
+        join_group_request::{self, JoinGroupRequest, JoinGroupRequestProtocol},
+        leave_group_request::{self, LeaveGroupRequest, MemberIdentity},
+        offset_commit_request::{
+            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+        },
+        share_group_heartbeat_request::{self, ShareGroupHeartbeatRequest},
+        streams_group_heartbeat_request::{self, StreamsGroupHeartbeatRequest},
+        sync_group_request::{self, SyncGroupRequest, SyncGroupRequestAssignment},
+        txn_offset_commit_request::{
+            TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
+        },
+    },
+};
+
+use super::*;
+
+/// The longest string Kafka's reader accepts.
+const LIMIT: usize = 32_767;
+
+/// A request field set from a string, with the name the case reports.
+type Field<R> = (&'static str, fn(&mut R, String));
+
+/// Encode `request` at `version` and decode it as a handler does.
+fn decoded<R>(request: &R, version: i16) -> Result<R, BrokerError>
+where
+    R: Encode + for<'de> Decode<'de> + RecordStrings,
+{
+    let mut buf = BytesMut::with_capacity(request.encoded_len(version));
+    request.encode(&mut buf, version).expect("encode request");
+    let mut cur: &[u8] = &buf;
+    decode_group_request(&mut cur, version)
+}
+
+/// Every one of `fields`, set to a string of 32767 bytes, decodes, and set to
+/// one of 32768 bytes is refused as a protocol error, as Kafka's reader
+/// refuses it.
+fn check_request<R>(version: i16, base: &R, fields: &[Field<R>])
+where
+    R: Clone + Encode + for<'de> Decode<'de> + RecordStrings,
+{
+    for (name, set) in fields {
+        for (length, accepted) in [(LIMIT, true), (LIMIT + 1, false)] {
+            let mut request = base.clone();
+            set(&mut request, "a".repeat(length));
+
+            let outcome = decoded(&request, version);
+
+            assert!(
+                outcome.is_ok() == accepted,
+                "{name} of {length} bytes: {:?}",
+                outcome.as_ref().err()
+            );
+            assert!(
+                accepted || matches!(outcome, Err(BrokerError::Protocol(_))),
+                "{name} of {length} bytes is a protocol error"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
+    check_request(
+        join_group_request::MAX_VERSION,
+        &JoinGroupRequest {
+            protocols: vec![JoinGroupRequestProtocol::default()],
+            ..Default::default()
+        },
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.group_instance_id = Some(s)),
+            ("protocol type", |r, s| r.protocol_type = s),
+            ("protocol name", |r, s| r.protocols[0].name = s),
+        ],
+    );
+    check_request(
+        sync_group_request::MAX_VERSION,
+        &SyncGroupRequest {
+            assignments: vec![SyncGroupRequestAssignment::default()],
+            ..Default::default()
+        },
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.group_instance_id = Some(s)),
+            ("protocol type", |r, s| r.protocol_type = Some(s)),
+            ("protocol name", |r, s| r.protocol_name = Some(s)),
+            ("assigned member id", |r, s| r.assignments[0].member_id = s),
+        ],
+    );
+    check_request(
+        heartbeat_request::MAX_VERSION,
+        &HeartbeatRequest::default(),
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.group_instance_id = Some(s)),
+        ],
+    );
+    check_request(
+        leave_group_request::MAX_VERSION,
+        &LeaveGroupRequest {
+            members: vec![MemberIdentity::default()],
+            ..Default::default()
+        },
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.members[0].member_id = s),
+            ("instance id", |r, s| {
+                r.members[0].group_instance_id = Some(s);
+            }),
+        ],
+    );
+    // The last version of each that names its topics: the next one names them by
+    // id.
+    check_request(
+        9,
+        &OffsetCommitRequest {
+            topics: vec![OffsetCommitRequestTopic {
+                partitions: vec![OffsetCommitRequestPartition::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.group_instance_id = Some(s)),
+            ("topic name", |r, s| r.topics[0].name = s),
+            ("metadata", |r, s| {
+                r.topics[0].partitions[0].committed_metadata = Some(s);
+            }),
+        ],
+    );
+    check_request(
+        5,
+        &TxnOffsetCommitRequest {
+            topics: vec![TxnOffsetCommitRequestTopic {
+                partitions: vec![TxnOffsetCommitRequestPartition::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        &[
+            ("transactional id", |r, s| r.transactional_id = s),
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.group_instance_id = Some(s)),
+            ("topic name", |r, s| r.topics[0].name = s),
+            ("metadata", |r, s| {
+                r.topics[0].partitions[0].committed_metadata = Some(s);
+            }),
+        ],
+    );
+}
+
+#[test]
+fn a_group_heartbeat_with_an_id_over_32767_bytes_is_refused() {
+    check_request(
+        consumer_group_heartbeat_request::MAX_VERSION,
+        &ConsumerGroupHeartbeatRequest::default(),
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.instance_id = Some(s)),
+            ("topic regex", |r, s| r.subscribed_topic_regex = Some(s)),
+        ],
+    );
+    check_request(
+        share_group_heartbeat_request::MAX_VERSION,
+        &ShareGroupHeartbeatRequest::default(),
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+        ],
+    );
+    check_request(
+        streams_group_heartbeat_request::MAX_VERSION,
+        &StreamsGroupHeartbeatRequest::default(),
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("member id", |r, s| r.member_id = s),
+            ("instance id", |r, s| r.instance_id = Some(s)),
+        ],
+    );
+}
+
+#[test]
+fn a_group_admin_request_with_a_name_over_32767_bytes_is_refused() {
+    check_request(
+        delete_groups_request::MAX_VERSION,
+        &DeleteGroupsRequest {
+            groups_names: vec![String::new()],
+            ..Default::default()
+        },
+        &[("group name", |r, s| r.groups_names[0] = s)],
+    );
+    check_request(
+        alter_share_group_offsets_request::MAX_VERSION,
+        &AlterShareGroupOffsetsRequest {
+            topics: vec![AlterShareGroupOffsetsRequestTopic::default()],
+            ..Default::default()
+        },
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("topic name", |r, s| r.topics[0].topic_name = s),
+        ],
+    );
+    check_request(
+        delete_share_group_offsets_request::MAX_VERSION,
+        &DeleteShareGroupOffsetsRequest {
+            topics: vec![DeleteShareGroupOffsetsRequestTopic::default()],
+            ..Default::default()
+        },
+        &[
+            ("group id", |r, s| r.group_id = s),
+            ("topic name", |r, s| r.topics[0].topic_name = s),
+        ],
+    );
+}

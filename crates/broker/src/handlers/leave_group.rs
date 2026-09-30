@@ -11,12 +11,9 @@
 //! top-level code at v0-v2.
 
 use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        leave_group_request::LeaveGroupRequest,
-        leave_group_response::{LeaveGroupResponse, MemberResponse},
-    },
+use krabka_protocol::owned::{
+    leave_group_request::LeaveGroupRequest,
+    leave_group_response::{LeaveGroupResponse, MemberResponse},
 };
 use tokio::sync::oneshot;
 
@@ -47,7 +44,7 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
     let mut cur: &[u8] = req_bytes;
-    let req = LeaveGroupRequest::decode(&mut cur, version)?;
+    let req: LeaveGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────────
     // `Read` on `Group(group_id)`. On Deny → whole-response

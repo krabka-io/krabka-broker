@@ -424,6 +424,15 @@ pub(crate) fn get_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
     Ok(Bytes::from(out))
 }
 
+/// Writes `s` with an `INT16` length.
+///
+/// # Panics
+///
+/// Panics on a string longer than `i16::MAX` bytes. Kafka's generated request
+/// readers refuse such a string, so the group handlers do too, at decode
+/// (`crate::handlers::decode_group_request`), before a request reaches a
+/// coordinator record. A caller that takes a string from anywhere else has to
+/// bound it first.
 pub(crate) fn put_string<B: BufMut>(buf: &mut B, s: &str) {
     let n = i16::try_from(s.len()).expect("string < 32k");
     buf.put_i16(n);

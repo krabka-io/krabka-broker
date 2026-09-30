@@ -6,12 +6,9 @@ use std::collections::HashSet;
 
 use bytes::Bytes;
 use krabka_metadata::AclOperation;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-        share_group_heartbeat_response::ShareGroupHeartbeatResponse,
-    },
+use krabka_protocol::owned::{
+    share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+    share_group_heartbeat_response::ShareGroupHeartbeatResponse,
 };
 use tokio::sync::oneshot;
 
@@ -44,7 +41,8 @@ pub(crate) async fn handle(
     let ng = broker.group_coordinator.clone();
     {
         let mut cur: &[u8] = req_bytes;
-        let req = ShareGroupHeartbeatRequest::decode(&mut cur, version)?;
+        let req: ShareGroupHeartbeatRequest =
+            crate::handlers::decode_group_request(&mut cur, version)?;
 
         // ── Protocol gate ───────────────────────────────────────────
         // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
@@ -275,7 +273,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{MetadataImage, MetadataRecord};
-    use krabka_protocol::{UnknownTaggedFields, owned::share_group_heartbeat_response};
+    use krabka_protocol::{Decode, UnknownTaggedFields, owned::share_group_heartbeat_response};
     use krabka_security::{AuthMethod, Principal};
 
     use super::*;

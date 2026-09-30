@@ -10,12 +10,9 @@ use std::collections::HashSet;
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        delete_groups_request::DeleteGroupsRequest,
-        delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
-    },
+use krabka_protocol::owned::{
+    delete_groups_request::DeleteGroupsRequest,
+    delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
 };
 
 use crate::{
@@ -43,7 +40,7 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
-    let req = DeleteGroupsRequest::decode(&mut cur, version)?;
+    let req: DeleteGroupsRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // Kafka's `handleDeleteGroupsRequest` drops duplicate ids first
     // (`groupsNames.distinct`), keeping the first-seen order, and then

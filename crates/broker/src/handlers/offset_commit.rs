@@ -17,7 +17,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode,
     owned::{
         offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestTopic},
         offset_commit_response::{
@@ -100,7 +99,7 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
-    let mut req = OffsetCommitRequest::decode(&mut cur, version)?;
+    let mut req: OffsetCommitRequest = crate::handlers::decode_group_request(&mut cur, version)?;
     let image = broker.controller.current_image();
 
     let group_request = AuthorizationRequest {
