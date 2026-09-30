@@ -10,6 +10,16 @@
 //! accepts possible data loss in exchange for availability. The default
 //! `false` keeps Kafka's safe-by-default behavior. The partition stays
 //! unavailable until a former ISR member returns.
+//!
+//! KIP-966: a partition with nothing to elect has no leader. Its record keeps
+//! the last leader, and the ELR it publishes says so: a one-member last-known
+//! ELR naming that leader, which `Metadata` and `DescribeTopicPartitions`
+//! project as `leader = -1`. When a broker unfences,
+//! [`compute_unfence_changes`] elects again for such a partition. The last
+//! leader takes it back from the ELR, or, if an unclean restart kept it out
+//! of the ELR, as an unclean leader in `RECOVERING` -- with no
+//! `unclean.leader.election.enable` and no `unclean.recovery.strategy` in
+//! front of it, as in Kafka's `canElectLastKnownLeader`.
 
 mod driver;
 mod operator;
@@ -31,7 +41,7 @@ pub(crate) use self::{
     policy::FailoverPlan,
     scan::{
         compute_failover_changes, compute_offline_dir_failover_changes,
-        compute_unclean_restart_changes,
+        compute_unclean_restart_changes, compute_unfence_changes,
     },
 };
 

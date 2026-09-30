@@ -64,6 +64,7 @@ pub fn build_with_max_bytes_between_snapshots(
         KraftConfig {
             me,
             cluster_id: uuid::Uuid::nil(),
+            directory_id: uuid::Uuid::nil(),
             initial_state: state,
             election_timeout: TEST_ELECTION_TIMEOUT,
             heartbeat_interval: None,
@@ -118,6 +119,7 @@ pub fn build_full_with_policy(
         KraftConfig {
             me,
             cluster_id: uuid::Uuid::nil(),
+            directory_id: uuid::Uuid::nil(),
             initial_state: state,
             election_timeout,
             heartbeat_interval,
@@ -179,7 +181,6 @@ pub fn build_engine_only_with_policy(
         per_replica_fetch_offset: std::collections::BTreeMap::new(),
         per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
         per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
-        observer_directory_ids: std::collections::BTreeMap::new(),
         is_leader: core.role().is_leader(),
         current_state: if core.role().is_leader() {
             "leader"
@@ -231,8 +232,8 @@ pub fn build_engine_only_with_policy(
             snapshot_fetch: None,
             installed_snapshot_epoch: None,
             controls,
-            replica_fetch_offsets: BTreeMap::new(),
-            replica_directory_ids: BTreeMap::new(),
+            directory_id: uuid::Uuid::nil(),
+            observers: BTreeMap::new(),
             fetch_purgatory: Vec::new(),
             wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: log_hwm_at_open,

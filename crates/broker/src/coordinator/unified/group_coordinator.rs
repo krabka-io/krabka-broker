@@ -106,20 +106,13 @@ pub struct GroupCoordinator {
     /// up, and which of them are still replaying. See
     /// `coordinator::leadership`.
     pub(crate) shard_terms: std::sync::Mutex<crate::coordinator::leadership::ShardTerms>,
-    /// Cache of the `ConsumerGroupHeartbeat` handler's
-    /// `subscribed_topic_regex` → Describe-authorized-topics computation,
-    /// keyed by `(group_id, member_id, principal, host)`. Bounded LRU, not an
-    /// unbounded map: a caller can name arbitrary `member_id`s in a heartbeat
-    /// that the actor later rejects (an unknown epoch, a full group), and
-    /// this cache is populated before that rejection happens, so nothing
-    /// upstream of it caps how many distinct keys it could otherwise see. See
-    /// [`crate::handlers::consumer_group_heartbeat::RegexAuthzCacheEntry`].
-    pub(crate) regex_authz_cache: std::sync::Mutex<
-        lru::LruCache<
-            (String, String, String, std::net::IpAddr),
-            crate::handlers::consumer_group_heartbeat::RegexAuthzCacheEntry,
-        >,
-    >,
+    /// Kafka's `GroupMetadataManager.lastMetadataImageWithNewTopics`: the
+    /// metadata offset of the latest image that can change what a regular
+    /// expression of a consumer group resolves to, or `-1` before the image
+    /// watcher has read one. A group whose resolutions are older than it
+    /// refreshes them at its next heartbeat. See `coordinator::topic_deletion`
+    /// for what moves it.
+    pub(crate) regex_refresh_version: std::sync::atomic::AtomicI64,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -166,9 +159,7 @@ impl GroupCoordinator {
             metrics: std::sync::OnceLock::new(),
             recent_topic_deletions: std::sync::Mutex::default(),
             shard_terms: std::sync::Mutex::default(),
-            regex_authz_cache: std::sync::Mutex::new(lru::LruCache::new(
-                crate::handlers::consumer_group_heartbeat::REGEX_AUTHZ_CACHE_CAPACITY,
-            )),
+            regex_refresh_version: std::sync::atomic::AtomicI64::new(-1),
         }
     }
 
@@ -235,6 +226,22 @@ impl GroupCoordinator {
         if let Some(metrics) = self.metrics.get() {
             metrics.evict_group_series(group_id);
         }
+    }
+
+    /// The metadata offset of the latest image that can change what a
+    /// consumer group's regular expressions resolve to, or `-1` before the
+    /// image watcher has read one: Kafka's `lastMetadataImageWithNewTopics`.
+    #[must_use]
+    pub(crate) fn regex_refresh_version(&self) -> i64 {
+        self.regex_refresh_version
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Records that the image at metadata offset `version` can change what a
+    /// regular expression resolves to. The version never moves back.
+    pub(crate) fn bump_regex_refresh_version(&self, version: i64) {
+        self.regex_refresh_version
+            .fetch_max(version, std::sync::atomic::Ordering::AcqRel);
     }
 }
 

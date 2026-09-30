@@ -1,15 +1,15 @@
-//! The on-disk KIP-630 metadata checkpoints: the byte window a `FetchSnapshot`
-//! caller reads out of the newest `<end_offset>-<epoch>.checkpoint`, the scan
-//! that finds that file, and the manual snapshot trigger. The checkpoint file
-//! layout is read straight from disk here rather than through the engine, so it
-//! is kept apart from the rest of the handle.
+//! The on-disk KIP-630 metadata checkpoints: the `FetchSnapshot` answer that
+//! the engine gives a broker listener, the byte window of the newest
+//! `<end_offset>-<epoch>.checkpoint`, the scan that finds that file, and the
+//! manual snapshot trigger. The checkpoint file layout is read straight from
+//! disk here rather than through the engine, so it is kept apart from the rest
+//! of the handle.
 
 use super::ControllerHandle;
 use crate::error::RaftError;
 
 /// A contiguous byte window of the latest metadata `.checkpoint`, returned by
-/// [`ControllerHandle::read_snapshot_range`] to back the broker's
-/// `FetchSnapshot` handler.
+/// [`ControllerHandle::read_snapshot_range`].
 #[derive(Debug, PartialEq)]
 pub struct SnapshotSlice {
     pub end_offset: i64,
@@ -18,14 +18,12 @@ pub struct SnapshotSlice {
     pub bytes: bytes::Bytes,
 }
 
-/// Outcome of [`ControllerHandle::read_snapshot_range`]. The broker's
-/// `FetchSnapshot` handler maps each variant to its Kafka error code:
-/// `NoSnapshot` → `SNAPSHOT_NOT_FOUND`, `OutOfRange` → `POSITION_OUT_OF_RANGE`.
+/// Outcome of [`ControllerHandle::read_snapshot_range`].
 pub enum SnapshotRange {
     /// No `.checkpoint` exists yet.
     NoSnapshot,
-    /// `position` is strictly past the snapshot's end byte. A `position`
-    /// exactly at the end is valid and yields an empty `Slice`.
+    /// `position` is at or past the snapshot's end byte, which Kafka's
+    /// `handleFetchSnapshotRequest` answers with `POSITION_OUT_OF_RANGE`.
     OutOfRange,
     /// The requested byte window.
     Slice(SnapshotSlice),
@@ -47,10 +45,12 @@ impl ControllerHandle {
         else {
             return SnapshotRange::NoSnapshot;
         };
-        let pos = usize::try_from(position.max(0)).unwrap_or(0);
-        if pos > bytes.len() {
+        let Some(pos) = usize::try_from(position)
+            .ok()
+            .filter(|pos| *pos < bytes.len())
+        else {
             return SnapshotRange::OutOfRange;
-        }
+        };
         let max = usize::try_from(max_bytes.max(0)).unwrap_or(0);
         let slice = crate::snapshot::SnapshotReader::byte_range(&bytes, pos, max);
         SnapshotRange::Slice(SnapshotSlice {
@@ -59,6 +59,37 @@ impl ControllerHandle {
             total_size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
             bytes: bytes::Bytes::copy_from_slice(slice),
         })
+    }
+
+    /// Answer one KIP-630 `FetchSnapshot` request through the engine, as the
+    /// controller listener answers it.
+    ///
+    /// `body` is the request body at `version`, and the answer is the response
+    /// body at that version. The engine follows Kafka's
+    /// `KafkaRaftClient.handleFetchSnapshotRequest`: it serves exactly the
+    /// snapshot the request names, and refuses another topic or partition, a
+    /// stale or unknown `CurrentLeaderEpoch`, another cluster id, and a
+    /// position outside the snapshot. It also fills `CurrentLeader` and the
+    /// leader's endpoint. A broker listener that answered from the checkpoint
+    /// directly would answer the same request differently.
+    ///
+    /// # Errors
+    /// Returns [`RaftError::Shutdown`] if the engine task is gone, or if it
+    /// dropped the request because the body does not decode.
+    pub async fn fetch_snapshot(
+        &self,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Result<bytes::Bytes, RaftError> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.engine
+            .deliver(crate::kraft::transport::Inbound::FetchSnapshot {
+                req: body,
+                version,
+                reply,
+            })
+            .await?;
+        answer.await.map_err(|_| RaftError::Shutdown)
     }
 
     /// Manually trigger a metadata snapshot (KIP-630 checkpoint) on this node.
@@ -132,7 +163,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_snapshot_range_allows_exact_end_but_rejects_past_end() {
+    async fn read_snapshot_range_rejects_the_end_and_everything_past_it() {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Join,
@@ -148,28 +179,28 @@ mod tests {
         )
         .unwrap();
 
-        match ctrl.read_snapshot_range(3, 10) {
-            SnapshotRange::Slice(slice) => {
-                assert2::assert!(
-                    slice
-                        == SnapshotSlice {
-                            end_offset: 10,
-                            epoch: 4,
-                            total_size: 3,
-                            bytes: bytes::Bytes::new(),
-                        }
-                );
-            }
-            other => panic!(
-                "position exactly at snapshot end should yield an empty slice, got {:?}",
-                std::mem::discriminant(&other)
-            ),
+        // Kafka's `handleFetchSnapshotRequest` refuses `position < 0` and
+        // `position >= size`, so the end of the snapshot is not a valid position.
+        let read = |position| match ctrl.read_snapshot_range(position, 10) {
+            SnapshotRange::Slice(slice) => Some(slice),
+            SnapshotRange::OutOfRange => None,
+            SnapshotRange::NoSnapshot => panic!("the checkpoint was written"),
+        };
+        let window = |bytes: &'static [u8]| SnapshotSlice {
+            end_offset: 10,
+            epoch: 4,
+            total_size: 3,
+            bytes: bytes::Bytes::from_static(bytes),
+        };
+        for (position, expected) in [
+            (0, Some(window(b"abc"))),
+            (2, Some(window(b"c"))),
+            (3, None),
+            (4, None),
+            (-1, None),
+        ] {
+            assert2::assert!(read(position) == expected, "position {position}");
         }
-
-        assert2::assert!(matches!(
-            ctrl.read_snapshot_range(4, 10),
-            SnapshotRange::OutOfRange
-        ));
         ctrl.shutdown().await;
     }
 }

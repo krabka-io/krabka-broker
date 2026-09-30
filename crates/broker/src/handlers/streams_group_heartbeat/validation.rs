@@ -6,7 +6,7 @@
 
 use krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest;
 
-use crate::codes;
+use crate::{api_catalog::UnstableApiVersions, codes};
 
 /// `LEAVE_GROUP_STATIC_MEMBER_EPOCH`: the epoch of a static member's leave.
 const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
@@ -15,9 +15,34 @@ const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
 /// and then `throwIfStreamsGroupHeartbeatRequestIsInvalid`, in Kafka's order.
 /// Returns the error code and message of the first check that the request
 /// fails.
-pub(super) fn request_error(req: &StreamsGroupHeartbeatRequest) -> Option<(i16, String)> {
+///
+/// Kafka 4.3.1 refuses static membership, task offsets and warmup tasks, and
+/// Kafka trunk drops those three checks, so they hold only while
+/// `unstable.api.versions.enable` is off. Both refuse source topic regexes.
+pub(super) fn request_error(
+    req: &StreamsGroupHeartbeatRequest,
+    unstable: UnstableApiVersions,
+) -> Option<(i16, String)> {
     let invalid = |message: &str| Some((codes::INVALID_REQUEST, message.to_string()));
 
+    if unstable == UnstableApiVersions::Disabled {
+        if req.instance_id.is_some() {
+            return invalid("Static membership is not yet supported.");
+        }
+        if req.task_offsets.is_some() {
+            return invalid("TaskOffsets are not supported yet.");
+        }
+        if req.task_end_offsets.is_some() {
+            return invalid("TaskEndOffsets are not supported yet.");
+        }
+        if req
+            .warmup_tasks
+            .as_ref()
+            .is_some_and(|tasks| !tasks.is_empty())
+        {
+            return invalid("WarmupTasks are not supported yet.");
+        }
+    }
     if req
         .topology
         .iter()
@@ -349,13 +374,180 @@ mod tests {
     }
 
     /// Each row is a request and the error that Kafka's
-    /// `GroupCoordinatorService` gives it, or `None` for a valid request.
+    /// `GroupCoordinatorService` gives it, or `None` for a valid request. The
+    /// rows name an instance id in one place, and trunk accepts that, so they
+    /// run with `unstable.api.versions.enable` on.
     #[test]
     fn request_checks_follow_kafka() {
         for (name, request, expected) in
             join_rows().into_iter().chain(topology_and_heartbeat_rows())
         {
-            check!(request_error(&request) == expected, "{name}");
+            check!(
+                request_error(&request, UnstableApiVersions::Enabled) == expected,
+                "{name}"
+            );
+        }
+    }
+
+    /// Kafka 4.3.1's `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures`
+    /// refuses, in this order, an instance id, task offsets, task end offsets,
+    /// non-empty warmup tasks and a source topic regex, before it checks
+    /// anything else. Kafka trunk keeps only the regex check.
+    #[test]
+    fn version_4_3_1_refuses_static_membership_offsets_and_warmup_tasks() {
+        use krabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset;
+
+        let regex_topology = Topology {
+            subtopologies: vec![Subtopology {
+                source_topic_regex: vec!["in-.*".into()],
+                ..topology().subtopologies[0].clone()
+            }],
+            ..topology()
+        };
+        let with_regex = |request: StreamsGroupHeartbeatRequest| StreamsGroupHeartbeatRequest {
+            topology: Some(regex_topology.clone()),
+            ..request
+        };
+        let offsets = || {
+            Some(vec![TaskOffset {
+                subtopology_id: "0".into(),
+                partition: 0,
+                offset: 5,
+                ..Default::default()
+            }])
+        };
+        let instance = Some("i1".to_string());
+        // (name, request, the answer of 4.3.1 and the answer of trunk)
+        let rows = [
+            (
+                "an instance id",
+                StreamsGroupHeartbeatRequest {
+                    instance_id: instance.clone(),
+                    ..join()
+                },
+                Some(invalid("Static membership is not yet supported.")),
+                None,
+            ),
+            (
+                "a static member leaving",
+                StreamsGroupHeartbeatRequest {
+                    instance_id: instance.clone(),
+                    ..heartbeat(-2)
+                },
+                Some(invalid("Static membership is not yet supported.")),
+                None,
+            ),
+            (
+                "task offsets",
+                StreamsGroupHeartbeatRequest {
+                    task_offsets: offsets(),
+                    ..heartbeat(3)
+                },
+                Some(invalid("TaskOffsets are not supported yet.")),
+                None,
+            ),
+            (
+                "empty task offsets",
+                StreamsGroupHeartbeatRequest {
+                    task_offsets: Some(vec![]),
+                    ..heartbeat(3)
+                },
+                Some(invalid("TaskOffsets are not supported yet.")),
+                None,
+            ),
+            (
+                "task end offsets",
+                StreamsGroupHeartbeatRequest {
+                    task_end_offsets: offsets(),
+                    ..heartbeat(3)
+                },
+                Some(invalid("TaskEndOffsets are not supported yet.")),
+                None,
+            ),
+            (
+                "warmup tasks",
+                StreamsGroupHeartbeatRequest {
+                    active_tasks: Some(vec![]),
+                    standby_tasks: Some(vec![]),
+                    warmup_tasks: Some(task()),
+                    ..heartbeat(3)
+                },
+                Some(invalid("WarmupTasks are not supported yet.")),
+                None,
+            ),
+            (
+                "an empty warmup task list",
+                StreamsGroupHeartbeatRequest {
+                    active_tasks: Some(vec![]),
+                    standby_tasks: Some(vec![]),
+                    warmup_tasks: Some(vec![]),
+                    ..heartbeat(3)
+                },
+                None,
+                None,
+            ),
+            (
+                "an instance id before task offsets",
+                StreamsGroupHeartbeatRequest {
+                    instance_id: instance.clone(),
+                    task_offsets: offsets(),
+                    task_end_offsets: offsets(),
+                    ..heartbeat(3)
+                },
+                Some(invalid("Static membership is not yet supported.")),
+                None,
+            ),
+            (
+                "task offsets before task end offsets",
+                StreamsGroupHeartbeatRequest {
+                    task_offsets: offsets(),
+                    task_end_offsets: offsets(),
+                    ..heartbeat(3)
+                },
+                Some(invalid("TaskOffsets are not supported yet.")),
+                None,
+            ),
+            (
+                "an unsupported feature before an invalid request",
+                StreamsGroupHeartbeatRequest {
+                    instance_id: instance.clone(),
+                    member_id: String::new(),
+                    ..join()
+                },
+                Some(invalid("Static membership is not yet supported.")),
+                Some(invalid("MemberId can't be empty.")),
+            ),
+            (
+                "an unsupported feature before a source topic regex",
+                with_regex(StreamsGroupHeartbeatRequest {
+                    instance_id: instance,
+                    ..join()
+                }),
+                Some(invalid("Static membership is not yet supported.")),
+                Some(invalid(
+                    "Regular expressions for source topics are not supported yet.",
+                )),
+            ),
+            (
+                "a source topic regex",
+                with_regex(join()),
+                Some(invalid(
+                    "Regular expressions for source topics are not supported yet.",
+                )),
+                Some(invalid(
+                    "Regular expressions for source topics are not supported yet.",
+                )),
+            ),
+        ];
+        for (name, request, released, trunk) in rows {
+            check!(
+                request_error(&request, UnstableApiVersions::Disabled) == released,
+                "{name}: 4.3.1"
+            );
+            check!(
+                request_error(&request, UnstableApiVersions::Enabled) == trunk,
+                "{name}: trunk"
+            );
         }
     }
 }

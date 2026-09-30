@@ -75,7 +75,7 @@ pub(crate) async fn handle(
 
     let resolvable = resolve_ip_names(&req).await;
     let ip_is_valid =
-        |name: &str| name.parse::<std::net::IpAddr>().is_ok() || resolvable.contains(name);
+        |name: &str| crate::quota::parse_ip_literal(name).is_some() || resolvable.contains(name);
     let Alteration { results, records } =
         alter_client_quotas(&req.entries, image.client_quotas(), &ip_is_valid);
     let mut entry_results: Vec<_> = results
@@ -138,7 +138,7 @@ async fn resolve_ip_names(req: &AlterClientQuotasRequest) -> HashSet<String> {
             };
             if component.entity_type != "ip"
                 || name.is_empty()
-                || name.parse::<std::net::IpAddr>().is_ok()
+                || crate::quota::parse_ip_literal(name).is_some()
                 || resolvable.contains(name)
             {
                 continue;

@@ -329,7 +329,7 @@ pub struct FileConfig {
     /// listener serves exactly Kafka 4.3.1's API versions.
     /// `unstable.feature.versions.enable` (default `false`) lets this node
     /// support `metadata.version` past 4.3.1's `4.3-IV0` (30), up to trunk's
-    /// `4.4-IV2` (33), which the CIDR ACL hosts of KIP-1276 and the controller
+    /// `4.5-IV0` (34), which the CIDR ACL hosts of KIP-1276 and the controller
     /// unregistration of KIP-1312 need. Any other entry is accepted and
     /// ignored.
     /// A key set here loses to the equivalent dedicated key, which is applied

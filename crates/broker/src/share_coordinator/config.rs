@@ -47,6 +47,15 @@ pub struct ShareCoordinatorConfig {
     /// applied: the coordinator encodes each record into a new buffer and
     /// keeps no buffer for reuse.
     pub cached_buffer_max_bytes: ByteSize,
+    /// Whether the state machine applies the rules that Kafka trunk has added
+    /// to `ShareCoordinatorShard` since 4.3.1: a negative leader or state
+    /// epoch is `INVALID_REQUEST`, a write never lowers the stored start
+    /// offset, the stored delivery complete count follows the start offset of
+    /// the write, and an initialize that repeats the stored state epoch and
+    /// start offset is a no-op. Kafka 4.3.1 reads `-1` as "not supplied" and
+    /// stores a write as sent. The broker sets this from
+    /// `unstable.api.versions.enable`; it is not a `[runtime]` key.
+    pub trunk_rules: bool,
 }
 
 /// Kafka's `share.coordinator.cached.buffer.max.bytes` default: 1 MiB plus
@@ -69,6 +78,7 @@ impl Default for ShareCoordinatorConfig {
             threads: 1,
             append_linger: None,
             cached_buffer_max_bytes: bytes(CACHED_BUFFER_MAX_BYTES_DEFAULT),
+            trunk_rules: false,
         }
     }
 }
@@ -95,6 +105,7 @@ mod tests {
             threads: 1,
             append_linger: None,
             cached_buffer_max_bytes: bytes(1_048_588),
+            trunk_rules: false,
         };
         assert!(ShareCoordinatorConfig::default() == expected);
     }

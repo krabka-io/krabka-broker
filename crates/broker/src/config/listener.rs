@@ -175,6 +175,18 @@ impl BrokerConfig {
         (configured.millis_i64() > 0).then(|| configured.to_std())
     }
 
+    /// How long a failed SASL authentication holds its response and its close:
+    /// Kafka's `connection.failed.authentication.delay.ms`. A non-positive
+    /// value is no delay, as Kafka's `Selector` then closes at once.
+    #[must_use]
+    pub fn failed_authentication_delay(&self) -> std::time::Duration {
+        use krabka_units::convert::TimeExt as _;
+
+        std::time::Duration::from_millis(
+            u64::try_from(self.connection_failed_authentication_delay.millis_i64()).unwrap_or(0),
+        )
+    }
+
     /// Which of the three [`ListenerKind`][crate::api_catalog::ListenerKind]
     /// the listener named `listener_name` is.
     ///

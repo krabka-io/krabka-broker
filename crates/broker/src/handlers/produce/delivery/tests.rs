@@ -1,7 +1,7 @@
 //! Tests for the KFC-1 scheduled-delivery gate, including one that drives a
 //! real scheduled partition end to end through the per-partition pipeline.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::check;
 use bytes::Bytes;
@@ -307,9 +307,9 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                     transactional_id: None,
                     version: 9,
                     producer_id_expiration_ms: 86_400_000,
+                    verification_enabled: true,
                 },
                 acks: 1,
-                timeout: Duration::from_secs(5),
             },
             PartitionServices {
                 schema_validator: None,

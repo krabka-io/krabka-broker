@@ -98,19 +98,24 @@ pub(crate) fn completion_producer_identity(entry: &TxnEntry) -> (ProducerId, i16
     client_producer_identity(entry)
 }
 
+/// Whether completing `entry` at `txnv` rotates to a fresh producer ID, which
+/// the caller has to allocate before it prepares the identities.
+fn completion_needs_fresh_producer_id(entry: &TxnEntry, txnv: TxnVersion) -> bool {
+    let (_, client_epoch) = client_producer_identity(entry);
+    let at_rotation_boundary = if entry.has_staged_producer_identity() {
+        client_epoch == i16::MAX
+    } else {
+        client_epoch >= i16::MAX - 1
+    };
+    txnv.verified() && at_rotation_boundary
+}
+
 pub(crate) async fn prepare_completion_identities(
     entry: &mut TxnEntry,
     txnv: TxnVersion,
     ids: &crate::producer_id_manager::ProducerIdManager,
 ) -> Result<(), BrokerError> {
-    let had_recovery_identity = entry.has_staged_producer_identity();
-    let (_, client_epoch) = client_producer_identity(entry);
-    let at_rotation_boundary = if had_recovery_identity {
-        client_epoch == i16::MAX
-    } else {
-        client_epoch >= i16::MAX - 1
-    };
-    let fresh = if txnv.verified() && at_rotation_boundary {
+    let fresh = if completion_needs_fresh_producer_id(entry, txnv) {
         Some(ids.allocate().await?.0)
     } else {
         None
@@ -118,6 +123,64 @@ pub(crate) async fn prepare_completion_identities(
     prepare_completion_identities_with_fresh(entry, txnv, fresh)
         .expect("fresh producer ID supplied at the rotation boundary");
     Ok(())
+}
+
+/// Prepares the abort that the coordinator itself runs on an `Ongoing`
+/// transaction: the timeout reaper, and the fence `InitProducerId` runs for a
+/// producer that re-initialises. See
+/// [`prepare_server_abort_identities_with_fresh`].
+pub(crate) async fn prepare_server_abort_identities(
+    entry: &mut TxnEntry,
+    server_version: TxnVersion,
+    ids: &crate::producer_id_manager::ProducerIdManager,
+) -> Result<(), BrokerError> {
+    let fresh = if completion_needs_fresh_producer_id(entry, server_version) {
+        Some(ids.allocate().await?.0)
+    } else {
+        None
+    };
+    prepare_server_abort_identities_with_fresh(entry, server_version, fresh)
+        .expect("fresh producer ID supplied at the rotation boundary");
+    Ok(())
+}
+
+/// The server abort of [`prepare_server_abort_identities`], with the fresh
+/// producer ID the caller allocated when the epoch is exhausted. `None` is
+/// returned when the rotation needs one and `fresh` is `None`.
+///
+/// Kafka's `prepareFenceProducerEpoch` followed by
+/// `endTransaction(isFromClient = false)` at the cluster's transaction version
+/// `server_version`: `TransactionMetadata.prepareFenceProducerEpoch` and
+/// `prepareAbortOrCommit`, as `handleInitProducerId` and
+/// `abortTimedOutTransactions` drive them.
+///
+/// - `TV_2`: the completion bump in [`prepare_completion_identities_with_fresh`]
+///   is the only epoch bump. The abort and its markers sit at `epoch + 1`, and
+///   `last_producer_epoch` names the epoch the producer still holds, so its
+///   retry of `InitProducerId` is recognised. The record carries `TV_2`.
+/// - Below `TV_2`: nothing bumps at completion, so the fence raises the epoch
+///   itself, unless an earlier fence already did (`has_failed_epoch_fence`) or
+///   the epoch is `i16::MAX`, and no last epoch is kept. The timed-out producer
+///   is then fenced at its partitions. `endTransactionWithTV1` always stamps
+///   `TV_0` on the record, also on a `TV_1` cluster.
+pub(crate) fn prepare_server_abort_identities_with_fresh(
+    entry: &mut TxnEntry,
+    server_version: TxnVersion,
+    fresh: Option<ProducerId>,
+) -> Option<()> {
+    entry.client_transaction_version = if server_version.verified() {
+        TxnVersion::Verified
+    } else {
+        TxnVersion::Classic
+    }
+    .level();
+    if !server_version.verified() {
+        entry.last_producer_epoch = -1;
+        if !entry.has_failed_epoch_fence && entry.producer_epoch < i16::MAX {
+            entry.producer_epoch += 1;
+        }
+    }
+    prepare_completion_identities_with_fresh(entry, server_version, fresh)
 }
 
 pub(crate) fn prepare_completion_identities_with_fresh(
@@ -138,7 +201,10 @@ pub(crate) fn prepare_completion_identities_with_fresh(
     };
 
     // The transaction marker fences the identity that wrote the transaction.
-    // i16::MAX is reserved for this final marker epoch.
+    // i16::MAX is reserved for this final marker epoch. Kafka's
+    // `prepareAbortOrCommit` records the epoch it leaves as the last epoch,
+    // which is how `InitProducerId` recognises a retry that names it.
+    entry.last_producer_epoch = entry.producer_epoch;
     entry.producer_epoch = entry.producer_epoch.saturating_add(1);
 
     if had_recovery_identity || completion_pid != entry.producer_id {
@@ -236,6 +302,116 @@ mod tests {
             ids.allocate().await.unwrap() == (ProducerId(0), 0),
             "legacy completion must not consume a fresh producer ID"
         );
+    }
+
+    /// Kafka's `prepareFenceProducerEpoch` followed by the server's
+    /// `endTransaction`: `TV_2` bumps the epoch once, at completion, and keeps
+    /// the epoch the producer holds; below it the fence bumps once and keeps no
+    /// last epoch. `endTransactionWithTV1` stamps `TV_0` on the record at every
+    /// level below `TV_2`, `TV_1` included.
+    #[test]
+    fn a_server_abort_bumps_the_epoch_once_and_stamps_the_version_kafka_stamps() {
+        let ongoing = entry(7, 3, TxnState::Ongoing);
+        // (cluster level, epoch after the abort, last epoch, stamped version)
+        let cases = [
+            (TxnVersion::Classic, 4, -1, 0),
+            (TxnVersion::Flexible, 4, -1, 0),
+            (TxnVersion::Verified, 4, 3, 2),
+        ];
+        for (version, epoch, last_epoch, stamp) in cases {
+            let mut aborted = ongoing.clone();
+            assert!(
+                prepare_server_abort_identities_with_fresh(&mut aborted, version, None).is_some()
+            );
+            let expected = TxnEntry {
+                producer_epoch: epoch,
+                last_producer_epoch: last_epoch,
+                client_transaction_version: stamp,
+                ..ongoing.clone()
+            };
+            assert!(aborted == expected, "{version:?}");
+            assert!(
+                completion_producer_identity(&aborted) == (ProducerId(7), epoch),
+                "{version:?}: the identity the abort completes with"
+            );
+        }
+    }
+
+    #[test]
+    fn a_server_abort_at_the_epoch_boundary_rotates_the_producer_id_at_tv2_only() {
+        let ongoing = entry(7, i16::MAX - 1, TxnState::Ongoing);
+
+        // `TV_2` needs a fresh producer ID for the rotation, and hands out
+        // epoch 0 of it after the reserved marker epoch.
+        assert!(
+            prepare_server_abort_identities_with_fresh(
+                &mut ongoing.clone(),
+                TxnVersion::Verified,
+                None
+            )
+            .is_none()
+        );
+        let mut rotated = ongoing.clone();
+        assert!(
+            prepare_server_abort_identities_with_fresh(
+                &mut rotated,
+                TxnVersion::Verified,
+                Some(ProducerId(11))
+            )
+            .is_some()
+        );
+        let expected = TxnEntry {
+            producer_epoch: i16::MAX,
+            last_producer_epoch: i16::MAX - 1,
+            client_transaction_version: 2,
+            next_producer_id: ProducerId(11),
+            next_producer_epoch: 0,
+            ..ongoing.clone()
+        };
+        assert!(rotated == expected);
+        assert!(completion_producer_identity(&rotated) == (ProducerId(11), 0));
+
+        // Below `TV_2` the fence takes the epoch to the reserved one, and the
+        // producer id stays.
+        let mut fenced = ongoing.clone();
+        assert!(
+            prepare_server_abort_identities_with_fresh(&mut fenced, TxnVersion::Classic, None)
+                .is_some()
+        );
+        assert!(fenced.producer_epoch == i16::MAX);
+        assert!(completion_producer_identity(&fenced) == (ProducerId(7), i16::MAX));
+    }
+
+    /// Kafka's `prepareFenceProducerEpoch` does not raise the epoch again after
+    /// a fence whose write failed, and `prepareComplete` clears that memory once
+    /// the abort completes. Without the clearing, every later fence of the
+    /// transactional id would leave the producer unfenced.
+    #[test]
+    fn a_failed_fence_holds_back_one_bump_and_completion_forgets_it() {
+        let mut ongoing = entry(7, 3, TxnState::Ongoing);
+        ongoing.has_failed_epoch_fence = true;
+
+        assert!(
+            prepare_server_abort_identities_with_fresh(&mut ongoing, TxnVersion::Classic, None)
+                .is_some()
+        );
+        assert!(ongoing.producer_epoch == 3, "the epoch was already raised");
+
+        let identity = completion_producer_identity(&ongoing);
+        crate::txn::coordinator::completion::apply_completion(
+            &mut ongoing,
+            TxnState::CompleteAbort,
+            identity,
+            1,
+        );
+        assert!(!ongoing.has_failed_epoch_fence);
+
+        ongoing.state = TxnState::Ongoing;
+        assert!(
+            prepare_server_abort_identities_with_fresh(&mut ongoing, TxnVersion::Classic, None)
+                .is_some()
+        );
+        assert!(ongoing.producer_epoch == 4, "the next fence raises it");
     }
 
     #[tokio::test]

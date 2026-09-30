@@ -419,3 +419,125 @@ async fn a_fetch_session_repeats_unknown_topic_id() {
     assert!(actual == expected);
     broker.shutdown().await;
 }
+
+/// A partition the metadata holds and this broker does not host, after a
+/// reassignment took its replica away for example, is the read's own refusal:
+/// Kafka's `ReplicaManager.getPartitionOrError` answers `NOT_LEADER_OR_FOLLOWER`
+/// so the client refreshes its metadata, and from v16 the row names the
+/// leader (KIP-951) so it can re-route without that round trip. Only a
+/// partition the metadata does not hold is `UNKNOWN_TOPIC_OR_PARTITION`, which
+/// a client may take for a topic that was deleted.
+#[tokio::test]
+async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_leader_or_follower() {
+    use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_protocol::owned::fetch_response::LeaderIdAndEpoch;
+
+    const KIP_951_VERSION: i16 = 16;
+    const UNHOSTED: i32 = 0;
+    const ABSENT: i32 = 7;
+
+    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    // Node 1, this broker, is not a replica: node 2 leads and node 3 follows.
+    let topic_id = uuid::Uuid::from_u128(0x51);
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
+            name: "moved".into(),
+            topic_id,
+            partitions: 1,
+            replication_factor: 2,
+        }))
+        .await
+        .expect("submit topic record");
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
+            topic: "moved".into(),
+            partition: 0,
+            leader: krabka_audit::NodeId(2),
+            replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            leader_epoch: krabka_metadata::LeaderEpoch(4),
+            adding_replicas: Vec::new(),
+            removing_replicas: Vec::new(),
+            directories: vec![uuid::Uuid::nil(); 2],
+            partition_epoch: 0,
+        }))
+        .await
+        .expect("submit partition record");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while broker
+            .controller_image_for_test()
+            .partition("moved", UNHOSTED)
+            .is_none()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the image holds the partition");
+    let wire_id = WireUuid(topic_id.into_bytes());
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for version in [12, KIP_951_VERSION, MAX_VERSION] {
+        let by_id = version >= FIRST_TOPIC_ID_VERSION;
+        let name = if by_id { String::new() } else { "moved".into() };
+        let id = if by_id { wire_id } else { WireUuid::ZERO };
+        let request = FetchRequest {
+            max_wait_ms: 0,
+            min_bytes: 0,
+            session_id: INVALID_SESSION_ID,
+            session_epoch: FINAL_EPOCH,
+            topics: vec![FetchTopic {
+                topic: name.clone(),
+                topic_id: id,
+                partitions: [UNHOSTED, ABSENT]
+                    .into_iter()
+                    .map(|partition| FetchPartition {
+                        partition,
+                        fetch_offset: 0,
+                        partition_max_bytes: 1_048_576,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        actual.push((version, fetch(&broker, version, &request).await.responses));
+
+        let hosted_elsewhere = PartitionData {
+            partition_index: UNHOSTED,
+            error_code: codes::NOT_LEADER_OR_FOLLOWER,
+            high_watermark: -1,
+            last_stable_offset: -1,
+            log_start_offset: -1,
+            aborted_transactions: None,
+            preferred_read_replica: -1,
+            records: Some(no_records()),
+            current_leader: if version >= KIP_951_VERSION {
+                LeaderIdAndEpoch {
+                    leader_id: 2,
+                    leader_epoch: 4,
+                    ..Default::default()
+                }
+            } else {
+                LeaderIdAndEpoch::default()
+            },
+            ..Default::default()
+        };
+        expected.push((
+            version,
+            vec![FetchableTopicResponse {
+                topic: name,
+                topic_id: id,
+                partitions: vec![
+                    hosted_elsewhere,
+                    refused_partition(ABSENT, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                ],
+                ..Default::default()
+            }],
+        ));
+    }
+    assert!(actual == expected);
+    broker.shutdown().await;
+}

@@ -5,7 +5,7 @@
 //! schema resolves, and refuses each partition row of a frozen topic with
 //! `POLICY_VIOLATION` (44) before it parses the batch.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::check;
 use bytes::Bytes;
@@ -244,9 +244,9 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                     transactional_id: None,
                     version: 9,
                     producer_id_expiration_ms: 86_400_000,
+                    verification_enabled: true,
                 },
                 acks: 1,
-                timeout: Duration::from_secs(5),
             },
             PartitionServices {
                 partitions: &partitions,

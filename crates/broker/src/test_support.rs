@@ -352,6 +352,22 @@ pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
         .expect("publish the witness role");
 }
 
+/// Put `node_id` in controlled shutdown, the way the controller's heartbeat
+/// state machine does: its registration says so, and it stays unfenced.
+pub(crate) async fn begin_controlled_shutdown(handle: &BrokerHandle, node_id: u64) {
+    let broker = handle.broker_arc_for_test();
+    let change = crate::heartbeat::fencing::registration_change(
+        &broker.controller.current_image(),
+        krabka_raft::NodeId(node_id),
+        crate::heartbeat::fencing::RegistrationChange::CONTROLLED_SHUTDOWN,
+    );
+    broker
+        .controller
+        .submit_change(change.into_iter().collect())
+        .await
+        .expect("publish controlled shutdown");
+}
+
 /// Build a [`RequestContext`] over the given principal, peer, and client id.
 ///
 /// The remaining fields are the plaintext, non-sendfile defaults that every
@@ -518,6 +534,22 @@ pub(crate) fn start_broker_with(
         let handle = Broker::start(cfg).await.expect("start broker");
         (handle, dir)
     })
+}
+
+/// Finalizes `share.version` at `level` on a started broker: the feature that
+/// turns the share-group APIs on (1) or off (0), as Kafka's
+/// `isShareGroupProtocolEnabled` reads it.
+pub(crate) async fn finalize_share_version(broker: &Broker, level: i16) {
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::SHARE_VERSION_FEATURE.into(),
+                level,
+            },
+        )])
+        .await
+        .expect("finalize share.version");
 }
 
 /// Start an in-process broker with only its authorizer swapped in.

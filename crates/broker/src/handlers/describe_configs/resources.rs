@@ -5,8 +5,8 @@
 //! a topic's effective configuration, a broker's per-node override over the
 //! cluster default plus its static `node.id` and idle window, a client-metrics
 //! subscription's effective values, and a group's dynamic overrides over the
-//! streams defaults. Every other resource type gets an empty configs list and
-//! no error.
+//! values the coordinators run with. Every other resource type gets an empty
+//! configs list and no error.
 //!
 //! A topic reports every key in the registry, not only the ones it overrides.
 //! `kafka-configs --describe --all` and `AdminClient.describeConfigs` exist to
@@ -33,7 +33,7 @@ use super::{
 use crate::{
     codes,
     config_keys::{
-        self, broker_dynamic,
+        self, broker_dynamic, kafka_broker,
         registry::{self, ConfigScope, NODE_ID},
     },
 };
@@ -47,6 +47,7 @@ mod tests;
 
 #[cfg(test)]
 pub(super) use self::static_broker::kafka_default_static_broker;
+pub(crate) use self::static_broker::static_settings;
 pub(super) use self::{
     broker_logger::BrokerLoggers,
     static_broker::{StaticBrokerConfigs, StaticBrokerSetting},
@@ -71,9 +72,6 @@ pub(super) struct ServingBroker<'a> {
     /// This node's live log levels, and the broker id a `BROKER_LOGGER`
     /// resource must name.
     pub(super) loggers: BrokerLoggers<'a>,
-    /// The `min.insync.replicas` this process was started with, which a
-    /// topic reports as its static broker layer.
-    pub(super) static_min_insync_replicas: i32,
     /// Kafka's `unstable.api.versions.enable`, which decides whether a group
     /// resource carries Kafka trunk's group keys, a topic resource Kafka
     /// trunk's topic keys, and a broker resource their broker synonyms.
@@ -86,7 +84,6 @@ pub(super) fn describe_one(
     r: &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     serving: ServingBroker<'_>,
     client_metrics_default_interval_ms: i32,
-    streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
@@ -129,7 +126,7 @@ pub(super) fn describe_one(
         }
         let broker = TopicBrokerLayers {
             node: serving.node,
-            static_min_insync_replicas: serving.static_min_insync_replicas,
+            statics: serving.static_broker.settings,
             unstable: serving.unstable_api_versions,
         };
         return ok(topic_configs(
@@ -213,17 +210,21 @@ pub(super) fn describe_one(
         return ok(group_configs(
             image,
             &r.resource_name,
-            GroupServing {
-                streams_defaults,
-                unstable: serving.unstable_api_versions,
-            },
+            (
+                serving.static_broker.settings,
+                serving.unstable_api_versions,
+            ),
             &wanted,
             options,
         ));
     }
 
-    // All other resource types: empty configs, no error.
-    ok(Vec::new())
+    // `handle` refuses a request naming any other type before it gets here;
+    // this is Kafka's own last `case` in `ConfigHelper.describeConfigs`.
+    failed(
+        codes::INVALID_REQUEST,
+        Some(format!("Unsupported resource type: {}", r.resource_type)),
+    )
 }
 
 /// A topic's whole effective configuration, for a caller outside
@@ -246,19 +247,30 @@ pub(super) fn describe_one(
 /// *records*, so a dry run reports what the topic would be created as instead
 /// of the bare cluster defaults a lookup of an absent topic would give.
 ///
-/// `unstable` is Kafka's `unstable.api.versions.enable`, which decides
-/// whether Kafka trunk's topic keys are on the row.
+/// `node` is the node computing the answer and `statics` its static settings.
+/// Kafka's `ConfigurationControlManager.computeEffectiveTopicConfigs` hands
+/// `resolveEffectiveTopicConfigs` the active controller's own per-node
+/// dynamic configs (`currentControllerConfig()`) and its `staticNodeConfig`,
+/// so a key's broker synonym reports at `DYNAMIC_BROKER_CONFIG` when `node`
+/// sets it and at `STATIC_BROKER_CONFIG` when `statics` does. `unstable` is
+/// Kafka's `unstable.api.versions.enable`, which decides whether Kafka
+/// trunk's topic keys are on the row.
 pub(crate) fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
     topic: &str,
     overrides: &std::collections::BTreeMap<String, String>,
     unstable: crate::api_catalog::UnstableApiVersions,
+    statics: &std::collections::BTreeMap<&'static str, String>,
 ) -> Vec<DescribeConfigsResourceResult> {
     topic_configs_with_overrides(
         image,
         (topic, Some(overrides)),
-        None,
-        unstable,
+        TopicBrokerLayers {
+            node,
+            statics,
+            unstable,
+        },
         &|_| true,
         EntryOptions {
             include_synonyms: false,
@@ -275,26 +287,30 @@ pub(crate) fn effective_topic_configs(
 fn topic_configs(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
-    broker: TopicBrokerLayers,
+    broker: TopicBrokerLayers<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     topic_configs_with_overrides(
         image,
         (topic, image.topic_config(topic)),
-        Some(broker),
-        broker.unstable,
+        broker,
         wanted,
         options,
     )
 }
 
 /// The serving broker's own layers of a topic key's synonym chain: its
-/// per-broker dynamic configs and its static `min.insync.replicas`.
+/// per-broker dynamic configs and its static settings.
 #[derive(Debug, Clone, Copy)]
-struct TopicBrokerLayers {
+struct TopicBrokerLayers<'a> {
+    /// The node whose per-broker dynamic configs are a layer: the one that
+    /// answers a `DescribeConfigs`, or the controller that computes a
+    /// `CreateTopics` row.
     node: krabka_metadata::NodeId,
-    static_min_insync_replicas: i32,
+    /// The static settings of the answering node, by broker key: a topic key
+    /// reports its broker synonym here at `STATIC_BROKER_CONFIG`.
+    statics: &'a std::collections::BTreeMap<&'static str, String>,
     unstable: crate::api_catalog::UnstableApiVersions,
 }
 
@@ -313,23 +329,21 @@ struct TopicBrokerLayers {
 fn topic_configs_with_overrides(
     image: &krabka_metadata::MetadataImage,
     (topic, overrides): (&str, Option<&std::collections::BTreeMap<String, String>>),
-    broker: Option<TopicBrokerLayers>,
-    unstable: crate::api_catalog::UnstableApiVersions,
+    broker: TopicBrokerLayers<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
+    let unstable = broker.unstable;
     let cluster_defaults = image.default_broker_config();
-    let per_broker = broker.and_then(|broker| image.broker_config(broker.node));
+    let per_broker = image.broker_config(broker.node);
     let freeze = write_freeze_override(image, topic);
-    // Kafka reports a static `min.insync.replicas` when `server.properties`
-    // sets one; a value other than Kafka's default of 1 was set there.
-    let static_min_isr = broker
-        .map(|broker| broker.static_min_insync_replicas)
-        .filter(|value| *value != 1)
-        .map(|value| value.to_string());
 
     let mut configs: Vec<DescribeConfigsResourceResult> = registry::keys_in(ConfigScope::Topic)
         .filter(|row| wanted(row.name) && config_keys::serves_topic_key(row.name, unstable))
+        // Kafka hides an internal key unless the topic itself sets it.
+        .filter(|row| {
+            !row.internal || overrides.is_some_and(|configs| configs.contains_key(row.name))
+        })
         .map(|row| {
             let stored = if row.name == config_keys::WRITE_FREEZE {
                 freeze.as_deref()
@@ -386,14 +400,16 @@ fn topic_configs_with_overrides(
                     }
                 }
             }
-            if row.name == config_keys::MIN_INSYNC_REPLICAS
-                && let Some(value) = static_min_isr.as_deref()
-            {
-                layers.push(Layer {
-                    source: CONFIG_SOURCE_STATIC_BROKER,
-                    name: config_keys::MIN_INSYNC_REPLICAS,
-                    value,
-                });
+            // The static layer is provenance: Kafka reports a synonym the
+            // node's `server.properties` names, whatever its value is.
+            for synonym in &synonyms {
+                if let Some(value) = broker.statics.get(synonym.name) {
+                    layers.push(Layer {
+                        source: CONFIG_SOURCE_STATIC_BROKER,
+                        name: synonym.name,
+                        value,
+                    });
+                }
             }
             let default = synonyms
                 .iter()
@@ -445,7 +461,6 @@ fn broker_configs(
 ) -> Vec<DescribeConfigsResourceResult> {
     let ServingBroker {
         static_broker,
-        static_min_insync_replicas,
         unstable_api_versions: unstable,
         ..
     } = serving;
@@ -464,15 +479,21 @@ fn broker_configs(
             .flat_map(std::collections::BTreeMap::keys)
             .map(String::as_str),
     );
-    // A named broker reports every topic-default broker key it runs with,
-    // set or not, the way Kafka reports each `KafkaConfig` key.
+    // A named broker reports every non-internal `KafkaConfig` key, set or
+    // not (`ConfigHelperUtils.createResponseConfig` walks
+    // `config.nonInternalValues()`), and every topic-default broker key it
+    // serves. Another emitter below answers the keys the process synthesises.
     if node_id.is_some() {
         for name in broker_dynamic::served_topic_default_synonyms(unstable) {
             keys.insert(name);
         }
+        keys.extend(
+            kafka_broker::KAFKA_BROKER_CONFIGS
+                .iter()
+                .filter(|row| !row.internal && !EMITTED_ELSEWHERE.contains(&row.name))
+                .map(|row| row.name),
+        );
     }
-    let static_min_isr =
-        (static_min_insync_replicas != 1).then(|| static_min_insync_replicas.to_string());
 
     let mut configs: Vec<DescribeConfigsResourceResult> = keys
         .into_iter()
@@ -500,8 +521,7 @@ fn broker_configs(
                 });
             }
             if node_id.is_some()
-                && key == config_keys::MIN_INSYNC_REPLICAS
-                && let Some(value) = static_min_isr.as_deref()
+                && let Some(value) = static_broker.settings.get(key)
             {
                 layers.push(Layer {
                     source: CONFIG_SOURCE_STATIC_BROKER,
@@ -523,8 +543,12 @@ fn broker_configs(
             } else {
                 DefaultLayer::default()
             };
-            let mut entry = config_entry(row, key, &layers, default, options);
-            entry.read_only |= config_keys::is_controller_managed_broker_config(key);
+            let mut entry = config_entry(row.as_ref(), key, &layers, default, options);
+            // Kafka reads `readOnly` off `ALL_DYNAMIC_CONFIGS.contains(name)`,
+            // so a `listener.name.<listener>.` override, which is not a member
+            // of it, reads back read-only whatever the key it overrides is.
+            entry.read_only |= config_keys::is_controller_managed_broker_config(key)
+                || kafka_broker::listener_override_base(key).is_some();
             entry
         })
         .collect();
@@ -551,9 +575,25 @@ fn broker_configs(
     configs
 }
 
+/// The keys a named broker resource has another emitter answer: the process
+/// synthesises them, out of [`StaticBrokerConfigs`] and `node.id`, rather than
+/// out of the metadata image or the roster.
+const EMITTED_ELSEWHERE: &[&str] = &[
+    NODE_ID,
+    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+    config_keys::OFFSETS_RETENTION_MINUTES,
+    config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+    config_keys::NUM_PARTITIONS,
+    config_keys::DEFAULT_REPLICATION_FACTOR,
+    config_keys::DELETE_TOPIC_ENABLE,
+    config_keys::AUTO_CREATE_TOPICS_ENABLE,
+    config_keys::CONNECTIONS_MAX_IDLE_MS,
+];
+
 /// Kafka's `KafkaConfig` default of a broker key krabka reports: its own
-/// registry row's, or the one its topic-key synonym family gives it on a
-/// broker serving `unstable`.
+/// registry row's, the one its topic-key synonym family gives it on a broker
+/// serving `unstable`, or the roster's.
 fn broker_default(
     key: &str,
     unstable: crate::api_catalog::UnstableApiVersions,
@@ -561,15 +601,16 @@ fn broker_default(
     if let Some(row) = registry::lookup(ConfigScope::Broker, key) {
         return row.default;
     }
-    broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+    let synonym_of = broker_dynamic::TOPIC_DEFAULT_SYNONYMS
         .iter()
-        .find(|(broker, topic)| *broker == key && config_keys::serves_topic_key(topic, unstable))
-        .and_then(|(_, topic)| {
-            broker_dynamic::topic_broker_synonyms(topic)
-                .into_iter()
-                .find(|synonym| synonym.name == key)
-        })
-        .and_then(|synonym| synonym.default)
+        .find(|(broker, topic)| *broker == key && config_keys::serves_topic_key(topic, unstable));
+    match synonym_of {
+        Some((_, topic)) => broker_dynamic::topic_broker_synonyms(topic)
+            .into_iter()
+            .find(|synonym| synonym.name == key)
+            .and_then(|synonym| synonym.default),
+        None => kafka_broker::lookup(key).and_then(|row| row.default),
+    }
 }
 
 /// A KIP-714 client-metrics subscription: all three keys, with the ones the
@@ -623,45 +664,42 @@ fn client_metrics_configs(
         .collect()
 }
 
-/// What a group resource is described against: the values the broker runs
-/// streams groups with, and whether Kafka trunk's group keys are served.
-#[derive(Clone, Copy)]
-struct GroupServing<'a> {
-    streams_defaults: &'a crate::coordinator::unified::streams::config::StreamsGroupConfig,
-    unstable: crate::api_catalog::UnstableApiVersions,
-}
-
 /// A group resource: every key of Kafka's `GroupConfig` the broker serves --
 /// 4.3.1's by default, trunk's under `unstable.api.versions.enable` -- with
 /// the group's override above the value this broker runs the group with.
 ///
 /// The chain is Kafka's `ConfigHelper.createGroupConfigEntry`: the override
 /// at `DYNAMIC_GROUP_CONFIG`, then the key's broker synonym, at
-/// `STATIC_BROKER_CONFIG` when this broker was started with a value other
-/// than Kafka's default and at `DEFAULT_CONFIG` otherwise, or, for a key with
-/// no broker synonym, a `DEFAULT_CONFIG` entry under the group key's own name.
+/// `STATIC_BROKER_CONFIG` when `statics` states it and at `DEFAULT_CONFIG`
+/// otherwise, or, for a key with no broker synonym, a `DEFAULT_CONFIG` entry
+/// under the group key's own name.
+///
+/// `statics` are the node's static settings, [`static_settings`], which state
+/// a broker synonym when the operator named it or the coordinator runs a
+/// value other than Kafka's default, and carry the value the coordinator runs
+/// with: the `consumer.*` keys are the settings of the consumer coordinator's
+/// `NextGenConfig`, the `share.*` keys those of `ShareGroupConfig`, and the
+/// `streams.*` keys those of `StreamsGroupConfig`. This is
+/// `extractGroupConfigMap`: the broker's value is every group's default.
 fn group_configs(
     image: &krabka_metadata::MetadataImage,
     group: &str,
-    serving: GroupServing<'_>,
+    (statics, unstable): (
+        &std::collections::BTreeMap<&'static str, String>,
+        crate::api_catalog::UnstableApiVersions,
+    ),
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     let overrides = image.group_config(group).cloned().unwrap_or_default();
-    // The values krabka's coordinators run with, for the keys they apply.
-    let broker_values = serving.streams_defaults.group_config_values();
 
-    config_keys::group::served_group_keys(serving.unstable)
+    config_keys::group::served_group_keys(unstable)
         .filter(|key| wanted(key.name))
         .map(|key| {
             let own_row = registry::lookup(ConfigScope::Group, key.name);
             let row = own_row
                 .copied()
                 .unwrap_or_else(|| config_keys::group::group_row(key));
-            let broker_value = broker_values
-                .get(key.name)
-                .map(String::as_str)
-                .or(key.default);
             let mut layers: Vec<Layer<'_>> = overrides
                 .get(key.name)
                 .map(|value| Layer {
@@ -672,13 +710,12 @@ fn group_configs(
                 .into_iter()
                 .collect();
             let broker_name = key.broker_synonym.unwrap_or(key.name);
-            if key.broker_synonym.is_some()
-                && let Some(value) = broker_value
-                && Some(value) != key.default
+            if let Some(synonym) = key.broker_synonym
+                && let Some(value) = statics.get(synonym)
             {
                 layers.push(Layer {
                     source: CONFIG_SOURCE_STATIC_BROKER,
-                    name: broker_name,
+                    name: synonym,
                     value,
                 });
             }

@@ -42,6 +42,24 @@ pub(crate) fn group_partition_loading(
         .then_some(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
 }
 
+/// `true` while any `__consumer_offsets` partition this broker leads is not
+/// served yet: it is replaying, or the image watcher has not taken up its
+/// leadership term. Kafka's `ListGroups` reads every local shard, and
+/// `CoordinatorRuntime.withActiveContextOrThrow` throws
+/// `COORDINATOR_LOAD_IN_PROGRESS` for one that is still `LOADING`, so the
+/// whole answer is that error rather than the groups of the shards that are
+/// ready.
+pub(crate) fn any_group_partition_loading(broker: &crate::broker::Broker) -> bool {
+    let coordinator = &broker.group_coordinator;
+    coordinator.is_any_loading()
+        || broker
+            .controller
+            .current_image()
+            .partitions_of(crate::coordinator::bootstrap::OFFSETS_TOPIC)
+            .filter(|record| record.leader == broker.config.node_id)
+            .any(|record| coordinator.is_loading(record.partition, record.leader_epoch))
+}
+
 pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
     if let Some(host_port) = crate::host_port::parse_host_port(addr) {
         return host_port;

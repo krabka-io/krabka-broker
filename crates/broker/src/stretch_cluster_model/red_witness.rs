@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     config_keys::RecoveryStrategy,
+    elr::state::PartitionElr,
     leader_election::{FailoverDecision, failover_one},
 };
 
@@ -26,7 +27,7 @@ fn legacy_elect(
     dead: NodeId,
     alive: &HashSet<NodeId>,
     _witnesses: &HashSet<NodeId>,
-    _eligible: &[i32],
+    _elr: &PartitionElr,
     _strategy: RecoveryStrategy,
     _unclean_enabled: bool,
 ) -> FailoverDecision {

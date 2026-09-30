@@ -138,6 +138,11 @@ async fn preferred_read_replica(
     };
     let isr: std::collections::HashSet<krabka_metadata::NodeId> =
         record.isr.iter().copied().collect();
+    // The leader's own view is its log end and zero time since caught up, as
+    // Kafka builds it. Read before the replica state lock, so the log's
+    // mutex is never taken under it.
+    let leader_log_end = partition.log_end_offset();
+    let now = std::time::Instant::now();
     let replicas: Vec<crate::replica_selector::ReplicaView> = {
         let state = partition.replica_state.lock().await;
         record
@@ -146,11 +151,22 @@ async fn preferred_read_replica(
             .filter(|&&node_id| {
                 node_id == record.leader || state.follower_can_serve(node_id, fetch_offset)
             })
-            .map(|&node_id| crate::replica_selector::ReplicaView {
-                node_id: i32::try_from(node_id.0).unwrap_or(-1),
-                rack: image.broker(node_id).and_then(|broker| broker.rack.clone()),
-                in_isr: isr.contains(&node_id),
-                is_witness: crate::config_keys::resolve_broker_witness(image, node_id),
+            .map(|&node_id| {
+                let (log_end_offset, last_caught_up) = if node_id == record.leader {
+                    (leader_log_end, Some(now))
+                } else {
+                    state.follower_progress(node_id)
+                };
+                crate::replica_selector::ReplicaView {
+                    node_id: i32::try_from(node_id.0).unwrap_or(-1),
+                    rack: image.broker(node_id).and_then(|broker| broker.rack.clone()),
+                    in_isr: isr.contains(&node_id),
+                    is_witness: crate::config_keys::resolve_broker_witness(image, node_id),
+                    log_end_offset: log_end_offset.0,
+                    time_since_caught_up: last_caught_up.map_or(std::time::Duration::MAX, |at| {
+                        now.saturating_duration_since(at)
+                    }),
+                }
             })
             .collect()
     };
@@ -645,21 +661,30 @@ pub(super) async fn plan_partition_read(
     }
     if partition.is_none() || topic_name.is_empty() {
         // Kafka refuses a partition its metadata does not hold before the
-        // read. One the metadata holds but this broker does not host is the
-        // read's own refusal, so it keeps its place among the rows read.
-        let (slot, read) = refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
+        // read, with `UNKNOWN_TOPIC_OR_PARTITION`.
         let in_metadata = !topic_name.is_empty()
             && context
                 .image
                 .partition(topic_name, request.partition)
                 .is_some();
+        if !in_metadata {
+            return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
+        }
+        // One the metadata holds but this broker does not host, after a
+        // reassignment removed the local replica for example, is the read's
+        // own refusal: `ReplicaManager.getPartitionOrError` answers
+        // `HostedPartition.None` with `NOT_LEADER_OR_FOLLOWER` when
+        // `metadataCache.contains` the partition, to make the client refresh
+        // its metadata. The row keeps its place among the rows read, and
+        // carries the KIP-951 leader hint the way every other
+        // `NOT_LEADER_OR_FOLLOWER` row of this fetch does.
+        let output = PartitionData {
+            current_leader: image_leader(context.image, topic_name, request.partition),
+            ..refused_read(request.partition, codes::NOT_LEADER_OR_FOLLOWER)
+        };
         return (
-            if in_metadata {
-                ResponseSlot::Read
-            } else {
-                slot
-            },
-            read,
+            ResponseSlot::Read,
+            PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
         );
     }
     // Kafka's `ReplicaManager.findPreferredReadReplica` names a read replica

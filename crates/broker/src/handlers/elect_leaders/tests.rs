@@ -244,9 +244,10 @@ async fn a_preferred_election_is_never_gated() {
 
     let (row, records) = elect(&broker, &image_with(&[]), ElectionType::Preferred).await;
 
-    // Broker 1 is already the preferred leader, so the election is not
-    // needed. It is never `POLICY_VIOLATION`, which is the point.
-    check!(row.error_code == codes::ELECTION_NOT_NEEDED);
+    // Broker 1 leads, but it is dead, so Kafka would have left the partition
+    // leaderless and the preferred replica is not available. It is never
+    // `POLICY_VIOLATION`, which is the point.
+    check!(row.error_code == codes::PREFERRED_LEADER_NOT_AVAILABLE);
     assert!(records == vec![]);
     handle.shutdown().await;
 }

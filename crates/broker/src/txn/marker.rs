@@ -191,11 +191,6 @@ mod tests {
 
     use super::*;
 
-    /// `RECORD_LIST_TOO_LARGE` (18), one of the codes Kafka's completion
-    /// handler names as fatal. Nothing in this broker raises it, so it has no
-    /// constant in [`codes`].
-    const RECORD_LIST_TOO_LARGE: i16 = 18;
-
     /// One row per branch of Kafka's
     /// `TransactionMarkerRequestCompletionHandler.onComplete` error match.
     #[test]
@@ -223,7 +218,7 @@ mod tests {
             ),
             (codes::CORRUPT_MESSAGE, MarkerCodeClass::Unexpected),
             (codes::MESSAGE_TOO_LARGE, MarkerCodeClass::Unexpected),
-            (RECORD_LIST_TOO_LARGE, MarkerCodeClass::Unexpected),
+            (codes::RECORD_LIST_TOO_LARGE, MarkerCodeClass::Unexpected),
             (codes::INVALID_REQUIRED_ACKS, MarkerCodeClass::Unexpected),
             (codes::UNKNOWN_SERVER_ERROR, MarkerCodeClass::Unexpected),
             (

@@ -129,6 +129,12 @@ impl GroupCoordinator {
         terms.led.get(&partition) != Some(&leader_epoch) || terms.loading.contains_key(&partition)
     }
 
+    /// `true` while any offsets partition this broker leads is replaying, the
+    /// check of Kafka's read-all-shards operations such as `ListGroups`.
+    pub(crate) fn is_any_loading(&self) -> bool {
+        !self.shard_terms().loading.is_empty()
+    }
+
     /// Record `epoch` as the term this broker leads `partition` under,
     /// without a load.
     fn take_up(&self, partition: PartitionIndex, epoch: LeaderEpoch) {
@@ -451,6 +457,7 @@ mod tests {
         TxnOffsetCommit,
         OffsetFetch,
         DeleteGroups,
+        ListGroups,
     }
 
     async fn call(broker: &crate::broker::Broker, rpc: GroupRpc) -> i16 {
@@ -463,6 +470,8 @@ mod tests {
             join_group_response::JoinGroupResponse,
             leave_group_request::{LeaveGroupRequest, MemberIdentity},
             leave_group_response::LeaveGroupResponse,
+            list_groups_request::ListGroupsRequest,
+            list_groups_response::ListGroupsResponse,
             offset_commit_request::{
                 OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
             },
@@ -622,6 +631,18 @@ mod tests {
                 .unwrap();
                 decode_response::<OffsetFetchResponse>(&bytes, 8).groups[0].error_code
             }
+            GroupRpc::ListGroups => {
+                let bytes = crate::handlers::list_groups::handle(
+                    broker,
+                    4,
+                    1,
+                    &encode_request(&ListGroupsRequest::default(), 4),
+                    &ctx,
+                )
+                .await
+                .unwrap();
+                decode_response::<ListGroupsResponse>(&bytes, 4).error_code
+            }
             GroupRpc::DeleteGroups => {
                 let request = DeleteGroupsRequest {
                     groups_names: vec!["g".into()],
@@ -700,6 +721,12 @@ mod tests {
                 GroupRpc::DeleteGroups,
                 crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
             ),
+            // Kafka's `listGroups` reads every local shard, so one loading
+            // shard fails the whole answer.
+            (
+                GroupRpc::ListGroups,
+                crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
         ];
         for unserved in [Unserved::Loading, Unserved::NotTakenUp, Unserved::OlderTerm] {
             let coordinator = &broker.group_coordinator;
@@ -730,6 +757,7 @@ mod tests {
             );
         }
         check!(call(&broker, GroupRpc::JoinGroup).await == crate::codes::MEMBER_ID_REQUIRED);
+        check!(call(&broker, GroupRpc::ListGroups).await == crate::codes::NONE);
         broker_handle.shutdown().await;
     }
 

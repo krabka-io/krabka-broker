@@ -180,6 +180,7 @@ fn diskless_index_gets_topic_kickoff_with_in_memory_rlmm() {
     let kickoff = kafka_swap_kickoff(&config).expect("diskless index kickoff");
     check!(kickoff.cfg.num_partitions == crate::config::DEFAULT_RLMM_TOPIC_NUM_PARTITIONS);
     check!(kickoff.cfg.replication == crate::config::DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR);
+    check!(kickoff.cfg.min_isr == crate::config::DEFAULT_RLMM_TOPIC_MIN_ISR);
 }
 
 #[test]
@@ -192,6 +193,7 @@ fn metadata_log_config_copies_shared_transport_policy() {
         bootstrap: "broker-0:9094".into(),
         num_partitions: 8,
         replication: 2,
+        min_isr: 1,
         topic_create_timeout: secs(45),
         fetch_max_wait: millis(750),
         fetch_max_bytes: mebibytes(2),
@@ -216,6 +218,7 @@ fn metadata_log_config_copies_shared_transport_policy() {
         check!(config.bootstrap == "broker-0:9094");
         check!(config.num_partitions == 8);
         check!(config.replication == 2);
+        check!(config.min_isr == Some(1));
         check!(config.topic_create_timeout == secs(45));
         check!(config.fetch_max_wait == millis(750));
         check!(config.fetch_max_bytes == mebibytes(2));
@@ -249,6 +252,7 @@ async fn cancelled_topic_rlmm_bootstrap_attempts_once_without_activating() {
             bootstrap,
             num_partitions: 1,
             replication: 1,
+            min_isr: 1,
             snapshot_interval: minutes(1),
             snapshot_dir: snapshot_dir.path().to_path_buf(),
             security: None,

@@ -115,7 +115,7 @@ pub(super) fn apply_request_quota(
                     &image,
                     &broker.quota_buckets,
                     &principal.name,
-                    parsed.client_id.unwrap_or(""),
+                    parsed.client_id,
                     elapsed_micros,
                     broker.config.quota_throttle_max,
                 )
@@ -264,14 +264,14 @@ where
 // PERF — measured; decision: KEEP.
 //
 // This copies the whole body to prepend a 4-5 byte header, and the sink copies
-// it a second time: the sink is a `Framed<S, LengthDelimitedCodec>`, and
-// `LengthDelimitedCodec` only implements `Encoder<Bytes>` (a single concrete
-// impl), so `framed.send` requires a contiguous `Bytes` and will not accept a
+// it a second time: the sink is a `Framed<S, KafkaCodec>`, and `KafkaCodec`
+// only implements `Encoder<Bytes>` (a single concrete impl), so `framed.send`
+// requires a contiguous `Bytes` and will not accept a
 // `bytes::Buf::chain(header, body)`. Worse, that `Encoder::encode` itself does
-// `dst.extend_from_slice(&data[..])` into the codec's write buffer. Removing
-// both copies means swapping the codec for a custom `Encoder<impl Buf>` that
+// `dst.extend_from_slice(&frame)` into the codec's write buffer. Removing
+// both copies means changing the codec to an `Encoder<impl Buf>` that
 // vectored-writes header and body, which reaches `codec.rs`, the roundtrip
-// test, and every signature that names `Framed<S, LengthDelimitedCodec>`.
+// test, and every signature that names `Framed<S, KafkaCodec>`.
 //
 // `benches/perf_deferrals.rs` prices that chained-`Buf` prototype against this
 // path. Both sides write to a sink that keeps no bytes, so the socket write is
@@ -306,10 +306,9 @@ pub(super) fn encode_response(
     correlation_id: CorrelationId,
     body_flexible: bool,
     body: &[u8],
-    max_frame_bytes: usize,
 ) -> Result<Bytes, BrokerError> {
     let header_len = crate::network::response_header_len(api_key, body_flexible);
-    codec::validate_frame_length(header_len + body.len(), max_frame_bytes)?;
+    codec::response_frame_length(header_len + body.len())?;
     let mut buf = BytesMut::with_capacity(header_len + body.len());
     buf.put_i32(correlation_id);
     if crate::network::response_header_v1(api_key, body_flexible) {
@@ -492,15 +491,14 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::network::dispatch::{API_VERSIONS_KEY, test_support::DEFAULT_MAX_FRAME_BYTES};
+    use crate::network::dispatch::API_VERSIONS_KEY;
 
     #[test]
     fn encode_response_apiversions_uses_v0_header() {
         // ApiVersions response is always header v0 (no tagged byte) even
         // for flexible body versions.
         let body = [0u8, 0u8]; // error_code=0
-        let out = encode_response(API_VERSIONS_KEY, 7, true, &body, DEFAULT_MAX_FRAME_BYTES)
-            .expect("encode response");
+        let out = encode_response(API_VERSIONS_KEY, 7, true, &body).expect("encode response");
         // 4 byte corr_id + body, no tagged byte.
         assert!(out.len() == 4 + body.len());
     }
@@ -514,8 +512,7 @@ mod tests {
         // header = 5 bytes (corr_id + tagged byte); throttle int32 at offset 5.
         let mut body = BytesMut::new();
         body.put_i32(0); // ThrottleTimeMs = 0
-        let resp =
-            encode_response(68, 7, true, &body, DEFAULT_MAX_FRAME_BYTES).expect("encode response");
+        let resp = encode_response(68, 7, true, &body).expect("encode response");
         let patched = patch_leading_throttle(resp, 68, true, 250);
         assert!(read(&patched, 5) == 250);
         assert!(read(&patched, 0) == 7); // corr_id preserved
@@ -523,8 +520,7 @@ mod tests {
         // Non-flexible response header (Metadata v3): header = 4 bytes.
         let mut body = BytesMut::new();
         body.put_i32(10); // existing throttle 10 < 250
-        let resp =
-            encode_response(3, 9, false, &body, DEFAULT_MAX_FRAME_BYTES).expect("encode response");
+        let resp = encode_response(3, 9, false, &body).expect("encode response");
         let patched = patch_leading_throttle(resp, 3, false, 250);
         assert!(read(&patched, 4) == 250);
         assert!(read(&patched, 0) == 9);
@@ -535,8 +531,7 @@ mod tests {
         // max(existing, delay): an already-larger throttle is not lowered.
         let mut body = BytesMut::new();
         body.put_i32(500);
-        let resp =
-            encode_response(3, 1, false, &body, DEFAULT_MAX_FRAME_BYTES).expect("encode response");
+        let resp = encode_response(3, 1, false, &body).expect("encode response");
         let patched = patch_leading_throttle(resp, 3, false, 100);
         let v = i32::from_be_bytes([patched[4], patched[5], patched[6], patched[7]]);
         assert!(v == 500);
@@ -545,16 +540,8 @@ mod tests {
     #[test]
     fn encode_response_other_flexible_inserts_tagged_byte() {
         let body = [0u8, 0u8];
-        let out =
-            encode_response(3, 7, true, &body, DEFAULT_MAX_FRAME_BYTES).expect("encode response");
+        let out = encode_response(3, 7, true, &body).expect("encode response");
         assert!(out.len() == 5 + body.len());
         assert!(out[4] == 0); // tagged byte
-    }
-
-    #[test]
-    fn encode_response_enforces_max_frame_at_runtime() {
-        let body = [0u8; 4];
-        assert!(encode_response(3, 7, false, &body, 8).is_ok());
-        assert!(encode_response(3, 7, false, &body, 7).is_err());
     }
 }

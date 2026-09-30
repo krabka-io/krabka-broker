@@ -8,7 +8,9 @@ use super::*;
 use crate::kraft::controller::{
     control_state::{voter_set_from_wire, voter_set_to_wire},
     records::leader_change_batch,
-    test_support::{build_engine_only, elect_single_voter_engine, one_offset_batch, voter_set},
+    test_support::{
+        build_engine_only, elect_single_voter_engine, one_offset_batch, topic_record, voter_set,
+    },
 };
 
 fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_record::Voter {
@@ -407,10 +409,16 @@ async fn reconfiguration_refuses_when_epoch_not_committed_and_admits_when_commit
         "observer with fetch offset 0 is not caught up"
     );
 
-    // Observer caught up
-    leader
-        .replica_fetch_offsets
-        .insert(NodeId(4), leader.log.log_end_offset().0);
+    // Observer caught up: a valid fetch at the leader's log end, which is what
+    // `LeaderState.isReplicaCaughtUp` reads.
+    leader.clock_base = Instant::now() - Duration::from_millis(50);
+    leader.record_observer_fetch(
+        ReplicaKey {
+            id: NodeId(4),
+            directory_id: uuid::Uuid::nil(),
+        },
+        leader.log.log_end_offset().0,
+    );
     let (reply, mut rx) = oneshot::channel();
     leader.on_reconfigure(add_of(4), reply);
     leader.advance_and_apply(leader.log.log_end_offset());
@@ -512,4 +520,340 @@ fn apply_and_restore_control_records_updates_core_voters() {
     engine.apply_control_batch(&batch).unwrap();
     engine.commit_control_state(Offset(batch.base_offset + 1));
     check!(engine.controls.committed_voters.contains(NodeId(2)));
+}
+
+/// A leader of voters 1, 2 and 3 at `kraft.version` 1 that has committed its
+/// epoch, ready to answer `AddRaftVoter`, with a clock that has been running for
+/// 50 ms so a fetch is stamped with a nonzero time.
+fn kraft_version_one_leader() -> (Engine, tempfile::TempDir) {
+    let (mut leader, dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    leader.on_event(Event::ElectionTimeout);
+    for epoch in [0, 1] {
+        leader.on_event(Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch,
+            vote_granted: true,
+        });
+    }
+    assert2::assert!(leader.core.role().is_leader());
+    leader.controls.version_history.insert(-1, 1);
+    leader.controls.committed_version = 1;
+    leader.core.set_kraft_version(1);
+    let mut voters = leader.controls.committed_voters.clone();
+    for id in [NodeId(1), NodeId(2), NodeId(3)] {
+        let mut voter = voters.get(id).unwrap().clone();
+        voter.kraft_version = krabka_metadata::KRaftVersionRange { min: 0, max: 1 };
+        voters = voters.with_voter(voter);
+    }
+    leader.controls.committed_voters = voters.clone();
+    leader.controls.voter_history.insert(-1, voters);
+    leader.log.advance_hwm(leader.log.log_end_offset() + 10);
+    leader.clock_base = Instant::now() - Duration::from_millis(50);
+    (leader, dir)
+}
+
+/// The `AddRaftVoter` request for node `id` under `directory`.
+fn add_request(id: u64, directory: u128) -> crate::reconfig::AddVoter {
+    crate::reconfig::AddVoter {
+        voter: krabka_metadata::Voter {
+            id: NodeId(id),
+            directory_id: uuid::Uuid::from_u128(directory),
+            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9_093,
+            }],
+            kraft_version: krabka_metadata::KRaftVersionRange { min: 0, max: 1 },
+        },
+        ack_when_committed: true,
+    }
+}
+
+/// `LeaderState.isReplicaCaughtUp` reads the state of the exact `(id, directory
+/// id)` key that fetched, and a replica counts as caught up once a fetch has
+/// reached the leader's log end, or the log end the previous fetch saw. A
+/// candidate that is only a record or two behind under continuous appends is
+/// admitted.
+#[tokio::test]
+async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    /// One fetch by the candidate: its directory, the offset it asks for
+    /// (`None` is the leader's log end at that moment, `Some(-1)` the log end
+    /// before this row's append) and whether the leader appends a record first.
+    type Fetch = (u128, Option<i64>, bool);
+    let candidate_directory = 7;
+    let cases: [(&str, Vec<Fetch>, bool); 5] = [
+        ("it never fetched", vec![], false),
+        (
+            "it fetched short of the end and never reached it",
+            vec![(candidate_directory, Some(0), false)],
+            false,
+        ),
+        (
+            "it fetched at the log end",
+            vec![(candidate_directory, None, false)],
+            true,
+        ),
+        (
+            "it kept pace with the appends between two fetches",
+            vec![
+                (candidate_directory, Some(0), false),
+                (candidate_directory, Some(-1), true),
+            ],
+            true,
+        ),
+        (
+            "the fetches were made under another directory id",
+            vec![(candidate_directory + 1, None, false)],
+            false,
+        ),
+    ];
+    for (label, fetches, admitted) in cases {
+        let (mut leader, _dir) = kraft_version_one_leader();
+        for (directory, offset, append_first) in fetches {
+            let end_before_append = leader.log.log_end_offset().0;
+            if append_first {
+                leader.test_append_and_commit(&topic_record("t"));
+            }
+            leader.clock_base -= Duration::from_millis(10);
+            let offset = match offset {
+                Some(-1) => end_before_append,
+                Some(offset) => offset,
+                None => leader.log.log_end_offset().0,
+            };
+            leader.record_observer_fetch(
+                ReplicaKey {
+                    id: NodeId(4),
+                    directory_id: uuid::Uuid::from_u128(directory),
+                },
+                offset,
+            );
+        }
+
+        let (reply, mut rx) = oneshot::channel();
+        leader.on_reconfigure(VoterChange::Add(add_request(4, candidate_directory)), reply);
+        let end = leader.log.log_end_offset();
+        leader.advance_and_apply(end);
+        let outcome = rx.try_recv().expect("the add was answered");
+        if admitted {
+            check!(matches!(outcome, Ok(ReconfigOutcome::Committed)), "{label}");
+        } else {
+            check!(
+                matches!(outcome, Err(RaftError::VoterNotCaughtUp { .. })),
+                "{label}"
+            );
+        }
+    }
+}
+
+/// Kafka drops an observer that has been silent for five minutes in
+/// `observerStates()`, which only `DescribeQuorum` calls, while
+/// `isReplicaCaughtUp` reads the same map with a window of an hour. A fetch by
+/// another observer must not forget a candidate that fetched to the log end six
+/// minutes ago: `DescribeQuorum` no longer lists it, and `AddRaftVoter` still
+/// admits it.
+#[tokio::test]
+async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    let (mut leader, _dir) = kraft_version_one_leader();
+    let candidate = ReplicaKey {
+        id: NodeId(4),
+        directory_id: uuid::Uuid::from_u128(7),
+    };
+    let bystander = ReplicaKey {
+        id: NodeId(9),
+        directory_id: uuid::Uuid::from_u128(9),
+    };
+    let end = leader.log.log_end_offset().0;
+    leader.clock_base -= Duration::from_millis(10);
+    leader.record_observer_fetch(candidate, end);
+    leader.clock_base -= Duration::from_secs(360);
+    leader.record_observer_fetch(bystander, end);
+
+    let listed: Vec<NodeId> = leader
+        .quorum_state_snapshot()
+        .observers
+        .iter()
+        .map(|observer| observer.id)
+        .collect();
+    check!(listed == vec![NodeId(9)], "the five minutes hide it");
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(VoterChange::Add(add_request(4, 7)), reply);
+    let appended = leader.log.log_end_offset();
+    leader.advance_and_apply(appended);
+    check!(
+        matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))),
+        "the hour keeps it caught up"
+    );
+}
+
+/// `AddVoterHandler` answers from the leader's own state before it contacts the
+/// candidate: a candidate the leader has never seen fetch still gets the
+/// pending-change, duplicate-id and `kraft.version` answers, and a request that
+/// passes them is admitted without appending anything.
+#[tokio::test]
+async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    let check_add = |leader: &mut Engine, request: crate::reconfig::AddVoter| {
+        let (reply, mut rx) = oneshot::channel();
+        leader.on_reconfigure(VoterChange::CheckAdd(request), reply);
+        rx.try_recv().expect("the check was answered")
+    };
+
+    // No pending change, HWM past the epoch start, kraft.version 1: a stranger
+    // passes, and nothing is appended or left pending.
+    let (mut leader, _dir) = kraft_version_one_leader();
+    let end = leader.log.log_end_offset();
+    check!(
+        matches!(
+            check_add(&mut leader, add_request(4, 7)),
+            Ok(ReconfigOutcome::Committed)
+        ),
+        "a stranger passes the local checks"
+    );
+    check!(leader.log.log_end_offset() == end);
+    check!(leader.pending_reconfig.is_none());
+    check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
+
+    // The id is already a voter, under this directory or another: DUPLICATE_VOTER
+    // before any probe or catch-up check.
+    for directory in [0, 7] {
+        check!(
+            matches!(
+                check_add(&mut leader, add_request(2, directory)),
+                Err(RaftError::DuplicateVoter(NodeId(2)))
+            ),
+            "voter 2 as directory {directory}"
+        );
+    }
+
+    // A pending change is REQUEST_TIMED_OUT, whichever candidate asks.
+    leader.pending_reconfig = Some(crate::kraft::controller::PendingReconfig {
+        need_offset: Offset(100),
+        reply: None,
+        removed_local_leader: false,
+    });
+    for id in [2, 4] {
+        check!(
+            matches!(
+                check_add(&mut leader, add_request(id, 7)),
+                Err(RaftError::ReconfigInProgress)
+            ),
+            "node {id} during a pending change"
+        );
+    }
+    leader.pending_reconfig = None;
+
+    // Below kraft.version 1 there is nothing to add to.
+    let (mut leader, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut leader);
+    check!(
+        matches!(
+            check_add(&mut leader, add_request(4, 7)),
+            Err(RaftError::UnsupportedKraftVersion(0))
+        ),
+        "kraft.version 0"
+    );
+}
+
+/// `LeaderState.updateVoterAndObserverStates` keeps a replica's `ReplicaState`
+/// as it crosses between the observer and voter maps: a candidate that becomes a
+/// voter keeps its fetch and caught-up times, and a removed voter is listed as
+/// an observer with the times it had as a voter.
+#[tokio::test]
+async fn a_replica_keeps_its_progress_across_joining_and_leaving_the_voter_set() {
+    use crate::reconfig::{ReconfigOutcome, RemoveVoter, VoterChange};
+
+    let (mut leader, _dir) = kraft_version_one_leader();
+    let key = ReplicaKey {
+        id: NodeId(4),
+        directory_id: uuid::Uuid::from_u128(7),
+    };
+    let end = leader.log.log_end_offset().0;
+    leader.record_observer_fetch(key, end);
+    let as_observer = leader.observers[&key].clone();
+    assert2::assert!(as_observer.last_caught_up.0 > 0);
+
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(VoterChange::Add(add_request(4, 7)), reply);
+    let appended = leader.log.log_end_offset();
+    leader.advance_and_apply(appended);
+    check!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
+    check!(leader.observers.is_empty());
+    let Role::Leader { replicas, .. } = leader.core.role() else {
+        panic!("still the leader");
+    };
+    check!(replicas[&NodeId(4)] == as_observer);
+
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(
+        VoterChange::Remove(RemoveVoter {
+            id: NodeId(4),
+            directory_id: uuid::Uuid::from_u128(7),
+        }),
+        reply,
+    );
+    let appended = leader.log.log_end_offset();
+    leader.advance_and_apply(appended);
+    check!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
+    check!(leader.observers[&key] == as_observer);
+    check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
+}
+
+/// The `validate_only` half of a `kraft.version` upgrade runs every check the
+/// real upgrade runs and writes nothing, as Kafka's
+/// `LeaderState.maybeAppendUpgradedKRaftVersion` skips only the append.
+///
+/// Each case runs both requests on identically built engines: a refusal must
+/// be the same one for both, and an upgrade the checks admit must leave the
+/// log as it was when validated and grow it when finalized.
+#[test]
+fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    /// What the request left behind: the reply if it was immediate, and
+    /// whether the log grew.
+    fn run(elect: bool, change: VoterChange) -> (Option<Result<ReconfigOutcome, RaftError>>, bool) {
+        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        if elect {
+            elect_single_voter_engine(&mut engine);
+        }
+        let before = engine.log.log_end_offset();
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_reconfigure(change, reply);
+        (rx.try_recv().ok(), engine.log.log_end_offset() != before)
+    }
+
+    // A follower redirects, whichever request it gets.
+    let (validated, grew) = run(false, VoterChange::ValidateKraftVersion(1));
+    let (finalized, _) = run(false, VoterChange::FinalizeKraftVersion(1));
+    check!(matches!(
+        (&validated, &finalized),
+        (
+            Some(Ok(ReconfigOutcome::NotLeader { .. })),
+            Some(Ok(ReconfigOutcome::NotLeader { .. }))
+        )
+    ));
+    check!(!grew);
+
+    // A version nobody supports is refused the same way by both.
+    let (validated, grew) = run(true, VoterChange::ValidateKraftVersion(9));
+    let (finalized, _) = run(true, VoterChange::FinalizeKraftVersion(9));
+    check!(matches!(validated, Some(Err(_))), "{validated:?}");
+    check!(
+        format!("{validated:?}") == format!("{finalized:?}"),
+        "{validated:?} against {finalized:?}"
+    );
+    check!(!grew);
+
+    // An upgrade the checks admit: validating answers at once and leaves the
+    // log alone, while finalizing appends the version and the voter set.
+    let (validated, grew) = run(true, VoterChange::ValidateKraftVersion(1));
+    check!(matches!(validated, Some(Ok(ReconfigOutcome::Committed))));
+    check!(!grew, "a validated upgrade must append nothing");
+    let (_, grew) = run(true, VoterChange::FinalizeKraftVersion(1));
+    check!(grew, "the real upgrade appends");
 }

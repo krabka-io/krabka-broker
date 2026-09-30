@@ -131,6 +131,17 @@ macro_rules! tuning_fields {
             pub share_session_cache_max_when_unlimited: usize,
             /// Maximum encoded request size accepted from a socket (matches Kafka socket.request.max.bytes).
             pub socket_request_max: ByteSize,
+            /// Largest request frame a connection may send before it finishes
+            /// authenticating on a SASL listener. Matches Kafka's
+            /// `sasl.server.max.receive.size`, default 512 KiB. It replaces
+            /// `socket_request_max` for that stretch, and a larger frame fails
+            /// the authentication.
+            pub sasl_server_max_receive: ByteSize,
+            /// How long a failed SASL authentication holds its response and
+            /// the close that follows. Matches Kafka's
+            /// `connection.failed.authentication.delay.ms`, default 100 ms.
+            /// Zero closes at once.
+            pub connection_failed_authentication_delay: Time,
             /// Maximum number of resident queued requests across all connections (matches Kafka queued.max.requests).
             pub queued_max_requests: usize,
             /// Maximum resident request bytes across all connections (matches Kafka queued.max.request.bytes).

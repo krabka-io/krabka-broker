@@ -105,6 +105,19 @@ fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
     ]
 }
 
+/// The endpoint list of a remote broker at `port`: the `PLAINTEXT` listener that
+/// the requests of these tests arrive on. A broker with no endpoint on that
+/// listener is offline in `Metadata` and `DescribeTopicPartitions`, as it is in
+/// Kafka's `KRaftMetadataCache`.
+fn plaintext_endpoints(port: u16) -> Vec<krabka_metadata::BrokerEndpoint> {
+    vec![krabka_metadata::BrokerEndpoint {
+        name: "PLAINTEXT".into(),
+        host: "127.0.0.1".into(),
+        port,
+        protocol: krabka_security::ListenerProtocol::Plaintext,
+    }]
+}
+
 /// The registration record that puts broker 3 in the image under
 /// `incarnation`. Without one, the registration handler reads the broker as
 /// new rather than as one that has come back.
@@ -119,7 +132,7 @@ fn registration_record(incarnation: u128) -> MetadataRecord {
         host: "127.0.0.1".into(),
         port: 9094,
         rack: None,
-        endpoints: vec![],
+        endpoints: plaintext_endpoints(9094),
         log_dirs: vec![],
         features: std::collections::BTreeMap::new(),
     })
@@ -185,7 +198,9 @@ async fn activate_followers(broker: &Broker) {
                         host: "127.0.0.1".into(),
                         port: 9092 + u16::try_from(node).expect("a small node id"),
                         rack: None,
-                        endpoints: vec![],
+                        endpoints: plaintext_endpoints(
+                            9092 + u16::try_from(node).expect("a small node id"),
+                        ),
                         log_dirs: vec![],
                         features: std::collections::BTreeMap::new(),
                     })
@@ -303,8 +318,8 @@ fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsRespons
 }
 
 /// [`expected_row`] with the last-known ELR and the offline set given too.
-/// The registration tests need both: they register broker 3, which takes it
-/// out of the offline set, and a withdrawn eligibility lands in last-known.
+/// The registration tests need the offline set: they register broker 3, which
+/// takes it out of it.
 fn row(
     isr: &[i32],
     eligible: &[i32],
@@ -485,10 +500,12 @@ async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
 ///
 /// Kafka stops that with `uncleanShutdownReplicas`, which
 /// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from `targetElr`
-/// and from nothing else -- so the returning broker lands in the last-known
-/// set instead, which is what the second column asserts. Without the
-/// exclusion the batch publishes broker 3 as an eligible leader replica: a
-/// membership backed by whatever disk the new process actually has.
+/// and from nothing else -- so the returning broker is in neither column,
+/// which is what the assertions below read. It does not land in the last-known
+/// set: that holds the last leader of a partition that has none, and this one
+/// has a leader. Without the exclusion the batch publishes broker 3 as an
+/// eligible leader replica: a membership backed by whatever disk the new
+/// process actually has.
 #[tokio::test]
 async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
     let (handle, _dir) =
@@ -507,12 +524,12 @@ async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
     let response = register_broker_3(&broker, 2).await;
     assert!(response.error_code == codes::NONE, "{response:?}");
 
-    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[3], &[2, 3]));
+    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[], &[2, 3]));
 
     // And it stays out of every later derivation, while broker 2 -- which
     // left the ISR without its log being called into question -- goes in.
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == row(&[1], &[2], &[3], &[2, 3]));
+    assert!(describe_partition(&broker).await == row(&[1], &[2], &[], &[2, 3]));
 
     handle.shutdown().await;
 }

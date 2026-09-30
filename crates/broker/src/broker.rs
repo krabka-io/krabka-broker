@@ -13,6 +13,7 @@ use std::{
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
+use krabka_raft::ConnectionLimiter;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +24,6 @@ use crate::{
 mod accept;
 mod adapters;
 mod audit;
-mod connection_limiter;
 mod coordinators;
 mod diskless_index;
 mod endpoints;
@@ -48,12 +48,9 @@ mod transport;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{
-    connection_limiter::ConnectionLimiter,
-    partition_spawn::{
-        PartitionSpawnConfig, spawn_partition, spawn_partition_with_replication_target,
-        try_spawn_partition_with_replication_target, try_spawn_partition_with_sequencer,
-    },
+pub(crate) use self::partition_spawn::{
+    PartitionSpawnConfig, spawn_partition, spawn_partition_with_replication_target,
+    try_spawn_partition_with_replication_target, try_spawn_partition_with_sequencer,
 };
 
 /// Timeout shared by the test-helper `wait_*` awaiters. If a condition

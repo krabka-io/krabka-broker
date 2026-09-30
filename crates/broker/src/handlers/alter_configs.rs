@@ -200,6 +200,41 @@ fn duplicate_resource_flags(
         .collect()
 }
 
+/// The longest config value Kafka's controller writes: `Short.MAX_VALUE`
+/// UTF-16 code units, which is what `String.length()` counts.
+const MAX_CONFIG_VALUE_LENGTH: usize = 32_767;
+
+/// Kafka's `ConfigurationControlManager.validateAlterConfig` refuses, for
+/// every resource type, a written value longer than [`MAX_CONFIG_VALUE_LENGTH`]
+/// with `INVALID_CONFIG` (`DISALLOWED_CONFIG_VALUE_SIZE_ERROR`), because a
+/// `ConfigRecord` cannot carry more.
+///
+/// `records` are the ones a resource's alter ended up building, which hold
+/// every value the alter writes.
+pub(super) fn config_value_size_error(
+    records: &[krabka_metadata::MetadataRecord],
+) -> Option<(i16, String)> {
+    use krabka_metadata::MetadataRecord;
+
+    let too_long = |value: &String| value.encode_utf16().count() > MAX_CONFIG_VALUE_LENGTH;
+    let oversized = records.iter().any(|record| match record {
+        MetadataRecord::V1TopicConfig(config) => config.overrides.values().any(too_long),
+        MetadataRecord::V1BrokerConfig(config) => config.config_value.iter().any(too_long),
+        MetadataRecord::V1GroupConfig(config) => config.configs.values().any(too_long),
+        MetadataRecord::V1ClientMetricsConfig(config) => config.configs.values().any(too_long),
+        _ => false,
+    });
+    oversized.then(|| {
+        (
+            crate::codes::INVALID_CONFIG,
+            format!(
+                "The configuration value cannot be added because it exceeds the maximum value \
+                 size of {MAX_CONFIG_VALUE_LENGTH} bytes."
+            ),
+        )
+    })
+}
+
 /// The audit `resource_type` for a KIP-133 config resource-type discriminant.
 pub(super) fn config_resource_type(resource_type: i8) -> &'static str {
     match resource_type {

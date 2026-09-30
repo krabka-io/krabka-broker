@@ -346,7 +346,10 @@ mod tests {
                     txn_id_expiration: false,
                     txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -356,7 +359,10 @@ mod tests {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -367,7 +373,10 @@ mod tests {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: true,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
                 },
             ),
             (
@@ -380,7 +389,45 @@ mod tests {
                         num_partitions: true,
                         default_replication_factor: true,
                     },
+                    log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "the log defaults that back a topic key supplied, at Kafka's own default value",
+                "[runtime]\nmessage_max_bytes = \"1048588B\"\nlog_segment_bytes = \"1GiB\"\n\
+                 default_min_insync_replicas = 1\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins {
+                        message_max_bytes: true,
+                        log_segment_bytes: true,
+                        min_insync_replicas: true,
+                    },
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "the authentication limits supplied, at Kafka's own default value",
+                "[runtime]\nsasl_server_max_receive = \"524288B\"\n\
+                 connection_failed_authentication_delay = \"100ms\"\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins {
+                        sasl_server_max_receive: true,
+                        connection_failed_authentication_delay: true,
+                    },
+                    ..Default::default()
                 },
             ),
         ] {
@@ -402,6 +449,7 @@ mod tests {
             "audit_tail_read_max",
             "share_coordinator_load_buffer_size",
             "socket_request_max",
+            "sasl_server_max_receive",
             "sendfile_min",
             "socket_send_buffer",
             "socket_receive_buffer",
@@ -442,6 +490,7 @@ mod tests {
             ("replication_fetch_max", "2147483648B"),
             ("observer_fetch_max", "4294967296B"),
             ("socket_request_max", "4294967296B"),
+            ("sasl_server_max_receive", "4294967296B"),
             ("audit_tail_read_max", "1.5B"),
             ("record_decompression_output_floor", "1.5B"),
             ("record_decompression_output_ceiling", "1073741825B"),

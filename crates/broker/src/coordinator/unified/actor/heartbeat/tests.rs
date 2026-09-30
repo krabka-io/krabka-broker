@@ -1,9 +1,6 @@
 //! Unit tests for the KIP-848 heartbeat path.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_protocol::primitives::uuid::Uuid;
@@ -41,7 +38,7 @@ async fn first_join_emits_one_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -75,7 +72,7 @@ async fn first_join_adopts_client_member_id() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -96,9 +93,9 @@ async fn member_limit_rejects_only_new_members() {
     let coord = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             max_size: 1,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         empty_metadata(),
         log,
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -116,7 +113,192 @@ async fn member_limit_rejects_only_new_members() {
     check!(existing.member_epoch == joined.member_epoch);
 }
 
+/// A consumer actor exists from its first heartbeat, but the group only from
+/// its first join. Kafka's `getOrMaybeCreateConsumerGroup` and
+/// `consumerGroupLeave` answer `GROUP_ID_NOT_FOUND` to any other epoch while
+/// the group is missing, and `UNKNOWN_MEMBER_ID` once it exists and lacks the
+/// member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_actor_holds_no_consumer_group_before_the_first_join() {
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_consumer("g");
+
+    let mut answers = Vec::new();
+    for (member_id, epoch) in [("m1", 3), ("m1", -1), ("m1", 0), ("m2", 3), ("m1", -1)] {
+        let answer = rpc::consumer_heartbeat(&handle, member_id, epoch, Some("t")).await;
+        answers.push((answer.error_code, answer.error_message));
+    }
+
+    check!(
+        answers
+            == vec![
+                (
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Consumer group g not found.".to_string())
+                ),
+                (
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group g not found.".to_string())
+                ),
+                (codes::NONE, None),
+                // The group exists now.
+                (
+                    codes::UNKNOWN_MEMBER_ID,
+                    Some("Member m2 is not a member of group g.".to_string())
+                ),
+                (codes::NONE, None),
+            ]
+    );
+}
+
 const IDENTITY_TOPIC: Uuid = Uuid([9; 16]);
+
+/// The one topic `t`, with two partitions, of the handoff test.
+fn handoff_metadata() -> StaticMetadata {
+    StaticMetadata {
+        input: ReconcileInput {
+            topic_id_by_name: [("t".into(), IDENTITY_TOPIC)].into(),
+            partitions_per_topic: [(IDENTITY_TOPIC, 2)].into(),
+            ..Default::default()
+        },
+    }
+}
+
+fn handoff_heartbeat(
+    state: &mut GroupState,
+    request: ConsumerGroupHeartbeatRequest,
+) -> HeartbeatStep {
+    step_heartbeat(
+        state,
+        &NextGenConfig::assigning_at_once(),
+        &handoff_metadata(),
+        &ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            ..request
+        },
+        ClientIdentity {
+            id: "client",
+            host: "host",
+        },
+        Instant::now(),
+        &RegexResolution::none(),
+    )
+}
+
+/// The heartbeat with which a consumer joins `handoff_metadata`'s topic.
+fn handoff_join(state: &mut GroupState, member_id: &str) -> HeartbeatStep {
+    handoff_heartbeat(
+        state,
+        ConsumerGroupHeartbeatRequest {
+            member_id: member_id.into(),
+            member_epoch: 0,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            rebalance_timeout_ms: 60_000,
+            topic_partitions: Some(vec![]),
+            ..Default::default()
+        },
+    )
+}
+
+/// What the Java client sends in steady state
+/// (`ConsumerHeartbeatRequestManager.HeartbeatState.buildRequestData`): no
+/// subscription and no rebalance timeout, and `TopicPartitions` only when its
+/// assignment changed, so `owned` is `None` while it did not.
+fn handoff_keepalive(
+    state: &mut GroupState,
+    member_id: &str,
+    member_epoch: i32,
+    owned: Option<Vec<i32>>,
+) -> HeartbeatStep {
+    handoff_heartbeat(
+        state,
+        ConsumerGroupHeartbeatRequest {
+            member_id: member_id.into(),
+            member_epoch,
+            rebalance_timeout_ms: -1,
+            topic_partitions: owned.map(|partitions| {
+                vec![
+                    krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
+                        topic_id: IDENTITY_TOPIC,
+                        partitions,
+                        ..Default::default()
+                    },
+                ]
+            }),
+            ..Default::default()
+        },
+    )
+}
+
+/// The partitions of `t` that a response assigns, or `None` when it carries no
+/// assignment.
+fn assigned_partitions(response: &ConsumerGroupHeartbeatResponse) -> Option<Vec<i32>> {
+    response.assignment.as_ref().map(|assignment| {
+        assignment
+            .topic_partitions
+            .iter()
+            .flat_map(|topic| topic.partitions.iter().copied())
+            .collect()
+    })
+}
+
+/// Kafka reconciles a member only inside its own heartbeat, and reads a
+/// heartbeat without `TopicPartitions` as "the owned set is unchanged"
+/// (`CurrentAssignmentBuilder.ownsRevokedPartitions(null)`). So with two
+/// members, the joiner is granted a partition only after the incumbent, told to
+/// revoke it in its own heartbeat, reports an owned set without it. Stock
+/// clients send that steady-state heartbeat with a null owned set, which used
+/// to wipe the pending revocation and hand the partition to both members.
+#[test]
+fn a_joiner_gets_a_partition_only_after_the_incumbent_reports_it_revoked() {
+    use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState::{
+        Stable, UnreleasedPartitions, UnrevokedPartitions,
+    };
+
+    let mut state = GroupState::new("g");
+    let incumbent = handoff_join(&mut state, "a");
+    check!(incumbent.response == identity_ok("a", 1, Some(vec![0, 1])));
+
+    // `b` joins: the group moves to epoch 2 and `a` keeps both partitions
+    // until its own heartbeat.
+    let joiner = handoff_join(&mut state, "b");
+    check!(joiner.response.member_epoch == 2);
+    check!(assigned_partitions(&joiner.response) == Some(vec![]));
+    check!(state.members["b"].assignment_state == UnreleasedPartitions);
+    check!(state.members["a"].assigned_partitions == [(IDENTITY_TOPIC, vec![0, 1])].into());
+
+    // The incumbent's heartbeat carries no owned set. It is told its smaller
+    // assignment, and it stays at epoch 1 with the other partition pending
+    // revocation.
+    let told = handoff_keepalive(&mut state, "a", 1, None);
+    let kept = assigned_partitions(&told.response).expect("a is told its assignment shrank");
+    check!(kept.len() == 1);
+    check!(told.response == identity_ok("a", 1, Some(kept.clone())));
+    let revoked = 1 - kept[0];
+    check!(state.members["a"].assignment_state == UnrevokedPartitions);
+    check!(
+        state.members["a"].partitions_pending_revocation
+            == [(IDENTITY_TOPIC, vec![revoked])].into()
+    );
+
+    // Neither `a`'s next null heartbeat nor `b`'s moves anything: `a` still
+    // owns the partition, so `b` does not get it.
+    let again = handoff_keepalive(&mut state, "a", 1, None);
+    check!(again.response == identity_ok("a", 1, None));
+    let waiting = handoff_keepalive(&mut state, "b", 2, None);
+    check!(waiting.response == identity_ok("b", 2, None));
+    check!(state.members["b"].assigned_partitions.is_empty());
+    check!(state.members["a"].assignment_state == UnrevokedPartitions);
+
+    // `a` reports what it owns now, without the revoked partition. It moves to
+    // the target epoch, and `b` is granted the partition at its next heartbeat.
+    let acknowledged = handoff_keepalive(&mut state, "a", 1, Some(kept.clone()));
+    check!(acknowledged.response == identity_ok("a", 2, None));
+    check!(state.members["a"].assignment_state == Stable);
+    let granted = handoff_keepalive(&mut state, "b", 2, None);
+    check!(granted.response == identity_ok("b", 2, Some(vec![revoked])));
+    check!(state.members["b"].assignment_state == Stable);
+}
 
 /// One row of [`heartbeat_identity_rules_follow_kafka`].
 struct IdentityRow {
@@ -156,7 +338,12 @@ impl IdentityRow {
 }
 
 fn heartbeat_interval_ms() -> i32 {
-    i32::try_from(NextGenConfig::default().heartbeat_interval.as_millis()).unwrap()
+    i32::try_from(
+        NextGenConfig::assigning_at_once()
+            .heartbeat_interval
+            .as_millis(),
+    )
+    .unwrap()
 }
 
 fn identity_ok(
@@ -353,7 +540,6 @@ fn identity_group() -> GroupState {
             &identity_request(member_id, instance_id, 0, None),
             crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
             Instant::now(),
-            &HashSet::new(),
         );
         member.member_epoch = 5;
         member.previous_member_epoch = 4;
@@ -376,7 +562,7 @@ fn identity_group() -> GroupState {
 /// [`identity_group`] and compares the whole response and the members after.
 #[test]
 fn heartbeat_identity_rules_follow_kafka() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let metadata = StaticMetadata {
         input: ReconcileInput {
             topic_id_by_name: HashMap::from([("t".to_string(), IDENTITY_TOPIC)]),
@@ -396,7 +582,7 @@ fn heartbeat_identity_rules_follow_kafka() {
                 &identity_request("s1", Some("i1"), -2, None),
                 client,
                 Instant::now(),
-                &HashSet::new(),
+                &RegexResolution::none(),
             );
             check!(released.response.error_code == codes::NONE, "{}", row.name);
         }
@@ -408,7 +594,7 @@ fn heartbeat_identity_rules_follow_kafka() {
             &identity_request(row.member_id, row.instance_id, row.member_epoch, row.owned),
             client,
             Instant::now(),
-            &HashSet::new(),
+            &RegexResolution::none(),
         );
 
         let mut members: Vec<(&str, i32)> = state
@@ -444,7 +630,7 @@ fn written<T>(records: &[(String, Option<T>)]) -> Vec<(String, bool)> {
 /// `replaceMember` does.
 #[test]
 fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let metadata = empty_metadata();
     let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
     let join = |member_id: &str, member_epoch: i32| {
@@ -458,7 +644,7 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         &join("s1", 0),
         client,
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     check!(joined.response.error_code == codes::NONE);
 
@@ -469,7 +655,7 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         &join("s1", -2),
         client,
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     let current: Vec<(&str, Option<i32>)> = left
         .pending
@@ -492,7 +678,7 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         },
         client,
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     check!(replaced.response.error_code == codes::NONE);
     check!(replaced.response.member_epoch == joined.response.member_epoch);
@@ -529,7 +715,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -552,7 +738,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -583,7 +769,7 @@ async fn leave_emits_tombstone_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -603,7 +789,7 @@ async fn leave_emits_tombstone_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -620,7 +806,7 @@ async fn leave_emits_tombstone_batch() {
 
 #[test]
 fn leave_reconciles_and_persists_survivor_assignments() {
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let topic_id = Uuid([8; 16]);
     let metadata = StaticMetadata {
         input: ReconcileInput {
@@ -643,7 +829,6 @@ fn leave_reconciles_and_persists_survivor_assignments() {
                 host: "host",
             },
             Instant::now(),
-            &HashSet::new(),
         ));
     }
     run_reconcile(&mut state, &config, &metadata);
@@ -664,7 +849,7 @@ fn leave_reconciles_and_persists_survivor_assignments() {
             host: "host",
         },
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
 
     check!(state.group_epoch == epoch_before + 1);
@@ -741,7 +926,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -788,7 +973,7 @@ async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_authorized_topics: std::collections::HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await
@@ -810,7 +995,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
             ..Default::default()
         },
     };
-    let config = NextGenConfig::default();
+    let config = NextGenConfig::assigning_at_once();
     let mut group = GroupState::new("g");
     let req = ConsumerGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -830,7 +1015,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
             host: "",
         },
         Instant::now(),
-        &HashSet::new(),
+        &RegexResolution::none(),
     );
     // First join succeeds, advances to group epoch 1, targets all
     // partitions of "t", and must persist records.
@@ -942,7 +1127,8 @@ async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
                 },
                 client_id: "client-a".into(),
                 client_host: String::new(),
-                regex_authorized_topics: HashSet::new(),
+                regex_resolver:
+                    crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
                 reply: tx,
             })
             .await

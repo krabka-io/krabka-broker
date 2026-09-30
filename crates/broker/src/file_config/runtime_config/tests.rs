@@ -226,3 +226,93 @@ fn runtime_file_config_accepts_a_zero_classic_group_initial_rebalance_delay() {
     assert!(cfg.classic_group_initial_rebalance_delay == millis(0));
     assert!(cfg.validate().is_ok());
 }
+
+/// Kafka's defaults are `sasl.server.max.receive.size` = 524288 and
+/// `connection.failed.authentication.delay.ms` = 100. The delay is
+/// `atLeast(0)`, so zero is a value and turns the delay off, and a negative
+/// one is an error.
+#[test]
+fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
+    let defaults = crate::config::BrokerConfig::default();
+    assert!(defaults.sasl_server_max_receive.bytes_i64() == 524_288);
+    assert!(defaults.connection_failed_authentication_delay == millis(100));
+
+    let cases = [
+        (
+            "[runtime]\nsasl_server_max_receive = \"64KiB\"\nconnection_failed_authentication_delay = \"0ms\"\n",
+            bytes(65_536),
+            std::time::Duration::ZERO,
+        ),
+        (
+            "[runtime]\nconnection_failed_authentication_delay = \"250ms\"\n",
+            bytes(524_288),
+            std::time::Duration::from_millis(250),
+        ),
+    ];
+    for (source, want_limit, want_delay) in cases {
+        let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).expect("apply runtime config");
+        assert!(cfg.sasl_server_max_receive == want_limit, "{source}");
+        assert!(cfg.failed_authentication_delay() == want_delay, "{source}");
+    }
+
+    let file: FileConfig =
+        toml::from_str("[runtime]\nconnection_failed_authentication_delay = \"-1ms\"\n")
+            .expect("parse runtime config");
+    let error = file
+        .apply_to(&mut crate::config::BrokerConfig::default())
+        .expect_err("a negative delay must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("connection_failed_authentication_delay")
+    );
+}
+
+/// The loader records which Kafka keys the `[runtime]` table named, whatever
+/// their values, so `DescribeConfigs` reports a supplied setting at
+/// `STATIC_BROKER_CONFIG` even at Kafka's default. A table that names none
+/// records none, a field that is not a Kafka key records nothing, and a second
+/// table applied afterwards, as the command-line overlay is, adds to the first.
+#[test]
+fn the_runtime_table_records_the_kafka_keys_it_named() {
+    let recorded = |sources: &[&str]| -> Vec<&'static str> {
+        let mut cfg = crate::config::BrokerConfig::default();
+        for source in sources {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            file.apply_to(&mut cfg).expect("apply runtime config");
+        }
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .into_iter()
+            .collect()
+    };
+
+    assert!(
+        (
+            recorded(&["[runtime]\n"]),
+            recorded(&["[runtime]\ncleaner_interval = \"7s\"\n"]),
+            recorded(&[
+                "[runtime]\nconsumer_group_session_timeout = \"45s\"\nshare_group_max_size = 200\n\
+                 streams_group_rack_aware_assignment_tags = [\"rack\"]\n"
+            ]),
+            recorded(&[
+                "[runtime]\nconsumer_group_session_timeout = \"45s\"\n",
+                "[runtime]\nsocket_send_buffer = \"1MiB\"\n",
+            ]),
+        ) == (
+            Vec::new(),
+            Vec::new(),
+            vec![
+                "group.consumer.session.timeout.ms",
+                "group.share.max.size",
+                "group.streams.rack.aware.assignment.tags",
+            ],
+            vec![
+                "group.consumer.session.timeout.ms",
+                "socket.send.buffer.bytes"
+            ],
+        )
+    );
+}

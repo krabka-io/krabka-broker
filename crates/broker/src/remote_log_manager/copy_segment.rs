@@ -711,6 +711,7 @@ mod tests {
                 metrics: &metrics,
                 index_cache: &index_cache,
                 copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
             };
 
             copy_one(

@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     error::BrokerError,
-    partition::{Partition, ProduceData, ProduceJob, WriterMessage},
+    partition::{Partition, ProduceData, ProduceJob, ProducerAppendCheck, WriterMessage},
 };
 
 /// Whether an internal produce definitely failed or may already be appended.
@@ -136,6 +136,20 @@ impl Partition {
             .map_err(|_| BrokerError::Replication("ack dropped".into()))?
     }
 
+    /// The lowest offset the log was cut to by [`Self::truncate_to`] or
+    /// [`Self::reset_to`] since the last call, which the KIP-113 move task
+    /// applies to its future log. See [`WriterMessage::TakeFutureTruncation`].
+    pub(crate) async fn take_future_truncation(&self) -> Result<Option<Offset>, BrokerError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterMessage::TakeFutureTruncation { ack: ack_tx })
+            .await
+            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
+        ack_rx
+            .await
+            .map_err(|_| BrokerError::Replication("ack dropped".into()))
+    }
+
     /// Drop every segment and recreate the active segment at `new_base`.
     /// The request goes through the writer task, so it stays ordered with
     /// appends.
@@ -236,12 +250,24 @@ impl Partition {
         &self,
         batch: RecordBatch,
     ) -> Result<Offset, ProduceBatchError> {
+        self.produce_batch_checked(batch, None).await
+    }
+
+    /// [`Self::produce_batch_outcome`] with the producer transaction check the
+    /// log runs under its append lock, just before the append. A coordinator
+    /// that writes a producer's transactional records for it, such as
+    /// `TxnOffsetCommit`, passes the check its verification produced.
+    pub(crate) async fn produce_batch_checked(
+        &self,
+        batch: RecordBatch,
+        producer_check: Option<ProducerAppendCheck>,
+    ) -> Result<Offset, ProduceBatchError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.writer_tx
             .send(WriterMessage::Produce(ProduceJob {
                 data: ProduceData::Owned(batch),
                 ack: ack_tx,
-                producer_check: None,
+                producer_check,
             }))
             .await
             .map_err(|_| {

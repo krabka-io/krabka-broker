@@ -1,7 +1,7 @@
 //! Tests for finding the changed topics of an image and for the refresh
 //! request that goes to the groups this broker coordinates.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use assert2::check;
 use krabka_metadata::{
@@ -15,7 +15,7 @@ use krabka_protocol::owned::{
 };
 use uuid::Uuid;
 
-use super::{changed_topics, on_metadata_update};
+use super::{changed_topics, on_metadata_update, regex_resolution_may_change};
 use crate::coordinator::unified::{
     actor::{GroupActorHandle, GroupActorMessage},
     test_support::{SwitchableMetadata, make_coord_with_metadata, snapshot_of},
@@ -137,6 +137,95 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
     check!(found == expected);
 }
 
+fn describe_acl(topic: &str) -> MetadataRecord {
+    MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+        resource_type: krabka_metadata::ResourceType::Topic,
+        resource_name: topic.into(),
+        pattern_type: krabka_metadata::PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: krabka_metadata::AclOperation::Describe,
+        permission_type: krabka_metadata::PermissionType::Allow,
+    })
+}
+
+/// A created topic and a changed ACL can change what a regular expression
+/// resolves to. A deleted topic, a grown one, a new leader and a
+/// configuration cannot: the assignment follows those through the metadata
+/// hash, and the next resolution drops a deleted topic.
+#[test]
+fn a_new_topic_or_a_changed_acl_can_change_a_resolution() {
+    type Row = (&'static str, Vec<MetadataRecord>, bool);
+    let base = [
+        topic("orders", 10),
+        partition("orders", 0, 1),
+        topic("payments", 20),
+        partition("payments", 0, 1),
+        describe_acl("orders"),
+    ];
+    let rows: [Row; 9] = [
+        ("no change", vec![], false),
+        (
+            "a topic is created",
+            vec![topic("refunds", 30), partition("refunds", 0, 1)],
+            true,
+        ),
+        (
+            "a topic is deleted and created again with a new id",
+            vec![
+                MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+                    name: "orders".into(),
+                }),
+                topic("orders", 11),
+                partition("orders", 0, 1),
+            ],
+            true,
+        ),
+        ("an ACL is granted", vec![describe_acl("payments")], true),
+        (
+            "an ACL is deleted",
+            vec![MetadataRecord::V1DeleteAccessControlEntry(
+                krabka_metadata::AclEntryFilter {
+                    resource_type: Some(krabka_metadata::ResourceType::Topic),
+                    resource_name: Some("orders".into()),
+                    ..Default::default()
+                },
+            )],
+            true,
+        ),
+        (
+            "a topic is deleted",
+            vec![MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+                name: "payments".into(),
+            })],
+            false,
+        ),
+        ("a topic grows", vec![partition("orders", 1, 2)], false),
+        (
+            "a partition gets a new leader",
+            vec![partition("orders", 0, 2)],
+            false,
+        ),
+        (
+            "a topic configuration changes",
+            vec![MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "orders".into(),
+                overrides: BTreeMap::from([("retention.ms".into(), "1000".into())]),
+            })],
+            false,
+        ),
+    ];
+    let mut found = Vec::new();
+    let mut expected = Vec::new();
+    for (name, changes, may_change) in rows {
+        let previous = image(&base);
+        let next = image(&[base.as_slice(), changes.as_slice()].concat());
+        found.push((name, regex_resolution_may_change(&previous, &next)));
+        expected.push((name, may_change));
+    }
+    check!(found == expected);
+}
+
 async fn heartbeat(
     handle: &GroupActorHandle,
     request: ConsumerGroupHeartbeatRequest,
@@ -148,7 +237,7 @@ async fn heartbeat(
             request,
             client_id: "client".into(),
             client_host: "host".into(),
-            regex_authorized_topics: HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply,
         })
         .await

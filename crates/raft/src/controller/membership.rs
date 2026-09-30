@@ -104,6 +104,22 @@ impl ControllerHandle {
             .await
     }
 
+    /// Run the leader-local admission checks of `AddVoterHandler` for `req`
+    /// without contacting the candidate or appending anything.
+    ///
+    /// # Errors
+    /// Returns the refusal the same request would get from [`Self::add_voter`]
+    /// for a pending change, an unset high watermark, `kraft.version` below 1,
+    /// an uncommitted voters record or a duplicate voter id.
+    pub async fn check_add_voter(
+        &self,
+        req: crate::reconfig::AddVoter,
+    ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
+        self.engine
+            .reconfigure(crate::reconfig::VoterChange::CheckAdd(req))
+            .await
+    }
+
     /// Remove the exact node/directory pair through the Raft control log.
     ///
     /// # Errors
@@ -139,6 +155,18 @@ impl ControllerHandle {
         version: u16,
     ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
         self.engine.finalize_kraft_version(version).await
+    }
+
+    /// Run the checks of [`Self::finalize_kraft_version`] and write nothing.
+    ///
+    /// # Errors
+    /// Returns the error `finalize_kraft_version` would return for the same
+    /// request.
+    pub async fn validate_kraft_version(
+        &self,
+        version: u16,
+    ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
+        self.engine.validate_kraft_version(version).await
     }
 }
 

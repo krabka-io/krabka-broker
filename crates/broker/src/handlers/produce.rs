@@ -14,7 +14,6 @@ use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse};
-use krabka_units::convert::TimeExt as _;
 use krabka_verified::FreezeMutationKind;
 
 use self::{
@@ -38,7 +37,7 @@ use self::{
 use crate::{
     broker::Broker,
     codes,
-    config_keys::{resolve_max_message_bytes, resolve_schema_validation},
+    config_keys::{BrokerLogDefaults, resolve_max_message_bytes, resolve_schema_validation},
     error::BrokerError,
     freeze::resolve::resolve_freeze_mutation,
 };
@@ -58,6 +57,7 @@ mod owned_decode;
 mod pipeline;
 mod prepare;
 mod producer_checks;
+mod record_limit;
 mod response;
 mod schema;
 mod throttle;
@@ -66,6 +66,8 @@ mod topic_settings;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(test)]
+mod broker_default_tests;
 #[cfg(test)]
 mod compacted_key_tests;
 #[cfg(test)]
@@ -201,15 +203,6 @@ pub(crate) async fn handle(
         default_min_insync_replicas: broker.config.default_min_insync_replicas,
         is_witness: broker.config.is_witness(),
     };
-    // Kafka's three `log.message.timestamp.*` broker configs, resolved once
-    // per request: the topic key's own broker-wide default, the same as
-    // `LogConfig`'s topic keys take their matching broker key as their
-    // default. A topic that names none of the three inherits this.
-    let broker_timestamp_default = broker_default_timestamp_policy(
-        broker.config.log_config.message_timestamp_type,
-        broker.config.default_message_timestamp_before_max_ms,
-        broker.config.default_message_timestamp_after_max_ms,
-    );
     // ── request decode (header-only on the verbatim-eligible path) ──
     // For v≥3 (native v2 payloads) we decode only the request FRAMING —
     // `transactional_id`, `acks`, `timeout_ms`, and per-topic / per-partition
@@ -259,6 +252,15 @@ pub(crate) async fn handle(
     // UNKNOWN_TOPIC_ID at v13+ still answers 53. So this runs ahead of the
     // topic-resolution loop below, not inside it.
     let image = controller.current_image();
+    // The broker-wide defaults of the topic keys checked below: the static
+    // startup values under the dynamic broker configs of this node and the
+    // cluster, which Kafka applies to every log at once. A topic override wins.
+    let log_defaults = BrokerLogDefaults::for_broker(&image, &broker.config);
+    let broker_timestamp_default = broker_default_timestamp_policy(
+        log_defaults.message_timestamp_type,
+        log_defaults.message_timestamp_before_max_ms,
+        log_defaults.message_timestamp_after_max_ms,
+    );
 
     if req.has_transactional_batch()
         && !is_authorized_transactional(broker, &image, ctx, req.transactional_id.as_deref())
@@ -322,11 +324,8 @@ pub(crate) async fn handle(
     // The partitions that passed every gate before the transaction check, in
     // request order, with the rows they reserved.
     let mut admitted: Vec<AdmittedPartition> = Vec::new();
-    let transaction = TransactionRequest {
-        transactional_id: req.transactional_id.as_deref(),
-        version,
-        producer_id_expiration_ms: broker.config.producer_id_expiration.millis_i64(),
-    };
+    let transaction =
+        TransactionRequest::new(broker, &image, (req.transactional_id.as_deref(), version));
     let services = PartitionServices {
         partitions: &partitions,
         txn_coordinator: &txn_coordinator,
@@ -393,17 +392,15 @@ pub(crate) async fn handle(
         // writer's `config_snapshot().compression_type` gate so the
         // handler's verbatim decision matches the writer's recompression
         // decision exactly.
-        let topic_compression = resolve_topic_compression(&image, &topic_name);
+        let topic_compression =
+            resolve_topic_compression(&image, &topic_name, log_defaults.compression_type);
 
         // Kafka's `max.message.bytes`, resolved here for the same reason: the
         // cap belongs to the topic. A topic that sets none inherits the
         // broker's `message.max.bytes`, which is the `DEFAULT_CONFIG` synonym
         // `kafka-configs --describe --all` reports for the key.
-        let max_message_bytes = resolve_max_message_bytes(
-            &image,
-            &topic_name,
-            broker.config.log_config.max_message_size,
-        );
+        let max_message_bytes =
+            resolve_max_message_bytes(&image, &topic_name, log_defaults.max_message_size);
 
         // Resolve the topic's KFC-1 delivery settings once, beside the
         // compression resolve and for the same reason: they are a property of
@@ -423,7 +420,7 @@ pub(crate) async fn handle(
         // Kafka's `LogConfig.compact`, resolved once per topic: a compacted
         // topic refuses a record with no key.
         let compacted_topic =
-            resolve_compacted_topic(&image, &topic_name, broker.config.log_config.cleanup_policy);
+            resolve_compacted_topic(&image, &topic_name, log_defaults.cleanup_policy);
 
         // KFC-7, resolved here for the same reason: schema validation is a
         // property of the topic. `None` is the default, and every partition of
@@ -454,7 +451,9 @@ pub(crate) async fn handle(
         // is its own admin tooling's `"__admin_client"`.
         let internal_topic_denied =
             crate::internal_topics::is_internal_topic(&broker.config, &topic_name)
-                && !crate::internal_topics::produce_internal_topics_allowed(ctx.client_id);
+                && !crate::internal_topics::produce_internal_topics_allowed(
+                    ctx.client_id.unwrap_or_default(),
+                );
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
@@ -482,7 +481,6 @@ pub(crate) async fn handle(
                     internal_topic_denied,
                     transaction,
                     acks: req.acks,
-                    timeout,
                 },
                 services,
             )
@@ -685,13 +683,16 @@ async fn await_durability(
     }
     let started = std::time::Instant::now();
     let deadline = started + timeout;
-    let default_min_insync_replicas = broker.config.default_min_insync_replicas;
+    let min_isr_layers = (
+        broker.config.node_id,
+        broker.config.default_min_insync_replicas,
+    );
     let current_min_isr = |partition: &crate::partition::Partition, admitted_topic_id| {
         current_effective_min_isr(
             &broker.controller.current_image(),
             (&partition.topic, partition.index.0),
             admitted_topic_id,
-            default_min_insync_replicas,
+            min_isr_layers,
         )
     };
     let finished = futures_util::future::join_all(awaiting.into_iter().map(|pending| {

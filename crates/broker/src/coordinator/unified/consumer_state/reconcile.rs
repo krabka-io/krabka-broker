@@ -7,181 +7,392 @@
 //! revoke, and which it may claim, so that the broker never advertises one
 //! partition to two members at once.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
-use super::group::GroupState;
-use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState;
+use super::{group::GroupState, member::MemberState};
+use crate::coordinator::unified::{
+    actor::MetadataProvider, persistence_next_gen::MemberAssignmentState,
+};
+
+/// The partitions each topic holds, by topic id.
+type Partitions = HashMap<Uuid, Vec<i32>>;
+
+/// The member that `CurrentAssignmentBuilder` builds from the current one.
+struct Rebuilt {
+    state: MemberAssignmentState,
+    epoch: i32,
+    assigned: Partitions,
+    pending: Partitions,
+    /// The partitions of `assigned` that the member did not hold before, so
+    /// that they are assigned at `epoch`.
+    granted: Partitions,
+}
+
+/// The topics a member subscribes to, as Kafka's `TopicIds` over
+/// `CurrentAssignmentBuilder.subscribedTopicIds`: the names of the member and
+/// the topics its regex resolved to. A topic is asked about by id, and it is
+/// in the set when it exists and its name is one of them.
+struct Subscription<'a> {
+    group: &'a GroupState,
+    member: &'a MemberState,
+    metadata: &'a dyn MetadataProvider,
+}
+
+impl Subscription<'_> {
+    fn contains(&self, topic_id: &Uuid) -> bool {
+        self.metadata
+            .topic_name(topic_id)
+            .is_some_and(|name| self.group.member_subscribes_to(self.member, &name))
+    }
+}
 
 impl GroupState {
-    pub fn install_target(&mut self, per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>) {
+    /// Installs a freshly computed target at the current group epoch.
+    ///
+    /// Only the target changes. Kafka reconciles a member inside that
+    /// member's own heartbeat, so a target change never rewrites another
+    /// member's assignment: the member is told about its new, smaller
+    /// assignment by its own next heartbeat, and it stays behind the target
+    /// epoch until it acknowledges the revocation. See [`Self::reconcile_member`].
+    pub fn install_target(&mut self, per_member: HashMap<String, Partitions>) {
         self.target.epoch = self.group_epoch;
         self.target.per_member = per_member;
-        for (mid, member) in &mut self.members {
-            let target = self.target.per_member.get(mid).cloned().unwrap_or_default();
-            // Split everything the member still holds — its current assignment
-            // PLUS any partitions already pending revocation — against the new
-            // target. Splitting `assigned ∪ pending` (not just `assigned`)
-            // preserves in-flight revocations across successive reconciles, so a
-            // partition a member is still releasing is never mistaken for "free"
-            // by the withholding in `reconcile_member`.
-            let mut held = member.assigned_partitions.clone();
-            for (tid, parts) in &member.partitions_pending_revocation {
-                held.entry(*tid).or_default().extend(parts.iter().copied());
-            }
-            let (revoke, assigned) = compute_revoke_split(&held, &target);
-            member.partitions_pending_revocation = revoke;
-            member.assigned_partitions = assigned;
-            // A split only moves partitions between the two maps, so every
-            // held partition keeps its epoch.
-            member.stamp_assignment_epochs(member.member_epoch);
-            member.assignment_state = if !member.partitions_pending_revocation.is_empty() {
-                MemberAssignmentState::UnrevokedPartitions
-            } else if assignment_covers(&member.assigned_partitions, &target) {
-                MemberAssignmentState::Stable
-            } else {
-                MemberAssignmentState::UnreleasedPartitions
-            };
-        }
     }
 
-    /// KIP-848 per-heartbeat reconciliation, the `CurrentAssignmentBuilder`.
+    /// Kafka's `GroupMetadataManager.maybeReconcile` and
+    /// `CurrentAssignmentBuilder.build`: reconciles the current assignment of
+    /// `member_id` towards the target, inside that member's heartbeat.
     ///
-    /// It computes the authoritative *current* assignment for `member_id` from
-    /// the member's reported owned set and the group target. It **withholds
-    /// any partition that another member still holds**, whether that member
-    /// owns it or has it pending revocation.
+    /// `owned` is the `TopicPartitions` the heartbeat reports, and `None` when
+    /// the heartbeat sent none. The Java client sends it only when its
+    /// assignment changed, so `None` means "unchanged" and the member still
+    /// owns everything it was assigned or asked to revoke
+    /// (`ownsRevokedPartitions(null)` is true). `has_subscription_changed` is
+    /// true when this heartbeat changed the member's subscription.
+    /// `metadata` names the topics of the target and of the assignment, which
+    /// the member's subscription is checked against.
     ///
-    /// The returned set is what the coordinator grants the member now and
-    /// advertises in the heartbeat response. Storing it as
-    /// `assigned_partitions` makes the grant authoritative, so the broker
-    /// never advertises a partition to two members at once. That is the main
+    /// A member keeps every target partition it holds and moves the others to
+    /// `partitions_pending_revocation`. It stays in its epoch, in the
+    /// `UnrevokedPartitions` state, until it reports an owned set that omits
+    /// them. Only then does it move to the target epoch and claim the target
+    /// partitions that are free. A partition another member holds, assigned or
+    /// pending revocation, stays withheld until that member lets it go, so the
+    /// broker never advertises a partition to two members. That is the main
     /// KIP-848 safety property. See `reconciler_model.rs`.
     ///
-    /// A member keeps every target partition it already owns, and gains target
-    /// partitions that are *free*. A partition it owns but no longer targets
-    /// moves to `partitions_pending_revocation`. Another member claims a freed
-    /// partition only once its previous owner reports that it released the
-    /// partition. That owner's next heartbeat drops the partition from
-    /// `reported_owned`, which drains it from both sets.
+    /// The member's subscription filters all of it. A partition of a topic
+    /// the member no longer subscribes to is not in its target, whatever the
+    /// installed target says, and a heartbeat that changed the subscription
+    /// removes those partitions at once, without waiting for the next target
+    /// (`updateCurrentAssignment`). The target of a group that waits for its
+    /// assignment interval is stale in exactly that way.
     ///
-    /// It returns `true` when the member's assignment or pending set
-    /// changed.
+    /// It returns `true` when the member's epoch, previous epoch, state,
+    /// assignment or pending set changed. A member that is rebuilt records the
+    /// epoch it leaves as its previous epoch, even when it stays in it, as
+    /// Kafka's `ConsumerGroupMember.Builder.updateMemberEpoch` does.
     pub fn reconcile_member(
         &mut self,
         member_id: &str,
-        reported_owned: &HashMap<Uuid, Vec<i32>>,
+        owned: Option<&Partitions>,
+        has_subscription_changed: bool,
+        metadata: &dyn MetadataProvider,
     ) -> bool {
-        let target = self
-            .target
-            .per_member
-            .get(member_id)
-            .cloned()
-            .unwrap_or_default();
-        // `assigned ∪ pending` of every OTHER member is exactly what that member
-        // still holds; it is invariant under `install_target`'s keep/revoke split.
-        let mut held_by_others: HashSet<(Uuid, i32)> = HashSet::new();
-        for (mid, m) in &self.members {
-            if mid == member_id {
-                continue;
+        let Some(member) = self.members.get(member_id) else {
+            return false;
+        };
+        let target_epoch = self.target.epoch;
+        // `isReconciledTo`: a stable member at the target epoch has nothing to do.
+        if !has_subscription_changed
+            && member.assignment_state == MemberAssignmentState::Stable
+            && member.member_epoch == target_epoch
+        {
+            return false;
+        }
+        let subscription = Subscription {
+            group: self,
+            member,
+            metadata,
+        };
+        let rebuilt = match member.assignment_state {
+            MemberAssignmentState::Stable if member.member_epoch != target_epoch => {
+                Some(self.compute_next_assignment(&subscription, target_epoch, owned))
             }
-            for (tid, parts) in m
-                .assigned_partitions
-                .iter()
-                .chain(m.partitions_pending_revocation.iter())
+            // At the target epoch, and not reconciled only because the
+            // subscription changed.
+            MemberAssignmentState::Stable => Self::update_current_assignment(&subscription, owned),
+            // A member that still owns the partitions it must revoke cannot move
+            // forward, however the target changed meanwhile.
+            MemberAssignmentState::UnrevokedPartitions
+                if owns_any(owned, &member.partitions_pending_revocation) =>
             {
-                for &p in parts {
-                    held_by_others.insert((*tid, p));
-                }
-            }
-        }
-        // Grant each target partition the member already owns OR that is free.
-        let mut new_assigned: HashMap<Uuid, Vec<i32>> = HashMap::new();
-        let mut fully_assigned = true;
-        for (tid, tparts) in &target {
-            for &p in tparts {
-                let owned_here = reported_owned.get(tid).is_some_and(|o| o.contains(&p));
-                let free = !held_by_others.contains(&(*tid, p));
-                if owned_here || free {
-                    new_assigned.entry(*tid).or_default().push(p);
+                if has_subscription_changed {
+                    Self::update_current_assignment(&subscription, owned)
                 } else {
-                    fully_assigned = false;
+                    None
                 }
             }
-        }
-        // Pending revocation = reported-owned partitions no longer in the target.
-        let mut new_pending: HashMap<Uuid, Vec<i32>> = HashMap::new();
-        for (tid, oparts) in reported_owned {
-            let tset: HashSet<i32> = target
-                .get(tid)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            for &p in oparts {
-                if !tset.contains(&p) {
-                    new_pending.entry(*tid).or_default().push(p);
-                }
+            MemberAssignmentState::UnrevokedPartitions
+            | MemberAssignmentState::UnreleasedPartitions => {
+                Some(self.compute_next_assignment(&subscription, target_epoch, owned))
             }
-        }
-        for v in new_assigned.values_mut() {
-            v.sort_unstable();
-        }
-        for v in new_pending.values_mut() {
-            v.sort_unstable();
-        }
-        let m = self
+        };
+        let Some(rebuilt) = rebuilt else {
+            return false;
+        };
+
+        let member = self
             .members
             .get_mut(member_id)
             .expect("member exists in reconcile_member");
-        let changed =
-            m.assigned_partitions != new_assigned || m.partitions_pending_revocation != new_pending;
-        m.assigned_partitions = new_assigned;
-        m.partitions_pending_revocation = new_pending;
-        // The caller has already moved the member to its new epoch, so a
-        // partition granted now is stamped with that epoch, as Kafka's
-        // `computeNextAssignment` stamps it with the target assignment epoch.
-        let epoch = m.member_epoch;
-        m.stamp_assignment_epochs(epoch);
-        m.assignment_state = if !m.partitions_pending_revocation.is_empty() {
-            MemberAssignmentState::UnrevokedPartitions
-        } else if fully_assigned {
-            MemberAssignmentState::Stable
-        } else {
-            MemberAssignmentState::UnreleasedPartitions
-        };
-        changed
-    }
-}
-
-/// True if `assigned` contains every partition in `target`.
-fn assignment_covers(assigned: &HashMap<Uuid, Vec<i32>>, target: &HashMap<Uuid, Vec<i32>>) -> bool {
-    target.iter().all(|(tid, tparts)| {
-        tparts
-            .iter()
-            .all(|p| assigned.get(tid).is_some_and(|a| a.contains(p)))
-    })
-}
-
-fn compute_revoke_split(
-    current: &HashMap<Uuid, Vec<i32>>,
-    target: &HashMap<Uuid, Vec<i32>>,
-) -> (HashMap<Uuid, Vec<i32>>, HashMap<Uuid, Vec<i32>>) {
-    let mut revoke: HashMap<Uuid, Vec<i32>> = HashMap::new();
-    let mut keep: HashMap<Uuid, Vec<i32>> = HashMap::new();
-    for (tid, parts) in current {
-        let target_parts = target.get(tid).cloned().unwrap_or_default();
-        let target_set: HashSet<i32> = target_parts.into_iter().collect();
-        for p in parts {
-            if target_set.contains(p) {
-                keep.entry(*tid).or_default().push(*p);
-            } else {
-                revoke.entry(*tid).or_default().push(*p);
+        let left = member.member_epoch;
+        let changed = member.previous_member_epoch != left
+            || member.member_epoch != rebuilt.epoch
+            || member.assignment_state != rebuilt.state
+            || member.assigned_partitions != rebuilt.assigned
+            || member.partitions_pending_revocation != rebuilt.pending;
+        member.previous_member_epoch = left;
+        member.member_epoch = rebuilt.epoch;
+        member.assignment_state = rebuilt.state;
+        member.assigned_partitions = rebuilt.assigned;
+        member.partitions_pending_revocation = rebuilt.pending;
+        // A partition granted now is assigned at this epoch, as Kafka stamps it
+        // with the target assignment epoch, even one the member held before and
+        // gave up. A partition it keeps, or moves to pending revocation, keeps
+        // its epoch.
+        for (topic_id, parts) in &rebuilt.granted {
+            if let Some(epochs) = member.assignment_epochs.get_mut(topic_id) {
+                for partition in parts {
+                    epochs.remove(partition);
+                }
             }
         }
+        member.stamp_assignment_epochs(rebuilt.epoch);
+        changed
     }
-    (revoke, keep)
+
+    /// Kafka's `CurrentAssignmentBuilder.updateCurrentAssignment`: removes the
+    /// partitions of topics the member no longer subscribes to, and leaves the
+    /// rest as it is. A partition that the member still owns moves to pending
+    /// revocation, and the member waits for the client to release it. `None`
+    /// when no topic was removed.
+    fn update_current_assignment(
+        subscription: &Subscription<'_>,
+        owned: Option<&Partitions>,
+    ) -> Option<Rebuilt> {
+        let member = subscription.member;
+        let mut assigned = member.assigned_partitions.clone();
+        let mut pending = member.partitions_pending_revocation.clone();
+        let mut removed = false;
+        for (topic_id, parts) in &member.assigned_partitions {
+            if subscription.contains(topic_id) {
+                continue;
+            }
+            removed = true;
+            assigned.remove(topic_id);
+            let merged: BTreeSet<i32> = pending
+                .get(topic_id)
+                .into_iter()
+                .flatten()
+                .chain(parts)
+                .copied()
+                .collect();
+            pending.insert(*topic_id, merged.into_iter().collect());
+        }
+        if !removed {
+            return None;
+        }
+        Some(if !pending.is_empty() && owns_any(owned, &pending) {
+            Rebuilt {
+                state: MemberAssignmentState::UnrevokedPartitions,
+                epoch: member.member_epoch,
+                assigned,
+                pending,
+                granted: Partitions::new(),
+            }
+        } else {
+            // The partitions were removed, and the client had released them
+            // already: the member shrinks and keeps its state.
+            Rebuilt {
+                state: member.assignment_state,
+                epoch: member.member_epoch,
+                assigned,
+                pending: member.partitions_pending_revocation.clone(),
+                granted: Partitions::new(),
+            }
+        })
+    }
+
+    /// Kafka's `CurrentAssignmentBuilder.computeNextAssignment`.
+    fn compute_next_assignment(
+        &self,
+        subscription: &Subscription<'_>,
+        target_epoch: i32,
+        owned: Option<&Partitions>,
+    ) -> Rebuilt {
+        let member = subscription.member;
+        let no_target = Partitions::new();
+        let target = self
+            .target
+            .per_member
+            .get(&member.member_id)
+            .unwrap_or(&no_target);
+
+        let mut kept = Partitions::new();
+        let mut to_revoke = Partitions::new();
+        // The target partitions the member does not hold yet.
+        let mut wanted = Partitions::new();
+        let topic_ids: HashSet<Uuid> = target
+            .keys()
+            .chain(member.assigned_partitions.keys())
+            .copied()
+            .collect();
+        for topic_id in topic_ids {
+            // A topic the member no longer subscribes to has an empty target.
+            let target_here: HashSet<i32> = if subscription.contains(&topic_id) {
+                target
+                    .get(&topic_id)
+                    .map(|parts| parts.iter().copied().collect())
+                    .unwrap_or_default()
+            } else {
+                HashSet::new()
+            };
+            let held: &[i32] = member
+                .assigned_partitions
+                .get(&topic_id)
+                .map_or(&[], Vec::as_slice);
+            for &partition in held {
+                let side = if target_here.contains(&partition) {
+                    &mut kept
+                } else {
+                    &mut to_revoke
+                };
+                side.entry(topic_id).or_default().push(partition);
+            }
+            let held: HashSet<i32> = held.iter().copied().collect();
+            let new: Vec<i32> = target_here.difference(&held).copied().collect();
+            if !new.is_empty() {
+                wanted.insert(topic_id, new);
+            }
+        }
+
+        // `currentPartitionEpoch`: what every other member still holds,
+        // assigned or pending revocation. The member's own holdings need no
+        // entry: what it keeps is in `kept`, and what it gives up is not in its
+        // target. Only the partitions the member wants are looked up, so a
+        // member with nothing to claim reads no other member.
+        let held_by_others = self.held_by_others(&member.member_id, &wanted);
+        let mut has_unreleased = false;
+        let mut granted = Partitions::new();
+        for (topic_id, partitions) in wanted {
+            // A partition the member itself is pending to revoke is free
+            // for it: only one member holds a partition at a time.
+            let pending_here: HashSet<i32> = member
+                .partitions_pending_revocation
+                .get(&topic_id)
+                .map(|parts| parts.iter().copied().collect())
+                .unwrap_or_default();
+            for partition in partitions {
+                if held_by_others.contains(&(topic_id, partition))
+                    && !pending_here.contains(&partition)
+                {
+                    has_unreleased = true;
+                } else {
+                    granted.entry(topic_id).or_default().push(partition);
+                }
+            }
+        }
+
+        let mut rebuilt = if !to_revoke.is_empty() && owns_any(owned, &to_revoke) {
+            // The member keeps its epoch and waits for the client to
+            // acknowledge the revocation.
+            Rebuilt {
+                state: MemberAssignmentState::UnrevokedPartitions,
+                epoch: member.member_epoch,
+                assigned: kept,
+                pending: to_revoke,
+                granted: Partitions::new(),
+            }
+        } else {
+            // Whatever the member had to revoke it has revoked. It moves to
+            // the target epoch with what it keeps and what is free.
+            let state = if has_unreleased {
+                MemberAssignmentState::UnreleasedPartitions
+            } else {
+                MemberAssignmentState::Stable
+            };
+            for (topic_id, parts) in &granted {
+                kept.entry(*topic_id).or_default().extend(parts);
+            }
+            Rebuilt {
+                state,
+                epoch: target_epoch,
+                assigned: kept,
+                pending: Partitions::new(),
+                granted,
+            }
+        };
+        for parts in rebuilt
+            .assigned
+            .values_mut()
+            .chain(rebuilt.pending.values_mut())
+        {
+            parts.sort_unstable();
+        }
+        rebuilt
+    }
+
+    /// The partitions of `wanted` that a member other than `member_id` holds,
+    /// assigned or pending revocation.
+    fn held_by_others(&self, member_id: &str, wanted: &Partitions) -> HashSet<(Uuid, i32)> {
+        let mut held = HashSet::new();
+        if wanted.is_empty() {
+            return held;
+        }
+        let wanted: HashMap<Uuid, HashSet<i32>> = wanted
+            .iter()
+            .map(|(topic_id, parts)| (*topic_id, parts.iter().copied().collect()))
+            .collect();
+        for other in self
+            .members
+            .values()
+            .filter(|other| other.member_id != member_id)
+        {
+            for map in [
+                &other.assigned_partitions,
+                &other.partitions_pending_revocation,
+            ] {
+                for (topic_id, parts) in map {
+                    let Some(wanted) = wanted.get(topic_id) else {
+                        continue;
+                    };
+                    held.extend(
+                        parts
+                            .iter()
+                            .filter(|partition| wanted.contains(partition))
+                            .map(|&partition| (*topic_id, partition)),
+                    );
+                }
+            }
+        }
+        held
+    }
+}
+
+/// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
+/// the `pending` partitions, or reports nothing at all.
+fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
+    owned.is_none_or(|owned| {
+        owned.iter().any(|(topic_id, parts)| {
+            pending.get(topic_id).is_some_and(|pending| {
+                let pending: HashSet<&i32> = pending.iter().collect();
+                parts.iter().any(|partition| pending.contains(partition))
+            })
+        })
+    })
 }
 
 #[cfg(test)]
@@ -189,21 +400,605 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::test_support::member;
+    use crate::coordinator::unified::consumer_state::{
+        ResolvedRegularExpression,
+        test_support::{Topics, member, subscribed_member},
+    };
 
-    #[test]
-    fn install_target_computes_revoke_split() {
+    const T: Uuid = Uuid([1; 16]);
+    const TARGET_EPOCH: i32 = 6;
+
+    fn topics() -> Topics {
+        Topics(vec![("t", T)])
+    }
+
+    fn parts(partitions: &[i32]) -> Partitions {
+        if partitions.is_empty() {
+            Partitions::new()
+        } else {
+            [(T, partitions.to_vec())].into()
+        }
+    }
+
+    /// What the coordinator stores about a member.
+    #[derive(Debug, PartialEq)]
+    struct Held {
+        epoch: i32,
+        state: MemberAssignmentState,
+        assigned: Vec<i32>,
+        pending: Vec<i32>,
+    }
+
+    fn held(epoch: i32, state: MemberAssignmentState, assigned: &[i32], pending: &[i32]) -> Held {
+        Held {
+            epoch,
+            state,
+            assigned: assigned.to_vec(),
+            pending: pending.to_vec(),
+        }
+    }
+
+    fn held_by(g: &GroupState, member_id: &str) -> Held {
+        let member = &g.members[member_id];
+        let list = |partitions: &Partitions| partitions.get(&T).cloned().unwrap_or_default();
+        Held {
+            epoch: member.member_epoch,
+            state: member.assignment_state,
+            assigned: list(&member.assigned_partitions),
+            pending: list(&member.partitions_pending_revocation),
+        }
+    }
+
+    /// A group at epoch 6 with member `a`, holding `before`, and member `b`,
+    /// holding `other`, assigned and pending revocation, and the target `target`
+    /// for `a`.
+    fn group(before: &Held, other: (&[i32], &[i32]), target: &[i32]) -> GroupState {
         let mut g = GroupState::new("g");
-        let t = Uuid([1; 16]);
-        let mut m = member("m1");
-        m.assigned_partitions.insert(t, vec![0, 1, 2]);
-        g.add_or_update_member(m);
-        let mut target_for_m1 = HashMap::new();
-        target_for_m1.insert(t, vec![0, 1]);
-        g.install_target([("m1".to_string(), target_for_m1)].into());
-        let m = &g.members["m1"];
-        check!(m.partitions_pending_revocation[&t] == vec![2]);
-        check!(m.assigned_partitions[&t] == vec![0, 1]);
-        check!(m.assignment_state == MemberAssignmentState::UnrevokedPartitions);
+        g.group_epoch = TARGET_EPOCH;
+        let mut a = subscribed_member("a", &["t"]);
+        a.member_epoch = before.epoch;
+        // The member already recorded the epoch it is in as its previous epoch.
+        a.previous_member_epoch = before.epoch;
+        a.assignment_state = before.state;
+        a.assigned_partitions = parts(&before.assigned);
+        a.partitions_pending_revocation = parts(&before.pending);
+        a.stamp_assignment_epochs(before.epoch);
+        g.members.insert("a".into(), a);
+        let mut b = member("b");
+        b.member_epoch = TARGET_EPOCH;
+        b.assigned_partitions = parts(other.0);
+        b.partitions_pending_revocation = parts(other.1);
+        g.members.insert("b".into(), b);
+        g.install_target([("a".to_string(), parts(target))].into());
+        g
+    }
+
+    /// Kafka's `CurrentAssignmentBuilder`: one row per rule. `owned` is what
+    /// the heartbeat reports, and `None` is a heartbeat without
+    /// `TopicPartitions`.
+    #[test]
+    fn reconcile_member_follows_the_current_assignment_builder() {
+        use MemberAssignmentState::{
+            Stable as S, UnreleasedPartitions as R, UnrevokedPartitions as U,
+        };
+
+        struct Row {
+            name: &'static str,
+            before: Held,
+            other: (&'static [i32], &'static [i32]),
+            target: &'static [i32],
+            owned: Option<&'static [i32]>,
+            subscription_changed: bool,
+            after: Held,
+            changed: bool,
+        }
+        let row = |name, before, other, target, owned, after| Row {
+            name,
+            before,
+            other,
+            target,
+            owned,
+            subscription_changed: false,
+            changed: false,
+            after,
+        };
+        let rows = [
+            // A member that must revoke stays where it is until it reports an
+            // owned set without the pending partitions.
+            row(
+                "an absent owned set keeps a member that must revoke",
+                held(5, U, &[0, 1], &[2]),
+                (&[], &[]),
+                &[0, 1],
+                None,
+                held(5, U, &[0, 1], &[2]),
+            ),
+            row(
+                "an owned set with the pending partition keeps the member",
+                held(5, U, &[0, 1], &[2]),
+                (&[], &[]),
+                &[0, 1],
+                Some(&[0, 1, 2]),
+                held(5, U, &[0, 1], &[2]),
+            ),
+            Row {
+                changed: true,
+                ..row(
+                    "an owned set without the pending partition moves the member on",
+                    held(5, U, &[0, 1], &[2]),
+                    (&[], &[]),
+                    &[0, 1],
+                    Some(&[0, 1]),
+                    held(6, S, &[0, 1], &[]),
+                )
+            },
+            // A stable member behind the target epoch learns what to revoke.
+            Row {
+                changed: true,
+                ..row(
+                    "a shrunk target is a revocation, in the member's epoch",
+                    held(5, S, &[0, 1, 2], &[]),
+                    (&[], &[]),
+                    &[0, 1],
+                    None,
+                    held(5, U, &[0, 1], &[2]),
+                )
+            },
+            Row {
+                changed: true,
+                ..row(
+                    "a member that already dropped the partition moves on",
+                    held(5, S, &[0, 1, 2], &[]),
+                    (&[], &[]),
+                    &[0, 1],
+                    Some(&[0, 1]),
+                    held(6, S, &[0, 1], &[]),
+                )
+            },
+            Row {
+                changed: true,
+                ..row(
+                    "a free target partition is granted at the target epoch",
+                    held(5, S, &[0], &[]),
+                    (&[], &[]),
+                    &[0, 1],
+                    None,
+                    held(6, S, &[0, 1], &[]),
+                )
+            },
+            Row {
+                changed: true,
+                ..row(
+                    "a partition another member holds is withheld",
+                    held(5, S, &[0], &[]),
+                    (&[1], &[]),
+                    &[0, 1],
+                    None,
+                    held(6, R, &[0], &[]),
+                )
+            },
+            Row {
+                changed: true,
+                ..row(
+                    "a partition another member must still revoke is withheld",
+                    held(5, S, &[0], &[]),
+                    (&[], &[1]),
+                    &[0, 1],
+                    None,
+                    held(6, R, &[0], &[]),
+                )
+            },
+            Row {
+                changed: true,
+                ..row(
+                    "an unreleased partition is granted once it is free",
+                    held(6, R, &[0], &[]),
+                    (&[], &[]),
+                    &[0, 1],
+                    None,
+                    held(6, S, &[0, 1], &[]),
+                )
+            },
+            row(
+                "an unreleased partition stays withheld while it is held",
+                held(6, R, &[0], &[]),
+                (&[1], &[]),
+                &[0, 1],
+                None,
+                held(6, R, &[0], &[]),
+            ),
+            row(
+                "a stable member at the target epoch has nothing to do",
+                held(6, S, &[0, 1], &[]),
+                (&[], &[]),
+                &[0, 1],
+                None,
+                held(6, S, &[0, 1], &[]),
+            ),
+            Row {
+                changed: true,
+                ..row(
+                    "a revocation waits, and so does a free partition",
+                    held(5, S, &[0, 1], &[]),
+                    (&[], &[]),
+                    &[1, 2],
+                    None,
+                    held(5, U, &[1], &[0]),
+                )
+            },
+            Row {
+                changed: true,
+                ..row(
+                    "a partition the member gave up is free for it again",
+                    held(5, U, &[0], &[1]),
+                    (&[], &[]),
+                    &[0, 1],
+                    Some(&[0]),
+                    held(6, S, &[0, 1], &[]),
+                )
+            },
+            // A subscription change at the target epoch only filters the
+            // assignment by the subscription, and the member still subscribes
+            // to the topic (`updateCurrentAssignment`).
+            Row {
+                subscription_changed: true,
+                ..row(
+                    "a subscription change alone leaves a member at the target epoch",
+                    held(6, S, &[0, 1, 2], &[]),
+                    (&[], &[]),
+                    &[0, 1],
+                    None,
+                    held(6, S, &[0, 1, 2], &[]),
+                )
+            },
+        ];
+        for r in rows {
+            let mut g = group(&r.before, r.other, r.target);
+            let owned = r.owned.map(parts);
+
+            let changed =
+                g.reconcile_member("a", owned.as_ref(), r.subscription_changed, &topics());
+
+            check!(held_by(&g, "a") == r.after, "{}", r.name);
+            check!(changed == r.changed, "{}", r.name);
+        }
+    }
+
+    /// A target change leaves every member as it was. The member learns about
+    /// it in its own heartbeat, and it keeps its epoch until it revokes.
+    #[test]
+    fn install_target_does_not_reconcile_any_member() {
+        let before = held(5, MemberAssignmentState::Stable, &[0, 1, 2], &[]);
+        let mut g = group(&before, (&[], &[]), &[0, 1]);
+
+        check!(held_by(&g, "a") == before);
+        check!(g.target.epoch == TARGET_EPOCH);
+
+        g.reconcile_member("a", None, false, &topics());
+        check!(
+            held_by(&g, "a") == held(5, MemberAssignmentState::UnrevokedPartitions, &[0, 1], &[2])
+        );
+    }
+
+    /// A member moved to a new epoch remembers the one it left, and a partition
+    /// granted at that epoch is assigned at it, even one the member gave up.
+    #[test]
+    fn a_granted_partition_is_assigned_at_the_new_epoch() {
+        let before = held(5, MemberAssignmentState::UnrevokedPartitions, &[0], &[1]);
+        let mut g = group(&before, (&[], &[]), &[0, 1]);
+
+        g.reconcile_member("a", Some(&parts(&[0])), false, &topics());
+
+        let member = &g.members["a"];
+        check!(member.member_epoch == TARGET_EPOCH);
+        check!(member.previous_member_epoch == 5);
+        check!(member.assignment_epoch(&T, 0) == Some(5));
+        check!(member.assignment_epoch(&T, 1) == Some(TARGET_EPOCH));
+    }
+
+    const U: Uuid = Uuid([2; 16]);
+    /// A topic that the metadata does not hold, as one that was deleted.
+    const W: Uuid = Uuid([3; 16]);
+
+    /// What the coordinator stores about a member, with the epoch it left.
+    #[derive(Debug, PartialEq)]
+    struct Shape {
+        epoch: i32,
+        previous_epoch: i32,
+        state: MemberAssignmentState,
+        assigned: Partitions,
+        pending: Partitions,
+    }
+
+    fn shape(
+        (epoch, previous_epoch): (i32, i32),
+        state: MemberAssignmentState,
+        assigned: &[(Uuid, &[i32])],
+        pending: &[(Uuid, &[i32])],
+    ) -> Shape {
+        Shape {
+            epoch,
+            previous_epoch,
+            state,
+            assigned: topic_parts(assigned),
+            pending: topic_parts(pending),
+        }
+    }
+
+    fn topic_parts(entries: &[(Uuid, &[i32])]) -> Partitions {
+        entries
+            .iter()
+            .map(|(topic_id, parts)| (*topic_id, parts.to_vec()))
+            .collect()
+    }
+
+    fn shape_of(g: &GroupState, member_id: &str) -> Shape {
+        let member = &g.members[member_id];
+        Shape {
+            epoch: member.member_epoch,
+            previous_epoch: member.previous_member_epoch,
+            state: member.assignment_state,
+            assigned: member.assigned_partitions.clone(),
+            pending: member.partitions_pending_revocation.clone(),
+        }
+    }
+
+    /// A row of [`subscription_rows`]: a group at epoch 6, with the target it
+    /// names installed for member `a`, and `other` held by member `b`.
+    struct SubscriptionRow {
+        name: &'static str,
+        names: &'static [&'static str],
+        /// The regex of the member, and what the group resolved it to.
+        regex: Option<(&'static str, Option<&'static [&'static str]>)>,
+        before: Shape,
+        other: Partitions,
+        target: Partitions,
+        owned: Option<Partitions>,
+        subscription_changed: bool,
+        after: Shape,
+    }
+
+    fn subscription_rows() -> Vec<SubscriptionRow> {
+        use MemberAssignmentState::{Stable, UnreleasedPartitions, UnrevokedPartitions};
+
+        let row = |name: &'static str,
+                   names: &'static [&'static str],
+                   before: Shape,
+                   target: Partitions,
+                   owned: Option<Partitions>,
+                   subscription_changed: bool,
+                   after: Shape| SubscriptionRow {
+            name,
+            names,
+            regex: None,
+            before,
+            other: Partitions::new(),
+            target,
+            owned,
+            subscription_changed,
+            after,
+        };
+        let owning_everything = topic_parts(&[(T, &[0, 1]), (U, &[0])]);
+        vec![
+            row(
+                "an unrevoked member that owns its pending set drops a topic it left",
+                &["t"],
+                shape(
+                    (5, 4),
+                    UnrevokedPartitions,
+                    &[(T, &[0]), (U, &[0])],
+                    &[(T, &[1])],
+                ),
+                topic_parts(&[(T, &[0]), (U, &[0])]),
+                Some(owning_everything.clone()),
+                true,
+                shape(
+                    (5, 5),
+                    UnrevokedPartitions,
+                    &[(T, &[0])],
+                    &[(T, &[1]), (U, &[0])],
+                ),
+            ),
+            row(
+                "an unrevoked member that owns its pending set keeps it without a change",
+                &["t"],
+                shape(
+                    (5, 4),
+                    UnrevokedPartitions,
+                    &[(T, &[0]), (U, &[0])],
+                    &[(T, &[1])],
+                ),
+                topic_parts(&[(T, &[0]), (U, &[0])]),
+                Some(owning_everything.clone()),
+                false,
+                shape(
+                    (5, 4),
+                    UnrevokedPartitions,
+                    &[(T, &[0]), (U, &[0])],
+                    &[(T, &[1])],
+                ),
+            ),
+            row(
+                "a stable member at the target epoch revokes a topic it left and still owns",
+                &["t"],
+                shape((6, 5), Stable, &[(T, &[0, 1]), (U, &[0, 1])], &[]),
+                topic_parts(&[(T, &[0, 1]), (U, &[0, 1])]),
+                None,
+                true,
+                shape(
+                    (6, 6),
+                    UnrevokedPartitions,
+                    &[(T, &[0, 1])],
+                    &[(U, &[0, 1])],
+                ),
+            ),
+            row(
+                "a stable member at the target epoch drops a topic it left and released",
+                &["t"],
+                shape((6, 5), Stable, &[(T, &[0, 1]), (U, &[0, 1])], &[]),
+                topic_parts(&[(T, &[0, 1]), (U, &[0, 1])]),
+                Some(topic_parts(&[(T, &[0, 1])])),
+                true,
+                shape((6, 6), Stable, &[(T, &[0, 1])], &[]),
+            ),
+            row(
+                "a member with no subscription revokes everything",
+                &[],
+                shape((6, 5), Stable, &[(T, &[0]), (U, &[0])], &[]),
+                topic_parts(&[(T, &[0]), (U, &[0])]),
+                None,
+                true,
+                shape((6, 6), UnrevokedPartitions, &[], &[(T, &[0]), (U, &[0])]),
+            ),
+            row(
+                "the target of a topic the member left grants nothing",
+                &["t"],
+                shape((5, 4), Stable, &[(T, &[0])], &[]),
+                topic_parts(&[(T, &[0]), (U, &[0, 1])]),
+                None,
+                false,
+                shape((6, 5), Stable, &[(T, &[0])], &[]),
+            ),
+            row(
+                "a partition of a topic the member left is revoked though the target holds it",
+                &["t"],
+                shape((5, 4), Stable, &[(T, &[0]), (U, &[0])], &[]),
+                topic_parts(&[(T, &[0]), (U, &[0])]),
+                None,
+                false,
+                shape((5, 5), UnrevokedPartitions, &[(T, &[0])], &[(U, &[0])]),
+            ),
+            row(
+                "a topic that does not exist is not subscribed",
+                &["t", "w"],
+                shape((5, 4), Stable, &[(T, &[0])], &[]),
+                topic_parts(&[(T, &[0]), (W, &[0])]),
+                None,
+                false,
+                shape((6, 5), Stable, &[(T, &[0])], &[]),
+            ),
+            SubscriptionRow {
+                regex: Some(("u.*", Some(&["u"]))),
+                ..row(
+                    "the topics of a resolved regex are subscribed",
+                    &[],
+                    shape((5, 4), Stable, &[], &[]),
+                    topic_parts(&[(U, &[0])]),
+                    None,
+                    false,
+                    shape((6, 5), Stable, &[(U, &[0])], &[]),
+                )
+            },
+            SubscriptionRow {
+                regex: Some(("u.*", None)),
+                ..row(
+                    "a regex the group has not resolved subscribes to nothing",
+                    &[],
+                    shape((5, 4), Stable, &[], &[]),
+                    topic_parts(&[(U, &[0])]),
+                    None,
+                    false,
+                    shape((6, 5), Stable, &[], &[]),
+                )
+            },
+            // A member that keeps its epoch is rebuilt all the same, and records
+            // the epoch it stays in as its previous epoch.
+            SubscriptionRow {
+                other: topic_parts(&[(T, &[1])]),
+                ..row(
+                    "an unreleased member that keeps waiting records the epoch it stays in",
+                    &["t"],
+                    shape((6, 5), UnreleasedPartitions, &[(T, &[0])], &[]),
+                    topic_parts(&[(T, &[0, 1])]),
+                    None,
+                    false,
+                    shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]),
+                )
+            },
+            SubscriptionRow {
+                other: topic_parts(&[(T, &[1])]),
+                ..row(
+                    "an unreleased member that already recorded it changes nothing",
+                    &["t"],
+                    shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]),
+                    topic_parts(&[(T, &[0, 1])]),
+                    None,
+                    false,
+                    shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]),
+                )
+            },
+        ]
+    }
+
+    /// Kafka's `CurrentAssignmentBuilder` reads the member's subscription:
+    /// `subscribedTopicIds` is the member's names and the topics of its
+    /// resolved regex, and a topic that does not exist is not in it.
+    /// `updateCurrentAssignment` removes the partitions of a topic the member
+    /// left, and `computeNextAssignment` treats the target of such a topic as
+    /// empty. The member is rebuilt when the shape after differs from the
+    /// shape before, and it records the epoch it leaves whenever it is
+    /// rebuilt.
+    #[test]
+    fn the_subscription_filters_the_reconciliation() {
+        let metadata = Topics(vec![("t", T), ("u", U)]);
+        for r in subscription_rows() {
+            let mut g = GroupState::new("g");
+            g.group_epoch = TARGET_EPOCH;
+            let mut a = subscribed_member("a", r.names);
+            a.member_epoch = r.before.epoch;
+            a.previous_member_epoch = r.before.previous_epoch;
+            a.assignment_state = r.before.state;
+            a.assigned_partitions = r.before.assigned.clone();
+            a.partitions_pending_revocation = r.before.pending.clone();
+            a.stamp_assignment_epochs(r.before.epoch);
+            if let Some((regex, resolved)) = r.regex {
+                a.subscribed_topic_regex = Some(regex.to_owned());
+                if let Some(topics) = resolved {
+                    g.set_resolved_regex(
+                        regex.to_owned(),
+                        ResolvedRegularExpression {
+                            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+                            version: 1,
+                            timestamp_ms: 0,
+                        },
+                    );
+                }
+            }
+            g.members.insert("a".into(), a);
+            let mut b = member("b");
+            b.member_epoch = TARGET_EPOCH;
+            b.assigned_partitions = r.other;
+            g.members.insert("b".into(), b);
+            g.install_target([("a".to_string(), r.target)].into());
+
+            let changed =
+                g.reconcile_member("a", r.owned.as_ref(), r.subscription_changed, &metadata);
+
+            check!(changed == (r.before != r.after), "{}", r.name);
+            check!(shape_of(&g, "a") == r.after, "{}", r.name);
+        }
+    }
+
+    /// The lookup of the partitions that other members hold reads only the
+    /// partitions the member wants, assigned or pending revocation, and never
+    /// the member's own.
+    #[test]
+    fn held_by_others_reports_only_the_wanted_partitions_of_other_members() {
+        let mut g = GroupState::new("g");
+        for (id, assigned, pending) in [
+            ("a", topic_parts(&[(T, &[0, 1])]), topic_parts(&[(U, &[5])])),
+            ("b", topic_parts(&[(T, &[2, 3])]), topic_parts(&[(T, &[4])])),
+            ("c", topic_parts(&[(U, &[7])]), Partitions::new()),
+        ] {
+            let mut m = member(id);
+            m.assigned_partitions = assigned;
+            m.partitions_pending_revocation = pending;
+            g.members.insert(id.into(), m);
+        }
+
+        let held = g.held_by_others("a", &topic_parts(&[(T, &[0, 2, 4, 9]), (U, &[5, 7])]));
+
+        check!(held == HashSet::from([(T, 2), (T, 4), (U, 7)]));
+        check!(g.held_by_others("a", &Partitions::new()).is_empty());
     }
 }

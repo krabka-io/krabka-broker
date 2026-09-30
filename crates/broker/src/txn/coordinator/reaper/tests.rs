@@ -9,7 +9,9 @@ use krabka_ids::PartitionIndex;
 use tokio::sync::Mutex;
 
 use super::*;
-use crate::txn::coordinator::test_support::{entry, test_coordinator};
+use crate::txn::coordinator::test_support::{
+    DATA_TOPIC, entry, live_coordinator, test_coordinator,
+};
 
 #[tokio::test]
 async fn reaper_retries_an_existing_prepare_abort() {
@@ -401,4 +403,86 @@ async fn sweep_does_not_complete_when_marker_fanout_fails() {
     .await;
 
     assert!(out.is_empty());
+}
+
+// ── The abort of a timed-out transaction, against real logs ───────────
+
+/// Kafka's `abortTimedOutTransactions` runs `prepareFenceProducerEpoch` and
+/// then `endTransaction(isFromClient = false)` at the cluster's transaction
+/// version. Every version aborts at `epoch + 1`, so the timed-out producer is
+/// fenced at its partitions and on its next coordinator call. Below `TV_2` the
+/// fence raises the epoch and keeps no last epoch. At `TV_2` the completion bump
+/// raises it once and keeps the epoch the producer held as the last epoch. The
+/// record and the markers carry `TV_2` on a `TV_2` cluster, and `TV_0` below it:
+/// `endTransactionWithTV1` stamps `TV_0` on a `TV_1` cluster too.
+#[tokio::test]
+async fn a_timed_out_transaction_aborts_at_the_fenced_epoch_at_every_transaction_version() {
+    const TID: &str = "tid-timed-out";
+    const PID: ProducerId = ProducerId(1000);
+    const HELD_EPOCH: i16 = 3;
+
+    // (cluster level, the last epoch the abort records, the version it stamps)
+    let cases = [
+        (TxnVersion::Classic, -1, 0),
+        (TxnVersion::Flexible, -1, 0),
+        (TxnVersion::Verified, HELD_EPOCH, 2),
+    ];
+    for (txnv, last_epoch, stamp) in cases {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, data) = live_coordinator(dir.path()).await;
+        let orders = crate::txn::state::TopicPartition {
+            topic: DATA_TOPIC.to_owned(),
+            partition: PartitionIndex(0),
+        };
+        let mut ongoing = TxnEntry::new_empty(TID.to_owned(), PID, HELD_EPOCH, 1, 0);
+        ongoing.state = TxnState::Ongoing;
+        ongoing.start_ms = 0;
+        ongoing.partitions.insert(orders.clone());
+        coordinator
+            .put(ongoing, txnv)
+            .await
+            .expect("seed the ongoing transaction");
+
+        check!(
+            coordinator.sweep_expired(10_000, txnv).await == vec![TID.to_owned()],
+            "{txnv:?}: the transaction times out"
+        );
+
+        let aborted = coordinator
+            .get(TID)
+            .expect("the transaction is still tracked")
+            .lock()
+            .await
+            .clone();
+        let expected = TxnEntry {
+            state: TxnState::CompleteAbort,
+            producer_epoch: HELD_EPOCH + 1,
+            last_producer_epoch: last_epoch,
+            client_transaction_version: stamp,
+            start_ms: 0,
+            last_update_ms: aborted.last_update_ms,
+            ..TxnEntry::new_empty(TID.to_owned(), PID, HELD_EPOCH + 1, 1, 0)
+        };
+        check!(aborted == expected, "{txnv:?}: the entry after the abort");
+        let marker = data
+            .read_log(krabka_log::Offset(0), krabka_units::mebibytes(1))
+            .expect("read the data partition")
+            .batches
+            .first()
+            .map(|batch| batch.producer_epoch);
+        check!(
+            marker == Some(HELD_EPOCH + 1),
+            "{txnv:?}: the abort marker fences the epoch the producer held"
+        );
+
+        // The zombie that resumes at the epoch it held is fenced instead of
+        // starting a new transaction.
+        let zombie = coordinator
+            .register_partitions(TID, PID, HELD_EPOCH, vec![orders], txnv, 4)
+            .await;
+        check!(
+            zombie == crate::codes::PRODUCER_FENCED,
+            "{txnv:?}: the timed-out producer is fenced"
+        );
+    }
 }

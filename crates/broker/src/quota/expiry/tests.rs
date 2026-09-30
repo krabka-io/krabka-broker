@@ -33,13 +33,7 @@ fn throttle_series(metrics: &BrokerMetrics) -> Vec<String> {
 fn an_inactive_bucket_and_its_metric_series_are_both_dropped() {
     let buckets = QuotaBuckets::new();
     let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create(
-        "producer_byte_rate",
-        &key("alice", "app"),
-        "alice",
-        "app",
-        1024.0,
-    ));
+    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -63,13 +57,7 @@ fn an_inactive_bucket_and_its_metric_series_are_both_dropped() {
 fn a_bucket_inside_the_window_keeps_its_series() {
     let buckets = QuotaBuckets::new();
     let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create(
-        "producer_byte_rate",
-        &key("alice", "app"),
-        "alice",
-        "app",
-        1024.0,
-    ));
+    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -84,6 +72,33 @@ fn a_bucket_inside_the_window_keeps_its_series() {
 
     check!(buckets.len() == 1);
     check!(throttle_series(&metrics).len() == 1);
+}
+
+/// A bucket keyed by a user alone published its throttle under that user with
+/// no client id, whichever client created it, so that is the series its expiry
+/// releases (#1213). Keying the release on the creating client would have
+/// named `client_id="app"` and left this series behind.
+#[test]
+fn a_user_bucket_releases_the_series_of_its_own_key() {
+    let buckets = QuotaBuckets::new();
+    let metrics = BrokerMetrics::new();
+    let user: EntityKey = vec![("user".into(), Some("alice".into()))];
+    drop(buckets.get_or_create("producer_byte_rate", &user, 1024.0));
+    drop(
+        metrics
+            .quota_entity_throttle_seconds_total
+            .get_or_create(&QuotaEntityLabel {
+                quota_type: QuotaType::Produce,
+                user: Some("alice".into()),
+                client_id: None,
+            }),
+    );
+    check!(throttle_series(&metrics).len() == 1);
+
+    sweep(&buckets, &metrics, millis(0));
+
+    check!(buckets.len() == 0);
+    check!(throttle_series(&metrics).is_empty());
 }
 
 /// Kafka charges every quota under its own config key, and the series is

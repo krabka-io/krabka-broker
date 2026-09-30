@@ -59,7 +59,7 @@ impl Segment {
         }
         let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
             .map_err(|_| LogError::Corrupt("read_raw target offset out of range".into()))?;
-        let start_pos = u64::from(self.offset_index.lookup(target_rel));
+        let start_pos = self.read_start_position(target_rel)?;
 
         // Below this line the budget indexes into a byte buffer, so it
         // crosses back to `usize` once, here.

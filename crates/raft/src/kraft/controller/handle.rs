@@ -15,7 +15,7 @@ use crate::{
     kraft::{
         event::Event,
         transport::{Command, Inbound, MetadataFetchSlice, QuorumStateSnapshot},
-        types::NodeId,
+        types::{NodeId, ReplicaKey},
     },
 };
 
@@ -128,6 +128,20 @@ impl KraftController {
             .await
     }
 
+    /// Run the leader-side checks of [`Self::finalize_kraft_version`] and
+    /// append nothing.
+    ///
+    /// # Errors
+    /// Returns the error `finalize_kraft_version` would return for the same
+    /// request.
+    pub async fn validate_kraft_version(
+        &self,
+        version: u16,
+    ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
+        self.reconfigure(crate::reconfig::VoterChange::ValidateKraftVersion(version))
+            .await
+    }
+
     /// A structured snapshot of consensus state for the broker's
     /// `DescribeQuorum` admin view.
     ///
@@ -143,7 +157,8 @@ impl KraftController {
     }
 
     /// Read a committed `__cluster_metadata` slice for an observer's
-    /// `API_KEY_METADATA_FETCH` (1004).
+    /// `API_KEY_METADATA_FETCH` (1004). `replica` names the observer that asked,
+    /// when it is a replica, so a leader can track its progress.
     ///
     /// # Errors
     /// Returns [`RaftError::Shutdown`] if the engine task is gone.
@@ -151,12 +166,14 @@ impl KraftController {
         &self,
         fetch_offset: i64,
         max_size: ByteSize,
+        replica: Option<ReplicaKey>,
     ) -> Result<MetadataFetchSlice, RaftError> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx
             .send(Command::MetadataFetch {
                 fetch_offset,
                 max_size,
+                replica,
                 reply,
             })
             .await

@@ -120,8 +120,16 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn coordinator(log_dir: &Path) -> Arc<ShareCoordinator> {
+        coordinator_with(log_dir, ShareCoordinatorConfig::default())
+    }
+
+    /// [`coordinator`] with `config`, for a test of a rule that Kafka trunk
+    /// added to the share coordinator.
+    pub(crate) fn coordinator_with(
+        log_dir: &Path,
+        config: ShareCoordinatorConfig,
+    ) -> Arc<ShareCoordinator> {
         let registry = Arc::new(PartitionRegistry::new());
-        let config = ShareCoordinatorConfig::default();
         open_all_state_partitions(&registry, log_dir, config.state_topic_num_partitions);
         Arc::new(ShareCoordinator::with_wall_clock(
             NodeId(1),

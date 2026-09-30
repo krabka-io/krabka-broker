@@ -65,16 +65,27 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode Produce");
-    let resp_bytes = round_trip(&mut stream, 0, VERSION, 1, true, &body)
-        .await
-        .expect("Produce round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = ProduceResponse::decode(&mut cur, VERSION).expect("decode ProduceResponse");
-    let part = &resp.responses[0].partition_responses[0];
+    // A partition record that the test has just changed reaches the broker's
+    // partition a moment after the image shows it, and a producer retries the
+    // leadership errors of that window as any Kafka client does.
+    let mut attempts = 0;
+    let error_code = loop {
+        let resp_bytes = round_trip(&mut stream, 0, VERSION, 1, true, &body)
+            .await
+            .expect("Produce round-trip");
+        let mut cur: &[u8] = &resp_bytes;
+        let resp = ProduceResponse::decode(&mut cur, VERSION).expect("decode ProduceResponse");
+        let error_code = resp.responses[0].partition_responses[0].error_code;
+        attempts += 1;
+        // LEADER_NOT_AVAILABLE, NOT_LEADER_OR_FOLLOWER
+        if !matches!(error_code, 5 | 6) || attempts == 100 {
+            break error_code;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
     assert!(
-        part.error_code == 0,
-        "Produce must succeed: error_code={}",
-        part.error_code
+        error_code == 0,
+        "Produce must succeed: error_code={error_code}"
     );
 }
 

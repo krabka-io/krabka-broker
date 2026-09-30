@@ -135,8 +135,12 @@ impl Engine {
             Command::MetadataFetch {
                 fetch_offset,
                 max_size,
+                replica,
                 reply,
             } => {
+                if let Some(replica) = replica {
+                    self.record_metadata_fetch(replica, fetch_offset);
+                }
                 let _ = reply.send(self.metadata_fetch_slice(fetch_offset, max_size));
             }
             #[cfg(test)]
@@ -389,6 +393,11 @@ impl Engine {
             self.held_epoch,
             epoch,
         );
+        if lost_leadership {
+            // A later leadership starts with no observers, as a new
+            // `LeaderState` does.
+            self.observers.clear();
+        }
         if lost_leadership && !self.commit_waiters.is_empty() {
             let current_leader = self.core.quorum_state().leader_id;
             for w in self.commit_waiters.drain(..) {

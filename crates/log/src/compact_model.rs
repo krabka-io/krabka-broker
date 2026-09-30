@@ -42,8 +42,10 @@
 //!   1. **control-not-deduped** — a marker leaves the log only through its
 //!      delete horizon: every input marker whose horizon has not elapsed is in
 //!      the output.
-//!   2. **marker-data-precedence** — a marker never leaves the log while its
-//!      producer has live data in the output, elapsed horizon or not.
+//!   2. **marker-data-precedence** — a marker never leaves the log while the
+//!      pass reads data of its own transaction in front of it, elapsed horizon
+//!      or not. Kafka decides this per transaction, so a marker whose data is
+//!      gone ages out even when its producer has newer live data.
 //!   3. **tombstone-aging** — no surviving tombstone has an elapsed horizon,
 //!      and a newest-for-key tombstone that has not reached its horizon
 //!      survives.

@@ -104,8 +104,8 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
     wait_until_fenced_set(&cluster[observer_index].0, &BTreeSet::from([victim_id])).await;
 
     // From here the observer must name only survivors, on both APIs, for every
-    // turn of the rotation — while the dead broker keeps the `Metadata`
-    // endpoint row a client still needs to route to it.
+    // turn of the rotation, and `Metadata` must stop listing the dead broker,
+    // as Kafka's `getAliveBrokerNodes` does, so a client does not dial it.
     let dead_id = i32::try_from(victim_id).expect("node id fits an i32");
     for _ in 0..REQUESTS {
         let resp: MetadataResponse = client
@@ -116,8 +116,8 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
             .await
             .unwrap();
         assert!(
-            resp.brokers.iter().any(|row| row.node_id == dead_id),
-            "the dead broker keeps its Metadata endpoint row: {:?}",
+            resp.brokers.iter().all(|row| row.node_id != dead_id),
+            "the dead broker is not listed in Metadata: {:?}",
             resp.brokers
         );
         assert!(

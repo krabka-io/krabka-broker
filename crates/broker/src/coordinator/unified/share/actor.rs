@@ -11,7 +11,7 @@
 //! protocol, the handle, and the `tokio::select!` loop — while each request
 //! path and each persistence concern lives in its own submodule.
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use krabka_protocol::owned::{
     share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -33,6 +33,8 @@ mod seed;
 mod session;
 mod share_state;
 
+#[cfg(test)]
+mod group_config_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -111,6 +113,21 @@ impl ShareGroupActorHandle {
     }
 }
 
+/// The settings `group_id` runs with: the `share.*` overrides of its group
+/// config in the current metadata image over the broker's `config`. A
+/// coordinator with no metadata source runs every group with the broker
+/// values.
+fn effective_config<'a>(
+    config: &'a ShareGroupConfig,
+    coordinator: &super::super::GroupCoordinator,
+    group_id: &str,
+) -> Cow<'a, ShareGroupConfig> {
+    match coordinator.metadata_source() {
+        Some(source) => config.for_group(source.current_image().group_config(group_id)),
+        None => Cow::Borrowed(config),
+    }
+}
+
 async fn actor_loop(
     group_id: String,
     config: Arc<ShareGroupConfig>,
@@ -120,17 +137,32 @@ async fn actor_loop(
     mut rx: mpsc::Receiver<ShareGroupActorMessage>,
 ) {
     let mut state = ShareGroupState::new(group_id);
-    let mut tick = tokio::time::interval(config.heartbeat_interval);
+    let mut tick_period = config.heartbeat_interval;
+    let mut tick = tokio::time::interval(tick_period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        // The session-expiry tick follows the group's heartbeat interval, so a
+        // `share.heartbeat.interval.ms` override takes effect at the next turn.
+        let heartbeat_interval =
+            effective_config(&config, &coordinator, &state.group_id).heartbeat_interval;
+        if heartbeat_interval != tick_period {
+            tick_period = heartbeat_interval;
+            tick = tokio::time::interval(tick_period);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        }
         tokio::select! {
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
                 match msg {
                     ShareGroupActorMessage::Heartbeat { request, client_id, client_host, reply } => {
+                        // The settings this group runs with when the heartbeat
+                        // arrives, not those of the turn before: a `share.*`
+                        // override in its group config takes effect at the
+                        // next message or tick.
+                        let effective = effective_config(&config, &coordinator, &state.group_id);
                         match handle_heartbeat(
                             &mut state,
-                            &config,
+                            &effective,
                             &*metadata,
                             &*offsets_log,
                             &coordinator,
@@ -188,7 +220,8 @@ async fn actor_loop(
                 }
             }
             _ = tick.tick() => {
-                if handle_session_tick(&mut state, &config, &*metadata, &*offsets_log, &coordinator).await.is_err() {
+                let effective = effective_config(&config, &coordinator, &state.group_id);
+                if handle_session_tick(&mut state, &effective, &*metadata, &*offsets_log, &coordinator).await.is_err() {
                     break;
                 }
             }

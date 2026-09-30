@@ -131,9 +131,11 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
     let image = broker.controller.current_image();
     let configs = crate::handlers::describe_configs::effective_topic_configs(
         &image,
+        broker.config.node_id,
         "fresh",
         &std::collections::BTreeMap::new(),
         crate::api_catalog::UnstableApiVersions::Disabled,
+        &std::collections::BTreeMap::new(),
     )
     .into_iter()
     .map(|entry| CreatableTopicConfigs {
@@ -485,8 +487,12 @@ impl FakeController {
                 if api_key == envelope_request::API_KEY {
                     let outer =
                         envelope::decode_request(parsed.body, version).expect("an Envelope");
-                    let forwarded = envelope::unwrap_request(&outer.request_data, flexible_for)
-                        .expect("an embedded request");
+                    let forwarded = envelope::unwrap_request(
+                        &outer.request_data,
+                        flexible_for,
+                        crate::api_catalog::UnstableApiVersions::Disabled,
+                    )
+                    .expect("an embedded request");
                     let principal =
                         envelope::deserialize_principal(outer.request_principal.as_deref())
                             .expect("a principal");

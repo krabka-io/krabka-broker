@@ -83,6 +83,7 @@ impl QuorumStateMachine {
                     self.role = Role::Follower {
                         leader_id,
                         fetch_deadline,
+                        has_fetched_from_leader: false,
                     };
                     vec![
                         Action::TransitionedTo(self.role.name()),

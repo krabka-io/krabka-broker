@@ -10,8 +10,8 @@
 use krabka_log::Offset;
 
 use super::{
-    AcquisitionState, DS_ACKNOWLEDGED, DS_ARCHIVED, DS_AVAILABLE, InFlightBatch, RecordState,
-    clamp_i32,
+    AcquisitionState, DS_ACKNOWLEDGED, DS_ARCHIVED, DS_ARCHIVING, DS_AVAILABLE, InFlightBatch,
+    RecordState, clamp_i32, dlq::DlqRange,
 };
 use crate::share_coordinator::persistence::StateBatch;
 
@@ -37,6 +37,7 @@ impl AcquisitionState {
                     DS_AVAILABLE
                 }
                 RecordState::Acknowledged => DS_ACKNOWLEDGED,
+                RecordState::Archiving => DS_ARCHIVING,
                 RecordState::Archived => DS_ARCHIVED,
             };
             out.push(StateBatch {
@@ -103,6 +104,7 @@ impl AcquisitionState {
                 // leader change, so re-offer those records.
                 let state = match sb.delivery_state {
                     DS_ACKNOWLEDGED => RecordState::Acknowledged,
+                    DS_ARCHIVING => RecordState::Archiving,
                     DS_ARCHIVED => RecordState::Archived,
                     _ => RecordState::Available,
                 };
@@ -114,6 +116,20 @@ impl AcquisitionState {
                     acquired_by: None,
                     lock_deadline: None,
                 }
+            })
+            .collect();
+        // A run that was `Archiving` when the last leader stopped never got
+        // its dead-letter record acknowledged, so this leader writes it again,
+        // as Kafka's `maybeResumeDlqArchiving` does.
+        self.pending_dlq = self
+            .batches
+            .iter()
+            .filter(|b| b.state == RecordState::Archiving)
+            .map(|b| DlqRange {
+                first: b.first_offset,
+                last: b.last_offset,
+                delivery_count: b.delivery_count,
+                cause: None,
             })
             .collect();
         self.end_offset = self

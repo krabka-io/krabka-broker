@@ -10,8 +10,9 @@
 //! it forwardable. The controller listener answers it in place, as
 //! `ControllerApis.handleUnregisterController` does. A broker listener
 //! forwards it to the active controller in a KIP-590 `Envelope`, as
-//! `KafkaApis` does with `forwardToController`. The `forward` submodule holds
-//! that half.
+//! `KafkaApis` does with `forwardToController`. The forwarding lives in
+//! `handlers::forward_to_controller`, shared with the other admin RPCs that
+//! need the active controller.
 //!
 //! The checks run in trunk's order:
 //!
@@ -33,7 +34,7 @@ use krabka_metadata::{MetadataRecord, NodeId, UnregisterControllerRecord};
 use krabka_protocol::{
     Decode,
     owned::{
-        unregister_controller_request::UnregisterControllerRequest,
+        unregister_controller_request::{self, UnregisterControllerRequest},
         unregister_controller_response::UnregisterControllerResponse,
     },
 };
@@ -45,10 +46,11 @@ use crate::{
     controller_admin::CONTROLLER_ADMIN_CONNECTION_ID,
     error::BrokerError,
     features::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
-    handlers::{RequestContext, cluster_alter_denied},
+    handlers::{
+        RequestContext, cluster_alter_denied,
+        forward_to_controller::{to_active_controller, wrong_controller_message},
+    },
 };
-
-mod forward;
 
 #[cfg(test)]
 mod tests;
@@ -85,7 +87,15 @@ pub(crate) async fn handle(
     // authorizes the principal the `Envelope` names. A node that is itself
     // the active controller has nowhere to forward to and answers in place.
     if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
-        && let Some(answer) = forward::to_active_controller(broker, req_bytes, version, ctx).await
+        && let Some(answer) = to_active_controller(
+            broker,
+            unregister_controller_request::API_KEY,
+            req_bytes,
+            version,
+            ctx,
+            |error_code, message| encode(version, error_code, message),
+        )
+        .await
     {
         return answer;
     }
@@ -184,14 +194,6 @@ fn not_registered(controller_id: i32) -> (i16, Option<String>) {
         Some(format!(
             "Controller ID {controller_id} is not currently registered."
         )),
-    )
-}
-
-/// `ControllerExceptions.newWrongControllerException`'s message.
-fn wrong_controller_message(leader: Option<NodeId>) -> String {
-    leader.map_or_else(
-        || "No controller appears to be active.".to_owned(),
-        |leader| format!("The active controller appears to be node {leader}."),
     )
 }
 

@@ -11,13 +11,32 @@ use crate::AclSource;
 #[derive(Debug, Clone, Default)]
 pub struct AclCache {
     entries: Vec<AclEntry>,
+    cidr_hosts_supported: bool,
 }
 
 impl AclCache {
+    /// A snapshot of `entries` that compares every host as text, as Kafka
+    /// 4.3.1 does. Say that the cluster reads a range from a host containing
+    /// `/` with [`Self::with_cidr_hosts_supported`].
     #[must_use]
     pub fn new(entries: Vec<AclEntry>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            cidr_hosts_supported: false,
+        }
     }
+
+    /// Sets whether a stored host containing `/` is a CIDR range (KIP-1276),
+    /// which it is once the broker the entries came from has a
+    /// `metadata.version` of 4.4-IV1 or higher. A gateway that reads a range
+    /// where that broker compares text would authorize a peer the broker
+    /// denies, and the other way round.
+    #[must_use]
+    pub fn with_cidr_hosts_supported(mut self, supported: bool) -> Self {
+        self.cidr_hosts_supported = supported;
+        self
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -47,6 +66,10 @@ impl AclSource for AclCache {
 
     fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
         Box::new(self.entries.iter().filter(move |e| e.resource_type == rt))
+    }
+
+    fn cidr_hosts_supported(&self) -> bool {
+        self.cidr_hosts_supported
     }
 }
 
@@ -166,6 +189,93 @@ mod tests {
             let from_cache = sorted_keys(AclSource::matching_acls(&cache, rt, name));
             assert2::assert!(from_image == from_cache);
         }
+    }
+
+    /// A host containing `/` is a CIDR range only where the cluster's
+    /// `metadata.version` has reached 4.4-IV1 (KIP-1276), and a snapshot of its
+    /// ACLs must decide as the cluster does. Each row builds the same range
+    /// ALLOW into an image at a `metadata.version` and into a cache told what
+    /// that image supports, and both must give the answer of the row: text
+    /// comparison below the level, where the range applies to no peer, and a
+    /// range at or above it. A cache that is not told compares as text.
+    #[test]
+    fn a_cache_reads_a_slash_host_as_the_cluster_does() {
+        use krabka_metadata::{
+            FeatureLevelRecord,
+            metadata_version::{CIDR_ACL_MIN_LEVEL, METADATA_VERSION_FEATURE},
+        };
+        use krabka_security::{AuthMethod, Principal};
+
+        use crate::{AuthorizationRequest, AuthorizationResult, Authorizer, SimpleAclAuthorizer};
+
+        let range_allow = AclEntry {
+            host: "10.0.0.0/8".into(),
+            ..entry(
+                ResourceType::Topic,
+                PatternType::Literal,
+                "foo",
+                AclOperation::Read,
+            )
+        };
+        let alice = Principal {
+            name: "alice".into(),
+            auth_method: AuthMethod::SaslPlain,
+            groups: vec![],
+        };
+        let peer = "10.1.2.3:5000".parse().unwrap();
+        let request = AuthorizationRequest {
+            principal: &alice,
+            host: &peer,
+            resource_type: ResourceType::Topic,
+            resource_name: "foo",
+            operation: AclOperation::Read,
+        };
+        let auth = SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        // (label, metadata.version of the cluster, whether the cache is told)
+        let cases = [
+            (
+                "an unfinalized version is below the level",
+                None,
+                false,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "a level below the floor",
+                Some(CIDR_ACL_MIN_LEVEL - 1),
+                false,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "the floor",
+                Some(CIDR_ACL_MIN_LEVEL),
+                true,
+                AuthorizationResult::Allow,
+            ),
+        ];
+        for (label, level, told, expected) in cases {
+            let mut image = MetadataImage::new(Uuid::nil());
+            if let Some(level) = level {
+                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: METADATA_VERSION_FEATURE.into(),
+                    level,
+                }));
+            }
+            image.apply(&MetadataRecord::V1AccessControlEntry(range_allow.clone()));
+            let cache = AclCache::new(vec![range_allow.clone()]).with_cidr_hosts_supported(told);
+
+            assert2::assert!(
+                (
+                    auth.authorize(&image, &request),
+                    auth.authorize(&cache, &request)
+                ) == (expected, expected),
+                "{label}"
+            );
+        }
+        // Not told: text, as Kafka 4.3.1 compares.
+        assert2::assert!(
+            auth.authorize(&AclCache::new(vec![range_allow]), &request)
+                == AuthorizationResult::Deny
+        );
     }
 
     #[test]

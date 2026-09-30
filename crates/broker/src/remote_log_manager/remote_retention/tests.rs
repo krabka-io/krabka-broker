@@ -423,6 +423,7 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -490,6 +491,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
             deleted_below: None,
             now_ms: 1,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -522,6 +524,7 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
             deleted_below: None,
             now_ms: now_ms(),
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -623,6 +626,7 @@ async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() 
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
     )
@@ -666,6 +670,7 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
                 deleted_below: None,
                 now_ms: now_ms() + 1_000_000,
                 local: LocalLogFootprint::EMPTY,
+                earliest_epoch: None,
             },
             &tier(archive, &rsm, &rlmm),
         )
@@ -854,6 +859,7 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
             deleted_below: Some(floor),
             now_ms: 1,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -915,6 +921,7 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -972,6 +979,7 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
             deleted_below: None,
             now_ms: 1,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -1004,6 +1012,7 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
         metrics: &metrics,
         index_cache: &index_cache,
         copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
     };
     let cfg = LogConfig {
         retention: Some(millis(1)),
@@ -1019,6 +1028,7 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
             local: LocalLogFootprint::EMPTY,
+            earliest_epoch: None,
         },
         &tier,
     )

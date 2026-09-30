@@ -12,10 +12,47 @@ use tracing::instrument;
 use super::{Segment, io::seek_to_log_size};
 use crate::error::LogError;
 
+/// What [`Segment::write_snapshot`] saves for [`Segment::rollback_failed_write`].
+#[derive(Debug, Clone, Copy)]
+pub(super) struct WriteSnapshot {
+    last_offset: Offset,
+    max_timestamp: i64,
+    max_timestamp_offset: Offset,
+}
+
 impl Segment {
     /// Mark this segment as sealed. No more appends.
-    pub fn seal(&mut self) {
+    ///
+    /// Sealing first writes the segment's final time-index entry, Kafka's
+    /// `LogSegment.onBecomeInactiveSegment`: the sparse index lags the writes,
+    /// so without it a reopened segment would not learn the timestamp of the
+    /// batches after its last index point from the index.
+    ///
+    /// # Errors
+    /// Returns an error when the time-index entry cannot be written or its
+    /// offset overflows the index range. The segment stays open then.
+    pub fn seal(&mut self) -> Result<(), LogError> {
+        self.append_running_max_time_entry()?;
         self.sealed = true;
+        Ok(())
+    }
+
+    /// Kafka's `timeIndex().maybeAppend(maxTimestampSoFar(),
+    /// shallowOffsetOfMaxTimestampSoFar())`: the running maximum timestamp
+    /// with the last offset of the batch that set it. The index keeps only an
+    /// entry whose timestamp is newer than its last, so it stays strictly
+    /// increasing, and a segment without a timestamp (`i64::MIN`, or
+    /// `NO_TIMESTAMP`) adds nothing.
+    pub(super) fn append_running_max_time_entry(&mut self) -> Result<(), LogError> {
+        if self.max_timestamp < 0 {
+            return Ok(());
+        }
+        let relative = krabka_verified::truncation_relative_offset(
+            self.base_offset.0,
+            self.max_timestamp_offset.0,
+        )
+        .ok_or_else(|| LogError::BadSegmentName("offset overflow in segment".into()))?;
+        self.time_index.maybe_append(self.max_timestamp, relative)
     }
 
     /// Seal a segment loaded through the no-scan [`Segment::open`] path and
@@ -52,17 +89,32 @@ impl Segment {
         Ok(())
     }
 
+    /// The part of the segment's state an append changes, saved before the
+    /// write so a failed one can put it back.
+    pub(super) fn write_snapshot(&self) -> WriteSnapshot {
+        WriteSnapshot {
+            last_offset: self.last_offset,
+            max_timestamp: self.max_timestamp,
+            max_timestamp_offset: self.max_timestamp_offset,
+        }
+    }
+
     pub(super) fn rollback_failed_write(
         &mut self,
         position: u64,
-        last_offset: Offset,
-        max_timestamp: i64,
+        snapshot: WriteSnapshot,
     ) -> Result<(), LogError> {
+        let WriteSnapshot {
+            last_offset,
+            max_timestamp,
+            max_timestamp_offset,
+        } = snapshot;
         self.log_file.set_len(position)?;
         seek_to_log_size(&self.log_file, position)?;
         self.log_size = position;
         self.last_offset = last_offset;
         self.max_timestamp = max_timestamp;
+        self.max_timestamp_offset = max_timestamp_offset;
         let position = u32::try_from(position)
             .map_err(|_| LogError::BadSegmentName("position overflow".into()))?;
         self.offset_index.truncate_by_position(position)?;
@@ -117,6 +169,7 @@ impl Segment {
         let mut pos: u64 = 0;
         let mut last_kept_offset = self.base_offset - 1;
         let mut last_kept_ts = i64::MIN;
+        let mut last_kept_ts_offset = last_kept_offset;
         while !cur.is_empty() {
             let before = cur.len();
             let Ok(batch) = RecordBatch::decode(&mut cur) else {
@@ -134,6 +187,7 @@ impl Segment {
             last_kept_offset = batch_last_offset;
             if batch.max_timestamp > last_kept_ts {
                 last_kept_ts = batch.max_timestamp;
+                last_kept_ts_offset = batch_last_offset;
             }
         }
 
@@ -142,6 +196,7 @@ impl Segment {
         self.log_size = pos;
         self.last_offset = last_kept_offset;
         self.max_timestamp = last_kept_ts;
+        self.max_timestamp_offset = last_kept_ts_offset;
 
         let pos_u32 =
             u32::try_from(pos).map_err(|_| LogError::BadSegmentName("position overflow".into()))?;
@@ -221,8 +276,53 @@ mod tests {
         let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
         seg.append(&sample_batch(0, 2, 100), DENSE_INDEX).unwrap();
         check!(!seg.is_sealed(), "a fresh segment is open");
-        seg.seal();
+        seg.seal().unwrap();
         check!(seg.is_sealed(), "a sealed segment reports it");
+    }
+
+    /// Sealing writes Kafka's final time-index entry, the running maximum
+    /// timestamp with the last offset of the batch that set it, when the
+    /// sparse index has not already recorded it. A reopened segment restores
+    /// its `max_timestamp` from that entry, and the entries stay strictly
+    /// increasing. Each case is `(label, batches as (base offset, timestamp,
+    /// index interval), the entry count and last entry after sealing)`.
+    #[test]
+    fn seal_appends_the_final_time_index_entry() {
+        let sparse = kibibytes(4);
+        let cases = [
+            (
+                "no index point yet, and the newest timestamp came first",
+                vec![(0, 100, sparse), (1, 300, sparse), (2, 200, sparse)],
+                (1, Some((300, 1))),
+            ),
+            (
+                "the index already holds the newest timestamp",
+                vec![(0, 100, DENSE_INDEX), (1, 200, DENSE_INDEX)],
+                (1, Some((200, 1))),
+            ),
+            (
+                "an index point lags the newest batch",
+                vec![
+                    (0, 100, DENSE_INDEX),
+                    (1, 200, DENSE_INDEX),
+                    (2, 300, sparse),
+                ],
+                (2, Some((300, 2))),
+            ),
+        ];
+        for (label, batches, expected) in cases {
+            let dir = tempdir().unwrap();
+            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+            for (base, timestamp, interval) in batches {
+                seg.append(&sample_batch(base, 1, timestamp), interval)
+                    .unwrap();
+            }
+            seg.seal().unwrap();
+            check!(
+                (seg.time_index.entry_count(), seg.time_index.last_entry()) == expected,
+                "{label}"
+            );
+        }
     }
 
     /// `truncate_to_relative` decides which batches to drop by each batch's

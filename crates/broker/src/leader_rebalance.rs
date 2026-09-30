@@ -11,14 +11,16 @@
 //! partition whose preferred replica is back in the ISR. It bounds the work
 //! by count instead: at most `MAX_ELECTIONS_PER_TICK` elections in one pass,
 //! so a cluster that restarts a broker holding a hundred thousand partitions
-//! does not put them all into one metadata batch. The remainder is picked up
-//! by the next tick.
+//! does not put them all into one metadata batch. A pass that stops at the cap
+//! reports it, and `run` repeats the pass after `IMMEDIATE_RERUN_DELAY`, as
+//! Kafka's `PeriodicTask` does with a `ControllerResult<Boolean>` of `true`,
+//! so the remainder does not wait for the next check interval.
 
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use krabka_metadata::{MetadataImage, MetadataRecord};
-use krabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _, millis};
 use krabka_verified::broker::PreferredLeaderChange;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -40,6 +42,10 @@ pub(crate) trait ControllerLike: Send + Sync {
 /// Kafka's `QuorumController.MAX_ELECTIONS_PER_IMBALANCE`: the most preferred
 /// elections one balancing pass will submit.
 pub(crate) const MAX_ELECTIONS_PER_TICK: usize = 1000;
+
+/// Kafka's `PeriodicTask.DEFAULT_IMMEDIATE_PERIOD_NS`: how soon a pass that
+/// stopped at the election cap runs again.
+const IMMEDIATE_RERUN_DELAY: Time = millis(10);
 
 #[derive(Debug, Clone)]
 pub(crate) struct AutoRebalanceConfig {
@@ -66,15 +72,33 @@ pub(crate) async fn run(
             debug!("auto-rebalance tick skipped: not controller leader");
             continue;
         }
-        rebalance_tick(&*controller, &liveness, &cfg).await;
+        while rebalance_tick(&*controller, &liveness, &cfg).await {
+            tokio::select! {
+                () = tokio::time::sleep(IMMEDIATE_RERUN_DELAY.to_std()) => {},
+                () = shutdown.cancelled() => {
+                    info!("auto-rebalance task shutting down");
+                    return;
+                }
+            }
+            if !controller.is_leader() {
+                debug!("auto-rebalance rerun skipped: not controller leader");
+                break;
+            }
+        }
     }
 }
 
+/// One balancing pass. It reports whether the pass stopped at
+/// `MAX_ELECTIONS_PER_TICK` and its elections committed, so more preferred
+/// replicas may be waiting: Kafka's `maybeBalancePartitionLeaders` answers
+/// `records.size() >= maxElectionsPerImbalance`. A pass whose batch failed to
+/// commit reports `false` and waits for the next check interval, as Kafka
+/// does after a periodic task error.
 pub(crate) async fn rebalance_tick(
     controller: &dyn ControllerLike,
     liveness: &ControllerLivenessState,
     _cfg: &AutoRebalanceConfig,
-) {
+) -> bool {
     let image = controller.current_image();
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
     let mut changes: Vec<PreferredLeaderChange> = Vec::new();
@@ -103,7 +127,7 @@ pub(crate) async fn rebalance_tick(
                     partition = new_pr.partition,
                     "auto-rebalance: duplicate partition change; skipping tick"
                 );
-                return;
+                return false;
             }
             // Read off the change itself, so the admission below checks what
             // the election produced rather than trusting it.
@@ -118,21 +142,24 @@ pub(crate) async fn rebalance_tick(
             if to_submit.len() >= MAX_ELECTIONS_PER_TICK {
                 debug!(
                     limit = MAX_ELECTIONS_PER_TICK,
-                    "auto-rebalance: election cap reached; the rest waits for the next tick"
+                    "auto-rebalance: election cap reached; the rest follows in another pass"
                 );
                 break;
             }
         }
     }
     let imbalanced = to_submit.len();
+    let capped = imbalanced >= MAX_ELECTIONS_PER_TICK;
     if !krabka_verified::preferred_rebalance_admission(&changes, MAX_ELECTIONS_PER_TICK) {
         debug!(imbalanced, "auto-rebalance: batch admission denied");
-        return;
+        return false;
     }
     info!(count = imbalanced, "auto-rebalance: submitting elections");
     if let Err(e) = controller.submit_change(to_submit).await {
         warn!(error = %e, "auto-rebalance submit failed");
+        return false;
     }
+    capped
 }
 
 #[cfg(test)]
@@ -146,8 +173,10 @@ mod tests {
 
     use super::*;
 
+    /// A controller whose image takes every batch it commits, as the real
+    /// `submit_change` returns only once the leader applied it.
     struct MockController {
-        image: Arc<MetadataImage>,
+        image: Mutex<Arc<MetadataImage>>,
         is_leader: bool,
         submitted: Mutex<Vec<MetadataRecord>>,
         submit_calls: std::sync::atomic::AtomicUsize,
@@ -157,7 +186,7 @@ mod tests {
     impl MockController {
         fn new(image: Arc<MetadataImage>, is_leader: bool) -> Self {
             Self {
-                image,
+                image: Mutex::new(image),
                 is_leader,
                 submitted: Mutex::new(Vec::new()),
                 submit_calls: std::sync::atomic::AtomicUsize::new(0),
@@ -177,7 +206,7 @@ mod tests {
             self.is_leader
         }
         fn current_image(&self) -> Arc<MetadataImage> {
-            self.image.clone()
+            self.image.lock().unwrap().clone()
         }
         async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String> {
             self.submit_calls
@@ -192,6 +221,10 @@ mod tests {
                 .is_ok()
             {
                 return Err("injected submit failure".into());
+            }
+            let mut image = self.image.lock().unwrap();
+            for record in &records {
+                Arc::make_mut(&mut image).apply(record);
             }
             self.submitted.lock().unwrap().extend(records);
             Ok(())
@@ -357,6 +390,80 @@ mod tests {
         rebalance_tick(&mock, &liveness, &cfg).await;
 
         assert!(mock.submitted.lock().unwrap().len() == MAX_ELECTIONS_PER_TICK);
+    }
+
+    /// `maybeBalancePartitionLeaders` answers `records.size() >=
+    /// maxElectionsPerImbalance`: a pass that stopped at the cap, not one that
+    /// ran out of partitions, asks to run again.
+    #[tokio::test]
+    async fn a_tick_reports_whether_it_stopped_at_the_election_cap() {
+        let cfg = AutoRebalanceConfig {
+            check_interval: minutes(5),
+        };
+        for (imbalanced, expected) in [
+            (0, false),
+            (1, false),
+            (MAX_ELECTIONS_PER_TICK - 1, false),
+            (MAX_ELECTIONS_PER_TICK, true),
+            (MAX_ELECTIONS_PER_TICK + 25, true),
+        ] {
+            let mock = MockController::new(img_with_n_partitions(imbalanced, 0), true);
+            let liveness = liveness_all_alive().await;
+
+            let capped = rebalance_tick(&mock, &liveness, &cfg).await;
+
+            assert!(capped == expected, "{imbalanced} imbalanced partitions");
+        }
+    }
+
+    /// A pass whose batch did not commit has elected nothing, so it waits for
+    /// the next check interval instead of spinning on a failing controller.
+    #[tokio::test]
+    async fn a_capped_tick_whose_batch_failed_does_not_ask_to_run_again() {
+        let mock = MockController::new(img_with_n_partitions(MAX_ELECTIONS_PER_TICK, 0), true);
+        mock.fail_next_submission();
+        let liveness = liveness_all_alive().await;
+        let cfg = AutoRebalanceConfig {
+            check_interval: minutes(5),
+        };
+
+        assert!(!rebalance_tick(&mock, &liveness, &cfg).await);
+    }
+
+    /// Kafka's `PeriodicTask` reruns a task that answered `true` after 10 ms,
+    /// so a broker that comes back holding far more than a thousand preferred
+    /// partitions is restored within a second, not one thousand per check
+    /// interval.
+    #[tokio::test(start_paused = true)]
+    async fn a_capped_pass_runs_again_at_once_and_not_at_the_next_interval() {
+        let imbalanced = 2 * MAX_ELECTIONS_PER_TICK + 25;
+        let controller = Arc::new(MockController::new(
+            img_with_n_partitions(imbalanced, 0),
+            true,
+        ));
+        let controller_for_run: Arc<dyn ControllerLike> = controller.clone();
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run(
+            controller_for_run,
+            Arc::new(liveness_all_alive().await),
+            AutoRebalanceConfig {
+                check_interval: minutes(5),
+            },
+            shutdown.clone(),
+        ));
+
+        // Far below the five-minute interval.
+        tokio::time::sleep(secs(1).to_std()).await;
+
+        assert!(controller.submitted.lock().unwrap().len() == imbalanced);
+        assert!(
+            controller
+                .submit_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 3
+        );
+        shutdown.cancel();
+        task.await.unwrap();
     }
 
     #[tokio::test]

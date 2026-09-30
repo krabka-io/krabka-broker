@@ -60,11 +60,21 @@ impl MetadataSource for ControllerHandle {
     fn read_snapshot_range(&self, position: i64, max_bytes: i32) -> SnapshotRange {
         ControllerHandle::read_snapshot_range(self, position, max_bytes)
     }
+    async fn fetch_snapshot(
+        &self,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Option<Result<bytes::Bytes, RaftError>> {
+        Some(ControllerHandle::fetch_snapshot(self, version, body).await)
+    }
     async fn trigger_snapshot(&self) -> Result<(), RaftError> {
         ControllerHandle::trigger_snapshot(self).await
     }
     async fn add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::add_voter(self, req).await
+    }
+    async fn check_add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
+        ControllerHandle::check_add_voter(self, req).await
     }
     async fn remove_voter(&self, req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::remove_voter(self, req).await
@@ -74,6 +84,9 @@ impl MetadataSource for ControllerHandle {
     }
     async fn finalize_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::finalize_kraft_version(self, version).await
+    }
+    async fn validate_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
+        ControllerHandle::validate_kraft_version(self, version).await
     }
     async fn forward_raw(
         &self,

@@ -138,6 +138,9 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("socket_request_max must be positive", |c| {
             c.socket_request_max = <ByteSize as ByteSizeExt>::ZERO;
         }),
+        ("sasl_server_max_receive must be positive", |c| {
+            c.sasl_server_max_receive = <ByteSize as ByteSizeExt>::ZERO;
+        }),
         ("sendfile_min must be positive", |c| {
             c.sendfile_min = <ByteSize as ByteSizeExt>::ZERO;
         }),

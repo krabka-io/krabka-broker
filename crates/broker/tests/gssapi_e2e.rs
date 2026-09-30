@@ -44,10 +44,7 @@ use std::{
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use krabka_security::{
-    ListenerProtocol, SaslMechanism,
-    gssapi::{GssapiConfig, name::Rule},
-};
+use krabka_security::{ListenerProtocol, SaslMechanism, gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW};
 
 /// cp-kafka image that holds the GSSAPI-capable console tools.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka:6.1.1";
@@ -118,14 +115,14 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
     ];
     cfg.inter_broker_listener_name = "INTERNAL".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
-    cfg.gssapi = Some(GssapiConfig {
+    cfg.gssapi = Some(krabka_broker::GssapiConfig {
         keytab_path: kdc_fixtures().join("kafka.keytab"),
         service_name: "kafka".to_string(),
         // DEFAULT maps alice@CRABKA.TEST → "alice".
-        principal_to_local_rules: vec![Rule::Default],
+        principal_to_local_rules: vec![krabka_broker::KerberosRule::Default],
         realm: Some("CRABKA.TEST".to_string()),
         kdc: Some(kdc_url),
-        max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        max_time_skew: DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
     let handle = Broker::start(cfg).await.expect("start gssapi broker");

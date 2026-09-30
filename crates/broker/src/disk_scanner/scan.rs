@@ -5,9 +5,30 @@
 
 use std::{fs, io, path::Path};
 
+use krabka_log::name::parse_log_filename;
+
+/// Sums every regular file in a partition directory: the disk the partition
+/// uses.
+///
 /// # Errors
-/// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+/// Returns an error when the directory cannot be read.
 pub fn sum_partition_dir(path: &Path) -> Result<u64, io::Error> {
+    sum_files(path, |_| true)
+}
+
+/// Sums the `.log` segment files of a partition directory, and nothing else:
+/// Kafka's `UnifiedLog.size`, which `DescribeLogDirs` reports as
+/// `PartitionSize`. The indexes, the producer snapshots, the leader-epoch
+/// checkpoint and `partition.metadata` do not count, so an empty partition is
+/// 0.
+///
+/// # Errors
+/// Returns an error when the directory cannot be read.
+pub fn sum_log_segments(path: &Path) -> Result<u64, io::Error> {
+    sum_files(path, |name| parse_log_filename(name).is_ok())
+}
+
+fn sum_files(path: &Path, keep: impl Fn(&str) -> bool) -> Result<u64, io::Error> {
     let entries = match fs::read_dir(path) {
         Ok(e) => e,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -17,7 +38,7 @@ pub fn sum_partition_dir(path: &Path) -> Result<u64, io::Error> {
     for entry in entries {
         let entry = entry?;
         let meta = entry.metadata()?;
-        if meta.is_file() {
+        if meta.is_file() && entry.file_name().to_str().is_some_and(&keep) {
             total = total.saturating_add(meta.len());
         }
     }
@@ -68,5 +89,34 @@ mod tests {
         write_file(&tmp.path().join("subdir/inner.log"), &[0u8; 999]);
         write_file(&tmp.path().join("top.log"), &[0u8; 100]);
         assert!(sum_partition_dir(tmp.path()).unwrap() == 100);
+    }
+
+    /// `PartitionSize` is the segment bytes, as Kafka's `UnifiedLog.size` counts
+    /// them: the `.log` files, including the active segment, and no index,
+    /// snapshot, checkpoint, metadata file, or file of another name.
+    #[test]
+    fn log_segment_sum_counts_only_the_segment_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(sum_log_segments(tmp.path()).unwrap() == 0);
+        write_file(&tmp.path().join("00000000000000000000.log"), &[0u8; 1024]);
+        write_file(&tmp.path().join("00000000000000000100.log"), &[0u8; 512]);
+        for (name, len) in [
+            ("00000000000000000000.index", 128),
+            ("00000000000000000000.timeindex", 96),
+            ("00000000000000000000.txnindex", 8),
+            ("00000000000000000100.snapshot", 40),
+            ("00000000000000000100.log.swap", 77),
+            ("00000000000000000100.log.deleted", 66),
+            ("leader-epoch-checkpoint", 32),
+            ("partition.metadata", 24),
+            ("stray.log", 5),
+        ] {
+            write_file(&tmp.path().join(name), &vec![0u8; len]);
+        }
+        std::fs::create_dir(tmp.path().join("00000000000000000200.log")).unwrap();
+
+        assert!(sum_log_segments(tmp.path()).unwrap() == 1024 + 512);
+        assert!(sum_partition_dir(tmp.path()).unwrap() > 1024 + 512);
+        assert!(sum_log_segments(&tmp.path().join("nope")).unwrap() == 0);
     }
 }

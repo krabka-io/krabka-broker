@@ -92,12 +92,15 @@ fn elr_after(image: &MetadataImage, records: &[MetadataRecord], topic: &str) -> 
     TopicElr::of_topic(&image, topic)
 }
 
-/// The move Kafka's `maybePopulateTargetElr` makes for an unclean-shutdown
-/// replica: struck from the ELR, kept in the last-known ELR. The replica is no
-/// longer offered as a safe election, and an operator can still see it was the
-/// last one known to be complete.
+/// The strike Kafka's `maybePopulateTargetElr` makes for an unclean-shutdown
+/// replica: `targetElr = candidates - targetIsr - uncleanShutdownReplicas`, and
+/// nothing else. The replica is no longer offered as a safe election, and it
+/// does not move into the last-known ELR, which Kafka 4.3.1 keeps for the last
+/// leader of a partition that has none
+/// (`testEligibleLeaderReplicas_RemoveUncleanShutdownReplicasFromElr` runs
+/// with the last-known set empty).
 #[test]
-fn an_unclean_replica_moves_from_the_elr_to_the_last_known_elr() {
+fn an_unclean_replica_is_struck_from_the_elr_and_lands_nowhere() {
     let image = image_of(&[("orders", 1, "0:2,3:")]);
 
     let records = withdraw_elr_membership(&image, NodeId(2));
@@ -106,7 +109,7 @@ fn an_unclean_replica_moves_from_the_elr_to_the_last_known_elr() {
         elr_after(&image, &records, "orders").partition(0)
             == PartitionElr {
                 eligible_leader_replicas: vec![3],
-                last_known_elr: vec![2],
+                last_known_elr: vec![],
             }
     );
 }
@@ -125,7 +128,7 @@ fn withdrawal_reaches_every_partition_that_names_the_replica() {
         orders.partition(0)
             == PartitionElr {
                 eligible_leader_replicas: vec![3],
-                last_known_elr: vec![2],
+                last_known_elr: vec![],
             }
     );
     // Partition 1 never named node 2, so it is untouched.
@@ -136,11 +139,13 @@ fn withdrawal_reaches_every_partition_that_names_the_replica() {
                 last_known_elr: vec![],
             }
     );
+    // The last-known set the partition already carried is not the
+    // withdrawal's to touch.
     assert!(
         elr_after(&image, &records, "payments").partition(0)
             == PartitionElr {
                 eligible_leader_replicas: vec![],
-                last_known_elr: vec![2, 4],
+                last_known_elr: vec![4],
             }
     );
 }
@@ -169,11 +174,5 @@ fn the_last_eligible_replica_leaving_tombstones_the_key_and_keeps_other_override
     }
     let overrides = after.topic_config("orders").expect("topic keeps overrides");
     assert!(overrides.get(MIN_INSYNC_REPLICAS) == Some(&"2".to_string()));
-    assert!(
-        TopicElr::of_topic(&after, "orders").partition(0)
-            == PartitionElr {
-                eligible_leader_replicas: vec![],
-                last_known_elr: vec![2],
-            }
-    );
+    assert!(TopicElr::of_topic(&after, "orders").partition(0) == PartitionElr::default());
 }

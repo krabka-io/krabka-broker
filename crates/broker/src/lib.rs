@@ -306,9 +306,14 @@ pub mod fetch_drain {
 pub use handlers::produce::hot_path as produce_hot_path;
 pub use health::{HealthState, NotReady};
 pub use krabka_raft::NodeId;
+/// The SASL/GSSAPI accept-path configuration, [`config::BrokerConfig::gssapi`].
+pub use network::auth::GssapiConfig;
 /// The RFC 2253 Subject DN of an mTLS peer certificate, the string
 /// `ssl.principal.mapping.rules` are matched against.
 pub use network::auth::subject_dn_rfc2253;
+/// The Kafka `auth_to_local` rules that [`GssapiConfig`] carries.
+#[cfg(not(target_family = "wasm"))]
+pub use network::auth::{KerberosNameError, KerberosRule};
 /// KIP-371 `ssl.principal.mapping.rules`, reachable here because
 /// [`config::ListenerSpec`] carries a parsed rule list per listener.
 pub use network::auth::{SslPrincipalMapper, SslPrincipalRuleError};

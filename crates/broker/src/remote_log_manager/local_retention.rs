@@ -28,7 +28,7 @@ use krabka_verified::retention::{
 };
 use tracing::{debug, warn};
 
-use crate::partition::Partition;
+use crate::{api_catalog::UnstableApiVersions, partition::Partition};
 
 /// The offset through which the remote tier holds an unbroken copy of this
 /// partition, given the `(start, end)` range of every `CopySegmentFinished`
@@ -86,17 +86,22 @@ pub(crate) fn remote_covered_through(finished: &[(i64, i64)], local_start: i64) 
 /// only when the local log is at least its budget. Then
 /// `local.retention.ms` deletes the prefix with
 /// `now_ms - anchor > effective_local`, where the anchor is the segment's
-/// `largestTimestamp()` ([`SegmentExport::max_timestamp`]) or, when that lies
-/// in the future, its file's `lastModified()`: Kafka's tiered
-/// `deleteRetentionMsBreachedSegments` ages a segment whose records claim a
-/// future timestamp by when it was written rather than holding it forever.
+/// `largestTimestamp()` ([`SegmentExport::max_timestamp`]). A segment whose
+/// records claim a timestamp in the future has a negative age and is never
+/// time-expired, which is what Kafka 4.3.1's
+/// `UnifiedLog.deleteRetentionMsBreachedSegments` does (it only logs that the
+/// segment is "ineligible to be deleted"). Kafka trunk (KAFKA-20609) ages such
+/// a segment of a tiered topic by its file's `lastModified()` instead, so
+/// producer clock skew cannot pin local disk forever; that anchor applies only
+/// under `unstable.api.versions.enable`, which is what `unstable` carries.
 ///
 /// Kafka's walk ends at the active segment, which is never in the remote
 /// tier and so never eligible (`isSegmentEligibleForDeletion`); the walk here
 /// ends there too. Kafka also rolls that active segment when it breaches the
 /// time or size predicate, so the next copy can upload it. This host does not:
 /// an active segment waits for `segment.bytes` or `segment.ms` to roll it.
-pub(crate) fn local_retention_target(
+pub(crate) fn local_retention_target_under(
+    unstable: UnstableApiVersions,
     exports: &[SegmentExport],
     covered_through: Option<i64>,
     effective_local: Option<Time>,
@@ -109,10 +114,9 @@ pub(crate) fn local_retention_target(
     let mut facts: Vec<LocalRetentionSegment> = exports
         .iter()
         .map(|ex| {
-            let anchor = if now_ms < ex.max_timestamp {
-                ex.last_modified_ms
-            } else {
-                ex.max_timestamp
+            let anchor = match unstable {
+                UnstableApiVersions::Enabled if now_ms < ex.max_timestamp => ex.last_modified_ms,
+                _ => ex.max_timestamp,
             };
             let age = Time::from_millis(now_ms.saturating_sub(anchor));
             LocalRetentionSegment {
@@ -139,6 +143,28 @@ pub(crate) fn local_retention_target(
     retention_delete_target(last_offset)
 }
 
+/// [`local_retention_target_under`] for Kafka 4.3.1's behavior, which is what
+/// a broker runs unless `unstable.api.versions.enable` is set.
+#[cfg(test)]
+pub(crate) fn local_retention_target(
+    exports: &[SegmentExport],
+    covered_through: Option<i64>,
+    effective_local: Option<Time>,
+    effective_local_size: Option<ByteSize>,
+    local_log_size: ByteSize,
+    now_ms: i64,
+) -> Option<i64> {
+    local_retention_target_under(
+        UnstableApiVersions::Disabled,
+        exports,
+        covered_through,
+        effective_local,
+        effective_local_size,
+        local_log_size,
+        now_ms,
+    )
+}
+
 /// After the copy pass, drop local sealed segments whose
 /// remote copy is `CopySegmentFinished` and that fall outside the
 /// per-topic local-retention window. Returns the count of segments
@@ -156,7 +182,15 @@ pub(crate) fn local_retention_pass(
     log_config: &LogConfig,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
     now_ms: i64,
+    unstable: UnstableApiVersions,
 ) -> usize {
+    // Trunk ages a future-timestamped segment by its file only while the tier
+    // still takes copies (`remoteLogEnabledAndRemoteCopyEnabled`).
+    let unstable = if log_config.remote_tier.copy_disable {
+        UnstableApiVersions::Disabled
+    } else {
+        unstable
+    };
     let effective_local = log_config.local_retention.or(log_config.retention);
     let effective_local_size = log_config
         .local_retention_size
@@ -181,7 +215,8 @@ pub(crate) fn local_retention_pass(
 
     let (target, result) = {
         let mut log = partition.log.lock().expect("log mutex poisoned");
-        let Some(target) = local_retention_target(
+        let Some(target) = local_retention_target_under(
+            unstable,
             exports,
             covered_through,
             effective_local,
@@ -210,7 +245,7 @@ pub(crate) fn local_retention_pass(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_ids::LeaderEpoch;
+    use krabka_ids::{LeaderEpoch, PartitionIndex};
     use krabka_log::Log;
     use krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteStorageManager,
@@ -221,7 +256,8 @@ mod tests {
     use crate::remote_log_manager::{
         ArchiveMode, copy_eligible, now_ms,
         test_support::{
-            FakeWormArchive, batch, rolled_tiered_partition_with_config, synth_export, tier, tp,
+            FakeWormArchive, batch, leading_partition_over, rolled_tiered_partition_with_config,
+            synth_export, tier, tp,
         },
     };
 
@@ -236,24 +272,38 @@ mod tests {
         );
     }
 
-    /// Kafka's tiered `deleteRetentionMsBreachedSegments` ages a segment by its
-    /// `largestTimestamp()`, and by its file's `lastModified()` instead when
-    /// that timestamp lies in the future. `now` is 10 000 ms and the window
-    /// 1 ms; the segment is fully copied.
+    /// Kafka 4.3.1's `UnifiedLog.deleteRetentionMsBreachedSegments` ages a
+    /// segment by its `largestTimestamp()` alone: one whose records claim a
+    /// timestamp in the future is never time-expired, and the log only says it
+    /// is "ineligible to be deleted". Kafka trunk (KAFKA-20609) ages such a
+    /// segment of a tiered topic by its file's `lastModified()` instead, and
+    /// only under `unstable.api.versions.enable` does krabka follow it. `now`
+    /// is 10 000 ms and the window 1 ms; the segment is fully copied.
+    ///
+    /// Each case is `(name, newest timestamp, file last modified, target in
+    /// the default mode, target under the unstable flag)`.
     #[test]
-    fn a_future_timestamp_is_aged_by_the_file() {
-        for (name, max_timestamp, last_modified_ms, expected) in [
-            ("a past timestamp ages the segment", 100, 100, Some(10)),
+    fn a_future_timestamp_is_aged_by_the_file_only_under_the_unstable_flag() {
+        for (name, max_timestamp, last_modified_ms, default_target, unstable_target) in [
             (
-                "a future timestamp with an old file goes",
-                20_000,
+                "a past timestamp ages the segment either way",
                 100,
+                100,
+                Some(10),
                 Some(10),
             ),
             (
-                "a future timestamp with a young file stays",
+                "a future timestamp with an old file",
+                20_000,
+                100,
+                None,
+                Some(10),
+            ),
+            (
+                "a future timestamp with a young file",
                 20_000,
                 9_999,
+                None,
                 None,
             ),
         ] {
@@ -261,17 +311,23 @@ mod tests {
                 last_modified_ms,
                 ..synth_export(0, 9, max_timestamp, 100)
             }];
-            check!(
-                local_retention_target(
-                    &exports,
-                    Some(9),
-                    Some(millis(1)),
-                    None,
-                    bytes(100),
-                    10_000
-                ) == expected,
-                "{name}"
-            );
+            for (unstable, expected) in [
+                (UnstableApiVersions::Disabled, default_target),
+                (UnstableApiVersions::Enabled, unstable_target),
+            ] {
+                check!(
+                    local_retention_target_under(
+                        unstable,
+                        &exports,
+                        Some(9),
+                        Some(millis(1)),
+                        None,
+                        bytes(100),
+                        10_000
+                    ) == expected,
+                    "{name}: {unstable:?}"
+                );
+            }
         }
     }
 
@@ -630,6 +686,7 @@ mod tests {
             &log_config,
             &rlmm,
             now_ms() + 1_000_000,
+            crate::api_catalog::UnstableApiVersions::Disabled,
         );
 
         assert!(removed == exports.len());
@@ -679,11 +736,107 @@ mod tests {
             &log_config,
             &rlmm,
             now_ms() + 1_000_000,
+            crate::api_catalog::UnstableApiVersions::Disabled,
         );
 
         check!(removed == exports.len());
         let log = partition.log.lock().expect("partition log mutex poisoned");
         check!(log.local_log_start_offset() == exports.last().unwrap().last_offset + 1);
         check!(log.tierable_segments().is_empty());
+    }
+
+    /// A tiered topic whose producers stamp records far in the future keeps
+    /// its copied segments on local disk under Kafka 4.3.1, which never
+    /// time-expires them. Kafka trunk (KAFKA-20609) ages them by their file's
+    /// `lastModified()`, and only under `unstable.api.versions.enable`, and
+    /// only while the tier still takes copies (`remoteLogEnabledAndRemoteCopyEnabled`).
+    ///
+    /// Each case is `(name, unstable flag, remote.log.copy.disable, whether the
+    /// copied segments are evicted)`.
+    #[tokio::test]
+    async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
+        for (name, unstable, copy_disable, evicted) in [
+            (
+                "4.3.1 keeps them",
+                UnstableApiVersions::Disabled,
+                false,
+                false,
+            ),
+            (
+                "trunk ages them by their file",
+                UnstableApiVersions::Enabled,
+                false,
+                true,
+            ),
+            (
+                "trunk keeps them when the tier takes no copies",
+                UnstableApiVersions::Enabled,
+                true,
+                false,
+            ),
+        ] {
+            let log_dir = tempfile::tempdir().unwrap();
+            let remote_dir = tempfile::tempdir().unwrap();
+            let part_dir = crate::log_dir::partition_dir(log_dir.path(), "orders", 0);
+            std::fs::create_dir_all(&part_dir).unwrap();
+            let mut log = Log::open(
+                &part_dir,
+                LogConfig {
+                    segment_size: bytes(256),
+                    remote_storage_enable: true,
+                    local_retention: Some(millis(1)),
+                    remote_tier: krabka_log::RemoteTierFlags {
+                        copy_disable,
+                        ..krabka_log::RemoteTierFlags::DEFAULT
+                    },
+                    ..LogConfig::default()
+                },
+            )
+            .unwrap();
+            // Every record claims a timestamp a million seconds ahead.
+            let future = now_ms() + 1_000_000_000;
+            for _ in 0..12 {
+                let mut future_batch = batch(2);
+                future_batch.base_timestamp = future;
+                future_batch.max_timestamp = future;
+                log.append(&mut future_batch).unwrap();
+            }
+            let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
+            let (exports, log_config) = {
+                let log = partition.log.lock().expect("partition log mutex poisoned");
+                (log.tierable_segments(), log.config_snapshot())
+            };
+            assert!(exports.len() >= 2, "test needs multiple sealed segments");
+
+            let rsm: Arc<dyn RemoteStorageManager> =
+                Arc::new(LocalTieredStorage::new(remote_dir.path()));
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let copied = copy_eligible(
+                &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+                &tp(),
+                1,
+                LeaderEpoch(0),
+                exports.clone(),
+            )
+            .await;
+            assert!(copied == exports.len());
+
+            let removed = local_retention_pass(
+                &tp(),
+                &partition,
+                &exports,
+                &log_config,
+                &rlmm,
+                now_ms() + 1_000_000,
+                unstable,
+            );
+
+            check!(
+                removed == if evicted { exports.len() } else { 0 },
+                "{name}: removed {removed} of {}",
+                exports.len()
+            );
+        }
     }
 }

@@ -129,6 +129,7 @@ async fn repeated_leader_restart_reelects() {
             dirs[&leader].path().to_path_buf(),
             leader,
             cid,
+            uuid::Uuid::nil(),
             voter_set(&ids),
             STAGGERED_TIMEOUTS[usize::try_from(leader.0 - 1).unwrap()],
             None,

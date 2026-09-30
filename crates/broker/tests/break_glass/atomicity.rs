@@ -46,6 +46,8 @@ async fn metadata_batches(
     krabka_raft::KrabkaMetadataFetchRequest {
         fetch_offset: from,
         max_bytes: 4 << 20,
+        replica_id: -1,
+        replica_directory_id: uuid::Uuid::nil(),
     }
     .encode_v0(&mut body);
     let raw = connection
@@ -149,19 +151,33 @@ async fn the_consume_and_the_transition_land_in_one_raft_append() {
         other => panic!("the consume leads the append; found {other:?}"),
     };
     check!(consumed_at_ms != 0);
+    let consume = MetadataRecord::V1BreakGlassProposal(BreakGlassProposalRecord {
+        consumed_at_ms,
+        ..held
+    });
+    let transition = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
+        node_id: NodeId(1),
+        broker_epoch,
+    });
+    // Kafka's `handleBrokerUnregistered` takes the broker out of every ISR in
+    // the same record list, ahead of the `UnregisterBrokerRecord`, so the
+    // partition changes sit between the consume and the transition.
+    let (leaves, ends) = match carrying[0].as_slice() {
+        [first, leaves @ .., last] => (leaves, (first, last)),
+        other => panic!("the append holds the consume and the transition; found {other:?}"),
+    };
     check!(
-        carrying[0]
-            == &vec![
-                MetadataRecord::V1BreakGlassProposal(BreakGlassProposalRecord {
-                    consumed_at_ms,
-                    ..held
-                }),
-                MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
-                    node_id: NodeId(1),
-                    broker_epoch,
-                }),
-            ],
-        "the append is the consume followed by the transition, and nothing else"
+        ends == (&consume, &transition),
+        "the append starts with the consume and ends with the transition"
+    );
+    check!(
+        leaves.iter().all(|record| matches!(
+            record,
+            MetadataRecord::V1Partition(_)
+                | MetadataRecord::V1PartitionUpdate(_)
+                | MetadataRecord::V1PartitionElr(_)
+        )),
+        "only partition changes sit between them: {leaves:?}"
     );
     check!(
         batches

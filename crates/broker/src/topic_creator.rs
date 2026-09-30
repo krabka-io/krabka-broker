@@ -87,7 +87,7 @@ impl ForwardedIdentity {
         Self {
             principal_name: ctx.principal.name.clone(),
             client_address: ctx.peer.ip(),
-            client_id: ctx.client_id.to_owned(),
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
             correlation_id,
         }
     }

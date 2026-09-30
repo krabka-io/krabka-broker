@@ -413,9 +413,7 @@ impl Engine {
         if let Some(control) = contents.control_state {
             self.controls = KraftControlState::new(control.voters.clone(), control.kraft_version);
             self.core.set_kraft_version(control.kraft_version);
-            let actions = self
-                .core
-                .apply_voter_set(control.voters.clone(), self.now());
+            let actions = self.apply_voter_set(control.voters.clone());
             self.peers.update_voters(&control.voters);
             self.execute(actions);
         }

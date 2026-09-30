@@ -817,7 +817,7 @@ mod wire_tests {
             reregister(V3, Offer::Unproven).await
                 == PartitionElr {
                     eligible_leader_replicas: vec![3],
-                    last_known_elr: vec![2],
+                    last_known_elr: vec![],
                 }
         );
     }
@@ -833,7 +833,7 @@ mod wire_tests {
             reregister(V2, Offer::HeldEpoch).await
                 == PartitionElr {
                     eligible_leader_replicas: vec![3],
-                    last_known_elr: vec![2],
+                    last_known_elr: vec![],
                 }
         );
     }
@@ -856,8 +856,9 @@ mod wire_tests {
     /// Dropping node 2 leaves the ISR under `min.insync.replicas`, so the
     /// recompute that rides the same batch has an ELR to publish and
     /// `old_isr ∪ eligible_before` still names node 2. Kafka's
-    /// `uncleanShutdownReplicas` is what keeps it out of the eligible column
-    /// and lands it in the last-known one instead.
+    /// `uncleanShutdownReplicas` is what keeps it out of the eligible column,
+    /// and it lands nowhere else: the partition has a leader, so its
+    /// last-known ELR is empty.
     #[tokio::test]
     async fn an_unproven_restart_loses_its_isr_seat_without_regaining_eligibility() {
         assert!(
@@ -866,7 +867,7 @@ mod wire_tests {
                     isr: nodes(&[1, 3]),
                     elr: PartitionElr {
                         eligible_leader_replicas: vec![],
-                        last_known_elr: vec![2],
+                        last_known_elr: vec![],
                     },
                 }
         );

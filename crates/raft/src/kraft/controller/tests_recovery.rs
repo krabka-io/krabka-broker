@@ -250,6 +250,7 @@ async fn snapshot_then_restart_recovers_image() {
             KraftConfig {
                 me: NodeId(1),
                 cluster_id,
+                directory_id: uuid::Uuid::nil(),
                 initial_state: QuorumState::bootstrap(cluster_id, voters.clone()),
                 election_timeout: TEST_ELECTION_TIMEOUT,
                 heartbeat_interval: None,
@@ -282,6 +283,7 @@ async fn snapshot_then_restart_recovers_image() {
         data_dir.clone(),
         NodeId(1),
         cluster_id,
+        uuid::Uuid::nil(),
         voters,
         TEST_ELECTION_TIMEOUT,
         None,
@@ -324,6 +326,7 @@ async fn open_with_legacy_54_byte_quorum_state_advances_hwm() {
         data_dir,
         NodeId(1),
         cluster_id,
+        uuid::Uuid::nil(),
         voters,
         TEST_ELECTION_TIMEOUT,
         None,

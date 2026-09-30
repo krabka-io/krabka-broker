@@ -49,7 +49,7 @@ fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
             crate::config_keys::serves_topic_key(
                 row.name,
                 crate::api_catalog::UnstableApiVersions::Disabled,
-            )
+            ) && (!row.internal || overrides.iter().any(|(key, _)| *key == row.name))
         })
         .map(|row| {
             let stored = overrides
@@ -908,9 +908,11 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
         let configs = if expected_row.error_code == codes::NONE {
             Some(effective_topic_configs(
                 &broker_handle.controller_image_for_test(),
+                broker.config.node_id,
                 name,
                 &std::collections::BTreeMap::new(),
                 crate::api_catalog::UnstableApiVersions::Disabled,
+                &std::collections::BTreeMap::new(),
             ))
         } else {
             expected_row.configs.clone()
@@ -1080,9 +1082,11 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
     let described: Vec<CreatableTopicConfigs> =
         crate::handlers::describe_configs::effective_topic_configs(
             &image,
+            broker.config.node_id,
             "mirrored",
             image.topic_config("mirrored").expect("stored overrides"),
             crate::api_catalog::UnstableApiVersions::Disabled,
+            &std::collections::BTreeMap::new(),
         )
         .into_iter()
         .map(|entry| CreatableTopicConfigs {
@@ -1512,6 +1516,167 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     }
 }
 
+/// #1201: Kafka's `ClusterControlManager.usableBrokers` hands the placer every
+/// registered broker that is not in controlled shutdown, fenced ones included.
+/// `StripedReplicaPlacer` takes a fenced broker last and never first, and
+/// refuses only when the replication factor exceeds that count, or when no
+/// broker is unfenced. `createTopic` then sets the ISR to the replicas that
+/// pass `isActive`, and the first of them leads.
+///
+/// The cluster is the local broker 1 and the remote brokers 2 and 3.
+#[tokio::test]
+async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
+    /// One row: the fenced brokers, the brokers in controlled shutdown, the
+    /// replication factor, and either the brokers every replica list holds or
+    /// the refusal message.
+    type Row = (
+        &'static [u64],
+        &'static [u64],
+        i16,
+        Result<&'static [u64], &'static str>,
+    );
+    let rows: [Row; 6] = [
+        (&[3], &[], 3, Ok(&[1, 2, 3])),
+        (&[2, 3], &[], 3, Ok(&[1, 2, 3])),
+        (&[2, 3], &[], 1, Ok(&[1])),
+        (&[2], &[3], 2, Ok(&[1, 2])),
+        (
+            &[3],
+            &[],
+            4,
+            Err(
+                "Unable to replicate the partition 4 time(s): The target replication factor of 4 \
+                 cannot be reached because only 3 broker(s) are registered or some brokers have \
+                 all their log directories cordoned.",
+            ),
+        ),
+        (
+            &[],
+            &[3],
+            3,
+            Err(
+                "Unable to replicate the partition 3 time(s): The target replication factor of 3 \
+                 cannot be reached because only 2 broker(s) are registered or some brokers have \
+                 all their log directories cordoned.",
+            ),
+        ),
+    ];
+
+    for (fenced, shutting_down, rf, outcome) in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        for node_id in [2, 3] {
+            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in fenced {
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in shutting_down {
+            crate::test_support::begin_controlled_shutdown(&broker_handle, node_id).await;
+        }
+        let p = principal("admin");
+        let peer = peer();
+
+        let resp = drive(&broker, &request(vec![topic("auto", 4, rf)]), &p, &peer).await;
+
+        let image = broker_handle.controller_image_for_test();
+        let committed = (0..4)
+            .filter_map(|index| image.partition("auto", index).cloned())
+            .collect::<Vec<_>>();
+        let label = format!("fenced {fenced:?}, shutting down {shutting_down:?}, rf {rf}");
+        match outcome {
+            Err(message) => {
+                let expected = CreatableTopicResult {
+                    name: "auto".into(),
+                    topic_id: ProtoUuid([0; 16]),
+                    error_code: codes::INVALID_REPLICATION_FACTOR,
+                    error_message: Some(message.into()),
+                    num_partitions: -1,
+                    replication_factor: -1,
+                    configs: Some(Vec::new()),
+                    topic_config_error_code: 0,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                };
+                check!(resp.topics == vec![expected], "{label}");
+                check!(committed.is_empty(), "{label}");
+            }
+            Ok(brokers) => {
+                check!(resp.topics[0].error_code == codes::NONE, "{label}");
+                check!(committed.len() == 4, "{label}");
+                for (index, record) in committed.iter().enumerate() {
+                    let replicas = &record.replicas;
+                    let mut held = replicas.iter().map(|node| node.0).collect::<Vec<_>>();
+                    held.sort_unstable();
+                    // A fenced replica comes after every unfenced one.
+                    let fenced_flags = replicas
+                        .iter()
+                        .map(|node| fenced.contains(&node.0))
+                        .collect::<Vec<_>>();
+                    let isr = replicas
+                        .iter()
+                        .copied()
+                        .filter(|node| !fenced.contains(&node.0))
+                        .collect::<Vec<_>>();
+                    check!(held == brokers, "{label}, partition {index}");
+                    check!(fenced_flags.is_sorted(), "{label}, partition {index}");
+                    check!(
+                        *record
+                            == krabka_metadata::PartitionRecord {
+                                topic: "auto".into(),
+                                partition: i32::try_from(index).expect("index"),
+                                leader: isr[0],
+                                replicas: replicas.clone(),
+                                isr,
+                                leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
+                                adding_replicas: vec![],
+                                removing_replicas: vec![],
+                                directories: vec![],
+                                partition_epoch: 0,
+                            },
+                        "{label}, partition {index}"
+                    );
+                }
+            }
+        }
+        broker_handle.shutdown().await;
+    }
+}
+
+/// #1235: Kafka's `Uuid.randomUuid` never returns an id whose base64url form
+/// starts with a dash, and `createTopic` draws the topic id with it. One id in
+/// 64 would start with one otherwise, so a request of 2500 topics misses a
+/// missing check with a chance of e^-39. A validate-only request runs the same
+/// checks and mints the same ids without committing.
+#[tokio::test]
+async fn topic_ids_never_start_with_a_dash() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let mut req = request(
+        (0..2500)
+            .map(|n| topic(&format!("topic-{n}"), 1, 1))
+            .collect(),
+    );
+    req.validate_only = true;
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    check!(resp.topics.len() == 2500);
+    for row in &resp.topics {
+        check!(row.error_code == codes::NONE, "{}", row.name);
+        let id = uuid::Uuid::from_bytes(row.topic_id.0);
+        check!(!id.is_nil() && id.as_u128() != 1);
+        check!(
+            !krabka_format::ClusterId(id).to_string().starts_with('-'),
+            "{}",
+            row.name
+        );
+    }
+    broker_handle.shutdown().await;
+}
+
 /// #698 / #1058: Kafka's `Create` decision for a `CreateTopics` request,
 /// table-driven over which ACL `alice` holds.
 ///
@@ -1747,6 +1912,93 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
     }
 }
 
+/// #1235: Kafka's `ControllerApis.handleCreateTopics` checks cluster `Create`
+/// and the `DescribeConfigs` disclosure with `logIfDenied = false`, so a
+/// principal that holds only a topic-scoped `Create` ACL (the standard Streams
+/// and Connect setup) creates its topic without a Deny in the audit trail or
+/// in `authorization_denied_total`. A real refusal, `Create` denied on the
+/// topic, is still counted.
+#[tokio::test]
+async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
+    use crate::metrics::AuthorizationDeniedLabel;
+
+    let literal_a = AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: "a".into(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: AclOperation::Create,
+        permission_type: PermissionType::Allow,
+    };
+    let denied = |operation: &str, resource_type: &str| AuthorizationDeniedLabel {
+        operation: operation.into(),
+        resource_type: resource_type.into(),
+    };
+    // (label, ACLs alice holds, the topic's error code, and the denials
+    // counted for cluster Create, topic DescribeConfigs and topic Create)
+    let cases = [
+        (
+            "a topic-scoped Create ACL creates the topic quietly",
+            vec![literal_a],
+            codes::NONE,
+            (0, 0, 0),
+        ),
+        (
+            "a real refusal is counted, and the cluster probe is not",
+            vec![],
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            (0, 0, 1),
+        ),
+    ];
+
+    for (label, acls, error_code, (cluster_create, describe_configs, topic_create)) in cases {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            )))
+            .await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !acls.is_empty() {
+            broker
+                .controller
+                .submit_change(
+                    acls.into_iter()
+                        .map(MetadataRecord::V1AccessControlEntry)
+                        .collect(),
+                )
+                .await
+                .expect("seed acls");
+        }
+
+        let resp = drive(
+            &broker,
+            &request(vec![topic("a", 1, 1)]),
+            &principal("alice"),
+            &peer(),
+        )
+        .await;
+
+        let count = |key| {
+            broker
+                .metrics
+                .authorization_denied
+                .get_or_create(&key)
+                .get()
+        };
+        check!(resp.topics[0].error_code == error_code, "{label}");
+        check!(
+            (
+                count(denied("Create", "Cluster")),
+                count(denied("DescribeConfigs", "Topic")),
+                count(denied("Create", "Topic")),
+            ) == (cluster_create, describe_configs, topic_create),
+            "{label}"
+        );
+        broker_handle.shutdown().await;
+    }
+}
+
 /// An error row, as Kafka builds it: no topic id, and the KIP-525 fields at
 /// the Java defaults (-1 counts, an empty config list).
 fn error_row(name: &str, error_code: i16, message: &str) -> CreatableTopicResult {
@@ -1779,7 +2031,9 @@ struct CheckOrderCase {
 #[tokio::test]
 async fn rows_follow_kafkas_check_order_and_messages() {
     const EXISTS: &str = "Topic 't' already exists.";
-    const TOO_MANY: &str = "Too many partitions in request.";
+    // Kafka 4.3.1's text. Trunk rewords it, and krabka serves that only with
+    // `unstable.api.versions.enable`: see `too_many_partitions_message_follows_the_unstable_flag`.
+    const TOO_MANY: &str = "Excessively large number of partitions per request.";
     let duplicate = |name| error_row(name, codes::INVALID_REQUEST, "Duplicate topic name.");
     let exists = || Some(error_row("t", codes::TOPIC_ALREADY_EXISTS, EXISTS));
     let manual_rf_2 = CreatableTopic {
@@ -1973,4 +2227,91 @@ async fn rows_follow_kafkas_check_order_and_messages() {
         broker_handle.shutdown().await;
     }
     assert!(actual == expected);
+}
+
+/// Kafka's `createTopics` reaches `ConfigurationControlManager.validateAlterConfig`
+/// through `incrementalAlterConfig`, which refuses a config value longer than
+/// `Short.MAX_VALUE` with `INVALID_CONFIG` before it checks any key. A throttled
+/// replicas list of 8000 entries (31999 characters) is valid, and one of 8200
+/// entries (32799 characters) is not.
+#[tokio::test]
+async fn a_config_value_over_short_max_value_answers_invalid_config() {
+    let key = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
+    let fits = vec!["0:1"; 8_000].join(",");
+    let too_long = vec!["0:1"; 8_200].join(",");
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+
+    let resp = drive(
+        &broker,
+        &request(vec![
+            topic_with_configs("fits", &[(key, &fits)]),
+            topic_with_configs("long", &[(key, &too_long)]),
+        ]),
+        &principal("admin"),
+        &peer(),
+    )
+    .await;
+
+    check!(resp.topics[0].error_code == codes::NONE);
+    check!(
+        resp.topics[1]
+            == error_row(
+                "long",
+                codes::INVALID_CONFIG,
+                "The configuration value cannot be added because it exceeds the maximum value \
+                 size of 32767 bytes.",
+            )
+    );
+    let image = broker_handle.controller_image_for_test();
+    check!(image.topic("fits").is_some());
+    check!(image.topic("long").is_none());
+    broker_handle.shutdown().await;
+}
+
+/// The whole-request refusal for more than 10000 partitions answers
+/// `POLICY_VIOLATION` on every row in both modes, with 4.3.1's text by default
+/// ("Excessively large number of partitions per request.") and trunk's text
+/// only with `unstable.api.versions.enable` ("Too many partitions in request.").
+#[tokio::test]
+async fn too_many_partitions_message_follows_the_unstable_flag() {
+    use crate::api_catalog::UnstableApiVersions;
+
+    let cases = [
+        (
+            UnstableApiVersions::Disabled,
+            "Excessively large number of partitions per request.",
+        ),
+        (
+            UnstableApiVersions::Enabled,
+            "Too many partitions in request.",
+        ),
+    ];
+
+    for (unstable, message) in cases {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.features.unstable_api_versions = unstable;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+
+        let resp = drive(
+            &broker,
+            &request(vec![topic("a", 10_001, 1), topic("b", 1, 1)]),
+            &principal("admin"),
+            &peer(),
+        )
+        .await;
+
+        check!(
+            resp.topics
+                == vec![
+                    error_row("a", codes::POLICY_VIOLATION, message),
+                    error_row("b", codes::POLICY_VIOLATION, message),
+                ],
+            "{unstable:?}"
+        );
+        broker_handle.shutdown().await;
+    }
 }

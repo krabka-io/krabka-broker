@@ -44,6 +44,7 @@ use super::{
 };
 use crate::{
     config_keys::RecoveryStrategy,
+    elr::state::PartitionElr,
     leader_election::{FailoverDecision, failover_one},
     unclean_recovery::{ReplicaLogInfo, select_leader},
 };
@@ -158,8 +159,12 @@ pub(super) fn do_failover(image: Option<&MetadataImage>, s: &mut DpState, dead: 
         &alive,
         &witnesses,
         // The published eligible-leader set, as the production scan reads it
-        // out of the image for this partition.
-        &ids(s.elr),
+        // out of the image for this partition. The model carries no last-known
+        // ELR, so no partition in it lacks a leader.
+        &PartitionElr {
+            eligible_leader_replicas: ids(s.elr),
+            last_known_elr: Vec::new(),
+        },
         strategy,
         unclean,
     ) {

@@ -3,6 +3,8 @@
 //! chosen node id in `FetchResponse.preferred_read_replica`. Returning `-1`
 //! means "no preference, read from the leader".
 
+use std::time::Duration;
+
 /// One replica's view as the leader sees it, for selection purposes.
 #[derive(Debug, Clone)]
 pub(crate) struct ReplicaView {
@@ -15,6 +17,26 @@ pub(crate) struct ReplicaView {
     /// Whether this replica is a data-bearing witness. A witness replicates
     /// the partition and stays in the ISR, but it serves no client traffic.
     pub is_witness: bool,
+    /// Kafka's `ReplicaView.logEndOffset`: the leader's own log end for the
+    /// leader, and the last fetch offset the leader recorded for a follower.
+    pub log_end_offset: i64,
+    /// Kafka's `ReplicaView.timeSinceLastCaughtUpMs`: zero for the leader, and
+    /// for a follower the time since its fetch offset last reached the
+    /// leader's log end, [`Duration::MAX`] when it never has.
+    pub time_since_caught_up: Duration,
+}
+
+impl ReplicaView {
+    /// Kafka's `ReplicaView.comparator()`, the order of "most caught up":
+    /// the higher log end offset, then the shorter time since last caught up,
+    /// then the higher node id. The greatest key wins.
+    fn caught_up_rank(&self) -> (i64, std::cmp::Reverse<Duration>, i32) {
+        (
+            self.log_end_offset,
+            std::cmp::Reverse(self.time_since_caught_up),
+            self.node_id,
+        )
+    }
 }
 
 /// Which built-in selector the broker uses. Maps to Kafka's
@@ -45,6 +67,14 @@ impl ReplicaSelectorKind {
     /// Choose the preferred read replica. Returns a node id, or `-1` for
     /// "no preference, use the leader".
     ///
+    /// The rack-aware rule is Kafka's `RackAwareReplicaSelector.select`,
+    /// followed by `ReplicaManager.findPreferredReadReplica` dropping a leader
+    /// it selected from the response: a leader in the client's rack is the
+    /// answer, and no follower outranks it. Otherwise the most caught-up
+    /// same-rack in-sync follower wins, by log end offset, then by the shorter
+    /// time since it last caught up, then by the higher node id. No same-rack
+    /// candidate is the leader as well.
+    ///
     /// A witness is never a candidate. It replicates the partition and counts
     /// toward the ISR, but it serves no client traffic. The rule matters most
     /// where the witness looks most attractive: a consumer whose `client.rack`
@@ -62,14 +92,20 @@ impl ReplicaSelectorKind {
                 let Some(rack) = client_rack.filter(|r| !r.is_empty()) else {
                     return -1;
                 };
-                let winner = replicas
+                let same_rack = |replica: &&ReplicaView| replica.rack.as_deref() == Some(rack);
+                if replicas
                     .iter()
-                    .filter(|r| r.in_isr && !r.is_witness && r.rack.as_deref() == Some(rack))
-                    .min_by_key(|r| r.node_id);
-                match winner {
-                    Some(r) if r.node_id != leader_id => r.node_id,
-                    _ => -1,
+                    .filter(same_rack)
+                    .any(|replica| replica.node_id == leader_id)
+                {
+                    return -1;
                 }
+                replicas
+                    .iter()
+                    .filter(same_rack)
+                    .filter(|replica| replica.in_isr && !replica.is_witness)
+                    .max_by_key(|replica| replica.caught_up_rank())
+                    .map_or(-1, |replica| replica.node_id)
             }
         }
     }
@@ -81,12 +117,16 @@ mod tests {
 
     use super::*;
 
+    /// A follower in the ISR that has fetched to offset 100 and caught up a
+    /// moment ago; the cases below change the fields they are about.
     fn view(node_id: i32, rack: &str, in_isr: bool) -> ReplicaView {
         ReplicaView {
             node_id,
             rack: Some(rack.to_string()),
             in_isr,
             is_witness: false,
+            log_end_offset: 100,
+            time_since_caught_up: Duration::ZERO,
         }
     }
 
@@ -94,6 +134,14 @@ mod tests {
         ReplicaView {
             is_witness: true,
             ..view(node_id, rack, in_isr)
+        }
+    }
+
+    fn behind(replica: ReplicaView, log_end_offset: i64, since_caught_up_ms: u64) -> ReplicaView {
+        ReplicaView {
+            log_end_offset,
+            time_since_caught_up: Duration::from_millis(since_caught_up_ms),
+            ..replica
         }
     }
 
@@ -119,9 +167,9 @@ mod tests {
 
     #[test]
     fn rack_aware_picks_same_rack_isr_member() {
-        let replicas = [view(1, "a", true), view(2, "b", true), view(3, "b", true)];
-        // leader is node 1 (rack a); client in rack b -> lowest-id same-rack
-        // ISR member is node 2.
+        let replicas = [view(1, "a", true), view(2, "b", true)];
+        // leader is node 1 (rack a); client in rack b -> the same-rack ISR
+        // member is node 2.
         assert!(ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas) == 2);
     }
 
@@ -157,18 +205,13 @@ mod tests {
                 -1,
             ),
             (
-                "a same-rack non-witness wins over a lower-id witness",
+                "a same-rack non-witness wins over a witness that is more caught up",
                 vec![
                     view(1, "a", true),
                     witness(2, "b", true),
-                    view(3, "b", true),
+                    behind(view(3, "b", true), 50, 9_000),
                 ],
                 3,
-            ),
-            (
-                "no witness anywhere keeps the lowest-id same-rack ISR member",
-                vec![view(1, "a", true), view(2, "b", true), view(3, "b", true)],
-                2,
             ),
         ] {
             let got = ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas);
@@ -176,10 +219,87 @@ mod tests {
         }
     }
 
+    /// Kafka's `RackAwareReplicaSelector` answers the leader when it is in the
+    /// client's rack, and `findPreferredReadReplica` drops a selected leader:
+    /// a same-rack follower never outranks it, whatever its id or progress.
     #[test]
-    fn rack_aware_none_when_only_same_rack_replica_is_leader() {
-        let replicas = [view(1, "b", true), view(2, "a", true)];
-        // Client rack b matches only the leader (node 1) -> stay on leader.
-        assert!(ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas) == -1);
+    fn rack_aware_keeps_the_read_on_a_leader_in_the_clients_rack() {
+        for (name, replicas, leader_id) in [
+            (
+                "a lower-id same-rack follower",
+                vec![view(1, "b", true), view(2, "b", true)],
+                2,
+            ),
+            (
+                "a same-rack follower that is further ahead",
+                vec![behind(view(1, "b", true), 500, 0), view(2, "b", true)],
+                2,
+            ),
+            (
+                "the only same-rack replica",
+                vec![view(1, "b", true), view(2, "a", true)],
+                1,
+            ),
+        ] {
+            let got = ReplicaSelectorKind::RackAware.select(Some("b"), leader_id, &replicas);
+            assert!(got == -1, "{name}: got {got}");
+        }
+    }
+
+    /// Among several same-rack followers Kafka picks the most caught up: the
+    /// highest log end offset, then the shortest time since it last caught up,
+    /// then the highest node id.
+    #[test]
+    fn rack_aware_picks_the_most_caught_up_same_rack_follower() {
+        // Node 1 leads in rack "a"; the client is in rack "b".
+        for (name, followers, want) in [
+            (
+                "the higher log end offset wins over a lower id",
+                vec![behind(view(2, "b", true), 90, 0), view(3, "b", true)],
+                3,
+            ),
+            (
+                "the higher log end offset wins over a lower lag time",
+                vec![
+                    behind(view(2, "b", true), 95, 5_000),
+                    behind(view(3, "b", true), 90, 0),
+                ],
+                2,
+            ),
+            (
+                "the shorter time since caught up breaks a tie in log end offset",
+                vec![
+                    behind(view(2, "b", true), 100, 5_000),
+                    behind(view(3, "b", true), 100, 100),
+                ],
+                3,
+            ),
+            (
+                "a follower that never caught up loses a tie in log end offset",
+                vec![
+                    ReplicaView {
+                        time_since_caught_up: Duration::MAX,
+                        ..view(2, "b", true)
+                    },
+                    behind(view(3, "b", true), 100, 60_000),
+                ],
+                3,
+            ),
+            (
+                "the higher id breaks a full tie",
+                vec![view(2, "b", true), view(4, "b", true), view(3, "b", true)],
+                4,
+            ),
+            (
+                "an out-of-sync follower is not a candidate however far ahead",
+                vec![behind(view(2, "b", false), 999, 0), view(3, "b", true)],
+                3,
+            ),
+        ] {
+            let mut replicas = vec![view(1, "a", true)];
+            replicas.extend(followers);
+            let got = ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas);
+            assert!(got == want, "{name}: got {got}, want {want}");
+        }
     }
 }

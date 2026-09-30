@@ -130,6 +130,63 @@ async fn exit_code_for_each_argv() {
     }
 }
 
+/// `Formatter.run` resolves the release and the feature names before it
+/// reconciles `kraft.version` with the quorum flags, and it reconciles the mode
+/// before it checks that the feature defines the level. So the first error a
+/// command line with several wrong things reports is fixed.
+#[test]
+fn the_first_error_follows_kafkas_order() {
+    use clap::Parser as _;
+
+    // (what is wrong, argv, the start of the message it is reported as)
+    let cases: &[(&str, &[&str], &str)] = &[
+        (
+            "an unknown release beats a kraft.version level that does not exist",
+            &[
+                "--release-version",
+                "9.9-IV0",
+                "--feature",
+                "kraft.version=9",
+            ],
+            "krabka format: Unknown metadata.version '9.9-IV0'.",
+        ),
+        (
+            "an unknown feature name beats a kraft.version level that does not exist",
+            &[
+                "--feature",
+                "nope.version=1",
+                "--feature",
+                "kraft.version=9",
+            ],
+            "krabka format: Unsupported feature: nope.version.",
+        ),
+        (
+            "a kraft.version level above 1 without a quorum flag is a mode conflict",
+            &["--feature", "kraft.version=9"],
+            "krabka format: kraft.version=9 requires --standalone,",
+        ),
+        (
+            "a kraft.version level above 1 with a quorum flag does not exist",
+            &["--no-initial-controllers", "--feature", "kraft.version=9"],
+            "krabka format: No feature:kraft.version with feature level 9",
+        ),
+    ];
+    for (what, extra, want) in cases {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let log_dir = tmp.path().join("data").display().to_string();
+        let mut argv = vec!["krabka-format", "--log-dir", &log_dir];
+        argv.extend(extra.iter().copied());
+        let cli = crate::Cli::try_parse_from(argv).expect("parse");
+
+        let Err((code, message)) = plan(cli.args, Vec::new()) else {
+            panic!("{what}: the plan was accepted");
+        };
+
+        check!(code == EXIT_INVALID_FEATURE, "{what}: exit {code}");
+        check!(message.starts_with(want), "{what}: {message}");
+    }
+}
+
 /// Formatting into a fresh directory, returning its path for inspection.
 async fn format_into(tmp: &std::path::Path, extra: &[&str]) -> (i32, std::path::PathBuf) {
     let log_dir = tmp.join("data");

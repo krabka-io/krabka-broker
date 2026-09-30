@@ -9,8 +9,9 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        kafka_int_bytes, positive_i32, positive_i64, positive_ratio, positive_time, positive_u32,
-        positive_usize, whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
+        kafka_int_bytes, nonnegative_time, positive_i32, positive_i64, positive_ratio,
+        positive_time, positive_u32, positive_usize, whole_bytes_u32, whole_bytes_u64,
+        whole_bytes_usize,
     },
 };
 
@@ -147,6 +148,10 @@ impl RuntimeFileConfig {
             cfg.log_config.timestamp_scan_window,
             whole_bytes_usize
         );
+        // A topic reports these two at `STATIC_BROKER_CONFIG` when the
+        // operator named them, so the loader records the provenance.
+        cfg.static_config_origins.log.log_segment_bytes |= runtime.log_segment_bytes.is_some();
+        cfg.static_config_origins.log.message_max_bytes |= runtime.message_max_bytes.is_some();
         set_runtime_size_bytes!(
             runtime,
             log_segment_bytes,
@@ -177,6 +182,24 @@ impl RuntimeFileConfig {
             socket_request_max,
             cfg.socket_request_max,
             whole_bytes_u32
+        );
+        // Neither authentication limit is dynamic, so a named broker reports
+        // one at `STATIC_BROKER_CONFIG` when the operator named it.
+        let authentication = &mut cfg.static_config_origins.authentication;
+        authentication.sasl_server_max_receive |= runtime.sasl_server_max_receive.is_some();
+        authentication.connection_failed_authentication_delay |=
+            runtime.connection_failed_authentication_delay.is_some();
+        set_runtime_size_bytes!(
+            runtime,
+            sasl_server_max_receive,
+            cfg.sasl_server_max_receive,
+            whole_bytes_u32
+        );
+        set_runtime_validated!(
+            runtime,
+            connection_failed_authentication_delay,
+            cfg.connection_failed_authentication_delay,
+            nonnegative_time
         );
         set_runtime_usize!(runtime, queued_max_requests, cfg.queued_max_requests);
         if let Some(bytes) = runtime.queued_max_request_bytes.take() {

@@ -413,6 +413,8 @@ async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() 
     KrabkaMetadataFetchRequest {
         fetch_offset: 0,
         max_bytes: 1024,
+        replica_id: -1,
+        replica_directory_id: uuid::Uuid::nil(),
     }
     .encode_v0(&mut fetch);
     let fetched = exchange(&mut replicator, API_KEY_METADATA_FETCH, 0, true, &fetch).await;

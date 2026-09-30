@@ -43,6 +43,26 @@ fn voter_at(voters: &[(NodeId, String)], idx: usize) -> &(NodeId, String) {
     &voters[idx % voters.len()]
 }
 
+/// The index in `voters` the loop should move to, given the leader the last
+/// answer named.
+///
+/// Any controller serves the fetch, but only the leader records an observer's
+/// progress for `DescribeQuorum`, so an observer that landed on a follower
+/// moves to the leader that follower names, as a Kafka broker only ever fetches
+/// from the leader. It stays where it is when the hint names no other voter of
+/// the list, or the voter that just failed: a leader this node cannot reach
+/// would otherwise cost a failed dial on every second poll, for as long as the
+/// follower keeps naming it.
+fn leader_to_follow(
+    voters: &[(NodeId, String)],
+    target: NodeId,
+    leader_hint: Option<NodeId>,
+    failed: Option<NodeId>,
+) -> Option<usize> {
+    let leader = leader_hint.filter(|leader| *leader != target && Some(*leader) != failed)?;
+    voters.iter().position(|(id, _)| *id == leader)
+}
+
 /// Successive fetches that leave the image empty while the quorum has
 /// committed records before the loop warns about it. One such fetch is
 /// ordinary — a node that has just started has an empty image and no records
@@ -102,6 +122,9 @@ pub(super) async fn run_loop(
     let mut store = ObserverStore::open(&config.data_dir, config.snapshot_interval_records);
     let mut fetch_offset: u64 = resume(&config, &mut store, &observer);
     let mut target_idx: usize = 0;
+    // The voter whose fetch failed most recently, until one succeeds or a
+    // different leader is named.
+    let mut last_failed: Option<NodeId> = None;
     let mut empty_image = EmptyImageWatch::default();
     loop {
         if shutdown.is_cancelled() {
@@ -134,6 +157,15 @@ pub(super) async fn run_loop(
                 Ordering::Release,
             );
             let _ = observer.leader.send_replace(Some(target));
+            if last_failed == Some(target) {
+                last_failed = None;
+            }
+            if let Some(index) =
+                leader_to_follow(&config.voters, target, outcome.leader_hint, last_failed)
+            {
+                target_idx = index;
+                last_failed = None;
+            }
             // Every poll is answered and nothing is ever applied: the stall
             // shows up as a readiness lag this node can never close, with
             // nothing saying why. The responder's log start is what separates
@@ -162,6 +194,7 @@ pub(super) async fn run_loop(
                 store.maybe_checkpoint(&observer.current_image(), fetch_offset);
             }
         } else {
+            last_failed = Some(target);
             target_idx = target_idx.wrapping_add(1);
             tokio::select! {
                 () = shutdown.cancelled() => return,
@@ -231,10 +264,21 @@ mod tests {
         high_watermark: i64,
         quorum_high_watermark: i64,
     ) -> Vec<u8> {
+        metadata_fetch_response_naming(1, records, high_watermark, quorum_high_watermark)
+    }
+
+    /// [`metadata_fetch_response_body`] from a controller that believes
+    /// `leader_hint` leads.
+    fn metadata_fetch_response_naming(
+        leader_hint: i64,
+        records: Bytes,
+        high_watermark: i64,
+        quorum_high_watermark: i64,
+    ) -> Vec<u8> {
         let mut out = vec![0u8]; // flexible ResponseHeader v1 tagged-fields
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
-            leader_hint: 1,
+            leader_hint,
             leader_epoch: 3,
             log_start_offset: 0,
             high_watermark,
@@ -290,6 +334,64 @@ mod tests {
         ];
         for (idx, expected_id) in cases {
             assert!(voter_at(&voters, idx).0 == expected_id, "idx {idx}");
+        }
+    }
+
+    /// The loop moves to the leader a follower names, so that the leader sees
+    /// this node fetch, and does not go back to a voter that has just failed.
+    #[test]
+    fn the_loop_follows_a_named_leader_unless_it_just_failed() {
+        let voters = vec![
+            (krabka_raft::NodeId(1), "a:9093".to_string()),
+            (krabka_raft::NodeId(2), "b:9093".to_string()),
+            (krabka_raft::NodeId(3), "c:9093".to_string()),
+        ];
+        let node = krabka_raft::NodeId;
+        // (label, target just fetched, leader it named, voter that failed last,
+        // index to move to)
+        let cases = [
+            (
+                "a follower names the leader",
+                node(1),
+                Some(node(3)),
+                None,
+                Some(2),
+            ),
+            (
+                "the target is the leader",
+                node(3),
+                Some(node(3)),
+                None,
+                None,
+            ),
+            ("no leader is known", node(1), None, None, None),
+            (
+                "the leader is not a configured voter",
+                node(1),
+                Some(node(9)),
+                None,
+                None,
+            ),
+            (
+                "the named leader is the one that just failed",
+                node(1),
+                Some(node(3)),
+                Some(node(3)),
+                None,
+            ),
+            (
+                "a different leader than the one that failed",
+                node(1),
+                Some(node(2)),
+                Some(node(3)),
+                Some(1),
+            ),
+        ];
+        for (label, target, hint, failed, expected) in cases {
+            assert!(
+                leader_to_follow(&voters, target, hint, failed) == expected,
+                "{label}"
+            );
         }
     }
 
@@ -512,6 +614,77 @@ mod tests {
         assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
         assert!(timer.registrations() == 1);
         mock.stop();
+    }
+
+    /// A broker-only node that landed on a follower moves to the leader that
+    /// follower names, because only the leader records the observers it sees
+    /// for `DescribeQuorum`, and it identifies itself to that leader in every
+    /// fetch.
+    #[tokio::test]
+    async fn the_loop_moves_to_the_leader_a_follower_names_and_names_itself_there() {
+        use std::sync::Mutex;
+
+        // The fetches each controller was sent, as (node id, directory id).
+        type Seen = Arc<Mutex<Vec<(i32, Uuid)>>>;
+        let serve = |seen: Seen| {
+            move |api_key: i16, _version: i16, _corr_id: i32, body: &[u8]| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    // The request header precedes the fixed 32-byte payload.
+                    let payload = &body[body.len() - 32..];
+                    let request =
+                        krabka_raft::KrabkaMetadataFetchRequest::decode_v0(&mut &payload[..])
+                            .expect("a metadata fetch request");
+                    seen.lock()
+                        .unwrap()
+                        .push((request.replica_id, request.replica_directory_id));
+                    // Both controllers name node 2 as the leader.
+                    return Some(metadata_fetch_response_naming(2, Bytes::new(), 5, 5));
+                }
+                None
+            }
+        };
+        let (follower_seen, leader_seen) = (Seen::default(), Seen::default());
+        let follower =
+            krabka_client_core::MockBroker::start(serve(Arc::clone(&follower_seen))).await;
+        let leader = krabka_client_core::MockBroker::start(serve(Arc::clone(&leader_seen))).await;
+        let dir = tempfile::tempdir().unwrap();
+        let observer = MetadataObserver::start(ObserverConfig {
+            voters: vec![
+                (krabka_raft::NodeId(1), follower.addr.to_string()),
+                (krabka_raft::NodeId(2), leader.addr.to_string()),
+            ],
+            client_id: "follow-test".into(),
+            // Real time, so the parked poll wakes and the loop goes on to the
+            // leader.
+            poll_interval: millis(10),
+            ..observer_config(Uuid::nil(), dir.path().to_path_buf())
+        });
+
+        // The first fetch goes to the first voter. From then on the loop stays
+        // on the leader it names.
+        for _ in 0..100_000 {
+            if !leader_seen.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        observer.cancel().await;
+        follower.stop();
+        leader.stop();
+
+        let identity = (2, Uuid::from_u128(2));
+        let (follower_seen, leader_seen) = (
+            follower_seen.lock().unwrap().clone(),
+            leader_seen.lock().unwrap().clone(),
+        );
+        assert!(
+            follower_seen == vec![identity],
+            "follower {follower_seen:?}, leader {leader_seen:?}"
+        );
+        assert!(leader_seen.first() == Some(&identity));
     }
 
     /// The observer records the *quorum's* committed offset, not the watermark

@@ -514,6 +514,19 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
         };
         check!(resp == expected, "case: {label}");
 
+        // Kafka checks cluster `Delete` with `logIfDenied = false`, since a
+        // Deny there falls back to the per-topic checks: it is no refusal, so
+        // it leaves no count behind.
+        let cluster_delete_denials = broker
+            .metrics
+            .authorization_denied
+            .get_or_create(&crate::metrics::AuthorizationDeniedLabel {
+                operation: "Delete".into(),
+                resource_type: "Cluster".into(),
+            })
+            .get();
+        check!(cluster_delete_denials == 0, "case: {label}, cluster Delete");
+
         let image = broker_handle.controller_image_for_test();
         check!(
             image.topic("a").is_none() == case.deleted.contains(&"a"),

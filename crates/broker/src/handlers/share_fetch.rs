@@ -142,7 +142,9 @@ pub(crate) async fn handle(
 
     let cfg = broker.config.share_group.clone();
 
-    if !cfg.enable {
+    // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses a null group id
@@ -153,7 +155,6 @@ pub(crate) async fn handle(
     let Some(group) = req.group_id.clone() else {
         return encode_error_response(version, codes::INVALID_REQUEST);
     };
-    let image = broker.controller.current_image();
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
@@ -290,14 +291,13 @@ pub(crate) async fn handle(
     } else {
         req.max_wait_ms
     };
-    let acquire_result = acquire_records(&acquire, &mut pending, max_wait_ms).await;
+    acquire_records(&acquire, &mut pending, max_wait_ms).await;
     // Kafka's `releaseSession` runs after the final request's response is
     // built: the member gives its records back.
     if session.final_request {
         mgr.release_session_partitions(&group, &member, &session.released)
             .await;
     }
-    acquire_result?;
 
     // Kafka answers a fetch row for each partition of the share session that
     // it fetched, and an acknowledge row for each request partition when the

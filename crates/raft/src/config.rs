@@ -88,6 +88,42 @@ pub enum BootstrapMode {
     Rejoin,
 }
 
+/// The limits Kafka's `SocketServer` puts on every listener, including the
+/// controller's: `ControllerServer` builds its own `SocketServer`, and that
+/// hands `socket.request.max.bytes` and `connections.max.idle.ms` to each
+/// `Processor` and creates a `ConnectionQuotas` for `max.connections` and
+/// `max.connections.per.ip`.
+///
+/// The defaults are Kafka's: 100 MiB requests, ten idle minutes, and no
+/// connection ceiling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListenerLimits {
+    /// `socket.request.max.bytes`: the largest request frame the listener
+    /// reads. A larger size prefix closes the connection before the frame is
+    /// read, as `NetworkReceive.readFrom` does.
+    pub max_request_size: ByteSize,
+    /// `connections.max.idle.ms`: how long the listener waits for the next
+    /// request frame before it closes the connection. `None` expires none.
+    pub max_idle: Option<std::time::Duration>,
+    /// `max.connections`: live connections the listener accepts, `usize::MAX`
+    /// for no ceiling.
+    pub max_connections: usize,
+    /// `max.connections.per.ip`: live connections per peer address,
+    /// `usize::MAX` for no ceiling.
+    pub max_connections_per_ip: usize,
+}
+
+impl Default for ListenerLimits {
+    fn default() -> Self {
+        Self {
+            max_request_size: mebibytes(100),
+            max_idle: Some(std::time::Duration::from_mins(10)),
+            max_connections: usize::MAX,
+            max_connections_per_ip: usize::MAX,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ControllerConfig {
     /// Capacity used by outbound controller client connections.
@@ -139,12 +175,18 @@ pub struct ControllerConfig {
     /// semantics on one implementation.
     pub admin_router: Option<Arc<dyn ControllerAdminRouter>>,
     /// Kafka's internal `unstable.api.versions.enable`: whether the controller
-    /// listener advertises and accepts a `latestVersionUnstable` version.
+    /// listener advertises and accepts a `latestVersionUnstable` version, and
+    /// whether it advertises feature levels past the latest production ones.
+    /// Kafka builds the listener's `SimpleApiVersionManager` with this flag
+    /// alone.
     pub unstable_api_versions: UnstableApiVersions,
-    /// Kafka's internal `unstable.feature.versions.enable`: whether the
-    /// controller listener advertises feature levels past the latest
-    /// production ones.
+    /// Kafka's internal `unstable.feature.versions.enable`: the flag the
+    /// controller's own `QuorumFeatures` use, so it caps the feature levels this
+    /// controller accepts on replay and refuses to start above.
     pub unstable_feature_versions: UnstableFeatureVersions,
+    /// The request-size, idle and connection limits of the controller
+    /// listener.
+    pub listener_limits: ListenerLimits,
     /// `metadata.log.max.record.bytes.between.snapshots` (default 20 MiB).
     pub max_bytes_between_snapshots: ByteSize,
     /// `metadata.log.max.snapshot.interval.ms` (default 1 h; 0 = disabled).
@@ -203,6 +245,7 @@ impl std::fmt::Debug for ControllerConfig {
             .field("admin_router", &self.admin_router.is_some())
             .field("unstable_api_versions", &self.unstable_api_versions)
             .field("unstable_feature_versions", &self.unstable_feature_versions)
+            .field("listener_limits", &self.listener_limits)
             .field(
                 "max_bytes_between_snapshots",
                 &self.max_bytes_between_snapshots.human().to_string(),
@@ -262,6 +305,7 @@ impl ControllerConfig {
             admin_router: None,
             unstable_api_versions: UnstableApiVersions::Disabled,
             unstable_feature_versions: UnstableFeatureVersions::Disabled,
+            listener_limits: ListenerLimits::default(),
             max_bytes_between_snapshots: DEFAULT_MAX_BYTES_BETWEEN_SNAPSHOTS,
             max_snapshot_interval: DEFAULT_MAX_SNAPSHOT_INTERVAL,
             snapshot_interval_records: 0,

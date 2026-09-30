@@ -77,9 +77,10 @@ pub struct ReplicaFetchFacts {
     pub reported_target_matches: bool,
     /// The row's Kafka error code; `0` is `NONE`.
     pub error_code: i16,
-    /// The row's KIP-320 `DivergingEpoch.EndOffset`; `-1`, the schema default,
-    /// means the row carries no divergence.
-    pub diverging_end_offset: i64,
+    /// The row's KIP-320 `DivergingEpoch.Epoch`; `-1`, the schema default,
+    /// means the row carries no divergence. Kafka's
+    /// `FetchResponse.isDivergingEpoch` tests the epoch, not the end offset.
+    pub diverging_epoch: i32,
 }
 
 /// A row answers a request this follower no longer stands behind: the epoch
@@ -112,7 +113,7 @@ pub fn replica_fetch_fenced(facts: ReplicaFetchFacts) -> bool {
     ReplicaFetchMutation::Reject
 } else if facts.error_code@ != 0 {
     ReplicaFetchMutation::Retry
-} else if facts.diverging_end_offset@ >= 0 {
+} else if facts.diverging_epoch@ >= 0 {
     ReplicaFetchMutation::Truncate
 } else {
     ReplicaFetchMutation::Append
@@ -126,7 +127,7 @@ pub fn replica_fetch_mutation(facts: ReplicaFetchFacts) -> ReplicaFetchMutation 
         ReplicaFetchMutation::Reject
     } else if facts.error_code != 0 {
         ReplicaFetchMutation::Retry
-    } else if facts.diverging_end_offset >= 0 {
+    } else if facts.diverging_epoch >= 0 {
         ReplicaFetchMutation::Truncate
     } else {
         ReplicaFetchMutation::Append
@@ -744,7 +745,7 @@ mod tests {
         target_matches: true,
         reported_target_matches: true,
         error_code: 0,
-        diverging_end_offset: -1,
+        diverging_epoch: -1,
     };
 
     #[test]
@@ -758,7 +759,7 @@ mod tests {
                 ReplicaFetchFacts {
                     request_leader_epoch: i32::MAX,
                     current_leader_epoch: i32::MAX,
-                    diverging_end_offset: 0,
+                    diverging_epoch: 0,
                     ..LIVE_ROW
                 },
                 Truncate,
@@ -775,7 +776,7 @@ mod tests {
                 "an error row with a divergence is still only an error",
                 ReplicaFetchFacts {
                     error_code: 1,
-                    diverging_end_offset: 7,
+                    diverging_epoch: 7,
                     ..LIVE_ROW
                 },
                 Retry,
@@ -800,7 +801,7 @@ mod tests {
                 "the leader reports a different current leader",
                 ReplicaFetchFacts {
                     reported_target_matches: false,
-                    diverging_end_offset: 3,
+                    diverging_epoch: 3,
                     ..LIVE_ROW
                 },
                 Reject,

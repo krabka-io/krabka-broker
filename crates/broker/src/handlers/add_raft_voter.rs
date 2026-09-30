@@ -87,15 +87,44 @@ pub(crate) async fn handle(
             },
         );
     };
+    let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
+    let id = u64::try_from(voter_id).unwrap_or_default();
+    let voter = Voter {
+        id: krabka_raft::NodeId(id),
+        directory_id: uuid::Uuid::from_bytes(directory_id.0),
+        endpoints: req
+            .listeners
+            .iter()
+            .map(|l| VoterEndpoint {
+                name: l.name.clone(),
+                host: l.host.clone(),
+                port: l.port,
+            })
+            .collect(),
+        kraft_version: krabka_metadata::KRaftVersionRange::default(),
+    };
+    let add = AddVoter {
+        voter,
+        ack_when_committed: version == 0 || req.ack_when_committed,
+    };
     let refusal =
         match voter_requests::add_voter_refusal(&req, &image.cluster_id().to_string(), &quorum) {
             Some(refusal) => Some(refusal),
-            None if image.kraft_version() >= 1 => {
-                probe_candidate(broker, &req, image.kraft_version())
+            // `AddVoterHandler` answers from the leader's own state (a pending
+            // change, the high watermark, `kraft.version`, an uncommitted voters
+            // record, a duplicate id) before it sends the candidate anything, so
+            // a retried or refused add never probes an unreachable candidate.
+            None => match voter_requests::reconfiguration_refusal(
+                broker.controller.check_add_voter(add.clone()).await,
+                voter_requests::VoterOperation::Add,
+                voter_id,
+                directory_id,
+            ) {
+                (codes::NONE, _) => probe_candidate(broker, &req, image.kraft_version())
                     .await
-                    .err()
-            }
-            None => None,
+                    .err(),
+                refusal => Some(refusal),
+            },
         };
     if let Some((error_code, error_message)) = refusal {
         return encode_resp(
@@ -108,31 +137,9 @@ pub(crate) async fn handle(
         );
     }
 
-    let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
-    let id = u64::try_from(voter_id).unwrap_or_default();
-    let voter = Voter {
-        id: krabka_raft::NodeId(id),
-        directory_id: uuid::Uuid::from_bytes(directory_id.0),
-        endpoints: req
-            .listeners
-            .into_iter()
-            .map(|l| VoterEndpoint {
-                name: l.name,
-                host: l.host,
-                port: l.port,
-            })
-            .collect(),
-        kraft_version: krabka_metadata::KRaftVersionRange::default(),
-    };
-
     let (error_code, error_message) = voter_requests::reconfiguration_refusal(
-        broker
-            .controller
-            .add_voter(AddVoter {
-                voter,
-                ack_when_committed: version == 0 || req.ack_when_committed,
-            })
-            .await,
+        broker.controller.add_voter(add).await,
+        voter_requests::VoterOperation::Add,
         voter_id,
         directory_id,
     );
@@ -369,7 +376,7 @@ mod tests {
             resp == AddRaftVoterResponse {
                 error_code: codes::UNSUPPORTED_VERSION,
                 error_message: Some(
-                    "Cluster doesn't support changing voters because the kraft.version feature \
+                    "Cluster doesn't support adding voter because the kraft.version feature \
                      is 0"
                         .into()
                 ),

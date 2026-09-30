@@ -143,7 +143,7 @@ pub(crate) async fn handle(
         .send(GroupActorMessage::ClassicJoin {
             req,
             version,
-            client_id: ctx.client_id.to_owned(),
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
             client_host: ctx.client_host(),
             reply: tx,
         })

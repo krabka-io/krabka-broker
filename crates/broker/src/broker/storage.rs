@@ -162,6 +162,7 @@ pub(super) async fn recover_storage_and_groups(
     share_group.actor_mailbox_capacity = config.coordinator_actor_mailbox_capacity;
     let mut streams_group = config.streams_group.as_ref().clone();
     streams_group.actor_mailbox_capacity = config.coordinator_actor_mailbox_capacity;
+    streams_group.unstable_api_versions = config.features.unstable_api_versions;
     let group_coordinator = Arc::new(crate::coordinator::GroupCoordinator::new(
         consumer_group,
         share_group,

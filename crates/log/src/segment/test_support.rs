@@ -9,7 +9,9 @@ use tempfile::tempdir;
 
 use super::Segment;
 
-/// Index every batch. No batch is ever `0` bytes past the last entry.
+/// Index every batch but the first. Every later batch is more than `0` bytes
+/// past the last entry, and the first is `0` bytes past the segment start,
+/// which Kafka's `bytesSinceLastIndexEntry > indexIntervalBytes` does not index.
 pub(super) const DENSE_INDEX: ByteSize = ByteSize::ZERO;
 
 /// A read budget larger than anything these tests write, so the byte

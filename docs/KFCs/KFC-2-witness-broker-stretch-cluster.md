@@ -121,7 +121,7 @@ The rejection is deliberate. `acks=all` at `min.insync.replicas=1` acknowledges 
 
 **Replication.** A witness runs the standard replica fetcher in `crates/broker/src/replicator.rs`, and the leader tracks it in `ReplicaState` like any other follower. It enters and leaves the in-sync replica set through the normal `isr_maintenance` scan. It counts toward `min.insync.replicas` in `validate_partition_gate`, which is the mechanism the whole feature depends on.
 
-**Placement.** `crates/broker/src/site_placement.rs` replaces the round-robin helper when the brokers report racks. It falls back to `round_robin_replicas` when no broker reports a rack, which keeps a non-stretch cluster on the Kafka behaviour. A manual assignment always wins, as it does in Kafka.
+**Placement.** `crates/broker/src/site_placement.rs` replaces the round-robin helper when the brokers report racks. It falls back to `striped_replicas`, a port of Kafka's `StripedReplicaPlacer` for a cluster without racks, when no broker reports a rack, which keeps a non-stretch cluster on the Kafka behaviour. Both paths start at a random site and broker, as `StripedReplicaPlacer` does, and both take a fenced broker only as a last resort. A manual assignment always wins, as it does in Kafka.
 
 **Reads.** The KIP-392 replica selector skips a witness, so a rack-aware consumer in the witness site reads from the leader instead. A witness serves no client read.
 
@@ -129,7 +129,7 @@ The rejection is deliberate. `acks=all` at `min.insync.replicas=1` acknowledges 
 
 No wire format changes. No new API key, no new request or response version, and no new record field. A stock Kafka client and every JVM admin tool work unchanged against a stretch cluster.
 
-krabka is greenfield and undeployed, so there is no migration. A cluster with no `[stretch]` section and no witness node keeps the Kafka behaviour in every path this document touches: placement stays round-robin, and every in-sync replica is eligible to lead. There is nothing to deprecate.
+krabka is greenfield and undeployed, so there is no migration. A cluster with no `[stretch]` section and no witness node keeps the Kafka behaviour in every path this document touches: placement stays Kafka's striped placement, and every in-sync replica is eligible to lead. There is nothing to deprecate.
 
 - KIP-392 supplies `broker.rack` and the rack-aware replica selector. The site model reuses both.
 - KIP-460 supplies the preferred election that keeps leadership pinned.

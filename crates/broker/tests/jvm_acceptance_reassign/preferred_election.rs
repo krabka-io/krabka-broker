@@ -66,10 +66,8 @@ async fn jvm_kafka_leader_election_preferred() {
             "--if-not-exists",
             "--topic",
             TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "2",
+            "--replica-assignment",
+            "1:2",
             "--bootstrap-server",
             broker0_advertised(),
             "--command-config",
@@ -85,8 +83,8 @@ async fn jvm_kafka_leader_election_preferred() {
     eprintln!("KRABKA[test] initial partition leader: {initial_leader}");
 
     // For the preferred election to do anything interesting we need broker 1
-    // to be the preferred (replicas[0]). The scheduler should assign [1, 2]
-    // since broker 1 is node_id=1 (lowest). Assert this assumption.
+    // to be the preferred (replicas[0]). The assignment above is [1, 2], since
+    // an automatic placement would start at a random broker. Assert it held.
     assert!(
         initial_leader == 1,
         "expected broker 1 to be the initial/preferred leader; got {initial_leader}"

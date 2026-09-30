@@ -72,10 +72,18 @@ pub struct BrokerRaftHandshake {
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
+    /// Kafka's `delegation.token.secret.key`: the key that recomputes a
+    /// delegation token's SCRAM password. Without one no token authenticates.
+    pub delegation_token_secret_key: Option<krabka_security::SecretBytes>,
     /// Audit sink for the controller listener's own credential presentations.
     pub audit_log: AuditLogArc,
-    /// Maximum Kafka handshake frame body accepted before authentication.
-    pub max_frame_bytes: usize,
+    /// Kafka's `sasl.server.max.receive.size`: the largest frame the SASL
+    /// exchange reads. It replaces `socket.request.max.bytes` until the peer
+    /// finishes authenticating, and a larger frame fails the authentication.
+    pub sasl_max_receive_bytes: usize,
+    /// Kafka's `connection.failed.authentication.delay.ms`: how long a failed
+    /// SASL exchange holds its answer and the close that follows.
+    pub failed_authentication_delay: std::time::Duration,
     /// Authorizer that the controller listener asks for each request.
     ///
     /// Authentication proves *who* the peer is: the SASL principal, the mTLS
@@ -222,8 +230,10 @@ mod tests {
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             protocol: ListenerProtocol::Plaintext,
             controller: Arc::new(OnceCell::new()),
+            delegation_token_secret_key: None,
             audit_log: Arc::new(OnceCell::new()),
-            max_frame_bytes: 4096,
+            sasl_max_receive_bytes: 4096,
+            failed_authentication_delay: std::time::Duration::ZERO,
             authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
             principal_mapper: crate::SslPrincipalMapper::default(),
         };

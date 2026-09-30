@@ -620,19 +620,24 @@ mod tests {
         assert2::assert!(log.hwm().0 == 2);
     }
 
+    /// Kafka's `KafkaRaftLog.truncateTo` hands the cut to
+    /// `UnifiedLog.truncateTo`, which never refuses a target below the log
+    /// start: it truncates and moves the start down onto the target.
     #[test]
-    fn truncate_below_log_start_returns_error() {
+    fn truncate_below_log_start_lowers_the_log_start() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..4 {
             log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
         log.prune_to(Offset(2)).unwrap();
 
-        check!(matches!(
-            log.truncate_to(Offset(1)),
-            Err(RaftError::Storage(
-                krabka_log::LogError::OffsetTooLow { .. }
-            ))
-        ));
+        log.truncate_to(Offset(1)).unwrap();
+        check!(
+            (
+                log.log_start_offset().0,
+                log.log_end_offset().0,
+                log.hwm().0
+            ) == (1, 1, 0)
+        );
     }
 }

@@ -3,7 +3,7 @@ use assert2::check;
 use super::*;
 use crate::{
     core::test_support::{FakeLog, TEST_ELECTION_TIMEOUT, machine, voters},
-    event::Event,
+    event::{Event, SuccessorRank},
     types::{NodeId, QuorumState},
 };
 
@@ -117,15 +117,15 @@ fn a_candidate_at_our_own_epoch_is_not_fenced() {
     );
 }
 
-/// A standard vote request from a higher epoch moves us to that epoch
-/// before the grant is decided. Pre-vote never does.
+/// A vote or a pre-vote from a higher epoch moves us to that epoch before the
+/// grant is decided, as `KafkaRaftClient.handleVoteRequest` does for both.
 #[test]
-fn a_standard_vote_from_a_higher_epoch_advances_our_epoch() {
+fn a_vote_or_pre_vote_from_a_higher_epoch_advances_our_epoch() {
     let log = FakeLog {
         end: 5,
         last_epoch: 1,
     };
-    for (pre_vote, want_epoch) in [(false, 7), (true, 0)] {
+    for (pre_vote, want_epoch) in [(false, 7), (true, 7)] {
         let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
         m.on_event(
             Event::ReceiveVoteRequest {
@@ -246,7 +246,380 @@ fn pre_vote_grant_is_non_binding() {
         &log,
         SimInstant(0),
     );
-    assert2::assert!((m.quorum_state().voted_key, m.quorum_state().leader_epoch) == (None, 0));
+    // The epoch is adopted, but the pre-vote is not a vote: none is recorded.
+    assert2::assert!((m.quorum_state().voted_key, m.quorum_state().leader_epoch) == (None, 1));
+}
+
+/// One inbound Vote or pre-vote of `epoch` from `candidate`, whose log ends at
+/// `(last_epoch, last_offset)`.
+fn vote_event(
+    candidate: NodeId,
+    epoch: u32,
+    pre_vote: bool,
+    last_epoch: u32,
+    last_offset: i64,
+) -> Event {
+    Event::ReceiveVoteRequest {
+        from: candidate,
+        cluster_id: None,
+        voter_id: NodeId(1),
+        voter_directory_id: uuid::Uuid::nil(),
+        candidate_epoch: epoch,
+        candidate,
+        candidate_directory_id: uuid::Uuid::nil(),
+        candidate_log_end: LogEnd {
+            last_epoch,
+            last_offset,
+        },
+        pre_vote,
+    }
+}
+
+/// Voter 1's log ends at offset 5 in epoch 1: node 2's log is up to date at
+/// `(1, 5)` and behind at `(1, 4)`.
+const OUR_LOG: FakeLog = FakeLog {
+    end: 5,
+    last_epoch: 1,
+};
+
+/// What `m` answers a Vote or pre-vote of `epoch` from node 2, as (granted,
+/// epoch in the reply).
+fn vote_answer(
+    m: &mut QuorumStateMachine,
+    epoch: u32,
+    pre_vote: bool,
+    up_to_date: bool,
+) -> (bool, u32) {
+    let last_offset = if up_to_date { 5 } else { 4 };
+    let actions = m.on_event(
+        vote_event(NodeId(2), epoch, pre_vote, 1, last_offset),
+        &OUR_LOG,
+        SimInstant(0),
+    );
+    actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ReplyVote { epoch, granted, .. } => Some((*granted, *epoch)),
+            _ => None,
+        })
+        .expect("a vote request is answered")
+}
+
+/// A test state machine, built fresh for each row of a table.
+type Build = Box<dyn Fn() -> QuorumStateMachine>;
+
+/// A machine for voter 1 in a three-voter quorum that follows node 3 at epoch
+/// 4, and has fetched from it when `fetched`.
+fn follower_of_three(fetched: bool) -> QuorumStateMachine {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    m.on_event(
+        Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(3),
+            leader_epoch: 4,
+        },
+        &OUR_LOG,
+        SimInstant(10),
+    );
+    if fetched {
+        m.on_event(
+            Event::ReceiveFetchResponse {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+                diverging: None,
+            },
+            &OUR_LOG,
+            SimInstant(20),
+        );
+    }
+    assert2::assert!(matches!(m.role(), Role::Follower { .. }));
+    m
+}
+
+/// A machine for voter 1 in a three-voter quorum that leads epoch 1.
+fn leader_of_three() -> QuorumStateMachine {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(0));
+    for epoch in [0, 1] {
+        m.on_event(
+            Event::ReceiveVoteResponse {
+                from: NodeId(2),
+                epoch,
+                vote_granted: true,
+            },
+            &OUR_LOG,
+            SimInstant(1),
+        );
+    }
+    assert2::assert!(m.role().is_leader());
+    m
+}
+
+/// Each state's `canGrantVote` for a request at the state's own epoch: a
+/// follower grants a pre-vote only until it has fetched from its leader, a
+/// leader grants nothing, a candidate or a resigned leader grants a pre-vote on
+/// log recency alone, and nothing but an unattached, prospective or voted
+/// replica grants a binding vote.
+#[test]
+fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
+    let unattached = || machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let candidate = || {
+        let mut m = leader_of_three();
+        m.on_event(Event::CheckQuorumTimeout, &OUR_LOG, SimInstant(2));
+        // A resigned leader's election timer starts the next pre-vote round.
+        m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(3));
+        m.on_event(
+            Event::ReceiveVoteResponse {
+                from: NodeId(3),
+                epoch: m.quorum_state().leader_epoch,
+                vote_granted: true,
+            },
+            &OUR_LOG,
+            SimInstant(4),
+        );
+        assert2::assert!(matches!(m.role(), Role::Candidate { .. }), "{:?}", m.role());
+        m
+    };
+    let resigned = || {
+        let mut m = leader_of_three();
+        m.on_event(Event::CheckQuorumTimeout, &OUR_LOG, SimInstant(2));
+        assert2::assert!(matches!(m.role(), Role::Resigned));
+        m
+    };
+    // (state, machine, its epoch, pre-vote granted when up to date, vote granted
+    // when up to date)
+    let cases: Vec<(&str, Build, u32, bool, bool)> = vec![
+        ("leader", Box::new(leader_of_three), 1, false, false),
+        (
+            "follower not yet fetched",
+            Box::new(|| follower_of_three(false)),
+            4,
+            true,
+            false,
+        ),
+        (
+            "follower that has fetched",
+            Box::new(|| follower_of_three(true)),
+            4,
+            false,
+            false,
+        ),
+        ("candidate", Box::new(candidate), 2, true, false),
+        ("resigned leader", Box::new(resigned), 1, true, false),
+        ("unattached", Box::new(unattached), 0, true, true),
+    ];
+    for (label, build, epoch, pre_vote_granted, vote_granted) in cases {
+        let mut m = build();
+        check!(
+            vote_answer(&mut m, epoch, true, true) == (pre_vote_granted, epoch),
+            "{label}: pre-vote"
+        );
+        let mut m = build();
+        check!(
+            vote_answer(&mut m, epoch, false, true) == (vote_granted, epoch),
+            "{label}: vote"
+        );
+        let mut m = build();
+        check!(
+            vote_answer(&mut m, epoch, true, false) == (false, epoch),
+            "{label}: pre-vote with a log that is behind"
+        );
+    }
+}
+
+/// A stale leader or follower that sees a pre-vote from a higher epoch steps
+/// down to that epoch and answers from there, with the new epoch, so the
+/// election proceeds without waiting for a check-quorum or fetch timeout.
+#[test]
+fn a_pre_vote_from_a_higher_epoch_steps_down_a_stale_leader_or_follower() {
+    let cases: Vec<(&str, Build)> = vec![
+        ("leader", Box::new(leader_of_three)),
+        (
+            "follower that has fetched",
+            Box::new(|| follower_of_three(true)),
+        ),
+    ];
+    for (label, build) in cases {
+        let mut m = build();
+        let epoch = m.quorum_state().leader_epoch + 3;
+        check!(
+            vote_answer(&mut m, epoch, true, true) == (true, epoch),
+            "{label}: grants at the new epoch"
+        );
+        check!(
+            (
+                matches!(m.role(), Role::Unattached { .. }),
+                m.quorum_state().leader_epoch,
+                m.quorum_state().leader_id,
+                m.quorum_state().voted_key,
+            ) == (true, epoch, None, None),
+            "{label}: is unattached at the new epoch"
+        );
+    }
+}
+
+/// Only the candidate a replica already voted for gets its vote again, however
+/// the candidate's log compares, as `unattachedOrProspectiveCanGrantVote` says.
+#[test]
+fn a_vote_is_granted_again_only_to_the_candidate_it_went_to() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    check!(vote_answer(&mut m, 1, false, true) == (true, 1));
+    check!(
+        vote_answer(&mut m, 1, false, false) == (true, 1),
+        "same candidate"
+    );
+    let actions = m.on_event(
+        vote_event(NodeId(3), 1, false, 1, 5),
+        &OUR_LOG,
+        SimInstant(0),
+    );
+    check!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::ReplyVote { granted: false, .. })),
+        "another candidate"
+    );
+}
+
+/// Whether `m` grants a binding vote from `candidate` at `epoch`, with the
+/// candidate's log level with ours.
+fn grants_vote_to(m: &mut QuorumStateMachine, candidate: NodeId, epoch: u32) -> bool {
+    m.on_event(
+        vote_event(candidate, epoch, false, 1, 5),
+        &OUR_LOG,
+        SimInstant(0),
+    )
+    .iter()
+    .find_map(|action| match action {
+        Action::ReplyVote { granted, .. } => Some(*granted),
+        _ => None,
+    })
+    .expect("a vote request is answered")
+}
+
+/// A vote belongs to its epoch. A replica that votes for node 2, and then hears
+/// that node 3 won the same epoch, keeps its vote as Kafka's
+/// `QuorumState.transitionToFollower` does, so it grants no other candidate a
+/// binding vote at that epoch however it later loses the leader. Without it,
+/// voter 1 would count once for node 2 and once for node 3 in epoch 4, and two
+/// leaders could hold that epoch.
+#[test]
+fn a_vote_survives_following_the_leader_of_its_epoch() {
+    let end_epoch = SuccessorRank {
+        position: 1,
+        successors: 1,
+    };
+    let cases: Vec<(&str, Event)> = vec![
+        (
+            "the leader resigns",
+            Event::ReceiveEndQuorumEpoch {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+                successor_rank: end_epoch,
+            },
+        ),
+        ("the fetch times out", Event::FetchTimeout),
+    ];
+    for (label, event) in cases {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        check!(vote_answer(&mut m, 4, false, true) == (true, 4), "{label}");
+        m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+            },
+            &OUR_LOG,
+            SimInstant(10),
+        );
+        check!(
+            (
+                matches!(m.role(), Role::Follower { .. }),
+                m.quorum_state().voted_key.map(|key| key.id),
+            ) == (true, Some(NodeId(2))),
+            "{label}: following node 3 at epoch 4"
+        );
+
+        m.on_event(event, &OUR_LOG, SimInstant(20));
+
+        check!(
+            m.quorum_state().voted_key.map(|key| key.id) == Some(NodeId(2)),
+            "{label}: still voted for node 2"
+        );
+        check!(!grants_vote_to(&mut m, NodeId(3), 4), "{label}: node 3");
+        check!(
+            grants_vote_to(&mut m, NodeId(2), 4),
+            "{label}: node 2 again"
+        );
+    }
+}
+
+/// A newer epoch is a new ballot: the replica that followed node 3 at epoch 4
+/// has no vote left at epoch 5.
+#[test]
+fn a_vote_does_not_outlive_its_epoch() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    check!(vote_answer(&mut m, 4, false, true) == (true, 4));
+    m.on_event(
+        Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(3),
+            leader_epoch: 5,
+        },
+        &OUR_LOG,
+        SimInstant(10),
+    );
+
+    check!(m.quorum_state().voted_key.is_none());
+}
+
+/// A replica that followed the leader of an epoch, and then stopped, knows a
+/// leader for that epoch, so it grants no binding vote in it: Kafka's
+/// `ProspectiveState` keeps the `leaderId` of the follower it came from, and
+/// `unattachedOrProspectiveCanGrantVote` refuses when one is known. It still
+/// grants a pre-vote, or a cluster that lost its leader could not elect a new
+/// one, and it still attaches to a leader announced for its epoch, because
+/// `leader_id` in the quorum state is `None` while it prospects.
+#[test]
+fn a_prospective_replica_that_followed_a_leader_grants_no_binding_vote_in_that_epoch() {
+    let mut m = follower_of_three(false);
+
+    m.on_event(Event::FetchTimeout, &OUR_LOG, SimInstant(30));
+
+    check!(
+        (
+            matches!(
+                m.role(),
+                Role::Prospective {
+                    abandoned_leader: Some(NodeId(3)),
+                    ..
+                }
+            ),
+            m.quorum_state().leader_id,
+            m.quorum_state().voted_key,
+        ) == (true, None, None)
+    );
+    check!(!grants_vote_to(&mut m, NodeId(2), 4), "binding vote");
+    check!(vote_answer(&mut m, 4, true, true) == (true, 4), "pre-vote");
+}
+
+/// The belief is not lost when the election timer starts the round again.
+#[test]
+fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
+    let mut m = follower_of_three(false);
+    m.on_event(Event::FetchTimeout, &OUR_LOG, SimInstant(30));
+
+    m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(60));
+
+    check!(
+        matches!(
+            m.role(),
+            Role::Prospective {
+                abandoned_leader: Some(NodeId(3)),
+                ..
+            }
+        ),
+        "{:?}",
+        m.role()
+    );
+    check!(!grants_vote_to(&mut m, NodeId(2), 4));
 }
 
 #[test]

@@ -1234,6 +1234,9 @@ fn assert_acl_sync(target: &str, mm2: &MirrorMaker) {
         ],
     );
     let text = both_streams(&out);
+    // `kafka-acls --add` first asks DescribeAcls whether the binding exists
+    // (`AclCommand.addAcls`), so the refusal it prints is DescribeAcls's and not
+    // CreateAcls's shorter "No Authorizer is configured.".
     assert!(
         text.contains("SecurityDisabledException")
             && text.contains("No Authorizer is configured on the broker"),

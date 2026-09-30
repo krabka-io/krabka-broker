@@ -19,7 +19,7 @@ use krabka_protocol::{
     },
 };
 
-use super::handle;
+use super::{Doomed, filter::build_filter, handle, match_filter};
 use crate::{
     broker::BrokerHandle,
     codes,
@@ -166,7 +166,7 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
 
     let disabled = DeleteAclsFilterResult {
         error_code: codes::SECURITY_DISABLED,
-        error_message: Some("No Authorizer is configured on the broker".into()),
+        error_message: Some("No Authorizer is configured.".into()),
         matching_acls: Vec::new(),
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
@@ -499,4 +499,121 @@ async fn handle_closes_the_connection_on_an_unknown_element() {
     );
     assert!(all_acls(&broker_handle) == vec![acl("orders", "User:alice", AclOperation::Read)]);
     broker_handle.shutdown().await;
+}
+
+/// Seeds `count` distinct topic ACLs in one submit, as `CreateAcls` writes
+/// them. Several submits against a growing ACL set are far slower.
+async fn seed_many_acls(handle: &BrokerHandle, count: usize) {
+    seed_acls(
+        handle,
+        (0..count)
+            .map(|n| acl(&format!("topic-{n}"), "User:alice", AclOperation::Read))
+            .collect(),
+    )
+    .await;
+}
+
+/// Kafka's `AclControlManager.deleteAcls` caps a request at 10,000 removals.
+/// The 10,001st match fails the whole request with `INVALID_REQUEST` on every
+/// filter and deletes nothing. The check runs before a match is added, so a
+/// second filter that matches the 10,000 ACLs already collected fails too.
+///
+/// The boundary itself is `match_filter_bounds_the_removals_of_a_request`: a
+/// request that removes exactly 10,000 ACLs is not run here, because the image
+/// removes an ACL by scanning the whole set and 10,000 of them take minutes in
+/// a debug build.
+#[tokio::test]
+async fn handle_bounds_a_request_to_ten_thousand_removals() {
+    let match_all = || filter(None, None);
+    // (acls seeded, request filters)
+    let cases = [
+        (10_001, vec![match_all()]),
+        (10_000, vec![match_all(), match_all()]),
+    ];
+    for (seeded, filters) in cases {
+        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+        seed_many_acls(&broker_handle, seeded).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let filter_count = filters.len();
+
+        let resp = handle(&broker, request(filters), &ctx, VERSION)
+            .await
+            .expect("handle");
+        let resp = decode_response(&resp);
+
+        let bound = DeleteAclsFilterResult {
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some(
+                "Cannot remove more than 10000 acls in a single delete operation.".into(),
+            ),
+            matching_acls: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        let expected = DeleteAclsResponse {
+            throttle_time_ms: 0,
+            filter_results: vec![bound; filter_count],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "{seeded} acls, {filter_count} filters");
+        check!(
+            all_acls(&broker_handle).len() == seeded,
+            "{seeded} acls, {filter_count} filters"
+        );
+        broker_handle.shutdown().await;
+    }
+}
+
+/// The bound of [`super::match_filter`], at a size a test can afford: a
+/// request may remove exactly `bound` ACLs, and the next match fails it.
+#[test]
+fn match_filter_bounds_the_removals_of_a_request() {
+    let image_acls: Vec<AclEntry> = (0..5)
+        .map(|n| acl(&format!("topic-{n}"), "User:alice", AclOperation::Read))
+        .collect();
+    let build = |name: Option<&str>| build_filter(&filter(name, None)).expect("filter");
+    let every_acl = build(None);
+    let [topic_0, topic_1, topic_2] =
+        ["topic-0", "topic-1", "topic-2"].map(|name| build(Some(name)));
+    let bound = 3;
+    // (label, filters in order, how many ACLs each matched; `None` is refused)
+    let cases = [
+        (
+            "under the bound",
+            vec![&topic_0, &topic_1],
+            vec![Some(1), Some(1)],
+        ),
+        // A repeat adds no distinct removal, so it is never past the bound.
+        (
+            "repeats",
+            vec![&topic_0, &topic_0, &topic_1, &topic_1],
+            vec![Some(1); 4],
+        ),
+        (
+            "exactly the bound",
+            vec![&topic_0, &topic_1, &topic_2],
+            vec![Some(1); 3],
+        ),
+        // The fourth ACL is the first one past the bound.
+        ("one past the bound", vec![&every_acl], vec![None]),
+        (
+            "a later filter past the bound",
+            vec![&topic_0, &topic_1, &every_acl],
+            vec![Some(1), Some(1), None],
+        ),
+    ];
+    for (label, filters, expected) in cases {
+        let mut doomed = Doomed::default();
+        let mut got = Vec::new();
+        for filter in filters {
+            let matched = match_filter(image_acls.iter(), filter, &mut doomed, bound);
+            got.push(matched.as_ref().map(Vec::len));
+            if matched.is_none() {
+                break;
+            }
+        }
+        check!(got == expected, "{label}");
+    }
 }

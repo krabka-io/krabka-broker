@@ -18,13 +18,21 @@ use crate::{
 impl Log {
     /// Truncate the log so that no record at offset `>= offset` remains.
     /// Replication and leader election use this method.
+    ///
+    /// The target can lie below the log start. This is Kafka's
+    /// `UnifiedLog.truncateTo`, which never refuses: when no local segment
+    /// reaches down to `offset`, the log is reset empty at `offset`
+    /// ([`Log::reset_to`], Kafka's `truncateFullyAndStartAt`); otherwise the
+    /// log is truncated and the log start moves down to `offset` if it was
+    /// above it. A follower whose start sits above the leader's divergence
+    /// point, after a long outage and retention or an unclean election, can
+    /// therefore always truncate.
     #[instrument(level = "info", skip(self), err)]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), LogError> {
-        let log_start = self.log_start_offset();
         let log_end = self.log_end_offset();
         let empty_rolled_active_at_cut = offset == log_end
             && !self.segments.is_empty()
@@ -45,11 +53,8 @@ impl Log {
         // activation walk, so what that walk learned about this offset and
         // above no longer describes the log.
         self.invalidate_delivery_schedule(offset);
-        if offset < log_start {
-            return Err(LogError::OffsetTooLow {
-                requested: offset,
-                log_start,
-            });
+        if offset < self.first_local_offset() {
+            return self.reset_to(offset);
         }
 
         // Kafka's `truncateAndReload` deletes every snapshot outside
@@ -167,6 +172,11 @@ impl Log {
         // latest_epoch()/end_offset_for_epoch() don't report epochs that no
         // longer have records (mirrors Kafka's truncateFromEnd).
         self.epoch_checkpoint.truncate_from_end(new_end)?;
+        // Kafka's `logStartOffset = Math.min(targetOffset, logStartOffset)`.
+        // The retained log ends at `new_end`, which sits below `offset` when
+        // the cut landed inside a batch, and a start past the end would name
+        // records the log no longer holds.
+        self.lower_log_start_offset(offset.min(new_end))?;
         Ok(())
     }
 

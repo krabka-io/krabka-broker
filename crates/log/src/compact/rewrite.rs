@@ -10,8 +10,9 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use krabka_compression::CompressionType;
 use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::records::{RecordBatch, TimestampType};
 use krabka_units::prelude::{Time, TimeExt};
 use tracing::instrument;
 
@@ -19,14 +20,16 @@ use super::{
     BatchMeta, CleanedTransactionMetadata, RecordMeta, RetainDecision, TxnDataState,
     batch_reader::read_all_batches, retain_decision,
 };
-use crate::{
-    error::LogError,
-    segment::Segment,
-    txn_index::{AbortedTxn, TxnIndex},
-};
+use crate::{error::LogError, segment::Segment, txn_index::TxnIndex};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transaction_tests;
+
+/// Kafka's `RecordBatch.NO_TIMESTAMP`: the base timestamp of a batch that has
+/// no records.
+const NO_TIMESTAMP: i64 = -1;
 
 /// Result of [`rewrite_segments`]: paths to the `.cleaned` files that
 /// [`atomic_swap`] should promote through `.swap` to their final names.
@@ -39,8 +42,8 @@ pub struct RewriteOutput {
     /// Highest absolute offset of any surviving record.
     #[cfg(test)]
     pub new_last_offset: Offset,
-    /// Path to the rewritten survivor `.txnindex`. The rewrite writes this
-    /// file only when it carries forward one or more aborted-txn entries. It
+    /// Path to the rewritten `.txnindex`. The rewrite writes this file only
+    /// when it keeps the abort marker of one or more aborted transactions. It
     /// is `None` when no aborted transaction survives.
     pub txnindex_swap: Option<PathBuf>,
 }
@@ -52,6 +55,60 @@ pub struct RewriteRetention {
     pub now_ms: i64,
     /// How long a tombstone remains eligible for reads before deletion.
     pub delete_retention: Time,
+}
+
+/// What the log's producer state says about an active producer's last record:
+/// Kafka's `LastRecord`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerLastRecord {
+    /// The last offset of the producer's last *data* batch, or `None` when it
+    /// has written no data batch on the partition, only transaction markers.
+    pub last_data_offset: Option<Offset>,
+    /// The producer's current epoch, which fences a zombie.
+    pub producer_epoch: i16,
+}
+
+/// The last absolute offset `batch` spans.
+fn last_offset_of(batch: &RecordBatch) -> i64 {
+    batch.base_offset + i64::from(batch.last_offset_delta)
+}
+
+/// What one cleaning round knows about the log beyond the segments a
+/// [`rewrite_segments`] call gets. A round can rewrite several size-bounded
+/// groups, one call each, and both facts are about the whole round.
+#[derive(Debug, Clone, Copy)]
+pub struct CleaningRound<'a> {
+    /// Kafka's `lastRecordsOfActiveProducers`: each active producer's last
+    /// record. A producer that is not in the map is not active.
+    pub active_producers: &'a HashMap<ProducerId, ProducerLastRecord>,
+    /// Kafka's `upperBoundOffsetOfCleaningRound`: the offset after the last
+    /// batch the round rewrites.
+    pub upper_bound: Offset,
+}
+
+impl CleaningRound<'_> {
+    /// Kafka's `isBatchLastRecordOfProducer` in `Cleaner.cleanInto`: whether
+    /// `batch` is the record that keeps its producer's state alive. It is the
+    /// producer's last data batch, or, for a producer that wrote only
+    /// transaction markers, a marker of its current epoch.
+    fn is_last_record_of_producer(&self, batch: &RecordBatch) -> bool {
+        let Some(last) = self.active_producers.get(&ProducerId(batch.producer_id)) else {
+            return false;
+        };
+        match last.last_data_offset {
+            Some(last_data_offset) => last_offset_of(batch) == last_data_offset.0,
+            None => {
+                batch.attributes.is_control_batch() && batch.producer_epoch == last.producer_epoch
+            }
+        }
+    }
+
+    /// Kafka's `batch.nextOffset() == upperBoundOffsetOfCleaningRound`: the
+    /// last batch of the round, kept even when empty so that the last offset is
+    /// not lost.
+    fn is_last_batch_of_round(&self, batch: &RecordBatch) -> bool {
+        last_offset_of(batch) + 1 == self.upper_bound.0
+    }
 }
 
 /// Stream `segments`, oldest to newest, into new `.cleaned` files and apply the
@@ -67,12 +124,23 @@ pub struct RewriteRetention {
 /// therefore hold gaps in their `offset_delta` values where superseded records
 /// used to live. This matches Kafka's on-disk format for compacted topics.
 ///
+/// Every record of a batch that belongs to an aborted transaction is dropped,
+/// and a transaction marker follows Kafka's `CleanedTransactionMetadata`: it
+/// ages out through its delete horizon once the walk has met no batch of its
+/// transaction. The caller adds the aborted transactions of the range to
+/// `txn_meta` first, and passes the same `txn_meta` to every group of one pass
+/// in offset order, because a transaction can span groups. The output's
+/// `.txnindex` holds the aborted transactions whose marker this group kept.
+///
 /// `RETAIN_EMPTY`: this function normally skips a batch that ends up with no
 /// kept records. It writes such a batch again as a bare header with no records
-/// in two cases: when the batch is the last batch of an active producer in
-/// `active_producers`, and when it is the last batch of the consolidated
-/// output. The producer sequence, the producer epoch, and the log-end offset
-/// therefore survive. This is Kafka's `retainEmpty`.
+/// in two cases, both Kafka's `Cleaner.cleanInto`: when the batch is the
+/// record that keeps an active producer's state alive
+/// ([`CleaningRound::active_producers`]: the producer's last data batch, or a
+/// marker of its current epoch when it wrote no data batch), and when it is the
+/// last batch of the whole round ([`CleaningRound::upper_bound`]), not of each
+/// output group. The producer sequence, the producer epoch, and the log-end
+/// offset therefore survive.
 ///
 /// This function writes the `.cleaned` files to the segments' shared directory.
 /// The caller must fsync them and promote them through [`atomic_swap`].
@@ -92,9 +160,9 @@ pub fn rewrite_segments(
     dir: &Path,
     segments: &[&Segment],
     offset_map: &HashMap<Bytes, Offset>,
-    txn_meta: &CleanedTransactionMetadata,
+    txn_meta: &mut CleanedTransactionMetadata,
     retention: RewriteRetention,
-    active_producers: &HashMap<ProducerId, Offset>,
+    round: CleaningRound<'_>,
 ) -> Result<RewriteOutput, LogError> {
     // The Creusot-verified retain kernel is stated over integer milliseconds,
     // and the horizon it computes is stamped into an on-disk `base_timestamp`,
@@ -133,28 +201,35 @@ pub fn rewrite_segments(
         .truncate(true)
         .open(&timeindex_swap)?;
 
-    // Flatten all batches across all segments so we can identify the last
-    // batch (for RETAIN_EMPTY) and the last batch per active producer.
     let mut all_batches: Vec<RecordBatch> = Vec::new();
     for seg in segments {
         all_batches.extend(read_all_batches(seg)?);
     }
-    let last_batch_index = all_batches.len().saturating_sub(1);
-    // The index of each active producer's last batch in `all_batches`.
-    let mut producer_last_batch: HashMap<ProducerId, usize> = HashMap::new();
-    for (i, batch) in all_batches.iter().enumerate() {
-        let pid = ProducerId(batch.producer_id);
-        if active_producers.contains_key(&pid) {
-            producer_last_batch.insert(pid, i);
-        }
-    }
 
     let mut last_kept_offset = new_base - 1;
 
-    for (batch_idx, batch) in all_batches.iter().enumerate() {
+    for batch in &all_batches {
         let is_control = batch.attributes.is_control_batch();
         let producer_id = ProducerId(batch.producer_id);
-        let txn = txn_meta.txn_state(producer_id);
+        // The pass reads the batch before it filters its records, as Kafka's
+        // `Cleaner.shouldDiscardBatch` does: a transaction whose records all
+        // die in this pass still holds its marker until the next one.
+        let (txn, aborted) = if is_control {
+            let discardable = txn_meta.on_control_batch_read(batch);
+            let state = if producer_id.get() < 0 {
+                TxnDataState::NotTransactional
+            } else if discardable {
+                TxnDataState::DataFullyGone
+            } else {
+                TxnDataState::DataSurvives
+            };
+            (state, false)
+        } else {
+            (
+                TxnDataState::NotTransactional,
+                txn_meta.on_batch_read(batch),
+            )
+        };
         let batch_meta = BatchMeta {
             is_control,
             producer_id,
@@ -176,14 +251,21 @@ pub fn rewrite_segments(
                 has_key: record.key.is_some(),
                 has_value: record.value.is_some(),
             };
-            match retain_decision(
-                rec_meta,
-                batch_meta,
-                is_newest_for_key,
-                txn,
-                retention.now_ms,
-                delete_retention_ms,
-            ) {
+            // Every record of an aborted transaction goes, whether or not it
+            // is the newest for its key: Kafka's `discardBatchRecords`.
+            let decision = if aborted {
+                RetainDecision::Delete
+            } else {
+                retain_decision(
+                    rec_meta,
+                    batch_meta,
+                    is_newest_for_key,
+                    txn,
+                    retention.now_ms,
+                    delete_retention_ms,
+                )
+            };
+            match decision {
                 RetainDecision::Keep => kept.push(record.clone()),
                 RetainDecision::SetHorizon(h) => {
                     kept.push(record.clone());
@@ -194,28 +276,16 @@ pub fn rewrite_segments(
         }
 
         if kept.is_empty() {
-            // RETAIN_EMPTY: re-emit a bare header for an emptied batch when
-            // it is the last batch of an active producer or the last batch
-            // of the consolidated output, so producer sequence/epoch and the
-            // log-end offset survive.
-            let is_producer_last =
-                producer_last_batch.get(&producer_id).copied() == Some(batch_idx);
-            let is_output_last = batch_idx == last_batch_index;
-            if !(is_producer_last || is_output_last) {
+            // RETAIN_EMPTY: re-emit a bare header for an emptied batch that
+            // keeps a producer's state alive, or that is the last batch of
+            // the round, so the producer sequence and epoch and the log-end
+            // offset survive.
+            let keeps_producer_state =
+                batch.producer_id >= 0 && round.is_last_record_of_producer(batch);
+            if !(keeps_producer_state || round.is_last_batch_of_round(batch)) {
                 continue;
             }
-            let out_batch = RecordBatch {
-                base_offset: batch.base_offset,
-                last_offset_delta: batch.last_offset_delta,
-                max_timestamp: batch.max_timestamp,
-                base_timestamp: batch.base_timestamp,
-                attributes: batch.attributes,
-                producer_id: batch.producer_id,
-                producer_epoch: batch.producer_epoch,
-                base_sequence: batch.base_sequence,
-                partition_leader_epoch: batch.partition_leader_epoch,
-                records: vec![],
-            };
+            let out_batch = bare_header(batch);
             let mut buf = BytesMut::with_capacity(out_batch.encoded_len());
             out_batch.encode(&mut buf)?;
             crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, &log_file, &buf)?;
@@ -226,16 +296,25 @@ pub fn rewrite_segments(
             continue;
         }
 
-        // Compute new last_offset_delta covering the kept range (relative to
-        // the batch's original base_offset). Kafka preserves base_offset and
-        // only updates last_offset_delta when records are removed mid-batch.
-        let last_delta = kept
-            .iter()
-            .map(|r| r.offset_delta)
-            .max()
-            .expect("kept non-empty");
+        // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
+        // batch's base offset and last offset (`overrideLastOffset`), so the
+        // producer's last sequence (`base_sequence + last_offset_delta`) and
+        // the `RETAIN_EMPTY` comparisons of the next pass survive a batch that
+        // loses its tail records. The max timestamp is the retained records'
+        // under CreateTime (`MemoryRecordsBuilder.recordWritten`), and the
+        // batch's own under LogAppendTime (`writeDefaultBatchHeader`). The
+        // timestamps are absolute here, whether or not a delete horizon
+        // already re-based the batch.
+        let max_timestamp = match batch.attributes.timestamp_type() {
+            TimestampType::LogAppendTime => batch.max_timestamp,
+            TimestampType::CreateTime => kept
+                .iter()
+                .map(|r| batch.base_timestamp.saturating_add(r.timestamp_delta))
+                .max()
+                .expect("kept non-empty"),
+        };
         let mut out_batch = RecordBatch {
-            last_offset_delta: last_delta,
+            max_timestamp,
             records: kept,
             ..batch.clone()
         };
@@ -257,33 +336,19 @@ pub fn rewrite_segments(
     }
     io.sync_file(crate::io::IoTarget::CompactionSwap, &log_file)?;
 
-    // Rebuild the survivor `.txnindex`: carry forward aborted-txn entries
-    // whose aborted data still partially survives. Producers whose data is
-    // fully compacted away have their entries (and markers) dropped.
+    // Rebuild the `.txnindex` from the aborted transactions the walk kept an
+    // abort marker for, as Kafka's `CleanedTransactionMetadata` appends them
+    // to the cleaned index: a transaction whose batches the pass no longer
+    // meets has its entry dropped together with its marker.
     //
-    // The entries come from THIS group's own input `segments`, not from
-    // `txn_meta`'s aborted list over the whole consumed range: a compaction
-    // pass can rewrite that range into several output segments
-    // (`Log::group_segments_by_size`), and an aborted-txn entry lives in
-    // whichever sealed segment its abort marker was appended to -- never
-    // duplicated across segments. Scoping the read to `segments` here is
-    // what keeps each output's `.txnindex` to the entries that actually
-    // belong to it; a read-committed fetch that scans several of a
+    // An entry lands in the output group that holds its abort marker. A
+    // compaction pass can rewrite the consumed range into several output
+    // segments (`Log::group_segments_by_size`), and the walk closes an
+    // aborted transaction where it reads the marker, so no entry is duplicated
+    // across outputs. A read-committed fetch that scans several of a
     // multi-segment pass's outputs would otherwise see the same aborted
     // transaction once per output and inflate its response.
-    // `txn_meta.txn_state` still supplies the survivor set, which is a fact
-    // about the whole pass, not about this group alone: whether a producer's
-    // data survives compaction can be decided by a record in a different
-    // output group than the one holding that producer's abort entry.
-    let mut retained: Vec<AbortedTxn> = Vec::new();
-    for seg in segments {
-        let idx = TxnIndex::open(seg.txn_index_path())?;
-        retained.extend(
-            idx.entries().iter().copied().filter(|entry| {
-                txn_meta.txn_state(entry.producer_id) == TxnDataState::DataSurvives
-            }),
-        );
-    }
+    let retained = txn_meta.take_cleaned_index();
     let txnindex_swap = if retained.is_empty() {
         None
     } else {
@@ -311,6 +376,29 @@ pub fn rewrite_segments(
         new_last_offset: last_kept_offset,
         txnindex_swap,
     })
+}
+
+/// The bare header a `RETAIN_EMPTY` batch leaves in the output, Kafka's
+/// `DefaultRecordBatch.writeEmptyHeader`: it has no base timestamp, no
+/// compression and no delete horizon, whatever the emptied batch had. The
+/// batch's offsets, max timestamp, producer state, leader epoch and its
+/// transactional, control and timestamp-type bits carry over.
+fn bare_header(batch: &RecordBatch) -> RecordBatch {
+    RecordBatch {
+        base_offset: batch.base_offset,
+        last_offset_delta: batch.last_offset_delta,
+        max_timestamp: batch.max_timestamp,
+        base_timestamp: NO_TIMESTAMP,
+        attributes: batch
+            .attributes
+            .with_compression(CompressionType::None)
+            .with_delete_horizon(false),
+        producer_id: batch.producer_id,
+        producer_epoch: batch.producer_epoch,
+        base_sequence: batch.base_sequence,
+        partition_leader_epoch: batch.partition_leader_epoch,
+        records: vec![],
+    }
 }
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {

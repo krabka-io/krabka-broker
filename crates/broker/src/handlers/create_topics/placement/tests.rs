@@ -1,5 +1,6 @@
-//! Unit tests of the replica placement: the round-robin baseline, the
-//! site-aware spread, and the validation of an explicit assignment list.
+//! Unit tests of the replica placement: the striped baseline, the site-aware
+//! spread, the fenced and shutting-down brokers, and the validation of an
+//! explicit assignment list.
 
 use assert2::assert;
 use krabka_metadata::MetadataRecord;
@@ -7,10 +8,14 @@ use krabka_protocol::owned::create_topics_request::{CreatableReplicaAssignment, 
 use krabka_raft::NodeId;
 
 use super::{
-    automatic_placement_exclusions, codes, manual_replicas, resolve_assignments,
-    round_robin_replicas, site_broker_views,
+    InitialLeadership, PlacementRng, automatic_leaderships, automatic_placement_exclusions, codes,
+    inactive_brokers, manual_leaderships, manual_replicas, placement_failure_message,
+    resolve_assignments, site_broker_views,
 };
 use crate::config_keys::resolve_preferred_leader_site;
+
+/// The seeds that a test runs the placement with.
+const SEEDS: std::ops::Range<u64> = 0..32;
 
 /// One broker in each of the sites `a`, `b`, and `c`.
 const THREE_SITES: [(u64, Option<&str>); 3] = [(1, Some("a")), (2, Some("b")), (3, Some("c"))];
@@ -115,7 +120,35 @@ fn broker_views(
     image: &krabka_metadata::MetadataImage,
     local_broker: Option<NodeId>,
 ) -> Vec<super::SiteBrokerView> {
-    site_broker_views(image, local_broker, &std::collections::HashSet::new())
+    site_broker_views(
+        image,
+        local_broker,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )
+}
+
+/// The automatic placement that `seed` gives, or the code and message of a
+/// refusal.
+fn assign(
+    topic: &CreatableTopic,
+    views: &[super::SiteBrokerView],
+    preferred_site: Option<&str>,
+    seed: u64,
+) -> Result<Vec<Vec<NodeId>>, (i16, String)> {
+    resolve_assignments(
+        topic,
+        views,
+        preferred_site,
+        &mut PlacementRng::seeded(seed),
+    )
+}
+
+/// Marks `node_id` as in controlled shutdown in `image`.
+fn enter_controlled_shutdown(image: &mut krabka_metadata::MetadataImage, node_id: u64) {
+    let mut registration = image.broker(NodeId(node_id)).expect("registered").clone();
+    registration.in_controlled_shutdown = true;
+    image.apply(&MetadataRecord::V1BrokerRegistration(registration));
 }
 
 #[test]
@@ -224,44 +257,6 @@ fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {
 }
 
 #[test]
-fn three_brokers_three_partitions_rf_three() {
-    let bs = vec![NodeId(1), NodeId(2), NodeId(3)];
-    let out = round_robin_replicas(&bs, 3, 3);
-    // Every broker should lead exactly one partition.
-    let leaders: Vec<_> = out.iter().map(|r| r[0]).collect();
-    let mut sorted = leaders.clone();
-    sorted.sort_unstable();
-    assert!(sorted == vec![NodeId(1), NodeId(2), NodeId(3)]);
-    // Each partition has all three brokers as replicas.
-    for replicas in &out {
-        let mut s = replicas.clone();
-        s.sort_unstable();
-        assert!(s == vec![NodeId(1), NodeId(2), NodeId(3)]);
-    }
-}
-
-#[test]
-fn offset_per_partition_means_distinct_leaders() {
-    let bs = vec![NodeId(1), NodeId(2), NodeId(3)];
-    let out = round_robin_replicas(&bs, 3, 1);
-    assert!(out == vec![vec![NodeId(1)], vec![NodeId(2)], vec![NodeId(3)]]);
-}
-
-#[test]
-fn rf_too_high_returns_empty() {
-    let bs = vec![NodeId(1), NodeId(2), NodeId(3)];
-    let out = round_robin_replicas(&bs, 1, 5);
-    assert!(out.is_empty());
-}
-
-#[test]
-fn rf_one_single_broker_preserves_replica_shape() {
-    let bs = vec![NodeId(1)];
-    let out = round_robin_replicas(&bs, 2, 1);
-    assert!(out == vec![vec![NodeId(1)], vec![NodeId(1)]]);
-}
-
-#[test]
 fn site_broker_views_read_the_rack_and_the_witness_role() {
     let image = stretch_image(&[(3, Some("c")), (1, Some("a")), (2, None)], &[3], None);
 
@@ -277,16 +272,101 @@ fn site_broker_views_read_the_rack_and_the_witness_role() {
     assert!(view_rows(&views) == expected);
 }
 
+/// Kafka's `UsableBrokerIterator` hands the placer a fenced broker, tagged as
+/// fenced, and `StripedReplicaPlacer` takes it as a last resort. A fenced
+/// broker thus stays a candidate, unlike one in controlled shutdown.
 #[test]
-fn unavailable_brokers_are_not_placement_candidates() {
-    let image = stretch_image(&THREE_SITES, &[], None);
-    let unavailable = std::collections::HashSet::from([2]);
-    let views = site_broker_views(&image, Some(NodeId(1)), &unavailable);
+fn a_fenced_broker_is_a_tagged_last_resort_candidate() {
+    let mut image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);
+    let fenced = std::collections::HashSet::from([2]);
+    let views = site_broker_views(
+        &image,
+        Some(NodeId(1)),
+        &automatic_placement_exclusions(&image),
+        &fenced,
+    );
 
     assert!(
-        views.iter().map(|view| view.node_id).collect::<Vec<_>>() == vec![NodeId(1), NodeId(3)]
+        views
+            .iter()
+            .map(|view| (view.node_id, view.fenced))
+            .collect::<Vec<_>>()
+            == vec![(NodeId(1), false), (NodeId(2), true), (NodeId(3), false)]
     );
-    assert!(resolve_assignments(&auto_topic(1, 3), &views, None) == Ok(Vec::new()));
+    for seed in SEEDS {
+        // The replication factor is the broker count, fenced included, so
+        // the topic is placed, and the fenced broker comes last.
+        let assignments = assign(&auto_topic(3, 3), &views, None, seed).expect("placement");
+        assert!(
+            assignments
+                .iter()
+                .all(|replicas| replicas.len() == 3 && replicas[2] == NodeId(2)),
+            "seed {seed}"
+        );
+    }
+
+    // A broker in controlled shutdown is not a candidate at all, so the same
+    // replication factor now exceeds the broker count.
+    enter_controlled_shutdown(&mut image, 3);
+    let views = site_broker_views(
+        &image,
+        Some(NodeId(1)),
+        &automatic_placement_exclusions(&image),
+        &fenced,
+    );
+    assert!(
+        views.iter().map(|view| view.node_id).collect::<Vec<_>>() == vec![NodeId(1), NodeId(2)]
+    );
+    assert!(assign(&auto_topic(1, 3), &views, None, 0) == Ok(Vec::new()));
+    assert!(
+        placement_failure_message(3, &views)
+            == "Unable to replicate the partition 3 time(s): The target replication factor of 3 \
+                cannot be reached because only 2 broker(s) are registered or some brokers have \
+                all their log directories cordoned."
+    );
+}
+
+/// Kafka's `createTopic` builds the ISR from the replicas that pass
+/// `isActive`, and makes its first member the leader. A fenced replica stays
+/// in the replica list and out of the ISR.
+#[test]
+fn the_isr_leaves_out_fenced_and_shutting_down_brokers() {
+    let mut image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);
+    enter_controlled_shutdown(&mut image, 3);
+    let fenced = std::collections::HashSet::from([2]);
+    let inactive = inactive_brokers(&image, &fenced);
+    let replicas = vec![vec![NodeId(1), NodeId(2), NodeId(3)]];
+
+    assert!(inactive == std::collections::HashSet::from([2, 3]));
+    assert!(
+        automatic_leaderships(&replicas, &inactive)
+            == vec![InitialLeadership {
+                leader: NodeId(1),
+                isr: vec![NodeId(1)],
+            }]
+    );
+    // A manual assignment follows the same rule, and refuses a list of
+    // brokers that are all inactive.
+    let witnesses = std::collections::HashSet::new();
+    assert!(
+        manual_leaderships(
+            &[vec![NodeId(3), NodeId(2), NodeId(1)]],
+            &inactive,
+            &witnesses,
+            0
+        ) == Ok(vec![InitialLeadership {
+            leader: NodeId(1),
+            isr: vec![NodeId(1)],
+        }])
+    );
+    assert!(
+        manual_leaderships(&[vec![NodeId(3), NodeId(2)]], &inactive, &witnesses, 1)
+            == Err(
+                "All brokers specified in the manual partition assignment for partition 1 \
+                    are fenced or in controlled shutdown."
+                    .to_owned()
+            )
+    );
 }
 
 #[test]
@@ -310,7 +390,7 @@ fn a_controller_only_node_is_not_its_own_placement_fallback() {
     let views = broker_views(&image, None);
 
     assert!(views.is_empty());
-    assert!(resolve_assignments(&auto_topic(1, 1), &views, None) == Ok(Vec::new()));
+    assert!(assign(&auto_topic(1, 1), &views, None, 0) == Ok(Vec::new()));
 }
 
 #[test]
@@ -318,20 +398,32 @@ fn three_sites_hold_one_replica_of_every_partition() {
     let image = stretch_image(&THREE_SITES, &[], None);
     let views = broker_views(&image, Some(NodeId(1)));
 
-    let assignments =
-        resolve_assignments(&auto_topic(4, 3), &views, None).expect("automatic placement");
+    for seed in SEEDS {
+        let assignments =
+            assign(&auto_topic(4, 3), &views, None, seed).expect("automatic placement");
 
-    // Every list holds all three brokers, one for each site, and the
-    // leader rotates over the sites.
-    assert!(
-        assignments
-            == vec![
-                vec![NodeId(1), NodeId(2), NodeId(3)],
-                vec![NodeId(2), NodeId(3), NodeId(1)],
-                vec![NodeId(3), NodeId(1), NodeId(2)],
-                vec![NodeId(1), NodeId(2), NodeId(3)],
-            ]
-    );
+        // Every list holds all three brokers, one for each site, and the
+        // leader rotates over the sites, from a random one.
+        assert!(
+            assignments
+                .iter()
+                .all(|replicas| sites_of(&THREE_SITES, replicas) == vec!["a", "b", "c"]),
+            "seed {seed}"
+        );
+        let leaders = assignments
+            .iter()
+            .map(|replicas| replicas[0])
+            .collect::<Vec<_>>();
+        assert!(
+            leaders[..3]
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == 3
+                && leaders[3] == leaders[0],
+            "seed {seed}"
+        );
+    }
 }
 
 #[test]
@@ -339,23 +431,26 @@ fn the_preferred_site_leads_every_partition() {
     let image = stretch_image(&SIX_BROKERS, &[], Some("b"));
     let views = broker_views(&image, Some(NodeId(1)));
 
-    let assignments = resolve_assignments(
-        &auto_topic(6, 3),
-        &views,
-        resolve_preferred_leader_site(&image),
-    )
-    .expect("automatic placement");
+    for seed in SEEDS {
+        let assignments = assign(
+            &auto_topic(6, 3),
+            &views,
+            resolve_preferred_leader_site(&image),
+            seed,
+        )
+        .expect("automatic placement");
 
-    let leader_sites = assignments
-        .iter()
-        .map(|replicas| site_of(&SIX_BROKERS, replicas[0]))
-        .collect::<Vec<_>>();
-    assert!(leader_sites == vec!["b"; 6]);
-    let spread = assignments
-        .iter()
-        .map(|replicas| sites_of(&SIX_BROKERS, replicas))
-        .collect::<Vec<_>>();
-    assert!(spread == vec![vec!["a", "b", "c"]; 6]);
+        let leader_sites = assignments
+            .iter()
+            .map(|replicas| site_of(&SIX_BROKERS, replicas[0]))
+            .collect::<Vec<_>>();
+        assert!(leader_sites == vec!["b"; 6]);
+        let spread = assignments
+            .iter()
+            .map(|replicas| sites_of(&SIX_BROKERS, replicas))
+            .collect::<Vec<_>>();
+        assert!(spread == vec![vec!["a", "b", "c"]; 6]);
+    }
 }
 
 #[test]
@@ -364,57 +459,71 @@ fn a_witness_replicates_but_leads_no_partition() {
     let image = stretch_image(&brokers, &[3], None);
     let views = broker_views(&image, Some(NodeId(1)));
 
-    let assignments =
-        resolve_assignments(&auto_topic(6, 3), &views, None).expect("automatic placement");
+    for seed in SEEDS {
+        let assignments =
+            assign(&auto_topic(6, 3), &views, None, seed).expect("automatic placement");
 
-    // The witness takes a replica of every partition, and leadership
-    // rotates over the two brokers that serve clients.
-    let holds_witness = assignments
-        .iter()
-        .map(|replicas| replicas.contains(&NodeId(3)))
-        .collect::<Vec<_>>();
-    assert!(holds_witness == vec![true; 6]);
-    let leaders = assignments
-        .iter()
-        .map(|replicas| replicas[0])
-        .collect::<Vec<_>>();
-    assert!(
-        leaders
-            == vec![
-                NodeId(1),
-                NodeId(2),
-                NodeId(1),
-                NodeId(2),
-                NodeId(1),
-                NodeId(2),
-            ]
-    );
+        // The witness takes a replica of every partition, and leadership
+        // rotates over the two brokers that serve clients.
+        let holds_witness = assignments
+            .iter()
+            .map(|replicas| replicas.contains(&NodeId(3)))
+            .collect::<Vec<_>>();
+        assert!(holds_witness == vec![true; 6]);
+        let leaders = assignments
+            .iter()
+            .map(|replicas| replicas[0])
+            .collect::<Vec<_>>();
+        assert!(
+            leaders[0] != leaders[1]
+                && leaders.iter().all(|leader| *leader != NodeId(3))
+                && leaders[..2] == leaders[2..4]
+                && leaders[..2] == leaders[4..],
+            "seed {seed}"
+        );
+    }
 }
 
+/// Kafka's `StripedReplicaPlacer` starts each topic at a random broker, so
+/// with the defaults `num.partitions=1` and RF 1 the topics of a cluster
+/// without racks spread over every broker instead of stacking on the lowest
+/// id.
 #[test]
-fn a_cluster_without_racks_places_like_round_robin() {
+fn a_cluster_without_racks_starts_each_topic_at_a_random_broker() {
     let image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);
     let views = broker_views(&image, Some(NodeId(1)));
-    let node_ids = vec![NodeId(1), NodeId(2), NodeId(3)];
+
+    let leaders = (0..64)
+        .map(|seed| {
+            assign(&auto_topic(1, 1), &views, None, seed).expect("automatic placement")[0][0]
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(leaders == std::collections::BTreeSet::from([NodeId(1), NodeId(2), NodeId(3)]));
 
     for (partitions, rf) in [(1, 1), (3, 1), (3, 2), (4, 3), (5, 2)] {
-        let assignments = resolve_assignments(&auto_topic(partitions, rf), &views, None)
-            .expect("automatic placement");
+        let assignments =
+            assign(&auto_topic(partitions, rf), &views, None, 7).expect("automatic placement");
 
-        assert!(
-            assignments == round_robin_replicas(&node_ids, partitions, rf),
-            "partitions {partitions}, rf {rf}"
-        );
+        assert!(assignments.len() == usize::try_from(partitions).unwrap());
+        for replicas in &assignments {
+            let mut distinct = replicas.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert!(
+                replicas.len() == usize::try_from(rf).unwrap() && distinct.len() == replicas.len(),
+                "partitions {partitions}, rf {rf}"
+            );
+        }
     }
 }
 
 #[test]
 fn a_mixed_rack_cluster_keeps_the_unracked_broker_placeable() {
     let image = stretch_image(&[(1, Some("a")), (2, Some("b")), (3, None)], &[], None);
-    let views = site_broker_views(&image, Some(NodeId(1)), &std::collections::HashSet::new());
+    let views = broker_views(&image, Some(NodeId(1)));
 
-    let assignments = resolve_assignments(&auto_topic(3, 3), &views, None)
-        .expect("mixed-rack automatic placement");
+    let assignments =
+        assign(&auto_topic(3, 3), &views, None, 0).expect("mixed-rack automatic placement");
 
     assert!(
         assignments
@@ -447,15 +556,14 @@ fn a_manual_assignment_overrides_the_site_placement() {
         ..Default::default()
     };
 
-    let assignments =
-        resolve_assignments(&manual, &views, preferred_site).expect("manual assignments");
+    let assignments = assign(&manual, &views, preferred_site, 0).expect("manual assignments");
 
     assert!(assignments == vec![vec![NodeId(2), NodeId(1)], vec![NodeId(1), NodeId(3)]]);
     // The automatic placement of the same cluster leads in site `c`, so
     // the manual lists really did override it.
-    let automatic = resolve_assignments(&auto_topic(2, 2), &views, preferred_site)
-        .expect("automatic placement");
-    assert!(automatic == vec![vec![NodeId(3), NodeId(1)], vec![NodeId(3), NodeId(2)]]);
+    let automatic =
+        assign(&auto_topic(2, 2), &views, preferred_site, 0).expect("automatic placement");
+    assert!(automatic.iter().all(|replicas| replicas[0] == NodeId(3)));
 }
 
 #[test]
@@ -465,7 +573,7 @@ fn an_impossible_request_gives_no_assignment() {
     let image = stretch_image(&THREE_SITES, &[], None);
     let views = broker_views(&image, Some(NodeId(1)));
 
-    let too_many = resolve_assignments(&auto_topic(1, 4), &views, None).expect("no error code");
+    let too_many = assign(&auto_topic(1, 4), &views, None, 0).expect("no error code");
 
     assert!(too_many.is_empty());
 
@@ -473,7 +581,7 @@ fn an_impossible_request_gives_no_assignment() {
     let witnesses_only = stretch_image(&THREE_SITES, &[1, 2, 3], None);
     let views = broker_views(&witnesses_only, Some(NodeId(1)));
 
-    let unleadable = resolve_assignments(&auto_topic(1, 3), &views, None).expect("no error code");
+    let unleadable = assign(&auto_topic(1, 3), &views, None, 0).expect("no error code");
 
     assert!(unleadable.is_empty());
 }
@@ -502,15 +610,28 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
     }
     let cases = [
         (
-            "no broker unavailable",
-            vec![],
+            "no broker in controlled shutdown",
+            None,
             vec![NodeId(2), NodeId(3), NodeId(4)],
         ),
-        ("broker 4 unavailable", vec![4], vec![NodeId(2), NodeId(3)]),
+        (
+            "broker 4 in controlled shutdown",
+            Some(4),
+            vec![NodeId(2), NodeId(3)],
+        ),
     ];
-    for (label, unavailable, want) in cases {
-        let excluded = automatic_placement_exclusions(&image, &unavailable.into_iter().collect());
-        let views = site_broker_views(&image, Some(NodeId(1)), &excluded);
+    for (label, shutting_down, want) in cases {
+        let mut image = image.clone();
+        if let Some(node_id) = shutting_down {
+            enter_controlled_shutdown(&mut image, node_id);
+        }
+        let excluded = automatic_placement_exclusions(&image);
+        let views = site_broker_views(
+            &image,
+            Some(NodeId(1)),
+            &excluded,
+            &std::collections::HashSet::new(),
+        );
         assert!(
             views.iter().map(|view| view.node_id).collect::<Vec<_>>() == want,
             "{label}"
@@ -522,12 +643,17 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
     registration.log_dirs = vec![dir(10)];
     registration.cordoned_log_dirs = Some(vec![dir(10)]);
     all_cordoned.apply(&MetadataRecord::V1BrokerRegistration(registration));
-    let excluded = automatic_placement_exclusions(&all_cordoned, &std::collections::HashSet::new());
-    let views = site_broker_views(&all_cordoned, Some(NodeId(1)), &excluded);
+    let excluded = automatic_placement_exclusions(&all_cordoned);
+    let views = site_broker_views(
+        &all_cordoned,
+        Some(NodeId(1)),
+        &excluded,
+        &std::collections::HashSet::new(),
+    );
     assert!(views.is_empty());
-    assert!(resolve_assignments(&auto_topic(1, 1), &views, None) == Ok(Vec::new()));
+    assert!(assign(&auto_topic(1, 1), &views, None, 0) == Ok(Vec::new()));
     assert!(
-        super::placement_failure_message(1, views.len())
+        placement_failure_message(1, &views)
             == "Unable to replicate the partition 1 time(s): All brokers are currently fenced, \
                 or have all their log directories cordoned."
     );

@@ -22,7 +22,10 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::kraft::{transport::QuorumStateSnapshot, types::NodeId};
+use crate::kraft::{
+    transport::{ObserverReplica, QuorumStateSnapshot},
+    types::NodeId,
+};
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
@@ -48,7 +51,20 @@ fn names_only_the_metadata_partition(request: &DescribeQuorumRequest) -> bool {
     )
 }
 
-/// One replica row: the log end offset and the timestamps the leader tracks,
+/// One observer row: what the leader tracked of a replica that fetches
+/// without being a voter, keyed by its id and directory id.
+fn observer_state(observer: &ObserverReplica) -> ReplicaState {
+    ReplicaState {
+        replica_id: node_to_wire(observer.id),
+        replica_directory_id: WireUuid(*observer.directory_id.as_bytes()),
+        log_end_offset: observer.log_end_offset,
+        last_fetch_timestamp: observer.last_fetch_ms,
+        last_caught_up_timestamp: observer.last_caught_up_ms,
+        ..Default::default()
+    }
+}
+
+/// One voter row: the log end offset and the timestamps the leader tracks,
 /// or -1 where it tracks none.
 fn replica_state(
     quorum: &QuorumStateSnapshot,
@@ -138,18 +154,7 @@ pub fn describe_quorum(
                     .iter()
                     .map(|voter| replica_state(quorum, voter.id, voter.directory_id))
                     .collect(),
-                observers: quorum
-                    .observers
-                    .iter()
-                    .map(|&id| {
-                        let directory_id = quorum
-                            .observer_directory_ids
-                            .get(&id)
-                            .copied()
-                            .unwrap_or_default();
-                        replica_state(quorum, id, directory_id)
-                    })
-                    .collect(),
+                observers: quorum.observers.iter().map(observer_state).collect(),
                 // Kafka's `RaftUtil.singletonDescribeQuorumResponse` sets
                 // neither message, so both stay at their empty default.
                 error_message: Some(String::new()),
@@ -237,23 +242,16 @@ mod tests {
                 voter(2, vec![endpoint(9092)]),
             ]),
             voted_directory_id: None,
-            observers: vec![NodeId(9)],
-            per_replica_fetch_offset: BTreeMap::from([
-                (NodeId(1), 42),
-                (NodeId(2), 40),
-                (NodeId(9), 38),
-            ]),
-            per_replica_last_fetch_ms: BTreeMap::from([
-                (NodeId(1), 1_000),
-                (NodeId(2), 900),
-                (NodeId(9), 800),
-            ]),
-            per_replica_last_caught_up_ms: BTreeMap::from([
-                (NodeId(1), 1_000),
-                (NodeId(2), 850),
-                (NodeId(9), 700),
-            ]),
-            observer_directory_ids: BTreeMap::from([(NodeId(9), uuid::Uuid::from_u128(99))]),
+            observers: vec![ObserverReplica {
+                id: NodeId(9),
+                directory_id: uuid::Uuid::from_u128(99),
+                log_end_offset: 38,
+                last_fetch_ms: 800,
+                last_caught_up_ms: 700,
+            }],
+            per_replica_fetch_offset: BTreeMap::from([(NodeId(1), 42), (NodeId(2), 40)]),
+            per_replica_last_fetch_ms: BTreeMap::from([(NodeId(1), 1_000), (NodeId(2), 900)]),
+            per_replica_last_caught_up_ms: BTreeMap::from([(NodeId(1), 1_000), (NodeId(2), 850)]),
             is_leader: true,
             current_state: "leader",
         }
@@ -319,6 +317,31 @@ mod tests {
         );
     }
 
+    /// Observers are keyed by `(id, directory id)`: one id under two directories
+    /// is two rows, each with its own offset and timestamps, and a timestamp the
+    /// leader has not recorded stays -1.
+    #[test]
+    fn one_observer_id_under_two_directories_is_two_rows() {
+        let observer = |directory: u128, offset: i64, fetch: i64, caught_up: i64| ObserverReplica {
+            id: NodeId(9),
+            directory_id: uuid::Uuid::from_u128(directory),
+            log_end_offset: offset,
+            last_fetch_ms: fetch,
+            last_caught_up_ms: caught_up,
+        };
+        let snapshot = QuorumStateSnapshot {
+            observers: vec![observer(91, 30, 500, 400), observer(92, 10, 600, -1)],
+            ..leader_snapshot()
+        };
+
+        let response = describe_quorum(&request(&[(METADATA_TOPIC, &[0])]), &snapshot);
+
+        check!(
+            response.topics[0].partitions[0].observers
+                == vec![replica(9, 91, 30, 500, 400), replica(9, 92, 10, 600, -1)]
+        );
+    }
+
     #[test]
     fn a_node_that_is_not_the_leader_refuses() {
         let follower = QuorumStateSnapshot {
@@ -362,7 +385,6 @@ mod tests {
             per_replica_last_fetch_ms: BTreeMap::from([(NodeId(1), 1_000)]),
             per_replica_last_caught_up_ms: BTreeMap::from([(NodeId(1), 1_000)]),
             observers: vec![],
-            observer_directory_ids: BTreeMap::new(),
             ..leader_snapshot()
         };
 

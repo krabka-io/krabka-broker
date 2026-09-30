@@ -308,3 +308,232 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
     check!(refusals(&broker.metrics) == 1);
     broker_handle.shutdown().await;
 }
+
+/// A new registration of broker `node_id`. It carries no epoch (-1), and the
+/// controller stamps it with the offset that it commits at.
+fn registration(node_id: u64, fenced: bool) -> MetadataRecord {
+    MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+        fenced,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
+        node_id: NodeId(node_id),
+        broker_epoch: -1,
+        incarnation_id: Uuid::from_u128(u128::from(node_id)),
+        host: format!("broker-{node_id}"),
+        port: 9092,
+        rack: None,
+        endpoints: vec![],
+        log_dirs: vec![],
+        features: std::collections::BTreeMap::new(),
+    })
+}
+
+/// Partition `index` of topic `t`, replicated on brokers 1 and 2.
+fn replicated_partition(
+    index: i32,
+    leader: u64,
+    isr: &[u64],
+    leader_epoch: i32,
+    partition_epoch: i32,
+) -> krabka_metadata::PartitionRecord {
+    krabka_metadata::PartitionRecord {
+        topic: "t".into(),
+        partition: index,
+        leader: NodeId(leader),
+        replicas: vec![NodeId(1), NodeId(2)],
+        isr: isr.iter().copied().map(NodeId).collect(),
+        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: vec![],
+        partition_epoch,
+    }
+}
+
+/// Topic `t`, with `partitions` partitions and a replication factor of 2.
+fn topic(partitions: i32) -> MetadataRecord {
+    MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: "t".into(),
+        topic_id: Uuid::from_u128(0x7),
+        partitions,
+        replication_factor: 2,
+    })
+}
+
+async fn wait_for_leader(broker: &crate::broker::Broker) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !broker
+        .controller
+        .watch_leader()
+        .borrow()
+        .is_some_and(|node| node == broker.config.node_id)
+    {
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "broker did not become controller leader"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+/// Kafka's `ReplicationControlManager.unregisterBroker` writes
+/// `handleBrokerUnregistered`'s partition changes ahead of the
+/// `UnregisterBrokerRecord`: the broker leaves every ISR, and a partition it led
+/// moves to another replica. The change is committed by the time the handler
+/// answers, so no partition names the broker as leader or ISR member while the
+/// liveness ticker waits for a heartbeat timeout.
+#[tokio::test]
+async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() {
+    let version = unregister_broker_response::MAX_VERSION;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    broker
+        .controller
+        .submit_change(vec![
+            registration(2, false),
+            topic(3),
+            MetadataRecord::V1Partition(replicated_partition(0, 1, &[1, 2], 5, 0)),
+            MetadataRecord::V1Partition(replicated_partition(1, 2, &[2, 1], 5, 0)),
+            MetadataRecord::V1Partition(replicated_partition(2, 2, &[2], 5, 0)),
+        ])
+        .await
+        .expect("seed the partitions");
+    // Broker 2 is heartbeating, so it may take over.
+    broker.liveness.record_heartbeat(2).await;
+    let principal = principal();
+    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let ctx = context(&principal, &peer);
+    let req = UnregisterBrokerRequest {
+        broker_id: 1,
+        ..Default::default()
+    };
+
+    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+        .await
+        .expect("handle");
+    let resp = decode_response(&resp);
+
+    check!(resp.error_code == codes::NONE, "{resp:?}");
+    let image = broker.controller.current_image();
+    check!(image.broker(NodeId(1)).is_none());
+    // Broker 1 led partition 0, so broker 2 takes it at the next leader epoch.
+    // It only followed partition 1, so the leader stays and the epoch does not
+    // move. It was in neither of partition 2's lists, so that one is untouched.
+    let expected = [
+        replicated_partition(0, 2, &[2], 6, 1),
+        replicated_partition(1, 2, &[2], 5, 1),
+        replicated_partition(2, 2, &[2], 5, 0),
+    ];
+    for partition in expected {
+        check!(
+            image.partition("t", partition.partition) == Some(&partition),
+            "partition {}",
+            partition.partition
+        );
+    }
+    broker_handle.shutdown().await;
+}
+
+/// The partition records of an unregistration are built from the image of the
+/// node that runs it, and only the active controller's image is current. Any
+/// other node answers `NOT_CONTROLLER` with Kafka's wrong-controller message
+/// and appends nothing, so a follower or an observer whose image trails cannot
+/// roll back the leader, epoch and ISR that the controller committed since.
+#[test]
+fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
+    let node = NodeId(1);
+    let not_controller = |message: &str| {
+        Some(UnregisterBrokerResponse {
+            error_code: codes::NOT_CONTROLLER,
+            error_message: Some(message.to_owned()),
+            ..Default::default()
+        })
+    };
+    for (what, leader, expected) in [
+        ("this node leads", Some(NodeId(1)), None),
+        (
+            "another node leads",
+            Some(NodeId(3)),
+            not_controller("The active controller appears to be node 3."),
+        ),
+        (
+            "no leader is known",
+            None,
+            not_controller("No controller appears to be active."),
+        ),
+    ] {
+        check!(
+            wire::not_controller_refusal(leader, node) == expected,
+            "{what}"
+        );
+    }
+}
+
+/// A request that arrives on the controller listener, or inside an `Envelope`,
+/// is already at the active controller and is never forwarded again.
+#[tokio::test]
+async fn a_request_on_the_controller_listener_is_answered_in_place() {
+    let version = unregister_broker_response::MAX_VERSION;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    let principal = principal();
+    let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
+    let ctx = crate::handlers::RequestContext::new(
+        &principal,
+        &peer,
+        "unregister-client",
+        CONTROLLER_ADMIN_CONNECTION_ID,
+        false,
+        "CONTROLLER",
+    );
+    let req = UnregisterBrokerRequest {
+        broker_id: 999,
+        ..Default::default()
+    };
+
+    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+        .await
+        .expect("handle");
+
+    check!(
+        decode_response(&resp)
+            == UnregisterBrokerResponse {
+                error_code: codes::BROKER_ID_NOT_REGISTERED,
+                error_message: Some("Broker ID 999 is not currently registered".to_owned()),
+                ..Default::default()
+            }
+    );
+    broker_handle.shutdown().await;
+}
+
+/// The partition changes go between the consumed proposal and the unregister
+/// record: the approval commits first, and the registration goes last.
+#[test]
+fn the_isr_departures_sit_between_the_consume_and_the_unregister_record() {
+    let consumed = MetadataRecord::V1BreakGlassProposal(approved_proposal("7"));
+    let unregister = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
+        node_id: DOOMED,
+        broker_epoch: DOOMED_EPOCH,
+    });
+    let leave = MetadataRecord::V1Partition(replicated_partition(0, 2, &[2], 6, 1));
+
+    for (case, records, expected) in [
+        (
+            "gated",
+            vec![consumed.clone(), unregister.clone()],
+            vec![consumed, leave.clone(), unregister.clone()],
+        ),
+        (
+            "ungated",
+            vec![unregister.clone()],
+            vec![leave.clone(), unregister],
+        ),
+    ] {
+        check!(
+            gate::with_leaves(records, vec![leave.clone()]) == expected,
+            "{case}"
+        );
+    }
+}

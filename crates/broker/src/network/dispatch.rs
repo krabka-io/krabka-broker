@@ -18,12 +18,9 @@ use std::{net::SocketAddr, sync::Arc};
 use bytes::Bytes;
 use futures_util::SinkExt;
 use krabka_protocol::{Decode as _, api_key::ApiKey};
-use krabka_units::{
-    Time,
-    convert::{ByteSizeExt as _, TimeExt},
-};
+use krabka_units::{Time, convert::TimeExt};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::Framed;
 use tracing::Instrument as _;
 
 mod accept;
@@ -119,12 +116,12 @@ use self::{
     registry::{DispatchContext, send_registry_response},
     response::{ResponseShape, apply_request_quota, encode_response},
     sasl::{SaslFrameOutcome, SaslListener, try_handle_sasl_frame},
-    session::{FrameWaitPolicy, initial_connection_auth, next_connection_frame},
+    session::{FrameWaitPolicy, RequestLimits, initial_connection_auth, next_connection_frame},
 };
 use crate::{
     broker::Broker,
     handlers::{ApiKeyCode, ApiVersion},
-    network::codec,
+    network::codec::{self, KafkaCodec},
 };
 
 /// What the connection loop does once a response has been written.
@@ -275,7 +272,7 @@ fn is_served_version(
 }
 
 async fn reject_unsupported_version<S>(
-    framed: &mut Framed<S, LengthDelimitedCodec>,
+    framed: &mut Framed<S, KafkaCodec>,
     broker: &Broker,
     entry: crate::handlers::registry::DispatchEntry,
     parsed: &crate::network::request::ParsedRequest<'_>,
@@ -326,11 +323,10 @@ where
         parsed.correlation_id,
         shape.body_flexible,
         &body,
-        broker.config.socket_request_max.bytes_usize(),
     ) {
         Ok(response) => response,
         Err(error) => {
-            tracing::warn!(%error, "response exceeds configured frame maximum, closing");
+            tracing::warn!(%error, "response exceeds the int32 frame size, closing");
             return AfterResponse::Close;
         }
     };
@@ -350,6 +346,23 @@ where
     AfterResponse::Mute(response.throttle)
 }
 
+/// KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS` is
+/// tagged `controller`-only by its request schema, so no Kafka broker listener
+/// ever routes it to a handler.
+/// `ApiVersionManager.isApiEnabled` closes the connection before the request is
+/// even parsed further; krabka does the same on a pure `ListenerKind::Client`
+/// listener, and accepts these keys on `InterBroker` and
+/// `ClientAndInterBroker` alike, where krabka's own peers send them and the
+/// per-handler `ClusterAction` check applies.
+fn is_inter_broker_api_on_client_listener(
+    broker: &Broker,
+    spec: &crate::config::ListenerSpec,
+    api_key: i16,
+) -> bool {
+    crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&api_key)
+        && broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
+}
+
 /// Generic per-connection request loop.
 ///
 /// `S` is the post-handshake byte stream: `TcpStream` for plaintext listeners,
@@ -366,10 +379,8 @@ async fn serve_connection_stream<S>(
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static + crate::network::fetch_writer::SendfileSink,
 {
-    let mut framed: Framed<S, _> = Framed::new(
-        stream,
-        codec::codec(broker.config.socket_request_max.bytes_usize()),
-    );
+    let limits = RequestLimits::of(&broker.config);
+    let mut framed: Framed<S, _> = Framed::new(stream, codec::codec(limits.request_max()));
     let is_sasl_listener = spec.protocol.requires_sasl();
     let sasl_mechanisms = crate::network::listener::resolve_sasl_mechanisms_for_listener(
         &spec,
@@ -398,6 +409,8 @@ async fn serve_connection_stream<S>(
         idle: broker.config.connections_max_idle_for(&spec.name),
         peer,
         metrics: broker.metrics.clone(),
+        audit_log: broker.audit_log.clone(),
+        failed_authentication_delay: broker.config.failed_authentication_delay(),
     };
     // Kafka's `SocketServer` `Acceptor` and `Processor` log a new connection
     // at DEBUG, and its `Selector` logs a close at DEBUG, as this loop does.
@@ -423,6 +436,9 @@ async fn serve_connection_stream<S>(
     let mut sasl_session = sasl::SaslSession::default();
 
     loop {
+        framed
+            .codec_mut()
+            .set_max_request_bytes(limits.for_auth(&auth));
         let Some(frame) =
             next_connection_frame(&mut framed, &auth, mute_until.take(), &frame_wait).await
         else {
@@ -503,9 +519,12 @@ async fn serve_connection_stream<S>(
         // (see `ConnectionAuth::allows_request`). A refused request closes
         // the connection, after the ILLEGAL_SASL_STATE answer Kafka writes
         // when there is one (`sasl::refuse_gated_request`).
-        if is_sasl_listener && !auth.allows_request(parsed.api_key) {
+        if is_sasl_listener
+            && (!auth.allows_request(parsed.api_key)
+                || sasl_session.repeats_api_versions(&auth, parsed.api_key))
+        {
             if let Some(response) =
-                sasl::refuse_gated_request(&broker, &parsed, &auth, &peer, &spec.name)
+                sasl::refuse_gated_request(&broker, &parsed, &auth, &peer, &spec.name).await
             {
                 let _ = framed.send(response).await;
             }
@@ -520,17 +539,7 @@ async fn serve_connection_stream<S>(
             );
             break;
         };
-        // KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS`
-        // is tagged `controller`-only by its request schema, so no Kafka
-        // broker listener ever routes it to a handler.
-        // `ApiVersionManager.isApiEnabled` closes the connection before the
-        // request is even parsed further; krabka does the same on a pure
-        // `ListenerKind::Client` listener, and accepts these keys on
-        // `InterBroker` and `ClientAndInterBroker` alike, where krabka's own
-        // peers send them and the per-handler `ClusterAction` check applies.
-        if crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&parsed.api_key)
-            && broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
-        {
+        if is_inter_broker_api_on_client_listener(&broker, &spec, parsed.api_key) {
             broker.metrics.record_api_request(parsed.api_key);
             tracing::warn!(
                 api_key = parsed.api_key,
@@ -584,6 +593,7 @@ async fn serve_connection_stream<S>(
         }
 
         capture_client_software(&parsed, &mut client_software.0, &mut client_software.1);
+        sasl_session.note_api_versions(&auth, &parsed);
 
         let (_, _in_flight) = begin_request(&broker, &parsed);
 
@@ -625,5 +635,12 @@ async fn serve_connection_stream<S>(
         .share_partition_leaders
         .release_connection(&connection_id)
         .await;
+    // KIP-714: Kafka registers `ClientMetricsManager.connectionDisconnectListener`
+    // with the socket server, which drops the client instance that this
+    // connection created.
+    broker
+        .client_metrics
+        .manager
+        .connection_closed(&connection_id);
     tracing::debug!("connection closed");
 }

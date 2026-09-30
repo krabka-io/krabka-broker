@@ -161,7 +161,7 @@ impl FetchSessionCache {
     pub fn close(&self, session_id: FetchSessionId) {
         let mut guard = self.inner.lock().expect("poisoned");
         if let Some(session) = guard.sessions.remove(&session_id) {
-            guard.order.remove(session_id, session.privileged);
+            guard.order.remove(session_id);
             self.num_sessions.fetch_sub(1, Ordering::Relaxed);
             self.num_partitions
                 .fetch_sub(session.partitions.len(), Ordering::Relaxed);

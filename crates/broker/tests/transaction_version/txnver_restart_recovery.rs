@@ -215,8 +215,10 @@ struct RecoveryCase {
 /// Persist an `Ongoing` transaction, restart on the same data directory, and
 /// compare the complete `EndTxn` response after recovery. Success proves that
 /// the broker decoded the selected transaction-log codec with the original
-/// producer identity. The expected completion epoch also checks the feature
-/// level's KIP-890 behavior.
+/// producer identity. The expected completion epoch also checks KIP-890: the
+/// `EndTxn` v5 request that these tests send is a `TV_2` client whatever
+/// `transaction.version` the cluster finalized, so it bumps the epoch at every
+/// level, and the level only picks the log codec.
 async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
     let dir = TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
@@ -279,7 +281,7 @@ async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery() {
             topic: "rec0",
             tid: "recover-v0-tid",
             downgrade_to: Some(0),
-            completion_epoch_delta: 0,
+            completion_epoch_delta: 1,
         },
     ];
 

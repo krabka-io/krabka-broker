@@ -1,5 +1,9 @@
-//! The KIP-584 feature rows of an `ApiVersions` response, shared by the
-//! controller listener and the broker listener so the two cannot disagree.
+//! The KIP-584 feature rows of an `ApiVersions` response, built by one set of
+//! rules for the controller listener and the broker listener. The two pass it
+//! different caps, as Kafka does: the controller listener's
+//! `SimpleApiVersionManager` takes `unstable.api.versions.enable`, and the
+//! broker's `BrokerFeatures.createDefault` takes
+//! `unstable.feature.versions.enable`.
 //!
 //! The rules are Kafka 4.3.1's:
 //!
@@ -131,12 +135,12 @@ mod tests {
     #[test]
     fn supported_features_follow_kafkas_minimums_and_alter_level_zero() {
         use crate::UnstableFeatureVersions;
-        let modern = |metadata_max| {
+        let modern = |metadata_max, share_max| {
             vec![
                 supported("metadata.version", METADATA_VERSION_MIN, metadata_max),
                 supported("group.version", 0, 1),
                 supported("transaction.version", 0, 2),
-                supported("share.version", 0, 1),
+                supported("share.version", 0, share_max),
                 supported("streams.version", 0, 1),
                 supported("eligible.leader.replicas.version", 0, 1),
                 supported("kraft.version", 0, 1),
@@ -149,15 +153,16 @@ mod tests {
                 metadata_max,
             )]
         };
-        for (unstable, metadata_max) in [
-            (UnstableFeatureVersions::Disabled, 30),
-            (UnstableFeatureVersions::Enabled, METADATA_VERSION_MAX),
+        // `share.version` 2 (KIP-1191) is trunk's, so only the flag advertises it.
+        for (unstable, metadata_max, share_max) in [
+            (UnstableFeatureVersions::Disabled, 30, 1),
+            (UnstableFeatureVersions::Enabled, METADATA_VERSION_MAX, 2),
         ] {
             for (api_version, expected) in [
                 (0, legacy(metadata_max)),
                 (3, legacy(metadata_max)),
-                (4, modern(metadata_max)),
-                (5, modern(metadata_max)),
+                (4, modern(metadata_max, share_max)),
+                (5, modern(metadata_max, share_max)),
             ] {
                 check!(
                     supported_feature_keys(api_version, unstable) == expected,

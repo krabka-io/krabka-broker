@@ -376,10 +376,14 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
             token_acl(&super_users),
         )
         .await;
-        // The token id is a random UUID and the HMAC-SHA-256 output is 32
+        // The token id is a random UUID and the HMAC-SHA-512 output is 64
         // bytes; the response carries both raw.
         assert!(
-            (resp.token_id.is_empty(), resp.hmac.len()) == (false, 32),
+            (resp.token_id.is_empty(), resp.hmac.len()) == (false, 64),
+            "{case}"
+        );
+        assert!(
+            resp.hmac == compute_token_hmac(b"master-key", &resp.token_id),
             "{case}"
         );
         let expected = CreateDelegationTokenResponse {
@@ -399,7 +403,9 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
         let expected_stored = krabka_metadata::DelegationToken {
             token_id: resp.token_id.clone(),
             owner,
-            hmac: resp.hmac.to_vec(),
+            // Kafka stores the connection principal as the token requester,
+            // whoever the owner is.
+            requester: user(requester),
             issue_timestamp_ms: resp.issue_timestamp_ms,
             expiry_timestamp_ms: resp.expiry_timestamp_ms,
             max_timestamp_ms: resp.max_timestamp_ms,

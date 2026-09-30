@@ -11,6 +11,10 @@
 //! or above the new log start is not held back for another round trip. These
 //! tests drive that same scenario against a live broker: produce records,
 //! move the log start with a real `DeleteRecords`, and fetch again.
+//!
+//! The same fixtures serve two more end-to-end tests of the acquire pass: the
+//! record lock limit that bounds the window, and a partition whose log read
+//! fails beside a healthy one.
 
 use std::sync::Arc;
 
@@ -57,7 +61,6 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
-        cfg.share_group.enable = true;
     })
     .await
 }
@@ -420,6 +423,56 @@ async fn share_fetch_survives_the_log_start_moving_past_the_spso() {
     broker.shutdown().await;
 }
 
+/// Kafka's `ShareFetchUtils.processFetchResponse` turns the log read error of
+/// one partition into that partition's error code with no records, and the
+/// other partitions of the request still return theirs. A batch that does not
+/// check out is `CORRUPT_MESSAGE`. The request must not fail as a whole, which
+/// closes the connection.
+#[tokio::test]
+async fn an_unreadable_partition_fails_alone() {
+    let (broker, dir) = start().await;
+    let topic = "unreadable-and-healthy";
+    let group = "g-unreadable-and-healthy";
+    let topic_id = create_topic(&broker, topic, 2).await;
+    initialize_share_state(&broker, group, topic_uuid(topic_id), 0).await;
+    initialize_share_state(&broker, group, topic_uuid(topic_id), 1).await;
+    let opened = share_fetch_rows(&broker, group, 0, topic_id, &[0, 1]).await;
+    assert!(
+        opened.iter().all(|row| row.error_code == codes::NONE),
+        "{opened:?}"
+    );
+    produce_records(&broker, topic, 0, 5).await;
+    produce_records(&broker, topic, 1, 5).await;
+
+    // Give the only batch of partition 0 a length of zero, which is shorter
+    // than a batch header: bytes 8 to 11 of a record batch are its
+    // `batch_length`.
+    let segment = std::fs::read_dir(dir.path().join(format!("{topic}-0")))
+        .expect("the partition directory")
+        .map(|entry| entry.expect("a directory entry").path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "log"))
+        .expect("a segment file");
+    let mut bytes = std::fs::read(&segment).expect("read the segment");
+    bytes[8..12].copy_from_slice(&0_i32.to_be_bytes());
+    std::fs::write(&segment, bytes).expect("corrupt the segment");
+
+    let rows = share_fetch_rows(&broker, group, 1, topic_id, &[0, 1]).await;
+    let mut by_partition: Vec<PartitionOutcome> = rows
+        .iter()
+        .map(|row| (row.partition_index, row.error_code, acquired(row)))
+        .collect();
+    by_partition.sort_unstable();
+
+    assert!(
+        by_partition
+            == vec![
+                (0, codes::CORRUPT_MESSAGE, vec![]),
+                (1, codes::NONE, vec![(0, 4)]),
+            ]
+    );
+    broker.shutdown().await;
+}
+
 /// A second, healthy partition in the same `ShareFetch` request must still
 /// get its records when the first partition's log start has moved past its
 /// SPSO: the recovery is per-partition, not per-request.
@@ -463,6 +516,56 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
                 (0, codes::NONE, vec![(3, 4)]),
                 (1, codes::NONE, vec![(0, 4)]),
             ]
+    );
+    broker.shutdown().await;
+}
+
+/// Kafka's `SharePartition` stops taking records once the window from the SPSO
+/// to the SPEO reaches `group.share.partition.max.record.locks`, until an
+/// acknowledgement, a release or a lock timeout moves the SPSO. A member that
+/// fetches again without acknowledging must not get another limit's worth of
+/// records each time.
+#[tokio::test]
+async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_limit() {
+    let (broker, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        cfg.share_group.max_inflight_records = 100;
+    })
+    .await;
+    let topic = "record-lock-limit";
+    let group = "g-record-lock-limit";
+    let topic_id = create_topic(&broker, topic, 1).await;
+    initialize_share_state(&broker, group, topic_uuid(topic_id), 0).await;
+    let opened = share_fetch_one(&broker, group, 0, topic_id, 0).await;
+    assert!(opened.error_code == codes::NONE, "{opened:?}");
+    produce_records(&broker, topic, 0, 250).await;
+
+    let mut per_fetch = Vec::new();
+    for epoch in 1..=3 {
+        let row = share_fetch_one(&broker, group, epoch, topic_id, 0).await;
+        per_fetch.push((row.error_code, acquired(&row)));
+    }
+    let end_offset = broker
+        .broker_arc_for_test()
+        .share_partition_leaders
+        .peek_for_test(group, topic_uuid(topic_id), 0)
+        .expect("a cached share-partition leader")
+        .lock()
+        .await
+        .end_offset
+        .0;
+
+    assert!(
+        (per_fetch, end_offset)
+            == (
+                vec![
+                    (codes::NONE, vec![(0, 99)]),
+                    (codes::NONE, vec![]),
+                    (codes::NONE, vec![]),
+                ],
+                100
+            )
     );
     broker.shutdown().await;
 }

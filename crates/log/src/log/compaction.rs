@@ -13,7 +13,9 @@ use krabka_units::prelude::{
 use tracing::instrument;
 
 use super::Log;
-use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
+use crate::{
+    compact::ProducerLastRecord, error::LogError, retention, segment::Segment, txn_index::TxnIndex,
+};
 
 /// Inputs to one [`Log::compact`] pass that depend on broker-side state.
 ///
@@ -21,10 +23,12 @@ use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
 /// the last stable offset that bounds what a pass may rewrite, and the set of
 /// producers that count as active.
 ///
-/// `active_producers` maps `producer_id` to the `base_offset` of that
-/// producer's last batch. When compaction removes every record of that batch,
-/// the cleaner writes a bare batch header (`RETAIN_EMPTY`) again, so the
-/// producer's sequence and epoch state and the log-end offset survive.
+/// `active_producers` maps `producer_id` to that producer's last record, as
+/// Kafka's `UnifiedLog.lastRecordsOfActiveProducers` reads it from the
+/// producer state. When compaction removes every record of the producer's last
+/// data batch, or of a marker that is its last record, the cleaner writes a
+/// bare batch header (`RETAIN_EMPTY`) again, so the producer's sequence and
+/// epoch state survive.
 #[derive(Debug, Clone)]
 pub struct CompactionContext {
     /// Wall clock for this pass. It drives delete-horizon stamps and expiry.
@@ -44,9 +48,8 @@ pub struct CompactionContext {
     /// `read_committed` consumer could then see a record from a transaction
     /// that later aborts.
     pub last_stable_offset: Offset,
-    /// `producer_id` → last batch `base_offset` for currently-active
-    /// producers.
-    pub active_producers: std::collections::HashMap<ProducerId, Offset>,
+    /// `producer_id` → last record for currently-active producers.
+    pub active_producers: std::collections::HashMap<ProducerId, ProducerLastRecord>,
 }
 
 /// What a partition looks like to the broker's cleaner before it decides
@@ -238,8 +241,15 @@ impl Log {
     }
 
     /// How many sealed segments one pass may consume, counting the clean
-    /// first one: the clean prefix plus the dirty segments neither Kafka's
+    /// prefix: the clean prefix plus the dirty segments neither Kafka's
     /// `min.compaction.lag.ms` nor the high watermark withholds.
+    ///
+    /// The lag applies to every dirty segment, the oldest one included, as
+    /// Kafka's `findFirstUncleanableSegment` tests each dirty segment from the
+    /// first dirty offset. A log nothing has cleaned, or one that has been
+    /// reopened, has no clean prefix, so its oldest sealed segment is dirty
+    /// and the lag holds it back while its records are still young. The clean
+    /// prefix is a previous pass's output, which the lag already released.
     ///
     /// Zero for a log with no sealed segment at all, and zero for one whose
     /// oldest sealed segment still reaches above `last_stable_offset`.
@@ -249,14 +259,12 @@ impl Log {
         now_ms: i64,
         last_stable_offset: Offset,
     ) -> usize {
-        if self.segments.is_empty() {
-            return 0;
-        }
-        let largest_timestamps: Vec<i64> = self.segments[1..]
+        let clean_segments = self.clean_prefix_segments.min(self.segments.len());
+        let dirty_timestamps: Vec<i64> = self.segments[clean_segments..]
             .iter()
             .map(Segment::max_timestamp)
             .collect();
-        let by_lag = 1 + cleanable_prefix(&largest_timestamps, now_ms, min_lag_ms);
+        let by_lag = clean_segments + cleanable_prefix(&dirty_timestamps, now_ms, min_lag_ms);
         by_lag.min(self.sealed_segments_below(last_stable_offset))
     }
 
@@ -331,9 +339,9 @@ impl Log {
     ///
     /// `ctx` carries the wall clock, which drives the KIP-534 delete-horizon
     /// computation, the last stable offset, and the set of currently-active
-    /// producers. The cleaner
-    /// keeps the last batch of each active producer with `RETAIN_EMPTY`, even
-    /// when compaction removes all of its records.
+    /// producers. The cleaner keeps each active producer's last data batch
+    /// with `RETAIN_EMPTY`, and the last batch of the pass, even when
+    /// compaction removes all of their records.
     #[instrument(
         level = "info",
         skip_all,
@@ -380,19 +388,25 @@ impl Log {
         // segment's own handle, so this borrow does not itself hold anything
         // open across the swap below).
         //
-        // The offset map and the transaction metadata are built once over
-        // the whole consumed range: whether a record is the newest for its
-        // key, or which transaction it belongs to, is a fact about the full
+        // The offset map is built once over the whole consumed range:
+        // whether a record is the newest for its key is a fact about the full
         // dirty region, not about whichever output group a record lands in.
+        // The map skips the batches of aborted transactions, so it needs the
+        // aborted transactions of the range, wherever their abort marker sits.
         // The rewrite itself then runs once per size-bounded group, so no
         // output segment grows past `segment.bytes`, and every group's
-        // `.swap` files are written before any of them is promoted.
+        // `.swap` files are written before any of them is promoted. One
+        // transaction tracker walks all the groups in order, as a transaction
+        // can span two of them.
         let mut rewrites: Vec<(Vec<Offset>, crate::compact::RewriteOutput)> = Vec::new();
         {
             let sealed_refs: Vec<&Segment> = self.segments[..consumed].iter().collect();
-            let offset_map = crate::compact::build_offset_map(&sealed_refs)?;
-            let txn_meta =
-                crate::compact::CleanedTransactionMetadata::build(&sealed_refs, &offset_map)?;
+            let consumed_end = self.sealed_segment_end(consumed - 1);
+            let offset_map = crate::compact::build_offset_map(
+                &sealed_refs,
+                self.aborted_in_range(sealed_refs[0].base_offset(), consumed_end),
+            )?;
+            let mut txn_meta = crate::compact::CleanedTransactionMetadata::default();
             let sizes: Vec<ByteSize> = sealed_refs.iter().map(|segment| segment.size()).collect();
             let groups = Self::group_segments_by_size(&sizes, segment_bytes);
             rewrites.reserve_exact(groups.len());
@@ -404,17 +418,26 @@ impl Log {
                     .iter()
                     .map(|segment| segment.base_offset())
                     .collect();
+                txn_meta.add_aborted_transactions(self.aborted_in_range(
+                    group_refs[0].base_offset(),
+                    self.sealed_segment_end(start + group_len - 1),
+                ));
                 let rewrite = crate::compact::rewrite_segments(
                     &*self.io,
                     &self.dir,
                     group_refs,
                     &offset_map,
-                    &txn_meta,
+                    &mut txn_meta,
                     crate::compact::RewriteRetention {
                         now_ms,
                         delete_retention,
                     },
-                    &ctx.active_producers,
+                    crate::compact::CleaningRound {
+                        active_producers: &ctx.active_producers,
+                        // The round rewrites the offset map's whole range, so
+                        // it ends where the last consumed segment does.
+                        upper_bound: consumed_end,
+                    },
                 )?;
                 rewrites.push((group_bases, rewrite));
                 start += group_len;
@@ -447,7 +470,7 @@ impl Log {
                 index_interval,
             )?;
             new_seg.set_io(self.io.clone());
-            new_seg.seal();
+            new_seg.seal()?;
             let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
             for base in group_bases {
                 self.sealed_txn_indexes.remove(base);
@@ -465,6 +488,11 @@ impl Log {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod replication_tests;
+#[cfg(test)]
+mod transaction_tests;
 
 #[cfg(test)]
 mod tests {
@@ -739,6 +767,62 @@ mod tests {
             !log.compaction_due(at_epoch_millis(6_000), UNBOUNDED_HW),
             "a log whose only sealed segment is the last pass's output is settled"
         );
+    }
+
+    /// Kafka's `findFirstUncleanableSegment` tests every dirty segment against
+    /// `min.compaction.lag.ms`, the oldest one included. A log nothing has
+    /// cleaned, or one that was just reopened, has no clean prefix, so its
+    /// oldest sealed segment is dirty and the lag holds it back until its
+    /// records are old enough. Consumers that rely on seeing every update
+    /// inside the lag window would otherwise miss intermediate values.
+    #[test]
+    fn the_min_lag_holds_back_the_oldest_segment_of_a_never_cleaned_log() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            min_compaction_lag: Time::from_millis(3_000),
+            ..Default::default()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        // The first segment holds two records under one key, written at
+        // timestamp 0. A second batch seals it.
+        let mut first = keyed_batch(0, &[(0, b"key", b"old"), (1, b"key", b"new")]);
+        let mut second = keyed_batch(0, &[(0, b"other", b"v")]);
+        second.base_timestamp = 1_000;
+        second.max_timestamp = 1_000;
+        log.append(&mut first).unwrap();
+        log.append(&mut second).unwrap();
+        assert2::assert!(log.segments.len() == 1, "one sealed segment");
+        let read_values = |log: &Log| -> Vec<Vec<u8>> {
+            log.read(Offset(0), mebibytes(1))
+                .unwrap()
+                .batches
+                .iter()
+                .flat_map(|batch| batch.records.iter())
+                .map(|record| record.value.as_deref().unwrap().to_vec())
+                .collect()
+        };
+        let compact_at = |log: &mut Log, millis: u64| {
+            log.compact(&CompactionContext {
+                now: at_epoch_millis(millis),
+                last_stable_offset: UNBOUNDED_HW,
+                active_producers: std::collections::HashMap::new(),
+            })
+            .unwrap();
+        };
+
+        // Every record is younger than the lag: nothing is due, and a pass
+        // leaves the intermediate value alone.
+        assert2::check!(!log.compaction_due(at_epoch_millis(2_500), UNBOUNDED_HW));
+        compact_at(&mut log, 2_500);
+        assert2::check!(read_values(&log) == vec![b"old".to_vec(), b"new".to_vec(), b"v".to_vec()]);
+
+        // Once the segment's newest record has outlived the lag, the pass
+        // deduplicates it.
+        assert2::check!(log.compaction_due(at_epoch_millis(3_500), UNBOUNDED_HW));
+        compact_at(&mut log, 3_500);
+        assert2::check!(read_values(&log) == vec![b"new".to_vec(), b"v".to_vec()]);
     }
 
     /// The withheld tail is withheld from the pass as well, so a record inside

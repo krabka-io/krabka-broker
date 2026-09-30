@@ -48,14 +48,16 @@ mod validation;
 #[cfg(test)]
 mod test_support;
 
-// Only the #[cfg(test)] stateright models in txn/ reach this variant.
+// Only the #[cfg(test)] stateright models in txn/ reach these variants.
 #[cfg(test)]
-pub(crate) use self::producer_identity::prepare_completion_identities_with_fresh;
+pub(crate) use self::producer_identity::{
+    prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
+};
 pub(crate) use self::{
     markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
-        next_recovery_producer_identity, prepare_completion_identities,
+        next_recovery_producer_identity, prepare_server_abort_identities,
     },
     reacquire::{ReacquireDecision, validate_complete_reacquire},
 };
@@ -89,21 +91,41 @@ pub(crate) async fn handle(
     // Refresh leader-partition view from the current metadata image
     // before checking coordinator-ness.
     let image = controller.current_image();
+    // Kafka's `handleEndTxnRequest` gives the coordinator the transaction
+    // version of the request's API version, `TV_2` from v5 and `TV_0` below.
+    // The state table, the epoch bump and the stamps on the record and on the
+    // markers follow that client version. The cluster's `transaction.version`
+    // only picks the `__transaction_state` value format, so an EndTxn v4 on a
+    // `TV_2` cluster keeps its epoch, as a client that cannot read the new
+    // epoch out of the response needs.
     let txnv = crate::txn::version::resolve_txn_version(&image);
+    let client_txnv = crate::txn::version::TxnVersion::for_end_txn(version);
+    // Trunk's answer to a commit that races a coordinator-side abort
+    // (KAFKA-20785) is not in Kafka 4.3.1.
+    let trunk_rules = broker.config.features.unstable_api_versions
+        == crate::api_catalog::UnstableApiVersions::Enabled;
     drop(coord.refresh_leader_partitions(&image).await);
 
     let tid = req.transactional_id.as_str();
-    let (entry_mutex, no_partition_added) =
-        match validate_end_txn(&coord, authorizer, &image, ctx, &req, txnv).await {
-            Ok(EndTxnValidation::Proceed {
-                entry,
-                no_partition_added,
-            }) => (entry, no_partition_added),
-            Ok(EndTxnValidation::AlreadyComplete(pid, epoch)) => {
-                return encode_ok(version, pid.get(), epoch);
-            }
-            Err(code) => return encode_err(version, code),
-        };
+    let (entry_mutex, no_partition_added) = match validate_end_txn(
+        &coord,
+        authorizer,
+        &image,
+        ctx,
+        &req,
+        (client_txnv, trunk_rules),
+    )
+    .await
+    {
+        Ok(EndTxnValidation::Proceed {
+            entry,
+            no_partition_added,
+        }) => (entry, no_partition_added),
+        Ok(EndTxnValidation::AlreadyComplete(pid, epoch)) => {
+            return encode_ok(version, pid.get(), epoch);
+        }
+        Err(code) => return encode_err(version, code),
+    };
 
     // ── Phase 1: Ongoing → Prepare{Commit,Abort} ──────────────────────
 
@@ -111,7 +133,7 @@ pub(crate) async fn handle(
         &coord,
         &entry_mutex,
         (req.committed, no_partition_added),
-        txnv,
+        (client_txnv, txnv),
         tid,
     )
     .await
@@ -215,6 +237,9 @@ pub(crate) async fn handle(
             staged.producer_epoch = new_epoch;
             staged.next_producer_id = ProducerId(-1);
             staged.next_producer_epoch = -1;
+            // Kafka's `prepareComplete`: the abort of a failed epoch fence has
+            // now been written.
+            staged.has_failed_epoch_fence = false;
             staged.partitions.clear();
             (staged, new_pid, new_epoch)
         }

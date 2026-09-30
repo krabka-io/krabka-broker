@@ -44,6 +44,7 @@ pub(super) fn test_engine_with_voters(
         dir.path().to_path_buf(),
         NodeId(me),
         Uuid::nil(),
+        Uuid::nil(),
         krabka_metadata::VoterSet::from_voters(voters),
         TEST_ELECTION_TIMEOUT,
         None,

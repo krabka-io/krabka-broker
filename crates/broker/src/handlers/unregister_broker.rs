@@ -30,17 +30,45 @@
 //! record, so the approval and the transition it authorized commit together.
 //! The gate is active only when `[break_glass]` names an approver set.
 //!
+//! ## Leaving the ISRs first
+//!
+//! Kafka's `ReplicationControlManager.unregisterBroker` does not only drop the
+//! registration. `handleBrokerUnregistered` first removes the broker from every
+//! ISR it is in and elects new leaders for the partitions it leads, and writes
+//! the `UnregisterBrokerRecord` after them, all in one record list. The same
+//! `submit_change` here carries those partition changes ahead of the unregister
+//! record, so no partition names an unregistered broker as its leader while the
+//! liveness ticker waits for a heartbeat timeout.
+//!
+//! ## Only the active controller runs it
+//!
+//! Kafka forwards `UnregisterBroker` from a broker listener to the active
+//! controller (`KafkaApis.forwardToController`), and
+//! `ReplicationControlManager.unregisterBroker` runs there as one atomic record
+//! list. The partition records above are built from the image of the node that
+//! runs the handler, and a follower's or an observer's image can trail the
+//! leader's. The leader applies a partition record as written, so a record built
+//! from a trailing image would roll back a leader, epoch and ISR that the
+//! leader committed since. A broker listener therefore forwards the request in
+//! an `Envelope` to the active controller, and a request that reaches any other
+//! node on the controller listener answers `NOT_CONTROLLER (41)`. The two-person
+//! gate and the audit trail then run on the controller as well.
+//!
 //! This file holds the request flow. The two-person gate and the records it
-//! builds live in `gate`, and the response shape in `wire`.
+//! builds live in `gate`, the ISR departures in `leave`, and the response shape
+//! in `wire`.
 
 use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, NodeId};
-use krabka_protocol::{Decode, owned::unregister_broker_request::UnregisterBrokerRequest};
+use krabka_protocol::{
+    Decode,
+    owned::unregister_broker_request::{self, UnregisterBrokerRequest},
+};
 
 use self::{
-    gate::{broker_target, consumed_proposal_id, unregister_records},
-    wire::{encode_resp, response},
+    gate::{broker_target, consumed_proposal_id, unregister_records, with_leaves},
+    wire::{encode_resp, not_controller_refusal, response},
 };
 use crate::{
     break_glass::{
@@ -49,12 +77,14 @@ use crate::{
     },
     broker::Broker,
     codes,
+    controller_admin::CONTROLLER_ADMIN_CONNECTION_ID,
     error::BrokerError,
-    handlers::{RequestContext, cluster_alter_denied},
+    handlers::{RequestContext, cluster_alter_denied, forward_to_controller::to_active_controller},
     time_util::now_ms,
 };
 
 mod gate;
+mod leave;
 mod wire;
 
 #[cfg(test)]
@@ -77,6 +107,26 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = UnregisterBrokerRequest::decode(&mut cur, version)?;
 
+    // A broker listener forwards the request untouched, as `KafkaApis` does
+    // with `forwardToController`, and the controller authorizes the principal
+    // the `Envelope` names. A node that is itself the active controller has
+    // nowhere to forward to and answers in place.
+    if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
+        && let Some(answer) = to_active_controller(
+            broker,
+            unregister_broker_request::API_KEY,
+            req_bytes,
+            version,
+            ctx,
+            |error_code, message| {
+                encode_resp(version, &response(error_code, message.map(str::to_owned)))
+            },
+        )
+        .await
+    {
+        return answer;
+    }
+
     let image = broker.controller.current_image();
 
     // Cluster:Alter gate.
@@ -86,6 +136,17 @@ pub(crate) async fn handle(
             Some("unregister-broker denied".into()),
         );
         return encode_resp(version, &resp);
+    }
+
+    // Only the active controller unregisters a broker, as
+    // `ControllerWriteEvent.run` says. The records below are built from the
+    // image this node holds, and that image is only current on the leader: a
+    // follower's or an observer's can trail it, and a partition record built
+    // from a trailing image would roll back the leader, epoch and ISR that the
+    // leader has committed since.
+    let leader = *broker.controller.watch_leader().borrow();
+    if let Some(refusal) = not_controller_refusal(leader, broker.config.node_id) {
+        return encode_resp(version, &refusal);
     }
 
     // Existence check, as `ReplicationControlManager.unregisterBroker`: an id
@@ -159,8 +220,15 @@ pub(crate) async fn handle(
         return encode_resp(version, &resp);
     }
 
-    // Submit the unregister record through Raft. The image apply is
-    // idempotent (the `apply` arm calls `brokers.remove`).
+    // The broker leaves every ISR and every leadership in the same append that
+    // drops its registration, as `ReplicationControlManager.unregisterBroker`
+    // writes them: the partitions never name a broker that is no longer
+    // registered.
+    let leaves = leave::leave_isrs(broker, &broker.controller.current_image(), node_id).await;
+    let records = with_leaves(records, leaves);
+
+    // Submit the change through Raft. The image apply of the unregister record
+    // is idempotent (the `apply` arm calls `brokers.remove`).
     if let Err(e) = broker.controller.submit_change(records).await {
         let resp = response(
             crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR),

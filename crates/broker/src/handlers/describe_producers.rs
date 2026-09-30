@@ -138,10 +138,19 @@ pub(crate) async fn handle(
         // which combines both checks in one lookup.
         for &idx in &topic_req.partition_indexes {
             if image.partition(topic_req.name.as_str(), idx).is_none() {
+                // Kafka's `handleDescribeProducersRequest` gives the message
+                // only for an unknown topic, which it answers itself. A bad
+                // partition index of a known topic reaches
+                // `ReplicaManager.activeProducerState`, whose answer is a
+                // bare code.
+                let error_message = image
+                    .topic(topic_req.name.as_str())
+                    .is_none()
+                    .then(|| "This server does not host this topic-partition.".to_owned());
                 parts_out.push(PartitionResponse {
                     partition_index: idx,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    error_message: Some("This server does not host this topic-partition.".into()),
+                    error_message,
                     active_producers: Vec::new(),
                     ..Default::default()
                 });
@@ -362,6 +371,66 @@ mod tests {
             assert!(resp == expected, "topic {name:?}");
             broker_handle.shutdown().await;
         }
+    }
+
+    /// Kafka's `handleDescribeProducersRequest` answers an unknown topic itself,
+    /// with the error's message. A partition index outside a known topic
+    /// reaches `ReplicaManager.activeProducerState`, which answers the same code
+    /// with no message.
+    #[tokio::test]
+    async fn handle_gives_the_message_only_for_a_topic_the_image_lacks() {
+        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        broker
+            .controller
+            .submit_change(vec![
+                krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                    name: "known".into(),
+                    topic_id: uuid::Uuid::new_v4(),
+                    partitions: 1,
+                    replication_factor: 1,
+                }),
+                krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                    topic: "known".into(),
+                    partition: 0,
+                    leader: broker.config.node_id,
+                    replicas: vec![broker.config.node_id],
+                    isr: vec![broker.config.node_id],
+                    ..Default::default()
+                }),
+            ])
+            .await
+            .expect("seed the known topic");
+        let p = principal("alice");
+        let peer = peer();
+
+        // (topic, expected error message)
+        let cases = [
+            ("known", None),
+            (
+                "missing",
+                Some("This server does not host this topic-partition.".to_owned()),
+            ),
+        ];
+        for (name, error_message) in cases {
+            let resp = drive(&broker, &request(name, &[5]), &p, &peer).await;
+            let expected = DescribeProducersResponse {
+                topics: vec![TopicResponse {
+                    name: name.to_owned(),
+                    partitions: vec![PartitionResponse {
+                        partition_index: 5,
+                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                        error_message,
+                        active_producers: Vec::new(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            assert!(resp == expected, "topic {name:?}");
+        }
+        broker_handle.shutdown().await;
     }
 
     /// An invalid name gives `INVALID_TOPIC_EXCEPTION` on every requested

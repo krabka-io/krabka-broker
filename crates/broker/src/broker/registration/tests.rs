@@ -414,13 +414,15 @@ fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
 
     assert!(registration.node_id == krabka_metadata::NodeId(7));
     assert!(registration.incarnation_id == uuid::Uuid::from_u128(0xCAFE));
-    // #784: `metadata.version` capped at 4.3.1's latest production level,
-    // the node's default `unstable.feature.versions.enable=false`.
+    // #784: `metadata.version` and `share.version` capped at 4.3.1's latest
+    // production levels, the node's default
+    // `unstable.feature.versions.enable=false`.
     let mut expected = krabka_metadata::supported_feature_ranges();
     expected.insert(
         "metadata.version".into(),
         (krabka_metadata::metadata_version::METADATA_VERSION_MIN, 30),
     );
+    expected.insert("share.version".into(), (0, 1));
     assert!(registration.features == expected);
     assert!(
         registration.endpoints
@@ -692,7 +694,7 @@ mod unclean_restart {
             published_elr(&broker)
                 == PartitionElr {
                     eligible_leader_replicas: vec![3],
-                    last_known_elr: vec![2],
+                    last_known_elr: vec![],
                 }
         );
 

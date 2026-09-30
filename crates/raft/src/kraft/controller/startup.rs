@@ -75,6 +75,7 @@ impl KraftController {
         let KraftConfig {
             me,
             cluster_id: _,
+            directory_id,
             mut initial_state,
             election_timeout,
             heartbeat_interval,
@@ -138,7 +139,6 @@ impl KraftController {
             per_replica_fetch_offset: BTreeMap::new(),
             per_replica_last_fetch_ms: BTreeMap::new(),
             per_replica_last_caught_up_ms: BTreeMap::new(),
-            observer_directory_ids: BTreeMap::new(),
             is_leader: core.role().is_leader(),
             current_state: if core.role().is_leader() {
                 "leader"
@@ -200,8 +200,8 @@ impl KraftController {
             snapshot_fetch: None,
             installed_snapshot_epoch: None,
             controls,
-            replica_fetch_offsets: BTreeMap::new(),
-            replica_directory_ids: BTreeMap::new(),
+            directory_id,
+            observers: BTreeMap::new(),
             fetch_purgatory: Vec::new(),
             wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: initial_hwm,
@@ -249,6 +249,7 @@ impl KraftController {
         data_dir: PathBuf,
         me: NodeId,
         cluster_id: Uuid,
+        directory_id: Uuid,
         bootstrap_voters: krabka_metadata::voters::VoterSet,
         election_timeout: Time,
         heartbeat_interval: Option<Time>,
@@ -357,6 +358,7 @@ impl KraftController {
             KraftConfig {
                 me,
                 cluster_id,
+                directory_id,
                 initial_state,
                 election_timeout,
                 heartbeat_interval,

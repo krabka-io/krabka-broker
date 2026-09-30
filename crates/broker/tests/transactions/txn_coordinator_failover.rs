@@ -19,7 +19,7 @@ use krabka_protocol::{
     owned::{
         add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
         common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_request::CreateTopicsRequest,
         end_txn_request::EndTxnRequest,
         end_txn_response::EndTxnResponse,
         find_coordinator_request::FindCoordinatorRequest,
@@ -84,15 +84,17 @@ async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
     }
 }
 
-async fn create_topic(client: &Client) {
+/// Create the data topic with `leader` leading its one partition on all three
+/// brokers. The test stops the broker that coordinates the transaction and
+/// expects the data partition to change leaders with it, so the two must
+/// share a broker: an automatic placement starts at a random broker.
+async fn create_topic(client: &Client, leader: u64) {
+    let leader = i32::try_from(leader).expect("node id fits an i32");
+    let mut replicas = vec![leader];
+    replicas.extend((1..=3).filter(|node| *node != leader));
     let created = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on(TOPIC, &[&replicas])],
             timeout_ms: 5_000,
             ..Default::default()
         })
@@ -311,9 +313,9 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     }
 
     let admin = client(&cluster[0].0.listen_addr().to_string()).await;
-    create_topic(&admin).await;
     find_coordinator(&admin).await;
     let coordinator = leader_of(&cluster[0].0, STATE_TOPIC).await;
+    create_topic(&admin, coordinator).await;
     cluster[0].0.wait_until_isr_len(STATE_TOPIC, 0, 3).await;
     cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
 

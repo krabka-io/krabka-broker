@@ -142,35 +142,46 @@ impl Cleaner {
             .is_some_and(|map_key| offset_map.get(&map_key).copied() == Some(idx))
     }
 
-    /// Producers whose transactional data survives this compaction: those with
-    /// a keyed live data entry, one with `value=Some`, that is the newest for
-    /// its key.
+    /// The transactional-data state of every marker in `log`, by index, as the
+    /// production rewrite derives it from `CleanedTransactionMetadata`: a
+    /// marker is [`TxnDataState::DataFullyGone`] when the pass reads no data
+    /// entry of its transaction between the previous marker of its producer
+    /// and itself, and [`TxnDataState::DataSurvives`] otherwise.
+    ///
+    /// The pass reads an entry before it decides the entry's fate, so a data
+    /// entry the pass is about to delete still holds the marker behind it for
+    /// this pass.
     ///
     /// Data entries in this abstract model are anonymous, so the model
     /// associates producers with data by key: marker `pid` goes with the data
-    /// entries under key `pid`. The alphabet is small, `pid ∈ {0,1}` and
-    /// `key ∈ {0,1}`, so a marker's data survives if and only if key == pid has
-    /// a surviving live data entry.
-    pub(super) fn data_survives(log: &[Entry], offset_map: &HashMap<MapKey, usize>) -> HashSet<u8> {
-        let mut survivors: HashSet<u8> = HashSet::new();
+    /// entries under key `pid`. Every data entry belongs to a committed
+    /// transaction, so an abort marker never has a batch of its transaction
+    /// behind it.
+    pub(super) fn marker_states(log: &[Entry]) -> HashMap<usize, TxnDataState> {
+        let mut observed: HashSet<u8> = HashSet::new();
+        let mut states = HashMap::new();
         for (idx, entry) in log.iter().enumerate() {
-            if let EntryKind::Data { value: Some(_) } = entry.kind
-                && let Some(k) = entry.key
-                && offset_map.get(&MapKey::Data(k)).copied() == Some(idx)
-            {
-                survivors.insert(k);
+            match entry.kind {
+                EntryKind::Data { .. } => {
+                    observed.extend(entry.key);
+                }
+                EntryKind::Marker {
+                    producer_id,
+                    commit,
+                } => {
+                    let has_data = commit && observed.remove(&producer_id);
+                    states.insert(
+                        idx,
+                        if has_data {
+                            TxnDataState::DataSurvives
+                        } else {
+                            TxnDataState::DataFullyGone
+                        },
+                    );
+                }
             }
         }
-        survivors
-    }
-
-    /// The transactional-data state for a marker's producer.
-    pub(super) fn txn_state(producer_id: u8, data_survives: &HashSet<u8>) -> TxnDataState {
-        if data_survives.contains(&producer_id) {
-            TxnDataState::DataSurvives
-        } else {
-            TxnDataState::DataFullyGone
-        }
+        states
     }
 }
 

@@ -152,8 +152,6 @@ pub(crate) fn convert_classic_to_consumer(classic: &ClassicState) -> ConsumerSta
             client_host: m.host.clone(),
             subscribed_topic_names: names,
             subscribed_topic_regex: None,
-            compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_authorized_topics: HashSet::new(),
             server_assignor: None,
             rebalance_timeout: m.rebalance_timeout,
             member_epoch: state.group_epoch,

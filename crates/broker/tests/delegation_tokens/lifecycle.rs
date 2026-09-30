@@ -71,8 +71,8 @@ async fn delegation_token_lifecycle_end_to_end() {
         check!(create_resp.token_requester_principal_type == "User");
         check!(create_resp.token_requester_principal_name == "alice");
         check!(!create_resp.token_id.is_empty(), "token_id must be set");
-        // HMAC-SHA-256 → 32 raw bytes.
-        check!(create_resp.hmac.len() == 32, "HMAC length must be 32 bytes");
+        // HMAC-SHA-512 → 64 raw bytes.
+        check!(create_resp.hmac.len() == 64, "HMAC length must be 64 bytes");
         check!(create_resp.expiry_timestamp_ms > create_resp.issue_timestamp_ms);
 
         let token_id = create_resp.token_id.clone();

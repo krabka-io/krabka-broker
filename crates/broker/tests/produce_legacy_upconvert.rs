@@ -175,8 +175,10 @@ async fn produce_malformed_legacy_bytes_returns_invalid_record() {
     // 100 bytes of garbage that look superficially like a legacy
     // MessageSet (byte 16 != 2 → routed to Legacy arm) but fail CRC
     // when parsed. The handler must surface INVALID_RECORD (87), not
-    // panic or wedge.
+    // panic or wedge. The size field frames the whole set: a field below
+    // Kafka's 14-byte minimum is `CORRUPT_MESSAGE` before anything is parsed.
     let mut garbage = vec![0u8; 100];
+    garbage[8..12].copy_from_slice(&88_i32.to_be_bytes());
     garbage[16] = 0; // explicit: not v2
     let req = ProduceRequest {
         acks: 1,

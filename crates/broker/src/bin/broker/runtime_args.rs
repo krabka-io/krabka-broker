@@ -196,6 +196,10 @@ pub struct RuntimeArgs {
     pub message_max_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SOCKET_REQUEST_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_request_max: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_SASL_SERVER_MAX_RECEIVE", value_parser = krabka_units::parse::positive_byte_size)]
+    pub sasl_server_max_receive: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY", value_parser = krabka_units::parse::non_negative_time)]
+    pub connection_failed_authentication_delay: Option<Time>,
     #[arg(long, env = "KRABKA_QUEUED_MAX_REQUESTS", value_parser = parse_positive_count)]
     pub queued_max_requests: Option<usize>,
     #[arg(long, env = "KRABKA_QUEUED_MAX_REQUEST_BYTES", value_parser = krabka_units::parse::positive_byte_size)]
@@ -283,8 +287,6 @@ pub struct RuntimeArgs {
     #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub transaction_max_timeout: Option<Time>,
 
-    #[arg(long, env = "KRABKA_SHARE_GROUP_ENABLE", action = clap::ArgAction::Set)]
-    pub share_group_enable: Option<bool>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_group_session_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]

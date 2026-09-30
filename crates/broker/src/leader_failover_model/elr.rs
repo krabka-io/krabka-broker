@@ -63,9 +63,11 @@ pub(super) fn min_insync_replicas(image: &MetadataImage) -> usize {
 /// holds, by driving the real maintenance rule. Nothing in this model restarts
 /// uncleanly, so no replica is withheld as an unclean-shutdown one.
 ///
-/// The published last-known ELR is not carried: `failover_one` never reads
-/// it, and the rule derives the eligible set from the old ISR and the old
-/// eligible set alone, so feeding it back empty yields the same eligible set.
+/// The published last-known ELR is not carried: it holds the last leader of a
+/// partition that has none, this model applies nothing to such a partition,
+/// and the rule derives the eligible set from the old ISR and the old eligible
+/// set alone while there is a leader, so feeding it back empty yields the same
+/// eligible set.
 pub(super) fn maintain(image: &MetadataImage, s: &mut FailoverState, previous: &PartitionRecord) {
     let computed = next_partition_elr(
         image,

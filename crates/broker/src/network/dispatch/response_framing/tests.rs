@@ -18,13 +18,16 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::SinkExt as _;
 use krabka_protocol::api_key::ApiKey;
 use tokio::io::AsyncReadExt as _;
-use tokio_util::codec::{Encoder as _, Framed, LengthDelimitedCodec};
+use tokio_util::codec::{Encoder as _, Framed};
 
 use super::{codec, encode_response, response_header_len, response_header_v1};
-use crate::handlers::{ApiKeyCode, CorrelationId};
+use crate::{
+    handlers::{ApiKeyCode, CorrelationId},
+    network::codec::KafkaCodec,
+};
 
-/// Kafka's default `socket.request.max.bytes`, which is what the dispatch loop
-/// validates a framed response against.
+/// Kafka's default `socket.request.max.bytes`, the request limit the dispatch
+/// loop builds its codec with.
 const MAX_FRAME_BYTES: usize = 100 * 1024 * 1024;
 
 /// The correlation id every case echoes. Distinctive in all four bytes, so a
@@ -107,7 +110,7 @@ fn expected_header(api_key: ApiKeyCode, body_flexible: bool) -> Bytes {
 /// A real `Framed`, driven with `send`, which is the pair of `start_send` and
 /// `poll_flush` that `serve_connection_stream` drives per response. Dropping
 /// it closes the write half so the read side sees EOF.
-async fn wire_bytes(response: Bytes, codec: LengthDelimitedCodec) -> Vec<u8> {
+async fn wire_bytes(response: Bytes, codec: KafkaCodec) -> Vec<u8> {
     let (client, mut server) = tokio::io::duplex(1024 * 1024);
     let mut framed = Framed::new(client, codec);
     framed
@@ -159,14 +162,8 @@ fn the_seam_encodes_the_response_header_the_dispatch_loop_encodes() {
             case.name
         );
 
-        let framed = encode_response(
-            case.api_key,
-            CORRELATION_ID,
-            case.body_flexible,
-            &payload,
-            MAX_FRAME_BYTES,
-        )
-        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let framed = encode_response(case.api_key, CORRELATION_ID, case.body_flexible, &payload)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
 
         let mut expected = BytesMut::from(&header[..]);
         expected.put_slice(&payload);
@@ -180,7 +177,6 @@ fn the_seam_encodes_the_response_header_the_dispatch_loop_encodes() {
             CORRELATION_ID,
             case.body_flexible,
             &payload,
-            MAX_FRAME_BYTES,
         )
         .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         assert!(framed == production, "{}", case.name);
@@ -193,14 +189,8 @@ fn the_seam_encodes_the_response_header_the_dispatch_loop_encodes() {
 async fn the_seam_codec_writes_the_frame_the_connection_loop_writes() {
     for case in CASES {
         let payload = body(case.body_len);
-        let framed = encode_response(
-            case.api_key,
-            CORRELATION_ID,
-            case.body_flexible,
-            &payload,
-            MAX_FRAME_BYTES,
-        )
-        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let framed = encode_response(case.api_key, CORRELATION_ID, case.body_flexible, &payload)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
 
         let mut expected = BytesMut::new();
         expected.put_u32(u32::try_from(framed.len()).expect("a test frame fits in a u32"));
@@ -225,14 +215,8 @@ async fn the_seam_codec_writes_the_frame_the_connection_loop_writes() {
 async fn the_chained_prototype_the_bench_prices_is_wire_identical() {
     for case in CASES {
         let payload = body(case.body_len);
-        let framed = encode_response(
-            case.api_key,
-            CORRELATION_ID,
-            case.body_flexible,
-            &payload,
-            MAX_FRAME_BYTES,
-        )
-        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let framed = encode_response(case.api_key, CORRELATION_ID, case.body_flexible, &payload)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
 
         let copy_path = wire_bytes(framed, codec(MAX_FRAME_BYTES)).await;
         let prototype = chained_prototype_wire(case.api_key, case.body_flexible, &payload);
@@ -241,64 +225,24 @@ async fn the_chained_prototype_the_bench_prices_is_wire_identical() {
     }
 }
 
-/// `encode_response` refuses a frame over the maximum, at the same boundary
-/// the dispatch loop's own encoder refuses it. The header counts towards the
-/// limit, so the boundary sits `header_len` below the body length.
+/// `socket.request.max.bytes` bounds a request and never a response, so a
+/// codec built for small requests still frames a response larger than that
+/// limit, as the production codec does.
 #[test]
-fn the_seam_enforces_the_frame_maximum_at_the_dispatch_boundary() {
-    // (body length, max frame bytes, accepted). The api key and flexibility
-    // below give a 4-byte header, so a body of `n` needs `n + 4`.
-    let cases = [
-        (4_usize, 9_usize, true),
-        (4, 8, true),
-        (4, 7, false),
-        (0, 4, true),
-        (0, 3, false),
-    ];
+fn the_seam_codec_frames_a_response_over_the_request_limit() {
+    let response = Bytes::from(vec![0_u8; 9]);
+    let mut expected = BytesMut::new();
+    expected.put_u32(9);
+    expected.put_slice(&response);
 
-    for (body_len, max_frame_bytes, accepted) in cases {
-        let payload = body(body_len);
-        let seam = encode_response(METADATA, CORRELATION_ID, false, &payload, max_frame_bytes);
-        let production = super::super::response::encode_response(
-            METADATA,
-            CORRELATION_ID,
-            false,
-            &payload,
-            max_frame_bytes,
-        );
-
-        assert!(
-            seam.is_ok() == accepted,
-            "{body_len} bytes under {max_frame_bytes}"
-        );
-        assert!(
-            seam.is_ok() == production.is_ok(),
-            "{body_len} bytes under {max_frame_bytes}"
-        );
-    }
-}
-
-/// The maximum handed to the seam's codec reaches the codec, so a benchmark
-/// sink rejects an oversized frame exactly as a connection would.
-#[test]
-fn the_seam_codec_carries_the_frame_maximum_into_the_sink() {
-    let cases = [(8_usize, true), (9, false)];
-
-    for (frame_len, accepted) in cases {
-        let frame = Bytes::from(vec![0_u8; frame_len]);
-        let mut seam = BytesMut::new();
-        let mut production = BytesMut::new();
-
-        let seam = codec(8).encode(frame.clone(), &mut seam);
-        let production = crate::network::codec::codec(8).encode(frame, &mut production);
-
-        assert!(
-            seam.is_ok() == accepted,
-            "a {frame_len}-byte frame under a max of 8"
-        );
-        assert!(
-            seam.is_ok() == production.is_ok(),
-            "a {frame_len}-byte frame under a max of 8"
-        );
+    for (which, mut codec) in [
+        ("seam", codec(8)),
+        ("production", crate::network::codec::codec(8)),
+    ] {
+        let mut wire = BytesMut::new();
+        codec
+            .encode(response.clone(), &mut wire)
+            .unwrap_or_else(|error| panic!("{which}: {error}"));
+        assert!(wire == expected, "{which}");
     }
 }

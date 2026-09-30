@@ -30,7 +30,9 @@
 //!   `transaction.max.timeout.ms` = [`MAX_TIMEOUT_MS`].
 //! - The reaper decision `should_abort_idle_txn` over the persisted entry and
 //!   the model clock, and the prepared abort's
-//!   `prepare_completion_identities_with_fresh`.
+//!   `prepare_server_abort_identities_with_fresh` at the cluster's transaction
+//!   version, the one function the reaper and the `InitProducerId` fence
+//!   prepare that abort with.
 //! - `EndTxn` Phase 1: `decide_phase1_transition` and
 //!   `prepare_completion_identities_with_fresh`.
 //! - Completion: `completion_for`, `completion_decision`, `apply_completion`
@@ -44,9 +46,10 @@
 //! What is MODELED (hand-written, mirroring the handlers):
 //!
 //! - The reaper's `apply_prepare_abort` (the state becomes `PrepareAbort`),
-//!   the `InitProducerId` fence of an `Ongoing` transaction (epoch `+ 1`,
+//!   the `InitProducerId` fence of an `Ongoing` transaction (the state becomes
 //!   `PrepareAbort`), and `AddPartitionsToTxn` stamping `start_ms` when the
-//!   transaction opens.
+//!   transaction opens. The cluster's transaction version is a model
+//!   parameter, `TV_2` and below it.
 //! - Each `Prepare*` completes atomically in one `Complete` action that
 //!   stands for the `EndTxn` Phase 3, the reaper's `complete_abort`, and the
 //!   completion task alike. `decision_model` covers the marker window.
@@ -65,7 +68,10 @@ use stateright::{Checker, Model, Property};
 use super::{
     coordinator::completion::{apply_completion, completion_decision, completion_for},
     decision::decide_phase1_transition,
-    handlers::end_txn::{completion_producer_identity, prepare_completion_identities_with_fresh},
+    handlers::end_txn::{
+        completion_producer_identity, prepare_completion_identities_with_fresh,
+        prepare_server_abort_identities_with_fresh,
+    },
     state::{TxnEntry, TxnState},
     two_pc::{resolve_txn_timeout, should_abort_idle_txn},
     version::TxnVersion,
@@ -81,8 +87,13 @@ const MAX_DEPTH: usize = 80;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES_BASIC: usize = 23_124;
-const PINNED_UNIQUE_STATES_WIDE: usize = 93_754;
+//
+// `TV_2` and the versions below it reach the same states, since the epoch moves
+// once at every version and the projection holds no field that the versions
+// stamp differently. They differ in what the abort records, which
+// `fence_matches_kafka` checks against Kafka's rule for each version.
+const PINNED_UNIQUE_STATES_BASIC: usize = 21_876;
+const PINNED_UNIQUE_STATES_WIDE: usize = 80_914;
 
 const PID: ProducerId = ProducerId(1000);
 /// `transaction.max.timeout.ms`, Kafka's default.
@@ -112,6 +123,10 @@ const CLOCK: [i64; 10] = [
 
 struct TwoPcModel {
     max_epoch: i16,
+    /// The cluster's transaction version, which the `InitProducerId` fence and
+    /// the reaper abort at: `TV_2` bumps the epoch at completion, and the
+    /// versions below it bump it in the fence.
+    fence_version: TxnVersion,
 }
 
 /// Ghost violations. The transition that commits one records it, and an
@@ -129,6 +144,10 @@ enum Violation {
     FinalizedOutOfOrder,
     /// A transition lowered the producer epoch.
     EpochRegressed,
+    /// The abort the coordinator ran on an `Ongoing` transaction, in the
+    /// `InitProducerId` fence or the reaper, left an entry that Kafka's
+    /// `prepareFenceProducerEpoch` and server abort would not.
+    FenceDiverged,
 }
 
 /// Ghost non-vacuity witnesses.
@@ -219,8 +238,24 @@ fn kafka_timed_out(s: &TwoPcProj, now_ms: i64) -> bool {
         && i128::from(s.start_ms) + i128::from(s.requested_ms) < i128::from(now_ms)
 }
 
+/// Kafka's abort of an `Ongoing` transaction by the coordinator itself,
+/// restated from `TransactionMetadata` (`prepareFenceProducerEpoch`, then
+/// `prepareAbortOrCommit` from `endTransaction(isFromClient = false)` at the
+/// cluster's version) instead of read back from the function under test. The
+/// producer epoch moves from `held` to `held + 1` once, and the producer
+/// continues at that epoch. `TV_2` records the epoch it held as the last epoch,
+/// and stamps `TV_2`. Below it the last epoch is cleared and the record carries
+/// `TV_0`.
+fn fenced_as_kafka(entry: &TxnEntry, held: i16, version: TxnVersion) -> bool {
+    let verified = version == TxnVersion::Verified;
+    entry.producer_epoch == held + 1
+        && entry.last_producer_epoch == if verified { held } else { -1 }
+        && entry.client_transaction_version == if verified { 2 } else { 0 }
+        && completion_producer_identity(entry) == (entry.producer_id, held + 1)
+}
+
 impl TwoPcModel {
-    fn init(s: &mut TwoPcProj, enable_2pc: bool, requested_ms: i32) -> Option<()> {
+    fn init(&self, s: &mut TwoPcProj, enable_2pc: bool, requested_ms: i32) -> Option<()> {
         // The handler resolves the timeout before it reads the entry, and
         // answers INVALID_TRANSACTION_TIMEOUT when Kafka refuses it.
         let timeout_ms = resolve_txn_timeout(enable_2pc, requested_ms, MAX_TIMEOUT_MS).ok()?;
@@ -230,13 +265,16 @@ impl TwoPcModel {
             return None;
         }
         if entry.state == TxnState::Ongoing {
-            // `prepareFenceProducerEpoch`, then the abort's completion
-            // identity. The client retries after the completion, so this call
-            // does not apply its own timeout.
+            // `prepareFenceProducerEpoch` and the server's abort at the
+            // cluster's version. The client retries after the completion, so
+            // this call does not apply its own timeout.
+            let held = entry.producer_epoch;
             entry.state = TxnState::PrepareAbort;
-            entry.producer_epoch += 1;
-            prepare_completion_identities_with_fresh(&mut entry, TxnVersion::Verified, None)
+            prepare_server_abort_identities_with_fresh(&mut entry, self.fence_version, None)
                 .expect("model epochs never reach the rotation boundary");
+            if !fenced_as_kafka(&entry, held, self.fence_version) {
+                s.violations.insert(Violation::FenceDiverged);
+            }
         } else {
             let (pid, epoch) = krabka_verified::transaction::next_producer_identity(
                 true,
@@ -306,7 +344,7 @@ impl TwoPcModel {
         Some(())
     }
 
-    fn sweep(s: &mut TwoPcProj) -> Option<()> {
+    fn sweep(&self, s: &mut TwoPcProj) -> Option<()> {
         let now_ms = CLOCK[s.clock];
         let mut entry = rebuild(s);
         let reaps =
@@ -339,10 +377,15 @@ impl TwoPcModel {
         if i128::from(s.start_ms) + i128::from(s.requested_ms) + 1 == i128::from(now_ms) {
             s.witnesses.insert(Witness::ReapedOnePastTimeout);
         }
-        // `apply_prepare_abort`, then the abort's completion identity.
+        // `apply_prepare_abort`, then the server's abort at the cluster's
+        // version.
+        let held = entry.producer_epoch;
         entry.state = TxnState::PrepareAbort;
-        prepare_completion_identities_with_fresh(&mut entry, TxnVersion::Verified, None)
+        prepare_server_abort_identities_with_fresh(&mut entry, self.fence_version, None)
             .expect("model epochs never reach the rotation boundary");
+        if !fenced_as_kafka(&entry, held, self.fence_version) {
+            s.violations.insert(Violation::FenceDiverged);
+        }
         project(s, &entry);
         Some(())
     }
@@ -397,11 +440,11 @@ impl Model for TwoPcModel {
     fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
         let mut s = last.clone();
         match action {
-            TwoPcAction::Init(enable_2pc, requested) => Self::init(&mut s, enable_2pc, requested)?,
+            TwoPcAction::Init(enable_2pc, requested) => self.init(&mut s, enable_2pc, requested)?,
             TwoPcAction::BeginTxn => Self::begin(&mut s)?,
             TwoPcAction::EndTxn(committed) => Self::end_txn(&mut s, committed)?,
             TwoPcAction::Complete => Self::complete(&mut s)?,
-            TwoPcAction::TimeoutSweep => Self::sweep(&mut s)?,
+            TwoPcAction::TimeoutSweep => self.sweep(&mut s)?,
             TwoPcAction::Tick => {
                 if s.clock + 1 >= CLOCK.len() {
                     return None;
@@ -434,6 +477,12 @@ impl Model for TwoPcModel {
             }),
             Property::always("epoch_never_regresses", |_, s: &TwoPcProj| {
                 !s.violations.contains(&Violation::EpochRegressed)
+            }),
+            // The abort the coordinator runs on an `Ongoing` transaction raises
+            // the epoch once and stamps what Kafka does at the cluster's
+            // version.
+            Property::always("fence_matches_kafka", |_, s: &TwoPcProj| {
+                !s.violations.contains(&Violation::FenceDiverged)
             }),
             // Non-vacuity: the reaper aborts classic transactions, and does so
             // one millisecond past the timeout but not at it.
@@ -496,7 +545,10 @@ fn run(model: TwoPcModel, label: &str, pinned_unique_states: usize) {
 #[test]
 fn two_pc_basic() {
     run(
-        TwoPcModel { max_epoch: 3 },
+        TwoPcModel {
+            max_epoch: 3,
+            fence_version: TxnVersion::Verified,
+        },
         "two_pc_basic",
         PINNED_UNIQUE_STATES_BASIC,
     );
@@ -506,8 +558,37 @@ fn two_pc_basic() {
 fn two_pc_wide() {
     // More generations → deeper classic↔2PC alternations and reaper interleaves.
     run(
-        TwoPcModel { max_epoch: 5 },
+        TwoPcModel {
+            max_epoch: 5,
+            fence_version: TxnVersion::Verified,
+        },
         "two_pc_wide",
+        PINNED_UNIQUE_STATES_WIDE,
+    );
+}
+
+#[test]
+fn two_pc_basic_below_tv2_fence() {
+    // A cluster below `TV_2`: the reaper and the `InitProducerId` fence raise
+    // the epoch themselves, and completion does not.
+    run(
+        TwoPcModel {
+            max_epoch: 3,
+            fence_version: TxnVersion::Classic,
+        },
+        "two_pc_basic_below_tv2_fence",
+        PINNED_UNIQUE_STATES_BASIC,
+    );
+}
+
+#[test]
+fn two_pc_wide_below_tv2_fence() {
+    run(
+        TwoPcModel {
+            max_epoch: 5,
+            fence_version: TxnVersion::Classic,
+        },
+        "two_pc_wide_below_tv2_fence",
         PINNED_UNIQUE_STATES_WIDE,
     );
 }

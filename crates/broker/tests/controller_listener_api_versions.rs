@@ -216,3 +216,85 @@ async fn sasl_controller_listener_answers_api_versions_before_authentication() {
 
     broker.shutdown().await;
 }
+
+/// A broker whose controller listener is PLAINTEXT, on `customize`d settings.
+async fn start_plaintext_controller(
+    customize: impl FnOnce(&mut BrokerConfig),
+) -> (krabka_broker::BrokerHandle, SocketAddr, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let controller_addr = controller.local_addr().unwrap();
+    let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
+    cfg.controller_listen_addr = controller_addr;
+    cfg.controller_quorum_voters = vec![(cfg.node_id, controller_addr.to_string())];
+    customize(&mut cfg);
+    let broker = Broker::start_with_controller_listener(cfg, Some(controller))
+        .await
+        .expect("start broker");
+    (broker, controller_addr, dir)
+}
+
+/// Waits for the listener to end `stream`: the next read is end of input or
+/// an error, never a byte.
+async fn assert_closed(stream: &mut TcpStream, what: &str) {
+    let mut byte = [0u8; 1];
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(15), stream.read(&mut byte))
+        .await
+        .unwrap_or_else(|_| panic!("{what}: the listener held the connection open"));
+    check!(
+        outcome.as_ref().map_or(true, |read| *read == 0),
+        "{what}: {outcome:?}"
+    );
+}
+
+/// The controller listener is one of `SocketServer`'s listeners, so it holds
+/// a peer to `socket.request.max.bytes`: a request within the limit is served,
+/// and a size prefix over it closes the connection before the frame is read,
+/// where it used to allocate for whatever the four bytes said.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_controller_listener_refuses_a_request_over_socket_request_max() {
+    let (broker, controller_addr, _dir) = start_plaintext_controller(|cfg| {
+        cfg.socket_request_max = krabka_units::kibibytes(4);
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(controller_addr).await.expect("connect");
+    let served = api_versions(&mut stream, 0, 1).await;
+    check!(served.error_code == 0);
+
+    // 1 MiB declared, no body behind it.
+    stream
+        .write_all(&(1024 * 1024_u32).to_be_bytes())
+        .await
+        .expect("write the size prefix");
+    assert_closed(&mut stream, "an oversize request").await;
+
+    broker.shutdown().await;
+}
+
+/// `connections.max.idle.ms` covers the controller listener, under the
+/// listener's own name: a connection that sends nothing is closed once the
+/// window passes, and one that keeps sending requests is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_controller_listener_closes_an_idle_connection() {
+    let window = std::time::Duration::from_millis(800);
+    let (broker, controller_addr, _dir) = start_plaintext_controller(|cfg| {
+        cfg.connections_max_idle_overrides
+            .insert("CONTROLLER".to_string(), krabka_units::millis(800));
+    })
+    .await;
+
+    let mut idle = TcpStream::connect(controller_addr).await.expect("connect");
+    let mut busy = TcpStream::connect(controller_addr).await.expect("connect");
+    let started = std::time::Instant::now();
+    let mut correlation_id = 1;
+    while started.elapsed() < window * 2 {
+        let answered = api_versions(&mut busy, 0, correlation_id).await;
+        check!(answered.error_code == 0);
+        correlation_id += 1;
+        tokio::time::sleep(window / 4).await;
+    }
+    assert_closed(&mut idle, "an idle connection").await;
+
+    broker.shutdown().await;
+}

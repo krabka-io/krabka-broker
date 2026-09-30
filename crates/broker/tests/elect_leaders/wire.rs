@@ -15,7 +15,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_request::CreateTopicsRequest,
         create_topics_response::CreateTopicsResponse,
         elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
         elect_leaders_response::ElectLeadersResponse,
@@ -175,19 +175,13 @@ pub async fn drive_elect_leaders(
 ///
 /// The compat shim of the authorizer lets the request through because there
 /// are no `super_users` and no ACLs.
-pub async fn create_topic_plaintext(
-    addr: SocketAddr,
-    name: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
+///
+/// The topic has one partition on `replicas`, in that order, so the tests know
+/// which broker leads it and which one they can elect: an automatic placement
+/// starts at a random broker.
+pub async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i32]) {
     let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: partitions,
-            replication_factor,
-            ..Default::default()
-        }],
+        topics: vec![crate::support::topic_on(name, &[replicas])],
         timeout_ms: 5_000,
         ..Default::default()
     };

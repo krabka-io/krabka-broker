@@ -35,6 +35,8 @@ pub(super) struct FetchOutcome {
     /// Lowest offset the responder still retains. Everything below it has been
     /// pruned behind a snapshot, so a fetch there reads no records at all.
     pub(super) log_start_offset: i64,
+    /// The leader the responder believes is current, when it names one.
+    pub(super) leader_hint: Option<NodeId>,
 }
 
 /// Runs one iteration: it fetches from `addr` at `fetch_offset`, decodes and
@@ -87,8 +89,12 @@ async fn fetch_over(
     let req = krabka_raft::KrabkaMetadataFetchRequest {
         fetch_offset: i64::try_from(fetch_offset).unwrap_or(i64::MAX),
         max_bytes: config.max_bytes.bytes_i32(),
+        // The leader lists this node in `DescribeQuorum` under these, as it
+        // would a Kafka broker that fetches `__cluster_metadata`.
+        replica_id: i32::try_from(config.node_id.0).unwrap_or(-1),
+        replica_directory_id: config.directory_id,
     };
-    let mut body = Vec::with_capacity(12);
+    let mut body = Vec::with_capacity(32);
     req.encode_v0(&mut body);
 
     let resp_body = match conn
@@ -136,6 +142,7 @@ async fn fetch_over(
         next_fetch_offset,
         quorum_high_watermark: resp.quorum_high_watermark,
         log_start_offset: resp.log_start_offset,
+        leader_hint: u64::try_from(resp.leader_hint).ok().map(NodeId),
     })
 }
 

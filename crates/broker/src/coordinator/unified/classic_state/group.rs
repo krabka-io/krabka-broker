@@ -86,6 +86,16 @@ pub struct ClassicGroup {
     /// Kafka's `newMemberAdded`: a new member joined during the current
     /// initial delay, so the delay extends once more when it fires.
     pub new_member_added: bool,
+    /// Kafka's `pendingSyncMembers`: the members of the current generation that
+    /// have not sent `SyncGroup` yet. A completed join phase fills it, the
+    /// member's own `SyncGroup` empties it one member at a time, and every new
+    /// rebalance clears it.
+    pub pending_sync_members: std::collections::HashSet<String>,
+    /// Kafka's `classicGroupSyncKey` timer: when the members still in
+    /// [`Self::pending_sync_members`] are removed. It is armed with the group
+    /// rebalance timeout when the join phase completes and cancelled when
+    /// every member has synced or a rebalance begins.
+    pub sync_deadline: Option<Instant>,
 }
 
 /// The state of Kafka's `InitialDelayedJoin` timer: the delay that is running
@@ -114,6 +124,8 @@ impl ClassicGroup {
             pending_members: HashMap::new(),
             initial_join: None,
             new_member_added: false,
+            pending_sync_members: std::collections::HashSet::new(),
+            sync_deadline: None,
         }
     }
 

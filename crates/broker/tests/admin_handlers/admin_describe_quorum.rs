@@ -114,7 +114,7 @@ async fn describe_quorum_reports_cluster_metadata_voter_set() {
     );
     check!(
         pd.observers.is_empty(),
-        "Krabka has no observer-role concept"
+        "a lone combined node has no observer fetching from it"
     );
 }
 

@@ -497,6 +497,83 @@ async fn a_restart_from_controlled_shutdown_starts_fenced() {
     cluster.handle.shutdown().await;
 }
 
+/// `handleBrokerUnfenced`: the heartbeat that unfences a broker also elects
+/// again for every partition that has no leader, with that broker as an
+/// acceptable leader (`generateLeaderAndIsrUpdates` over
+/// `partitionsWithNoLeader`).
+///
+/// Partition 1 is the state an unclean restart leaves for the only ISR member:
+/// broker 2 is the last leader, nothing is eligible, and the last-known ELR
+/// names it (`PartitionChangeBuilder.canElectLastKnownLeader`). Its unfence
+/// gives it the partition back as an unclean leader -- singleton ISR, a new
+/// leader epoch, `RECOVERING` -- and clears both sets, all in the records of
+/// the heartbeat. Partition 0, which has a leader, is left alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
+    use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionElrRecord, PartitionRecord};
+
+    let cluster = Cluster::start().await;
+    crate::test_support::finalize_elr_version_on(&cluster.broker).await;
+    let epoch_2 = cluster.epoch(2);
+    let no_leader = PartitionRecord {
+        topic: "t".into(),
+        partition: 1,
+        leader: NodeId(2),
+        replicas: vec![NodeId(2), NodeId(3)],
+        isr: vec![NodeId(2)],
+        leader_epoch: LeaderEpoch(4),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: vec![uuid::Uuid::nil(); 2],
+        partition_epoch: 0,
+    };
+    cluster
+        .broker
+        .controller
+        .submit_change(vec![
+            MetadataRecord::V1Partition(no_leader.clone()),
+            MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: "t".into(),
+                partition: 1,
+                eligible_leader_replicas: vec![],
+                last_known_elr: vec![NodeId(2)],
+            }),
+        ])
+        .await
+        .expect("seed a partition with no leader");
+    let before = cluster.broker.controller.current_image();
+    check!(crate::elr::state::is_leaderless(
+        &before,
+        before.partition("t", 1).expect("partition 1")
+    ));
+
+    let answer_2 = cluster
+        .heartbeat(2, epoch_2, cluster.applied(), false)
+        .await;
+
+    check!(answer_2 == answer(false, false));
+    let image = cluster.broker.controller.current_image();
+    let elected = image.partition("t", 1).expect("partition 1");
+    check!(
+        *elected
+            == PartitionRecord {
+                leader: NodeId(2),
+                isr: vec![NodeId(2)],
+                leader_epoch: LeaderEpoch(5),
+                partition_epoch: elected.partition_epoch,
+                ..no_leader
+            }
+    );
+    check!(elected.partition_epoch > 0);
+    check!(
+        crate::elr::TopicElr::of_topic(&image, "t").partition(1)
+            == crate::elr::state::PartitionElr::default()
+    );
+    check!(image.leader_recovery_state("t", 1) == krabka_metadata::LeaderRecoveryState::Recovering);
+    check!(cluster.leader_and_isr(0) == (2, vec![2, 3, 1]));
+    cluster.handle.shutdown().await;
+}
+
 /// The response fields an error answer leaves at their schema defaults.
 fn success_response_default() -> Answer {
     let defaults = BrokerHeartbeatResponse::default();
@@ -621,10 +698,19 @@ fn each_transition_writes_kafkas_registration_change() {
         })
     };
     // Stands in for the partition changes that take broker 2 out of its ISRs,
-    // which the handler passes in for every transition but an unfence.
+    // which the handler passes in for a fence, a shutdown and a controlled
+    // shutdown.
     let leave = MetadataRecord::V1Topic(TopicRecord {
         name: "leave".into(),
         topic_id: uuid::Uuid::from_u128(9),
+        partitions: 1,
+        replication_factor: 1,
+    });
+    // Stands in for the elections an unfence makes possible, which the
+    // handler passes in for that transition alone.
+    let elect = MetadataRecord::V1Topic(TopicRecord {
+        name: "elect".into(),
+        topic_id: uuid::Uuid::from_u128(10),
         partitions: 1,
         replication_factor: 1,
     });
@@ -637,6 +723,16 @@ fn each_transition_writes_kafkas_registration_change() {
             Unfenced,
             vec![],
             vec![change(FencingChange::Unfence, false)],
+        ),
+        // `handleBrokerUnfenced` writes the registration change first and
+        // then the elections over `partitionsWithNoLeader`.
+        (
+            "fenced -> unfenced elects for the partitions with no leader",
+            registered(true, false),
+            Fenced,
+            Unfenced,
+            vec![elect.clone()],
+            vec![change(FencingChange::Unfence, false), elect.clone()],
         ),
         (
             "fenced stays fenced",

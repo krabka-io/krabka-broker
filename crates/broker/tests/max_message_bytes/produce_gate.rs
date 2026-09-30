@@ -6,8 +6,9 @@ use assert2::check;
 use crate::{
     support,
     wire::{
-        COMPRESSION_TYPE, KAFKA_DEFAULT, MAX_MESSAGE_BYTES, accepted, create_topic, gzip_batch,
-        produce_batch, produce_batch_of_wire_len, too_large, wire_len,
+        COMPRESSION_TYPE, KAFKA_DEFAULT, MAX_MESSAGE_BYTES, SEGMENT_BYTES, accepted, create_topic,
+        gzip_batch, produce_batch, produce_batch_of_wire_len, record_list_too_large, too_large,
+        wire_len,
     },
 };
 
@@ -38,6 +39,48 @@ async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused() {
     check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == too_large());
     check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
     check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP).await == accepted(1, 0));
+    check!(p.broker.local_log_end_offset("orders", 0) == Some(2));
+
+    p.broker.shutdown().await;
+}
+
+/// A record set larger than `segment.bytes` is refused with
+/// `RECORD_LIST_TOO_LARGE` (18) even when `max.message.bytes` would take it.
+///
+/// Kafka's floor for `segment.bytes` is 1 MiB and the default
+/// `max.message.bytes` is a little over it, so the two meet in the default
+/// configuration: `UnifiedLog.append` throws `RecordBatchTooLargeException`
+/// for a set larger than the segment (`apache/kafka:4.3.1`, and trunk keeps it
+/// for client appends). A batch is never split across segments, so without the
+/// refusal it would land whole in a segment of its own, bigger than the size
+/// the operator configured.
+///
+/// The batch of exactly `segment.bytes` goes first and goes again after the
+/// refusal: the limit is strict, and the refusal costs the log nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_larger_than_segment_bytes_is_refused_even_when_the_message_cap_allows_it() {
+    /// Kafka's floor for `segment.bytes`.
+    const SEGMENT: usize = 1_048_576;
+
+    let p = support::start().await;
+    let topic = create_topic(
+        &p.broker,
+        &p.client,
+        "orders",
+        &[
+            (MAX_MESSAGE_BYTES, &(SEGMENT * 2).to_string()),
+            (SEGMENT_BYTES, &SEGMENT.to_string()),
+        ],
+    )
+    .await;
+
+    check!(produce_batch_of_wire_len(&p.client, "orders", topic, SEGMENT).await == accepted(0, 0));
+    check!(
+        produce_batch_of_wire_len(&p.client, "orders", topic, SEGMENT + 1).await
+            == record_list_too_large()
+    );
+    check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
+    check!(produce_batch_of_wire_len(&p.client, "orders", topic, SEGMENT).await == accepted(1, 0));
     check!(p.broker.local_log_end_offset("orders", 0) == Some(2));
 
     p.broker.shutdown().await;

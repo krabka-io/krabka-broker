@@ -9,7 +9,9 @@ use krabka_protocol::owned::{
     sasl_authenticate_request::SaslAuthenticateRequest,
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
-use krabka_security::{Principal, SaslMechanism, ScramServerExchange};
+use krabka_security::{
+    Principal, SaslMechanism, ScramServerExchange, SecretBytes, compute_token_hmac,
+};
 use krabka_units::Time;
 use krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source};
 
@@ -44,19 +46,25 @@ use super::{
 /// listener's `connections.max.reauth.ms` — is what bounds a regular SCRAM
 /// session (KIP-368). A delegation-token session is bounded by the earlier of
 /// the token expiry and that cap.
+///
+/// A delegation token's password is the base64 of its HMAC, which the
+/// metadata image does not hold: it is recomputed under `secret_key`, the
+/// broker's `delegation.token.secret.key`. Without one no token can
+/// authenticate, as in Kafka, whose token cache stays empty.
 pub fn handle_authenticate_scram(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     controller: &dyn crate::metadata_source::MetadataSource,
+    secret_key: Option<&SecretBytes>,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     // KIP-368 in-band re-auth runs the same two rounds, so drive the exchange
     // through the ordinary path and let `finish_reauth` hold it to the
     // previous session's principal.
     let Some(previous) = begin_reauth(auth) else {
-        return authenticate_scram(req, auth, controller, max_reauth);
+        return authenticate_scram(req, auth, controller, secret_key, max_reauth);
     };
-    let resp = authenticate_scram(req, auth, controller, max_reauth);
+    let resp = authenticate_scram(req, auth, controller, secret_key, max_reauth);
     finish_reauth(auth, previous, resp)
 }
 
@@ -64,6 +72,7 @@ fn authenticate_scram(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     controller: &dyn crate::metadata_source::MetadataSource,
+    secret_key: Option<&SecretBytes>,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     // Round-1 case: still in `ScramPending` — build the exchange now that
@@ -94,12 +103,15 @@ fn authenticate_scram(
         } else {
             image.scram_credential(&username, mech)
         };
-        let token = if token_requested {
-            image.delegation_token_by_id(&username)
-        } else {
-            None
-        };
-        let token_active = token.is_some_and(|token| {
+        // Kafka keeps its token cache only when `delegation.token.secret.key`
+        // is set, so a token is found only next to the key that recomputes
+        // its password.
+        let token = secret_key.filter(|_| token_requested).and_then(|secret| {
+            image
+                .delegation_token_by_id(&username)
+                .map(|token| (token, secret))
+        });
+        let token_active = token.is_some_and(|(token, _)| {
             krabka_verified::token_is_active(
                 crate::time_util::now_ms(),
                 token.expiry_timestamp_ms,
@@ -124,14 +136,14 @@ fn authenticate_scram(
                 None,
             ),
             ScramCredentialSource::DelegationToken => {
-                let token = token.expect("verified token source exists");
+                let (token, secret) = token.expect("verified token source exists");
                 let owner = Principal {
                     name: token.owner.name.clone(),
                     auth_method: krabka_security::AuthMethod::from_sasl(mech),
                     groups: vec![],
                 };
                 (
-                    synthesize_token_scram_credential(token, mech),
+                    synthesize_token_scram_credential(token, secret, mech),
                     owner,
                     Some(token.expiry_timestamp_ms),
                 )
@@ -259,17 +271,19 @@ const AUTHORIZATION_ID_MISMATCH: &str =
 
 /// Builds the SCRAM credential of a delegation token for `mechanism`.
 ///
-/// The password is the base64 of the token HMAC, the value
+/// The password is the base64 of the token HMAC under `secret_key`, the value
 /// `CreateDelegationToken` returns and clients present as the SCRAM password.
 /// The salt is the token id's bytes: the client reads the salt from the
 /// server-first message, so a fixed salt works as well as Kafka's random one,
 /// and deriving it keeps the credential out of the metadata image.
 fn synthesize_token_scram_credential(
     token: &krabka_metadata::DelegationToken,
+    secret_key: &SecretBytes,
     mechanism: SaslMechanism,
 ) -> krabka_security::ScramCredential {
     use base64::Engine;
-    let password = base64::engine::general_purpose::STANDARD.encode(&token.hmac);
+    let password = base64::engine::general_purpose::STANDARD
+        .encode(compute_token_hmac(secret_key.as_bytes(), &token.token_id));
     let salt = token.token_id.as_bytes().to_vec();
     krabka_security::scram::hash_scram_password_with_salt(
         password.as_bytes(),

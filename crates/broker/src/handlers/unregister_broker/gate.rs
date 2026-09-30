@@ -58,6 +58,25 @@ pub(super) fn unregister_records(
     Ok(vec![consumed, record])
 }
 
+/// `records` with the partition changes in `leaves` placed ahead of the
+/// unregister record and behind any consumed proposal.
+///
+/// This is the order of Kafka's `ReplicationControlManager.handleBrokerUnregistered`:
+/// the broker leaves every ISR, and only then does its registration go. The
+/// consume stays first, so the approval commits with the transition it
+/// authorized.
+pub(super) fn with_leaves(
+    mut records: Vec<MetadataRecord>,
+    leaves: Vec<MetadataRecord>,
+) -> Vec<MetadataRecord> {
+    let unregister_at = records
+        .iter()
+        .position(|record| matches!(record, MetadataRecord::V1UnregisterBroker(_)))
+        .unwrap_or(records.len());
+    records.splice(unregister_at..unregister_at, leaves);
+    records
+}
+
 /// The break-glass target of one broker: its id in decimal, as an operator
 /// spells it on `krabka-guard break-glass propose --target`.
 ///

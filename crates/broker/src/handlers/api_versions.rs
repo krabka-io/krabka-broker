@@ -12,7 +12,10 @@
 //!
 //! From v5, KIP-1242 lets a client include the cluster and node it intended to
 //! reach. Both fields must be absent or present together. A complete mismatch
-//! returns `REBOOTSTRAP_REQUIRED` so the client discards stale metadata.
+//! returns `REBOOTSTRAP_REQUIRED` so the client discards stale metadata. A SASL
+//! connection that has not finished authenticating gets no such check: Kafka
+//! answers its `ApiVersions` from `SaslServerAuthenticator`, which validates the
+//! request and never compares the routing identity, and charges no quota.
 //!
 //! This file holds the wire entry point. The KIP-511 name check lives in
 //! `client_info`, and the KIP-584 feature rows the response carries live in
@@ -129,25 +132,30 @@ pub(crate) fn handle<'a>(
         let mut cur: &[u8] = req_bytes;
         let req = ApiVersionsRequest::decode(&mut cur, version)?;
 
-        let error_code = if version >= CLIENT_INFO_MIN_VERSION
-            && (!is_valid_client_info(&req.client_software_name)
-                || !is_valid_client_info(&req.client_software_version))
-        {
+        // Kafka's `SaslServerAuthenticator` answers an `ApiVersions` that
+        // arrives before authentication finishes. It checks only
+        // `ApiVersionsRequest.isValid`, never compares the routing identity
+        // (that is `KafkaApis`, which runs after authentication), and answers
+        // with throttle 0 without charging a quota.
+        let pre_authentication = context.pre_authentication;
+        let error_code = if !krabka_raft::is_valid_api_versions_request(&req, version) {
             Some(codes::INVALID_REQUEST)
-        } else if version >= ROUTING_IDENTITY_MIN_VERSION {
-            match (&req.cluster_id, req.node_id) {
-                (None, -1) => None,
-                (Some(_), -1) | (None, _) => Some(codes::INVALID_REQUEST),
-                (Some(cluster_id), node_id)
-                    if !crate::cluster_id::matches(cluster_id, expected_cluster_id)
-                        || Some(node_id) != expected_node_id =>
-                {
-                    Some(codes::REBOOTSTRAP_REQUIRED)
-                }
-                (Some(_), _) => None,
-            }
+        } else if version >= ROUTING_IDENTITY_MIN_VERSION
+            && !pre_authentication
+            && let Some(cluster_id) = &req.cluster_id
+            && (!crate::cluster_id::matches(cluster_id, expected_cluster_id)
+                || Some(req.node_id) != expected_node_id)
+        {
+            Some(codes::REBOOTSTRAP_REQUIRED)
         } else {
             None
+        };
+        let throttle_time_ms = || {
+            if pre_authentication {
+                0
+            } else {
+                charge_request_quota(broker, &image, context, handler_start)
+            }
         };
 
         // Invalid client information or an incomplete KIP-1242 identity is
@@ -156,7 +164,7 @@ pub(crate) fn handle<'a>(
         if let Some(error_code) = error_code {
             let resp = ApiVersionsResponse {
                 error_code,
-                throttle_time_ms: charge_request_quota(broker, &image, context, handler_start),
+                throttle_time_ms: throttle_time_ms(),
                 ..Default::default()
             };
             let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
@@ -194,11 +202,21 @@ pub(crate) fn handle<'a>(
             ),
             finalized_features_epoch: metadata_offset,
             finalized_features: finalized_feature_keys(&image),
-            throttle_time_ms: charge_request_quota(broker, &image, context, handler_start),
+            throttle_time_ms: throttle_time_ms(),
             ..Default::default()
         };
         let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
         resp.encode(&mut buf, version)?;
         Ok(buf.freeze())
     })
+}
+
+/// Whether `body` decodes as an `ApiVersions` request at `version` that
+/// Kafka's `ApiVersionsRequest.isValid` accepts.
+///
+/// Before the handshake, a valid request moves Kafka's `SaslServerAuthenticator`
+/// on to `HANDSHAKE_REQUEST`; an invalid one leaves it where it was.
+pub(crate) fn is_valid_request_body(version: i16, mut body: &[u8]) -> bool {
+    ApiVersionsRequest::decode(&mut body, version)
+        .is_ok_and(|request| krabka_raft::is_valid_api_versions_request(&request, version))
 }

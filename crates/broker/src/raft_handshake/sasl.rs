@@ -46,6 +46,15 @@ fn pre_auth_state() -> ConnectionAuth {
 /// advertises none.
 const CONTROLLER_MAX_REAUTH: Option<krabka_units::Time> = None;
 
+/// Waits out Kafka's `connection.failed.authentication.delay.ms`, which holds
+/// a failed authentication's answer and its close back. The controller
+/// listener's `Selector` delays them as a broker listener's does.
+async fn delay_failed_authentication(cfg: &BrokerRaftHandshake) {
+    if !cfg.failed_authentication_delay.is_zero() {
+        tokio::time::sleep(cfg.failed_authentication_delay).await;
+    }
+}
+
 /// Writes one `Authentication` audit row for a completed controller SASL
 /// exchange, so controller and inter-broker logins join the same audit trail
 /// as the data plane's.
@@ -111,10 +120,26 @@ pub(super) async fn run_inbound_sasl(
     api_versions: &dyn ControllerApiVersions,
 ) -> Result<(krabka_security::Principal, bool), RaftHandshakeError> {
     let mut auth = pre_auth_state();
+    // A valid `ApiVersions` has been answered before any handshake: Kafka's
+    // `SaslServerAuthenticator` then takes only a `SaslHandshake`.
+    let mut api_versions_answered = false;
     loop {
-        let (api_key, api_version, corr_id, body) =
-            read_kafka_request(stream, cfg.max_frame_bytes).await?;
-        if !auth.allows_request(api_key) {
+        let request = read_kafka_request(stream, cfg.sasl_max_receive_bytes).await;
+        if matches!(request, Err(RaftHandshakeError::Sasl(_))) {
+            delay_failed_authentication(cfg).await;
+        }
+        let (api_key, api_version, corr_id, body) = request?;
+        let repeated_api_versions = api_versions_answered
+            && api_key == API_KEY_API_VERSIONS
+            && matches!(auth, ConnectionAuth::Anonymous);
+        if repeated_api_versions || !auth.allows_request(api_key) {
+            // Before a handshake Kafka fails the request with an
+            // `InvalidRequestException`, or an `IllegalStateException` for a
+            // second `ApiVersions`, and closes at once. After one it is an
+            // `AuthenticationException`, and the close is delayed.
+            if !matches!(auth, ConnectionAuth::Anonymous) {
+                delay_failed_authentication(cfg).await;
+            }
             return Err(RaftHandshakeError::Sasl(format!(
                 "pre-auth request api_key={api_key} rejected"
             )));
@@ -125,6 +150,11 @@ pub(super) async fn run_inbound_sasl(
             API_KEY_API_VERSIONS => {
                 let response = api_versions.respond(api_version, &body)?;
                 write_response_body(stream, api_key, api_version, corr_id, &response).await?;
+                // The answer starts with its int16 error code, at every
+                // version. Only a valid request gets none, and an
+                // `UNSUPPORTED_VERSION` or `INVALID_REQUEST` answer leaves
+                // Kafka's state as it was, so the peer may ask again.
+                api_versions_answered = response.starts_with(&[0, 0]);
             }
             API_KEY_SASL_HANDSHAKE => {
                 let mut cur = body.as_slice();
@@ -143,6 +173,9 @@ pub(super) async fn run_inbound_sasl(
                 );
                 let resp = outcome.response;
                 let error_code = resp.error_code;
+                if error_code != 0 {
+                    delay_failed_authentication(cfg).await;
+                }
                 write_response(stream, api_key, api_version, corr_id, &resp).await?;
                 if error_code != 0 {
                     return Err(RaftHandshakeError::Sasl(format!(
@@ -179,6 +212,7 @@ pub(super) async fn run_inbound_sasl(
                             &req,
                             &mut auth,
                             controller.as_ref(),
+                            cfg.delegation_token_secret_key.as_ref(),
                             CONTROLLER_MAX_REAUTH,
                         )
                     }
@@ -213,6 +247,9 @@ pub(super) async fn run_inbound_sasl(
                     resp.error_message = Some(generic_failure_message(mech, false));
                 }
                 let error_code = resp.error_code;
+                if error_code != 0 {
+                    delay_failed_authentication(cfg).await;
+                }
                 write_response(stream, api_key, api_version, corr_id, &resp).await?;
                 if error_code != 0 {
                     emit_authentication(
@@ -265,6 +302,8 @@ pub(super) async fn run_inbound_sasl(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use assert2::assert;
     use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
     use tokio::io::AsyncWriteExt;
@@ -502,6 +541,128 @@ mod tests {
             .expect_err("pre-auth request rejected");
         assert!(
             matches!(err, RaftHandshakeError::Sasl(msg) if msg.contains("pre-auth request api_key=1 rejected"))
+        );
+    }
+
+    /// An `ApiVersions` answer with the error code a real listener gives:
+    /// none up to v4, and `UNSUPPORTED_VERSION` above it or for an empty body.
+    struct CodedApiVersions;
+
+    impl ControllerApiVersions for CodedApiVersions {
+        fn respond(
+            &self,
+            request_version: i16,
+            request_body: &[u8],
+        ) -> Result<bytes::Bytes, RaftHandshakeError> {
+            let error_code: i16 = if request_version > 4 || request_body.is_empty() {
+                35
+            } else {
+                0
+            };
+            Ok(bytes::Bytes::from(error_code.to_be_bytes().to_vec()))
+        }
+    }
+
+    /// After one valid `ApiVersions` the exchange takes only a
+    /// `SaslHandshake`: Kafka's `SaslServerAuthenticator` throws
+    /// `IllegalStateException` for a second one. An answer that refused the
+    /// request, `UNSUPPORTED_VERSION` here, is not the first one.
+    #[tokio::test]
+    async fn a_second_api_versions_before_the_handshake_ends_the_exchange() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            let cfg = sasl_test_config();
+            run_inbound_sasl(&mut server, &cfg, &test_peer(), &CodedApiVersions).await
+        });
+
+        // (version, body, error code of the answer)
+        let requests = [(6, vec![0xff], 35), (3, api_versions_body(3), 0)];
+        for (corr_id, (version, body, error_code)) in (1..).zip(requests) {
+            client
+                .write_all(&request_frame(
+                    API_KEY_API_VERSIONS,
+                    version,
+                    corr_id,
+                    Some(b"c"),
+                    true,
+                    &body,
+                ))
+                .await
+                .expect("write api versions");
+            let frame = read_response_frame(&mut client).await;
+            assert!(frame[4..6] == i16::to_be_bytes(error_code), "v{version}");
+        }
+        client
+            .write_all(&request_frame(
+                API_KEY_API_VERSIONS,
+                3,
+                3,
+                Some(b"c"),
+                true,
+                &api_versions_body(3),
+            ))
+            .await
+            .expect("write the second api versions");
+
+        let err = server
+            .await
+            .expect("server task")
+            .expect_err("the second ApiVersions ends the exchange");
+        assert!(
+            matches!(err, RaftHandshakeError::Sasl(msg) if msg.contains("api_key=18 rejected"))
+        );
+    }
+
+    /// A frame over `sasl.server.max.receive.size` fails the authentication
+    /// before the frame is read: the stream holds the size prefix and nothing
+    /// after it.
+    #[tokio::test]
+    async fn a_frame_over_the_sasl_receive_limit_fails_the_exchange() {
+        let (mut client, mut server) = tokio::io::duplex(128);
+        let server = tokio::spawn(async move {
+            let mut cfg = sasl_test_config();
+            cfg.sasl_max_receive_bytes = 64;
+            run_inbound_sasl(&mut server, &cfg, &test_peer(), &FixedApiVersions).await
+        });
+        client
+            .write_all(&65_u32.to_be_bytes())
+            .await
+            .expect("write the size prefix");
+
+        let err = server
+            .await
+            .expect("server task")
+            .expect_err("an oversize frame fails the exchange");
+        assert!(
+            matches!(err, RaftHandshakeError::Sasl(msg) if msg.contains("invalid receive size"))
+        );
+    }
+
+    /// A failed login writes its answer only after
+    /// `connection.failed.authentication.delay.ms`, as Kafka's `Selector` holds
+    /// the answer and the close of a failed authentication.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_login_holds_its_answer_for_the_configured_delay() {
+        let delay = Duration::from_millis(500);
+        let mut cfg = sasl_test_config();
+        cfg.failed_authentication_delay = delay;
+
+        let started = tokio::time::Instant::now();
+        let (resp, outcome) = plain_login(cfg, "broker", "wrong").await;
+        assert!(resp.error_code != 0);
+        assert!(outcome.is_err());
+        assert!(
+            started.elapsed() >= delay,
+            "the answer came after {:?}",
+            started.elapsed()
+        );
+
+        let started = tokio::time::Instant::now();
+        let (resp, _) = plain_login(sasl_test_config(), "broker", "secret").await;
+        assert!(resp.error_code == 0);
+        assert!(
+            started.elapsed() < delay,
+            "a login that succeeds is not held"
         );
     }
 }

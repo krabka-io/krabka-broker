@@ -59,7 +59,6 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(ReadOneGroup);
-        cfg.share_group.enable = true;
     })
     .await
 }

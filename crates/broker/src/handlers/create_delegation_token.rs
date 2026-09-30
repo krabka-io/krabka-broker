@@ -26,9 +26,13 @@
 //! broker-side refusals also carry `-1` timestamps, as Kafka's
 //! `CreateDelegationTokenResponse.prepareResponse` writes them.
 //!
-//! The HMAC-SHA-256 of `(secret_key, token_id)` becomes the token's password
-//! equivalent. Clients re-authenticate with the `token_id` as the SCRAM
-//! username and the HMAC bytes as the password.
+//! The HMAC-SHA-512 of `(secret_key, token_id)`, 64 bytes as in Kafka's
+//! `DelegationTokenManager.createHmac` and computed by
+//! `krabka_security::compute_token_hmac`, becomes the token's password
+//! equivalent. The metadata record carries no HMAC, as Kafka's
+//! `DelegationTokenRecord` has none: every use recomputes it from the secret
+//! key. Clients re-authenticate with the `token_id` as the SCRAM username and
+//! the HMAC bytes as the password.
 //!
 //! This file holds the request flow itself. Owner resolution and its
 //! authorization live in `owner`, the deadline arithmetic in `lifetime`, and
@@ -41,7 +45,7 @@ use krabka_protocol::owned::{
     create_delegation_token_request::CreateDelegationTokenRequest,
     create_delegation_token_response::CreateDelegationTokenResponse,
 };
-use krabka_security::{KafkaPrincipal, SecretBytes};
+use krabka_security::{KafkaPrincipal, SecretBytes, compute_token_hmac};
 use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
 
 use crate::{
@@ -183,7 +187,7 @@ pub(crate) async fn handle(
         }
     };
     let token_id = uuid::Uuid::new_v4().to_string();
-    let hmac = krabka_security::compute_token_hmac(secret_key.as_bytes(), &token_id);
+    let hmac = compute_token_hmac(secret_key.as_bytes(), &token_id);
 
     let renewers: Vec<KafkaPrincipal> = req
         .renewers
@@ -197,7 +201,7 @@ pub(crate) async fn handle(
     let record = DelegationTokenRecord {
         token_id: token_id.clone(),
         owner: owner.clone(),
-        hmac: hmac.clone(),
+        requester: requester.clone(),
         issue_timestamp_ms: now,
         expiry_timestamp_ms: deadlines.initial_expiry_ms,
         max_timestamp_ms: deadlines.max_timestamp_ms,

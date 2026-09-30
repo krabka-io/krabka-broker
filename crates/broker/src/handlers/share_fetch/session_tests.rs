@@ -49,7 +49,6 @@ async fn start(session_max: usize) -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(move |cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
-        cfg.share_group.enable = true;
         cfg.share_session_cache_max_when_unlimited = session_max;
     })
     .await
@@ -391,7 +390,16 @@ async fn an_incremental_response_leaves_out_partitions_without_news() {
 #[tokio::test]
 async fn group_share_settings_override_the_broker_defaults() {
     const RELEASE: i8 = 2;
-    let (broker, _dir) = start(10_000).await;
+    // The broker's bound admits the record lock limit of 2 that the group
+    // asks for, which is below Kafka's default minimum and would be capped to
+    // it.
+    let (broker, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        cfg.share_session_cache_max_when_unlimited = 10_000;
+        cfg.share_group.min_partition_max_record_locks = 2;
+    })
+    .await;
     let topic_id = create_topic(&broker, "overrides", 1).await;
     produce(&broker, "overrides", 0).await;
     earliest(&broker, "g", topic_id, 1).await;

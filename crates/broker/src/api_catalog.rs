@@ -273,7 +273,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/describe_configs.rs",
         tests: &["crates/broker/tests/jvm_acceptance_cli/configs.rs"],
-        note: "",
+        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. Dynamic keys with no krabka behaviour behind them (thread pool sizes, the log cleaner, connection limits, SSL and SASL listener settings, `listeners`) are stored and reported and do not change how the broker runs, and a `CLASS` value is accepted without loading the class.",
     },
     KipAnnotation {
         key: "KIP-227",
@@ -378,7 +378,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/file_config/listener.rs::apply_to_listener_parses_principal_mapping_rules",
             "crates/broker/tests/jvm_acceptance_tls/mtls_principal_mapping.rs",
         ],
-        note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
+        note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`. As in Kafka, the rules map the Subject DN on SSL listeners only, and patterns and replacements follow `java.util.regex`; a SASL_SSL listener takes its principal from the SASL exchange.",
     },
     KipAnnotation {
         key: "KIP-373",
@@ -400,7 +400,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
         ],
-        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them.",
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them. With the flag on, `remote.copy.lag.ms` and `remote.copy.lag.bytes` hold a sealed segment back from the remote tier (KIP-1241), and `max.decompressed.message.bytes` refuses a compressed record above it on produce with `INVALID_RECORD`; it is not enforced on compaction or by-timestamp offset lookups, where the broker-wide decompression bound applies to every topic. `errors.deadletterqueue.topic.name`, `errors.deadletterqueue.copy.record.enable` and the three `*.assignor.offload.enable` group keys are accepted on a group with trunk's validation and stored, and nothing reads them yet.",
     },
     KipAnnotation {
         key: "KIP-392",
@@ -633,7 +633,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/api_versions_features.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. `metadata.version` is supported up to 4.3.1's latest production level, `4.3-IV0` (30), unless Kafka's `unstable.feature.versions.enable` is set, which raises it to trunk's `4.4-IV2` (33) in `ApiVersions`, node registration, `UpdateFeatures` and `krabka format` alike.",
+        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. `metadata.version` is supported up to 4.3.1's latest production level, `4.3-IV0` (30), unless Kafka's `unstable.feature.versions.enable` is set, which raises it to trunk's `4.5-IV0` (34), Kafka's `latestTesting`, in `ApiVersions`, node registration, `UpdateFeatures` and `krabka format` alike.",
     },
     KipAnnotation {
         key: "KIP-590",
@@ -740,7 +740,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_metrics_config.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        note: "GetTelemetrySubscriptions (71) and PushTelemetry (72) are advertised only when the broker has a client-metrics receiver: the `[runtime]` key `client_metrics_enable`, or a configured `client_metrics_otlp_endpoint`, which implies it. The default is off, which is what a stock Kafka broker advertises when `metric.reporters` holds no `ClientTelemetry` implementation, so a modern Java or librdkafka client opens no telemetry handshake it has nowhere to push to. `api_catalog::ClientMetricsReceiver` names the gate and `BrokerConfig::client_metrics_receiver` reads it. Both handlers stay registered either way and answer a client that sends one anyway.",
+        note: "GetTelemetrySubscriptions (71) and PushTelemetry (72) are advertised only when the broker has a client-metrics receiver: the `[runtime]` key `client_metrics_enable`, or a configured `client_metrics_otlp_endpoint`, which implies it. The default is off, which is what a stock Kafka broker advertises when `metric.reporters` holds no `ClientTelemetry` implementation, so a modern Java or librdkafka client opens no telemetry handshake it has nowhere to push to. `api_catalog::ClientMetricsReceiver` names the gate and `BrokerConfig::client_metrics_receiver` reads it. Both handlers stay registered either way and answer a client that sends one anyway. A closed connection drops the instance it created, and an idle instance expires after the larger of one minute and three push intervals, as in Kafka. `PushTelemetry` follows Kafka 4.3.1 in two places where trunk has since changed: every push sets the instance's terminating flag, a rejected one included, and a payload that decompresses past `telemetry.max.bytes` is answered `INVALID_RECORD`. `unstable.api.versions.enable` selects trunk's behavior for both, which records the flag only for an accepted push (KAFKA-20898) and answers `TELEMETRY_TOO_LARGE` (KAFKA-21076).",
     },
     KipAnnotation {
         key: "KIP-734",
@@ -815,7 +815,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",
+        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker. The group resolves each subscribed regex once for all its members, as Kafka's `TopicRegexResolver` does: against the metadata image, keeping the topics that the principal of the heartbeat that resolves it may `Describe`. It records the result as a `ConsumerGroupRegularExpression` record, so a coordinator failover restores the topics of every regex subscription without a heartbeat that carries the pattern. A heartbeat of any member resolves the patterns again when a member's pattern is not resolved yet, when a topic was created since the last resolution, or when the last one is older than `group.consumer.regex.refresh.interval.ms` (10 minutes), and never within 10 seconds of the last one. A change of the ACLs counts as a new topic here, where Kafka picks it up at the refresh interval. A group's `consumer.session.timeout.ms`, `consumer.heartbeat.interval.ms` and `consumer.assignment.interval.ms` are accepted, validated against the `group.consumer.min.*` and `group.consumer.max.*` bounds and stored by `AlterConfigs` and `IncrementalAlterConfigs` on a `GROUP` resource, as Kafka does, and the consumer coordinator applies them to that group over the broker's `group.consumer.*` values. A next target assignment waits for `consumer.assignment.interval.ms` (1 s by default) since the last one, as in Kafka's `canComputeNextTargetAssignment`.",
     },
     KipAnnotation {
         key: "KIP-853",
@@ -859,7 +859,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transaction_version.rs",
             "crates/broker/tests/transaction_version/txnver_verify_only.rs",
         ],
-        note: "",
+        note: "What a request may do follows its API version, as in Kafka, whatever `transaction.version` the cluster finalized: EndTxn v5 and AddPartitionsToTxn v4 and later are TV_2 and bump the epoch, and older versions and AddOffsetsToTxn are TV_0. The cluster level picks the `__transaction_state` value format and the rules of a server-initiated abort. Two answers follow Kafka trunk only under `unstable.api.versions.enable`: an EndTxn v5 commit at the pre-abort epoch after CompleteAbort answers PRODUCER_FENCED (KAFKA-20785, where 4.3.1 answers INVALID_TXN_STATE), and `LastProducerEpoch` (tag 4) is written to and read from `__transaction_state` (KAFKA-20357, where 4.3.1 keeps it in memory). A transactional offset commit records the topic id only from TxnOffsetCommit v6 and under that flag.",
     },
     KipAnnotation {
         key: "KIP-903",
@@ -895,7 +895,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/share_admin_offsets.rs",
             "crates/broker/tests/jvm_share_groups.rs",
         ],
-        note: "",
+        note: "Group-level configs are accepted, validated and stored for every key of Kafka 4.3.1's `GroupConfig`, by `AlterConfigs` and `IncrementalAlterConfigs` on a `GROUP` resource, as Kafka does. The share partitions apply `share.auto.offset.reset`, `share.record.lock.duration.ms`, `share.delivery.count.limit`, `share.partition.max.record.locks`, `share.isolation.level` and `share.renew.acknowledge.enable`. The share coordinator applies `share.session.timeout.ms`, `share.heartbeat.interval.ms` and `share.assignment.interval.ms` to that group over the broker's `group.share.*` values, and a next target assignment waits for the assignment interval (1 s by default) since the last one, as in Kafka's `canComputeNextTargetAssignment`.",
     },
     KipAnnotation {
         key: "KIP-939",
@@ -941,7 +941,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/elr_columns.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is 0 at every `metadata.version` krabka advertises, because `ELRV_1` bootstraps at 4.1-IV0; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. ELR is carried by standard per-partition KRaft metadata and is consumed during JVM-compatible replay.",
+        note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is level 1 from `metadata.version` 4.1-IV0, where `ELRV_1` bootstraps, and 0 below it; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. ELR is carried by standard per-partition KRaft metadata and is consumed during JVM-compatible replay. The last-known ELR follows Kafka 4.3.1's `PartitionChangeBuilder` (`useLastKnownLeaderInBalancedRecovery` is always on): it holds the single last leader of a partition that has no leader and is empty otherwise, and when that leader returns it is elected as an unclean leader (`RECOVERING`, a singleton ISR) with no `unclean.leader.election.enable` or `unclean.recovery.strategy` consulted, unless an ELR member is there to lead cleanly first. krabka's partition record always names a leader, so a partition with no leader keeps its last leader in the record, marks it with that one-member last-known ELR, and `Metadata` and `DescribeTopicPartitions` report it as `leader = -1`; the election runs when a broker unfences (`handleBrokerUnfenced`). The operator election in `ElectLeaders` does not take the last-known rung.",
     },
     KipAnnotation {
         key: "KIP-996",
@@ -1018,7 +1018,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_streams_groups.rs",
             "crates/broker/tests/jvm_streams_app.rs",
         ],
-        note: "",
+        note: "A group's `streams.*` overrides, `streams.initial.rebalance.delay.ms` and `streams.assignment.interval.ms` included, apply per group, and a key of another coordinator stored beside them leaves them intact.",
     },
     KipAnnotation {
         key: "KIP-1073",
@@ -1069,16 +1069,45 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1191",
+        claim: "Share-group dead-letter queue: a record that a member rejects, or that uses up the delivery count limit, is written to the group's dead-letter topic before it is archived",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/share_partition/dlq.rs",
+        tests: &[
+            "crates/broker/src/features.rs::share_version_two_is_advertised_only_under_unstable_feature_versions",
+            "crates/broker/src/handlers/update_features/preconditions.rs::share_version_two_needs_unstable_feature_versions",
+            "crates/format/src/format/features.rs::share_version_two_is_trunks_level",
+            "crates/broker/src/share_partition/state/dlq.rs",
+            "crates/broker/src/share_partition/dlq/record.rs",
+            "crates/broker/src/share_partition/dlq/validate.rs",
+            "crates/broker/src/share_partition/manager/dead_letter.rs",
+            "crates/broker/tests/share_consume/dead_letter_queue.rs",
+        ],
+        note: "Kafka trunk's `share.version` 2, which a node supports only under `unstable.feature.versions.enable`; the topic key `errors.deadletterqueue.group.enable` and the group keys `errors.deadletterqueue.topic.name` and `errors.deadletterqueue.copy.record.enable` need `unstable.api.versions.enable` too, so trunk mode is both switches. At `share.version` 1, the level a default node runs, a group's dead-letter keys change nothing and a reject archives at once. A group with a topic name gets one record for each offset that is rejected or reaches `share.delivery.count.limit`, with Kafka's six `__dlq.errors.*` headers and, with `errors.deadletterqueue.copy.record.enable`, the source key and value. It is an acks=all produce to the leader of the topic partition that the source partition maps to, as Kafka's `ShareGroupDLQStateManager` sends it, over the inter-broker listener, and it retries five times from 1 s to 30 s. The writes of a broker share one connection to each destination leader, neighbouring runs with the same delivery count and cause are one write, and at most eight writes run at once; Kafka's `ShareGroupDLQStateManager` goes further and coalesces every pending record for a destination into one produce request. The record is persisted as delivery state `ARCHIVING` (3) first and as `ARCHIVED` (4) when the write ends, whatever its result, and a leader that finds `ARCHIVING` after a restart writes the record again, as `SharePartition.initiateDLQAndArchive` and `maybeResumeDlqArchiving` do. The topic has to have `errors.deadletterqueue.group.enable=true`, a name that starts with `errors.deadletterqueue.topic.name.prefix` (default `dlq.`) and not with `__`, and a missing topic is created only when `errors.deadletterqueue.auto.create.topics.enable` is true. Both cluster keys are read from the dynamic broker config, per broker and then cluster-wide, and neither is in the `DescribeConfigs` key roster of a broker yet. The `DeadLetterQueue*` meters of Kafka's `ShareGroupMetrics` are not exported, and `group.share.dlq.manager.class.name`, a JVM class name, has no counterpart. A copied record that the six headers and the batch header push over `max.message.bytes` is written with its headers alone, where trunk's writer sends it whole and loses it to `MESSAGE_TOO_LARGE`.",
+    },
+    KipAnnotation {
         key: "KIP-1222",
         claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
-        status: KipStatus::Partial,
+        status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/share_fetch/acknowledge.rs",
         tests: &[
             "crates/broker/src/handlers/share_fetch/renew_tests.rs::renew_acknowledgements_renew_only_the_renew_offsets",
             "crates/broker/src/handlers/share_fetch/renew_tests.rs::a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error",
             "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
         ],
-        note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758).",
+        note: "`share.renew.acknowledge.enable` (default true) is a `GroupConfig` key that `AlterConfigs` and `IncrementalAlterConfigs` accept on a `GROUP` resource and that the share partitions apply: a group that sets it to false answers a Renew acknowledgement with INVALID_RECORD_STATE, and a Renew type without IsRenewAck is INVALID_REQUEST.",
+    },
+    KipAnnotation {
+        key: "KIP-1241",
+        claim: "Delayed remote copy: remote.copy.lag.ms and remote.copy.lag.bytes hold a sealed segment back from the remote tier",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager/copy.rs",
+        tests: &[
+            "crates/broker/src/remote_log_manager/copy.rs::a_sealed_segment_waits_out_its_copy_lag",
+            "crates/broker/src/remote_log_manager/copy.rs::a_derived_copy_lag_is_the_effective_local_retention",
+            "crates/broker/src/remote_log_manager.rs::tick_all_honours_the_remote_copy_lag_on_a_trunk_broker",
+        ],
+        note: "Kafka trunk's topic keys and their `log.remote.copy.lag.ms` and `log.remote.copy.lag.bytes` broker defaults, served only under `unstable.api.versions.enable`. By default they are unknown configs, as on 4.3.1, and a sealed segment is copied as soon as it is sealed. With the flag on, the copy pass stops at the first sealed segment that is neither old enough by its newest record nor far enough behind newer local data, as `RLMCopyTask.candidateLogSegments` does.",
     },
     KipAnnotation {
         key: "KIP-1242",
@@ -1086,7 +1115,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/api_versions.rs",
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
-        note: "Kafka trunk's ApiVersions v5, served only under `unstable.api.versions.enable`. By default both listeners serve 4.3.1's v0-v4 and answer v5 `UNSUPPORTED_VERSION` with that range, so REBOOTSTRAP_REQUIRED (129) is never sent.",
+        note: "Kafka trunk's ApiVersions v5, served only under `unstable.api.versions.enable`. By default both listeners serve 4.3.1's v0-v4 and answer v5 `UNSUPPORTED_VERSION` with that range, so REBOOTSTRAP_REQUIRED (129) is never sent. On a SASL listener the first ApiVersions, which arrives before authentication, is answered as Kafka's `SaslServerAuthenticator` answers it: `INVALID_REQUEST` for an invalid request and otherwise the table, with no routing check.",
     },
     KipAnnotation {
         key: "KIP-1251",
@@ -1117,7 +1146,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/authz/src/simple/matching.rs",
             "crates/broker/src/handlers/create_acls/validate.rs",
         ],
-        note: "Matches Kafka trunk. `CreateAcls` accepts a CIDR host from `metadata.version` 4.4-IV1 (level 32), which a node supports only under `unstable.feature.versions.enable`; by default the cluster stays at 4.3-IV0 and a host containing `/` is refused with trunk's UNSUPPORTED_VERSION text.",
+        note: "Trunk behavior, behind `unstable.feature.versions.enable`. By default `CreateAcls` and the authorizer behave as Kafka 4.3.1 does: any host, an empty one or one containing `/` included, is stored and compared as text. Under the flag `CreateAcls` applies trunk's `validateHostPattern`, which accepts a CIDR host from `metadata.version` 4.4-IV1 (level 32) and answers UNSUPPORTED_VERSION below it, and the authorizer reads a stored host containing `/` as a range from that version.",
     },
     KipAnnotation {
         key: "KIP-1312",
@@ -1156,7 +1185,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
             "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_answers_as_a_trunk_broker_without_a_plugin",
         ],
-        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
+        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags. DeleteGroups v3, which adds a per-group ErrorMessage, is trunk's too and is advertised only under the same flag. krabka never answers GROUP_DELETION_FAILED, since it has no topology description plugin, so the message is always null.",
     },
     KipAnnotation {
         key: "KIP-1357",
@@ -2030,6 +2059,8 @@ mod tests {
             (18, Some((0, 4)), Some((0, 5))),
             (22, Some((0, 5)), Some((0, 6))),
             (28, Some((0, 5)), Some((0, 6))),
+            // KIP-1331's per-group `ErrorMessage`.
+            (42, Some((0, 2)), Some((0, 3))),
             (88, Some((0, 0)), Some((0, 1))),
             (89, Some((0, 0)), Some((0, 1))),
             (93, None, Some((0, 0))),

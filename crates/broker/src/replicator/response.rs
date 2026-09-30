@@ -27,9 +27,12 @@ use krabka_verified::{ReplicaFetchMutation, broker::ReplicaFetchFacts};
 use tracing::{info, warn};
 
 use super::{
-    Config, FollowedKey, replication_target_changed, task_replication_target,
+    Config, FollowedKey,
+    follower_throttle::record_replicated,
+    replication_target_changed, task_replication_target,
     truncation::{
-        handle_epoch_fence, handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+        diverging_epoch_truncation_target, handle_epoch_fence,
+        handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
     },
 };
 use crate::codes;
@@ -115,7 +118,7 @@ pub(super) async fn handle_partition_response(
         target_matches,
         reported_target_matches,
         error_code: part_resp.error_code,
-        diverging_end_offset: part_resp.diverging_epoch.end_offset,
+        diverging_epoch: part_resp.diverging_epoch.epoch,
     });
 
     if mutation == ReplicaFetchMutation::Reject {
@@ -135,9 +138,12 @@ pub(super) async fn handle_partition_response(
     match mutation {
         ReplicaFetchMutation::Truncate => {
             // KIP-320: an in-band divergence signal. The leader served no
-            // records and told us the epoch/offset our log must truncate to.
-            // `EpochEndOffset` defaults to (epoch:-1, end_offset:-1); a
-            // populated `end_offset >= 0` means "truncate here".
+            // records and named the largest epoch it has that is at or below
+            // our last fetched epoch, and where that epoch ends. That is
+            // the leader's history, not our truncation point: Kafka's
+            // `getOffsetTruncationState` intersects it with our own epoch
+            // history first. `EpochEndOffset` defaults to (epoch:-1,
+            // end_offset:-1); a populated `epoch >= 0` marks a divergence.
             // Recheck immediately before mutating: metadata may have
             // changed since the response-level guard above.
             if replication_target_changed(cfg) {
@@ -145,7 +151,6 @@ pub(super) async fn handle_partition_response(
                     "replicator: skipping diverging_epoch truncation from stale target");
                 return RowAction::Drop;
             }
-            let end_offset = part_resp.diverging_epoch.end_offset;
             if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
                 let _target_guard = match part
                     .lock_replication_target(task_replication_target(cfg))
@@ -158,7 +163,9 @@ pub(super) async fn handle_partition_response(
                         return RowAction::Drop;
                     }
                 };
-                // Wrap the wire `i64` into `Offset` for the log-layer call.
+                let leader_end_offset = part_resp.diverging_epoch.end_offset;
+                let end_offset =
+                    diverging_epoch_truncation_target(&part, &part_resp.diverging_epoch).0;
                 match part.truncate_to(Offset(end_offset)).await {
                     Ok(()) => {
                         // Drop idempotent-producer dedup entries for the
@@ -171,6 +178,8 @@ pub(super) async fn handle_partition_response(
                         info!(
                             topic = %cfg.topic,
                             partition = cfg.partition.get(),
+                            leader_epoch = part_resp.diverging_epoch.epoch,
+                            leader_end_offset,
                             end_offset,
                             "replicator: truncated to diverging_epoch (KIP-320 in-band)"
                         );
@@ -242,11 +251,7 @@ pub(super) async fn handle_partition_response(
                             "replicator: replicate_batch failed");
                             break;
                         }
-                        cfg.metrics.record_replication_in(
-                            &cfg.topic,
-                            cfg.partition.get(),
-                            u64::try_from(batch_bytes).unwrap_or(0),
-                        );
+                        record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
                     }
                 }
                 _ => {}
@@ -258,6 +263,10 @@ pub(super) async fn handle_partition_response(
                 return RowAction::Drop;
             }
             part.set_follower_hw(Offset(part_resp.high_watermark)).await;
+            // KIP-73: the lag behind the leader's high watermark decides
+            // whether the follower throttle applies to this partition.
+            cfg.lag
+                .update(part_resp.high_watermark, part.log_end_offset().0);
             follow_leader_log_start(&part, cfg, part_resp.log_start_offset).await;
             RowAction::Continue
         }
@@ -382,11 +391,7 @@ async fn replicate_raw_batches(
                 "replicator: append failed");
             break;
         }
-        cfg.metrics.record_replication_in(
-            &cfg.topic,
-            cfg.partition.get(),
-            u64::try_from(batch_len).unwrap_or(0),
-        );
+        record_replicated(cfg, u64::try_from(batch_len).unwrap_or(0));
         remaining.advance(batch_len);
     }
     RowAction::Continue
@@ -760,37 +765,205 @@ mod tests {
         assert!(part.log_end_offset() == Offset(1));
     }
 
+    /// KIP-320 follower side, `AbstractFetcherThread.getOffsetTruncationState`:
+    /// the follower intersects the leader's `(epoch, end offset)` with its own
+    /// epoch history. Each case is a follower log, written as runs of
+    /// `(leader epoch, record count)`, and the diverging row the leader
+    /// answered its Fetch with.
+    #[tokio::test]
+    async fn diverging_epoch_truncates_to_the_intersection_with_the_local_epochs() {
+        struct Case {
+            name: &'static str,
+            /// The follower log as runs of `(leader epoch, record count)`.
+            runs: &'static [(i32, usize)],
+            /// The leader's diverging epoch and its end offset.
+            diverging: (i32, i64),
+            /// The log end offset after the truncation.
+            expected_end: i64,
+            /// The `(epoch, start offset)` entries left in the epoch history.
+            expected_epochs: &'static [(i32, i64)],
+        }
+        let case = |name, runs, diverging, expected_end, expected_epochs| Case {
+            name,
+            runs,
+            diverging,
+            expected_end,
+            expected_epochs,
+        };
+        let cases = [
+            case(
+                // The leader went 4 -> 5 -> 7 while this follower went 4 -> 6:
+                // it does not know epoch 5, so it keeps only what epoch 4
+                // ended with, not the leader's end for epoch 5.
+                "two elections: the follower does not know the leader's epoch",
+                &[(4, 10), (6, 5)],
+                (5, 12),
+                10,
+                &[(4, 0)],
+            ),
+            case(
+                // The leader's epoch 5 is longer than this whole log: the
+                // leader's end offset cannot be a truncation point, or the
+                // same row would come back on every Fetch.
+                "the leader's end offset is past the log end",
+                &[(4, 10), (6, 2)],
+                (5, 20),
+                10,
+                &[(4, 0)],
+            ),
+            case(
+                "a known epoch that the leader ended earlier than the follower",
+                &[(4, 13)],
+                (4, 8),
+                8,
+                &[(4, 0)],
+            ),
+            case(
+                "a known epoch that the leader ended later than the follower",
+                &[(4, 10), (6, 5)],
+                (4, 12),
+                10,
+                &[(4, 0)],
+            ),
+            case(
+                "the leader's epoch is below every epoch the follower recorded",
+                &[(6, 5)],
+                (5, 3),
+                0,
+                &[],
+            ),
+            case(
+                "no leader end offset leaves the log alone",
+                &[(4, 5)],
+                (4, -1),
+                5,
+                &[(4, 0)],
+            ),
+        ];
+        for Case {
+            name,
+            runs,
+            diverging: (epoch, end_offset),
+            expected_end,
+            expected_epochs,
+        } in cases
+        {
+            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+            ensure_local_partition(&cfg).unwrap();
+            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            for &(leader_epoch, count) in runs {
+                for _ in 0..count {
+                    let mut batch = RecordBatch {
+                        partition_leader_epoch: leader_epoch,
+                        records: vec![Record::default()],
+                        ..RecordBatch::default()
+                    };
+                    part.log.lock().unwrap().append(&mut batch).unwrap();
+                }
+            }
+            let resp = fetch_response(
+                TOPIC,
+                WIRE_TOPIC_ID,
+                PartitionData {
+                    partition_index: PARTITION,
+                    error_code: codes::NONE,
+                    diverging_epoch: EpochEndOffset {
+                        epoch,
+                        end_offset,
+                        ..EpochEndOffset::default()
+                    },
+                    ..PartitionData::default()
+                },
+            );
+
+            let action = handle_response(resp, &cfg, cfg.leader_epoch.0).await;
+
+            assert!(action == RowAction::Continue, "{name}");
+            assert!(part.log_end_offset() == Offset(expected_end), "{name}");
+            let epochs: Vec<(i32, i64)> = part
+                .log
+                .lock()
+                .unwrap()
+                .epoch_checkpoint()
+                .entries()
+                .iter()
+                .map(|entry| (entry.epoch.0, entry.start_offset.0))
+                .collect();
+            assert!(epochs == expected_epochs, "{name}");
+        }
+    }
+
     #[tokio::test]
     async fn failed_append_leaves_log_retryable() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
         let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
-
-        let bad = fetch_response(
-            TOPIC,
-            WIRE_TOPIC_ID,
-            PartitionData {
-                partition_index: PARTITION,
-                error_code: codes::NONE,
-                records: Some(RecordsPayload::V2(vec![one_record_batch(2)])),
-                ..PartitionData::default()
-            },
-        );
-        assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
-        assert!(part.log_end_offset() == Offset(0));
-
-        let retry = fetch_response(
-            TOPIC,
-            WIRE_TOPIC_ID,
-            PartitionData {
-                partition_index: PARTITION,
-                error_code: codes::NONE,
-                records: Some(RecordsPayload::V2(vec![one_record_batch(0)])),
-                ..PartitionData::default()
-            },
-        );
-        assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        let respond = |base_offset| {
+            fetch_response(
+                TOPIC,
+                WIRE_TOPIC_ID,
+                PartitionData {
+                    partition_index: PARTITION,
+                    error_code: codes::NONE,
+                    records: Some(RecordsPayload::V2(vec![one_record_batch(base_offset)])),
+                    ..PartitionData::default()
+                },
+            )
+        };
+        assert!(handle_response(respond(0), &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         assert!(part.log_end_offset() == Offset(1));
+
+        // A batch that starts below the log end offset is a duplicate. The
+        // append is refused and leaves the log as it was.
+        let bad = respond(0);
+        assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        assert!(part.log_end_offset() == Offset(1));
+
+        let retry = respond(1);
+        assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        assert!(part.log_end_offset() == Offset(2));
+    }
+
+    /// A compacted leader's log has holes, so the batch after one starts past
+    /// the follower's log end offset. Kafka's `appendAsFollower` takes it, and
+    /// the follower's log end offset moves to the end of that batch, whether
+    /// the records arrive as decoded batches or as raw bytes.
+    #[tokio::test]
+    async fn a_batch_past_the_log_end_offset_is_replicated_across_the_hole() {
+        for raw in [false, true] {
+            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+            ensure_local_partition(&cfg).unwrap();
+            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+
+            // Offsets 1 to 4 were compacted away on the leader.
+            for base_offset in [0, 5] {
+                let mut batch = one_record_batch(base_offset);
+                batch.partition_leader_epoch = cfg.leader_epoch.0;
+                let records = if raw {
+                    let mut encoded = BytesMut::new();
+                    batch.encode(&mut encoded).unwrap();
+                    RecordsPayload::Raw(encoded.freeze())
+                } else {
+                    RecordsPayload::V2(vec![batch])
+                };
+                let response = fetch_response(
+                    TOPIC,
+                    WIRE_TOPIC_ID,
+                    PartitionData {
+                        partition_index: PARTITION,
+                        error_code: codes::NONE,
+                        records: Some(records),
+                        ..PartitionData::default()
+                    },
+                );
+                assert!(
+                    handle_response(response, &cfg, cfg.leader_epoch.0).await
+                        == RowAction::Continue
+                );
+            }
+
+            assert!(part.log_end_offset() == Offset(6), "raw: {raw}");
+        }
     }
 
     #[tokio::test]

@@ -36,12 +36,11 @@ pub(super) fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerE
 }
 
 /// Encode a successful `EndTxn` response. `producer_id` and `producer_epoch`
-/// are the post-completion identity. The epoch bumps at `TV >= 2`, or rolls to a
-/// new `producer_id` on epoch exhaustion; see
+/// are the post-completion identity. The epoch bumps for a `TV_2` client, that
+/// is `EndTxn` v5, or rolls to a new `producer_id` on epoch exhaustion; see
 /// [`next_producer_identity`](super::producer_identity::next_producer_identity). They
-/// are only on the wire at v5 (KIP-890). At lower versions the producer never
-/// observes them, and the persisted bump instead fences a stale-epoch producer
-/// on its next coordinator call.
+/// are only on the wire at v5 (KIP-890). A lower version never bumps the
+/// epoch, since its producer could not learn the new one.
 pub(super) fn encode_ok(
     version: i16,
     producer_id: i64,

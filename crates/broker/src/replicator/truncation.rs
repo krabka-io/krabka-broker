@@ -5,12 +5,16 @@
 //! `ListOffsets` and truncates to the one this replica has overrun.
 //! `FENCED_LEADER_EPOCH` runs the KIP-101 `OffsetForLeaderEpoch` lookup and
 //! truncates to the epoch boundary the leader reports.
+//! A KIP-320 `diverging_epoch` row intersects the leader's `(epoch, end
+//! offset)` with this replica's own epoch history before it truncates.
 //! `OFFSET_MOVED_TO_TIERED_STORAGE` runs the KIP-405
 //! `ListOffsets(EARLIEST_LOCAL_TIMESTAMP)` lookup and restarts the log at the
 //! leader's local log start.
 
+use krabka_ids::LeaderEpoch;
 use krabka_log::Offset;
 use krabka_protocol::owned::{
+    fetch_response::EpochEndOffset,
     list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
     list_offsets_response::ListOffsetsResponse,
     offset_for_leader_epoch_request::{
@@ -24,6 +28,62 @@ use super::{
     task_replication_target,
 };
 use crate::codes;
+
+/// Where this follower truncates for a KIP-320 `diverging_epoch` row, as
+/// `AbstractFetcherThread.getOffsetTruncationState` computes it.
+///
+/// `follower` is this replica's own `LeaderEpochFileCache.endOffsetFor`
+/// answer for the leader's epoch: the largest local epoch at or below it and
+/// where that epoch ends, or `(-1, -1)` when the history cannot place it.
+///
+/// - The leader's end offset is undefined: keep the log, and fetch on from the
+///   log end.
+/// - The local history cannot place the epoch: the leader's end offset, capped
+///   at the log end.
+/// - This replica does not know the leader's epoch (`follower.0` is a smaller
+///   one): only the end of that smaller epoch, capped at the log end. Kafka
+///   truncates there and asks `OffsetsForLeaderEpoch` again. The next `Fetch`
+///   asks the same question in band, from the epoch this replica now ends in,
+///   so the loop that follows needs no separate round trip.
+/// - Otherwise the lower of this replica's end for the epoch and the leader's,
+///   capped at the log end.
+fn diverging_truncation_offset(
+    follower: (LeaderEpoch, Offset),
+    leader_epoch: LeaderEpoch,
+    leader_end: Offset,
+    log_end: Offset,
+) -> Offset {
+    let (follower_epoch, follower_end) = follower;
+    if leader_end < Offset(0) {
+        log_end
+    } else if follower_end < Offset(0) {
+        leader_end.min(log_end)
+    } else if follower_epoch != leader_epoch {
+        follower_end.min(log_end)
+    } else {
+        follower_end.min(leader_end).min(log_end)
+    }
+}
+
+/// Where the local log of `part` truncates for the leader's `diverging`
+/// epoch and end offset. See [`diverging_truncation_offset`].
+pub(super) fn diverging_epoch_truncation_target(
+    part: &crate::partition::Partition,
+    diverging: &EpochEndOffset,
+) -> Offset {
+    let leader_epoch = LeaderEpoch(diverging.epoch);
+    let log = part.log.lock().expect("log mutex poisoned");
+    let log_end = log.log_end_offset();
+    let follower = log
+        .epoch_checkpoint()
+        .epoch_and_offset_for(leader_epoch, log_end);
+    diverging_truncation_offset(
+        follower,
+        leader_epoch,
+        Offset(diverging.end_offset),
+        log_end,
+    )
+}
 
 /// Kafka's `ListOffsetsRequest.LATEST_TIMESTAMP`: a follower's `ListOffsets`
 /// is answered with the leader's log end offset.
@@ -541,6 +601,90 @@ mod tests {
         ensure_local_partition,
         test_support::{LEADER_ID, NODE_ID, PARTITION, TOPIC, image_with_leader, test_config},
     };
+
+    /// One row per branch of `getOffsetTruncationState`.
+    #[test]
+    fn diverging_truncation_offset_follows_kafka_get_offset_truncation_state() {
+        let unplaced = (LeaderEpoch(-1), Offset(-1));
+        // (name, this replica's endOffsetFor, leader epoch, leader end, log end,
+        // expected offset)
+        for (name, follower, leader_epoch, leader_end, log_end, expected) in [
+            (
+                "the leader's end offset is undefined",
+                (LeaderEpoch(4), Offset(8)),
+                4,
+                -1,
+                9,
+                9,
+            ),
+            (
+                "the local epochs cannot place the epoch",
+                unplaced,
+                6,
+                12,
+                15,
+                12,
+            ),
+            (
+                "the local epochs cannot place the epoch, past the log end",
+                unplaced,
+                6,
+                20,
+                15,
+                15,
+            ),
+            (
+                "the epoch is unknown here: only the end of the smaller epoch",
+                (LeaderEpoch(4), Offset(10)),
+                5,
+                12,
+                15,
+                10,
+            ),
+            (
+                "the epoch is unknown here, and that end is past the log end",
+                (LeaderEpoch(4), Offset(10)),
+                5,
+                12,
+                8,
+                8,
+            ),
+            (
+                "a known epoch: the leader ends first",
+                (LeaderEpoch(5), Offset(12)),
+                5,
+                10,
+                15,
+                10,
+            ),
+            (
+                "a known epoch: this replica ends first",
+                (LeaderEpoch(5), Offset(10)),
+                5,
+                12,
+                15,
+                10,
+            ),
+            (
+                "a known epoch: the log ends first",
+                (LeaderEpoch(5), Offset(12)),
+                5,
+                14,
+                11,
+                11,
+            ),
+        ] {
+            assert!(
+                diverging_truncation_offset(
+                    follower,
+                    LeaderEpoch(leader_epoch),
+                    Offset(leader_end),
+                    Offset(log_end),
+                ) == Offset(expected),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn offset_epoch_request_and_connection_options_preserve_identity_fields() {

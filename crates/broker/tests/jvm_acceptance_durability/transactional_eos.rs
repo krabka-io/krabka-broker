@@ -128,9 +128,11 @@ async fn transactional_console_producer_eos() {
     /// rejected client-side by the `TopicCommand` in the image this suite
     /// pins. Kafka floors its broker-level `log.segment.bytes` at 1 MiB too,
     /// but that validates a parsed broker config; the harness sets the struct
-    /// field directly, as Kafka's own tests do. 14 bytes is below any batch,
-    /// so no batch can ever fit twice.
-    const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(14);
+    /// field directly, as Kafka's own tests do. 128 bytes is above one batch
+    /// (a one-record batch or a marker is about 75 bytes; `UnifiedLog.append`
+    /// refuses a batch larger than the segment with `RECORD_LIST_TOO_LARGE`) and
+    /// below two, so no batch can ever fit twice.
+    const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(128);
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(

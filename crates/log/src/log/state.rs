@@ -52,11 +52,38 @@ impl Log {
     /// [`Log::log_start_offset`]: on a tiered partition whose local segments
     /// were evicted, the inferred floor sits above everything the archive
     /// holds, so refusing below it hides readable records and deleting below
-    /// it destroys them. Nothing durable carries the floor across a restart
-    /// yet, so a reopened log answers `None` until something moves it again.
+    /// it destroys them. The log-start checkpoint carries an established floor
+    /// across a restart, so a reopened log answers `None` only when nobody has
+    /// moved it.
     #[must_use]
     pub fn established_log_start(&self) -> Option<Offset> {
         self.start_offset_established.then_some(self.start_offset)
+    }
+
+    /// The epoch of the earliest leader-epoch entry, when a log start that
+    /// somebody established truncated the cache to it: Kafka's
+    /// `leaderEpochCache.earliestEntry` after `truncateFromStart(logStartOffset)`.
+    ///
+    /// Only then does the entry say something about the remote tier. Kafka's
+    /// `RemoteLogManager` deletes a remote segment whose epochs all lie below
+    /// it (`deleteLogSegmentsDueToLeaderEpochCacheTruncation`), which is right
+    /// for the epoch that owns the log start, because every offset from there
+    /// on has that epoch or a later one. An earliest entry that no advance of
+    /// the log start put there (a cache that never held the older epochs, or
+    /// one cleared by [`Log::reset_to`] and refilled from the fetched
+    /// records) says nothing about them, so this answers `None`. The epoch
+    /// cache is cut from the start only by [`Log::set_log_start_offset`] and
+    /// by the log-start checkpoint [`Log::open`] restores, never by the
+    /// segments a tiered partition still holds locally, so a restart does not
+    /// move it.
+    #[must_use]
+    pub fn log_start_epoch(&self) -> Option<krabka_ids::LeaderEpoch> {
+        let start = self.established_log_start()?;
+        self.epoch_checkpoint
+            .entries()
+            .first()
+            .filter(|entry| entry.start_offset == start)
+            .map(|entry| entry.epoch)
     }
 
     /// The first offset the segments on disk begin at, before the global
@@ -132,6 +159,21 @@ impl Log {
                 .retain(|_, marker_offset| *marker_offset >= new_start);
             self.refresh_lso()?;
         }
+        Ok(())
+    }
+
+    /// Move the log start down to `ceiling` when it sits above it. Truncation
+    /// is the one caller: Kafka's `UnifiedLog.truncateTo` sets
+    /// `logStartOffset = Math.min(targetOffset, logStartOffset)`, so a cut that
+    /// lands below a start `DeleteRecords` or retention had advanced pulls the
+    /// start back onto the retained data. The new value is checkpointed for
+    /// the same reason [`Log::set_log_start_offset`] checkpoints an advance.
+    pub(super) fn lower_log_start_offset(&mut self, ceiling: Offset) -> Result<(), LogError> {
+        if ceiling >= self.start_offset {
+            return Ok(());
+        }
+        log_start_offset_checkpoint::write(&*self.io, &self.dir, ceiling)?;
+        self.start_offset = ceiling;
         Ok(())
     }
 
@@ -482,7 +524,7 @@ impl Log {
 mod tests {
     use assert2::check;
     use krabka_ids::LeaderEpoch;
-    use krabka_units::prelude::{kibibytes, minutes};
+    use krabka_units::prelude::{bytes, kibibytes, minutes};
     use tempfile::tempdir;
 
     use super::*;
@@ -596,6 +638,56 @@ mod tests {
         drop(log);
         let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
         check!(reopened.epoch_checkpoint().entries() == &expected[..]);
+    }
+
+    /// The epoch the remote tier's leader-epoch-cache cleanup may measure
+    /// against is the earliest cache entry an advance of the log start put
+    /// there (#1200). The segments a tiered partition still holds locally
+    /// are not that: evicting them after the archive took them, and a restart
+    /// on what is left, leave the whole epoch history in place and answer
+    /// `None`, so the archive's older epochs are never mistaken for a
+    /// truncated lineage. A `DeleteRecords`-style advance is one, and it is
+    /// still one after a restart.
+    #[test]
+    fn the_log_start_epoch_comes_only_from_an_established_log_start() {
+        let config = LogConfig {
+            segment_size: bytes(1),
+            remote_storage_enable: true,
+            ..LogConfig::default()
+        };
+        // Three batches of three records, each rolling into its own segment:
+        // epoch 1 at 0, epoch 2 at 3, epoch 4 at 6.
+        let filled = |dir: &std::path::Path| {
+            let mut log = Log::open(dir, config.clone()).unwrap();
+            for epoch in [1, 2, 4] {
+                log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();
+            }
+            log
+        };
+
+        // Local retention drops the segments the archive holds, and the
+        // restart infers a log start from what is left.
+        let evicted = tempdir().unwrap();
+        let mut log = filled(evicted.path());
+        check!(log.log_start_epoch() == None, "nobody moved the log start");
+        check!(log.delete_local_segments_through(Offset(6)).unwrap() == 2);
+        drop(log);
+        let log = Log::open(evicted.path(), config.clone()).unwrap();
+        check!(log.epoch_checkpoint().entries().len() == 3);
+        check!(
+            log.log_start_epoch() == None,
+            "the restart inferred a start from the surviving segments"
+        );
+
+        // A start that was moved cuts the cache to the epoch that owns it, and
+        // the restart keeps both.
+        let moved = tempdir().unwrap();
+        let mut log = filled(moved.path());
+        log.set_log_start_offset(Offset(4)).unwrap();
+        check!(log.log_start_epoch() == Some(LeaderEpoch(2)));
+        drop(log);
+        let log = Log::open(moved.path(), config).unwrap();
+        check!(log.log_start_epoch() == Some(LeaderEpoch(2)));
     }
 
     /// The log's size is every segment's size added up, the sealed ones as

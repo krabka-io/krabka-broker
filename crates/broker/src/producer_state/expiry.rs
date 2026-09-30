@@ -12,19 +12,20 @@ use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::Mutex;
 
 use super::{PartitionMap, PartitionProducerState, ProducerState};
-use crate::partition::LogOffset;
 
 impl ProducerState {
     /// Snapshot of currently-active producers on `(topic, partition)`.
     ///
-    /// The map holds `producer_id` → that producer's last-accepted-batch
-    /// `base_offset`. A producer is "active" unless
+    /// The map holds `producer_id` → that producer's last record, as Kafka's
+    /// `UnifiedLog.lastRecordsOfActiveProducers` reads it: the last offset of
+    /// its last data batch (none for a producer that only has transaction
+    /// markers) and its current epoch. A producer is "active" unless
     /// [`ProducerEntry::is_expired`](super::ProducerEntry::is_expired) holds,
     /// the predicate Kafka's `producer.id.expiration.ms` sweep uses. This
     /// function excludes expired producers.
     ///
     /// The cleaner calls it to build a `CompactionContext`. The cleaner must
-    /// keep an active producer's last batch with `RETAIN_EMPTY` even when
+    /// keep an active producer's last record with `RETAIN_EMPTY` even when
     /// compaction removes all of its records, so the producer's
     /// sequence/epoch state survives.
     ///
@@ -40,7 +41,7 @@ impl ProducerState {
         partition: PartitionIndex,
         now_ms: i64,
         expiration: Time,
-    ) -> HashMap<i64, LogOffset> {
+    ) -> HashMap<i64, krabka_log::ProducerLastRecord> {
         // Mirror `snapshot`: avoid inserting an empty entry for an unknown
         // partition (the borrowed lookups allocate nothing on a miss).
         let Some(topic_ref) = self.by_topic.get(topic) else {
@@ -60,7 +61,15 @@ impl ProducerState {
             .entries
             .iter()
             .filter(|(_pid, e)| !e.is_expired(now_ms, expiration.millis_i64()))
-            .map(|(pid, e)| (pid.get(), e.base_offset))
+            .map(|(pid, e)| {
+                let last_record = krabka_log::ProducerLastRecord {
+                    // A marker-only entry has no data batch: `last_offset < 0`.
+                    last_data_offset: (e.last_offset >= 0)
+                        .then_some(krabka_log::Offset(e.last_offset)),
+                    producer_epoch: e.epoch,
+                };
+                (pid.get(), last_record)
+            })
             .collect()
     }
 
@@ -223,16 +232,21 @@ mod tests {
     #[tokio::test]
     async fn active_snapshot_excludes_expired_includes_active() {
         let s = ProducerState::new();
-        // pid 1: last batch base_offset 10 at t=1_000; pid 2: base_offset 20
-        // at t=9_500.
+        // pid 1: last batch at offset 10 at t=1_000; pid 2: offset 20 at
+        // t=9_500.
         commit!(s, "t", PartitionIndex(0), 1, 0, 0, 0, 10, 1_000).await;
         commit!(s, "t", PartitionIndex(0), 2, 0, 0, 0, 20, 9_500).await;
         // now = 10_000, expiration = 5_000 → pid 1 (age 9_000) excluded;
-        // pid 2 (age 500) included with its base_offset.
+        // pid 2 (age 500) included with its last record.
         let snap = s
             .active_snapshot("t", PartitionIndex(0), 10_000, secs(5))
             .await;
-        let expected: HashMap<i64, i64> = maplit::hashmap! {2 => 20};
+        let expected = maplit::hashmap! {
+            2 => krabka_log::ProducerLastRecord {
+                last_data_offset: Some(krabka_log::Offset(20)),
+                producer_epoch: 0,
+            },
+        };
         assert!(snap == expected);
         // Unknown partition / topic → empty without panicking.
         for (topic, partition) in [("t", PartitionIndex(99)), ("nope", PartitionIndex(0))] {
@@ -241,6 +255,41 @@ mod tests {
                 "case: {topic}/{partition}"
             );
         }
+    }
+
+    /// A producer that only has a transaction marker left has no data offset
+    /// (Kafka's `LastRecord.lastDataOffset` is empty) and keeps its epoch, so
+    /// the cleaner keeps the marker of that epoch (#1198).
+    #[tokio::test]
+    async fn active_snapshot_reports_no_data_offset_for_a_marker_only_producer() {
+        let s = ProducerState::new();
+        s.mirror_log_entries(
+            "t",
+            PartitionIndex(0),
+            vec![krabka_log::ProducerSnapshotEntry {
+                producer_id: krabka_log::ProducerId(1000),
+                producer_epoch: 4,
+                last_sequence: -1,
+                last_offset: krabka_log::Offset(-1),
+                offset_delta: 0,
+                timestamp: 9_500,
+                coordinator_epoch: 0,
+                current_txn_first_offset: None,
+            }],
+        )
+        .await;
+
+        let snap = s
+            .active_snapshot("t", PartitionIndex(0), 10_000, secs(5))
+            .await;
+
+        let expected = maplit::hashmap! {
+            1000 => krabka_log::ProducerLastRecord {
+                last_data_offset: None,
+                producer_epoch: 4,
+            },
+        };
+        assert!(snap == expected);
     }
 
     #[tokio::test]

@@ -19,15 +19,16 @@ impl ControllerHandle {
         max_size: ByteSize,
     ) -> crate::kraft::MetadataFetchSlice {
         let off = i64::try_from(fetch_offset).unwrap_or(i64::MAX);
-        self.engine.metadata_fetch(off, max_size).await.unwrap_or(
-            crate::kraft::MetadataFetchSlice {
+        self.engine
+            .metadata_fetch(off, max_size, None)
+            .await
+            .unwrap_or(crate::kraft::MetadataFetchSlice {
                 records: bytes::Bytes::new(),
                 snapshot_id: None,
                 log_start_offset: 0,
                 high_watermark: 0,
                 quorum_high_watermark: 0,
-            },
-        )
+            })
     }
 
     /// Dial a controller-listener `addr` and issue one `API_KEY_METADATA_FETCH`.
@@ -47,8 +48,11 @@ impl ControllerHandle {
             // `max_bytes` is the KIP-595-shaped `int32` on the Krabka observer
             // wire; the quantity converts here and nowhere deeper.
             max_bytes: max_size.bytes_i32(),
+            // A one-shot read, not a replica: the leader tracks nothing for it.
+            replica_id: -1,
+            replica_directory_id: uuid::Uuid::nil(),
         };
-        let mut body = Vec::with_capacity(12);
+        let mut body = Vec::with_capacity(32);
         req.encode_v0(&mut body);
 
         let opts = krabka_client_core::ConnectionOptions {

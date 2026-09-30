@@ -25,6 +25,7 @@ use super::{
     seed::apply_seed,
     topic_deletion::reply_delete_topic_offsets,
     views::{build_classic_view, build_describe, inspect_any},
+    waiters::drain_parked_for_unload,
 };
 use crate::{
     codes,
@@ -96,7 +97,7 @@ pub(super) async fn handle_actor_message(
             request,
             client_id,
             client_host,
-            regex_authorized_topics,
+            regex_resolver,
             reply,
         } => {
             handle_actor_heartbeat(
@@ -107,7 +108,7 @@ pub(super) async fn handle_actor_message(
                     id: &client_id,
                     host: &client_host,
                 },
-                &regex_authorized_topics,
+                &*regex_resolver,
                 reply,
             )
             .await
@@ -260,6 +261,11 @@ pub(super) async fn handle_actor_message(
             true
         }
         GroupActorMessage::Shutdown(reply) => {
+            // Kafka's `GroupMetadataManager.onUnloaded`: a parked `JoinGroup`
+            // or `SyncGroup` learns that this broker no longer coordinates the
+            // group, so its client looks the coordinator up again instead of
+            // retrying here.
+            drain_parked_for_unload(&mut parked.joiners, &mut parked.followers);
             let _ = reply.send(());
             false
         }
@@ -283,6 +289,104 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::actor::test_support::make_coordinator;
+
+    /// Kafka's `GroupMetadataManager.onUnloaded` answers every awaiting
+    /// `JoinGroup` of a `PreparingRebalance` group, under the member's own id,
+    /// and every awaiting `SyncGroup` of a `CompletingRebalance` group with
+    /// `NOT_COORDINATOR`, so the client looks the coordinator up again instead
+    /// of joining the old broker once more.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_answers_parked_joiners_and_followers_not_coordinator() {
+        use krabka_protocol::owned::{
+            join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+            sync_group_request::SyncGroupRequest,
+        };
+
+        use crate::coordinator::unified::actor::{
+            JoinResult, SyncResult,
+            test_support::{completing_classic_group, rpc, subscription_blob},
+        };
+
+        // A member that waits in `JoinGroup`, behind the initial delay.
+        let (coord, _log) = make_coordinator();
+        let handle = coord.get_or_create_classic("g");
+        coord.mark_classic("g");
+        let member_id = rpc::classic_join(&handle, "", "t").await.member_id;
+        let (join_tx, join_rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::ClassicJoin {
+                req: JoinGroupRequest {
+                    group_id: "g".into(),
+                    member_id: member_id.clone(),
+                    protocol_type: "consumer".into(),
+                    protocols: vec![JoinGroupRequestProtocol {
+                        name: "range".into(),
+                        metadata: subscription_blob(&["t"]),
+                        ..Default::default()
+                    }],
+                    session_timeout_ms: 30_000,
+                    rebalance_timeout_ms: 60_000,
+                    ..Default::default()
+                },
+                version: 4,
+                client_id: "client-a".into(),
+                client_host: "127.0.0.1".into(),
+                reply: join_tx,
+            })
+            .await
+            .unwrap();
+        let (ack, acked) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Shutdown(ack))
+            .await
+            .unwrap();
+        acked.await.unwrap();
+        assert!(
+            join_rx.await.unwrap()
+                == JoinResult {
+                    error_code: codes::NOT_COORDINATOR,
+                    member_id,
+                    ..JoinResult::default()
+                }
+        );
+
+        // A follower that waits in `SyncGroup` for the leader.
+        let (coord, _log) = make_coordinator();
+        let group = completing_classic_group(&["m1", "m2"]);
+        let generation = group.as_classic().unwrap().generation_id;
+        coord.seed_classic("g", Box::new(group));
+        let handle = coord.find("g").unwrap();
+        let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::ClassicSync {
+                req: SyncGroupRequest {
+                    group_id: "g".into(),
+                    generation_id: generation,
+                    member_id: "m2".into(),
+                    ..Default::default()
+                },
+                reply: sync_tx,
+            })
+            .await
+            .unwrap();
+        let (ack, acked) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Shutdown(ack))
+            .await
+            .unwrap();
+        acked.await.unwrap();
+        assert!(
+            sync_rx.await.unwrap()
+                == SyncResult {
+                    error_code: codes::NOT_COORDINATOR,
+                    ..SyncResult::default()
+                }
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_seed_hydrates_group_and_blocks_delete_when_nonempty() {

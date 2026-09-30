@@ -89,6 +89,11 @@ pub fn supported_operations(resource_type: ResourceType) -> &'static [AclOperati
 /// `principal@host`. The bit for an operation is
 /// `1 << operation_to_wire(op)`, which matches Kafka's
 /// `AuthorizationHelper.authorizedOperations(...)`.
+///
+/// Kafka builds each `Action` with `logIfAllowed` and `logIfDenied` off, since
+/// a probe of every supported operation is no request to do any of them, so the
+/// checks go through [`Authorizer::authorize_quiet`]: a Deny is not audited or
+/// counted.
 #[must_use]
 pub fn authorized_operations_bits(
     authorizer: &dyn Authorizer,
@@ -100,7 +105,7 @@ pub fn authorized_operations_bits(
 ) -> i32 {
     let mut bits: i32 = 0;
     for &op in supported_operations(resource_type) {
-        let allow = authorizer.authorize(
+        let allow = authorizer.authorize_quiet(
             image,
             &AuthorizationRequest {
                 principal,

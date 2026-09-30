@@ -123,10 +123,23 @@ async fn seed_token(
     owner: KafkaPrincipal,
     renewers: Vec<KafkaPrincipal>,
 ) {
+    let requester = owner.clone();
+    seed_token_requested_by(controller, token_id, owner, requester, renewers).await;
+}
+
+/// A token that `requester` created for `owner`, as `CreateDelegationToken`
+/// stores it when a principal with `CreateTokens` mints for another owner.
+async fn seed_token_requested_by(
+    controller: &ControllerHandle,
+    token_id: &str,
+    owner: KafkaPrincipal,
+    requester: KafkaPrincipal,
+    renewers: Vec<KafkaPrincipal>,
+) {
     let rec = DelegationTokenRecord {
         token_id: token_id.into(),
         owner,
-        hmac: vec![0u8; 32],
+        requester,
         issue_timestamp_ms: 1_000,
         expiry_timestamp_ms: 2_000,
         max_timestamp_ms: 3_000,
@@ -466,5 +479,121 @@ async fn unrelated_caller_sees_nothing() {
     );
     assert!(resp.error_code == 0);
     assert!(resp.tokens.is_empty());
+    controller.cancel().await;
+}
+
+/// KIP-373: `TokenInformation.ownerOrRenewer` also matches the requester, the
+/// principal that created a token for another owner. `filterToken` applies it
+/// both to the `owners` filter and to the check that the caller may see the
+/// token, so the minting principal finds and sees the token without any
+/// `Describe` ACL.
+#[tokio::test]
+async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
+    // (caller, `owners` filter, expected token ids)
+    type Case<'a> = (&'a str, Option<&'a [&'a str]>, &'a [&'a str]);
+    let cases: [Case<'_>; 7] = [
+        ("admin", None, &["t-minted"]),
+        ("admin", Some(&["admin"]), &["t-minted"]),
+        ("admin", Some(&["alice"]), &["t-minted"]),
+        ("admin", Some(&["carol"]), &[]),
+        ("alice", None, &["t-minted"]),
+        ("bob", Some(&["admin"]), &["t-minted"]),
+        ("eve", Some(&["admin"]), &[]),
+    ];
+
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    seed_token_requested_by(
+        &controller,
+        "t-minted",
+        kp("alice"),
+        kp("admin"),
+        vec![kp("bob")],
+    )
+    .await;
+    seed_token(&controller, "t-own", kp("carol"), vec![]).await;
+
+    for (caller, owners, expected) in cases {
+        let req = DescribeDelegationTokenRequest {
+            owners: owners.map(|names| {
+                names
+                    .iter()
+                    .map(|name| DescribeDelegationTokenOwner {
+                        principal_type: "User".into(),
+                        principal_name: (*name).into(),
+                        ..Default::default()
+                    })
+                    .collect()
+            }),
+            ..Default::default()
+        };
+        let resp = handle(
+            &req,
+            &authed(caller),
+            Some(&secret),
+            &*controller,
+            &peer(),
+            &simple_authz(),
+        );
+        let visible: std::collections::HashSet<&str> = token_ids(&resp);
+        let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
+        assert!(
+            (resp.error_code, visible) == (0, expected),
+            "caller {caller}, owners {owners:?}"
+        );
+    }
+    controller.cancel().await;
+}
+
+/// The response names the requester that created the token, not the owner:
+/// `DescribeDelegationTokenResponse` v3 `TokenRequesterPrincipalType` and
+/// `TokenRequesterPrincipalName` (Kafka's `tokenInfo().tokenRequester()`).
+#[tokio::test]
+async fn describe_response_reports_the_requester_that_created_the_token() {
+    use krabka_protocol::owned::describe_delegation_token_response::{
+        DescribedDelegationToken, DescribedDelegationTokenRenewer,
+    };
+
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    seed_token_requested_by(
+        &controller,
+        "t-minted",
+        kp("alice"),
+        kp("admin"),
+        vec![kp("bob")],
+    )
+    .await;
+
+    let resp = handle(
+        &no_owner_filter(),
+        &authed("alice"),
+        Some(&secret),
+        &*controller,
+        &peer(),
+        &simple_authz(),
+    );
+    assert!(
+        resp.tokens
+            == vec![DescribedDelegationToken {
+                principal_type: "User".into(),
+                principal_name: "alice".into(),
+                token_requester_principal_type: "User".into(),
+                token_requester_principal_name: "admin".into(),
+                issue_timestamp: 1_000,
+                expiry_timestamp: 2_000,
+                max_timestamp: 3_000,
+                token_id: "t-minted".into(),
+                hmac: bytes::Bytes::from(krabka_security::compute_token_hmac(b"k", "t-minted")),
+                renewers: vec![DescribedDelegationTokenRenewer {
+                    principal_type: "User".into(),
+                    principal_name: "bob".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]
+    );
     controller.cancel().await;
 }

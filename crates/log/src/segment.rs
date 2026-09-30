@@ -13,6 +13,8 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt};
 
 mod activation;
 mod append;
+#[cfg(test)]
+mod dump_log_tests;
 mod header_walk;
 mod io;
 mod lifecycle;
@@ -62,6 +64,10 @@ pub struct Segment {
     sealed: bool,
     /// Highest timestamp observed across all batches written here.
     max_timestamp: i64,
+    /// Last absolute offset of the first batch that carried `max_timestamp`:
+    /// Kafka's `shallowOffsetOfMaxTimestampSoFar`. The time index pairs the
+    /// running maximum timestamp with this offset.
+    max_timestamp_offset: Offset,
     /// Last absolute offset (inclusive) of any batch in this segment.
     last_offset: Offset,
 }

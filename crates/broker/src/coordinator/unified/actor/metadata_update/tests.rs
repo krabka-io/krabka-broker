@@ -1,7 +1,7 @@
 //! Tests for the metadata refresh that a metadata update asks of a consumer
 //! group, through the group actor's mailbox.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
@@ -38,7 +38,7 @@ async fn heartbeat(
             request,
             client_id: "client".into(),
             client_host: "host".into(),
-            regex_authorized_topics: HashSet::new(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply,
         })
         .await
@@ -161,16 +161,15 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             update: &["orders"],
             expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
         },
-        // The target loses the partitions. Krabka moves the member to the new
-        // epoch at once. Kafka's `CurrentAssignmentBuilder` keeps it at epoch
-        // 1 until the member acknowledges the revocation, which is outside the
-        // refresh.
+        // The target loses the partitions. Kafka's `CurrentAssignmentBuilder`
+        // keeps the member at epoch 1 until it acknowledges the revocation, and
+        // its heartbeat answer already carries the smaller assignment.
         Row {
             name: "the subscribed topic is deleted",
             before: snapshot_of(&[("orders", 1, 2)]),
             after: snapshot_of(&[]),
             update: &["orders"],
-            expected: answer(2, Some(vec![])),
+            expected: answer(1, Some(vec![])),
         },
         // The update names `payments` only. The group does not read the
         // metadata again, so it does not see that `orders` grew in the same
@@ -287,9 +286,9 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
     let coordinator = Arc::new(GroupCoordinator::new(
         NextGenConfig {
             migration_policy: ConsumerGroupMigrationPolicy::Upgrade,
-            ..NextGenConfig::default()
+            ..NextGenConfig::assigning_at_once()
         },
-        ShareGroupConfig::default(),
+        ShareGroupConfig::assigning_at_once(),
         metadata.clone(),
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),

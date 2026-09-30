@@ -1,13 +1,11 @@
-//! Session allocation and the LRU eviction that makes room for it.
+//! Session allocation and the eviction that makes room for it.
 //!
-//! `try_allocate` picks the victim when the cache is full, where a
-//! non-privileged caller may displace only a non-privileged session, then
-//! draws a fresh wire-legal session id and inserts the new session. It refuses
-//! the allocation when no session may be displaced, and the caller then falls
-//! back to a sessionless response.
-//!
-//! The victim comes from the recency order in `super::order`, so choosing it
-//! costs the same whether the cache holds one session or all of them.
+//! `try_allocate` asks `super::order` for a victim when the cache is full,
+//! then draws a fresh wire-legal session id and inserts the new session. The
+//! order names a victim only where Kafka's `FetchSessionCacheShard.tryEvict`
+//! does: a session unused for more than two minutes, or a cheaper session that
+//! this caller may displace. It refuses the allocation otherwise, and the
+//! caller then falls back to a sessionless response.
 
 use std::{collections::HashMap, sync::atomic::Ordering};
 
@@ -46,18 +44,18 @@ impl FetchSessionCache {
             return INVALID_SESSION_ID;
         }
         let mut guard = self.inner.lock().expect("poisoned");
+        let now = self.clock.now().elapsed_since_origin();
 
         if guard.sessions.len() >= self.max_slots {
-            // Pick a victim: LRU non-privileged session if one exists,
-            // otherwise (only when the caller is itself privileged) the
-            // LRU session of any kind. Non-privileged callers cannot
-            // evict privileged sessions — they fall back to sessionless.
-            // The order index answers this in O(1); it does not scan.
-            let Some(id) = guard.order.victim(privileged) else {
+            // A stale session, or a cheaper one this caller may displace.
+            // Otherwise the newcomer is refused, however full the cache is,
+            // and answers sessionless: displacing a healthy session would
+            // only make its client reconnect and displace another.
+            let Some(id) = guard.order.victim(privileged, partitions.len(), now) else {
                 return INVALID_SESSION_ID;
             };
             let evicted = guard.sessions.remove(&id).expect("victim present");
-            guard.order.remove(id, evicted.privileged);
+            guard.order.remove(id);
             self.num_sessions.fetch_sub(1, Ordering::Relaxed);
             self.num_partitions
                 .fetch_sub(evicted.partitions.len(), Ordering::Relaxed);
@@ -103,9 +101,7 @@ impl FetchSessionCache {
         };
         let added_partitions = session.partitions.len();
         guard.sessions.insert(id, session);
-        guard
-            .order
-            .touch(id, privileged, self.clock.now().elapsed_since_origin());
+        guard.order.insert(id, privileged, added_partitions, now);
         self.num_sessions.fetch_add(1, Ordering::Relaxed);
         self.num_partitions
             .fetch_add(added_partitions, Ordering::Relaxed);
@@ -115,12 +111,15 @@ impl FetchSessionCache {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use assert2::{assert, check};
     use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
     use super::*;
     use crate::fetch_session::{
         SessionDecision,
+        order::MIN_EVICTION,
         test_support::{NAME_FETCH_VERSION, TICK, manual_cache, req},
     };
 
@@ -163,23 +162,165 @@ mod tests {
         assert!(id == INVALID_SESSION_ID);
     }
 
-    #[test]
-    fn lru_eviction_drops_oldest_non_privileged() {
-        let (cache, clock) = manual_cache(2);
-        let a = cache.try_allocate(false, false, "a".into(), vec![]);
-        // Advance logical time so each session gets a strictly increasing
-        // recency stamp, making `a` the unambiguous LRU victim — no sleep.
-        clock.advance(TICK).expect("manual time moves forward");
-        let b = cache.try_allocate(false, false, "b".into(), vec![]);
-        clock.advance(TICK).expect("manual time moves forward");
-        let c = cache.try_allocate(false, false, "c".into(), vec![]);
-        assert!(cache.len() == 2);
-        assert!(cache.evictions_total() == 1);
-        // `a` (oldest) was evicted; `b` and `c` remain.
-        let g = cache.inner.lock().unwrap();
-        let mut ids: Vec<i32> = g.sessions.keys().copied().collect();
+    /// One second past the minimum: a session idle this long is stale, and a
+    /// session this old may be displaced by a larger newcomer.
+    const PAST_MIN_EVICTION: Duration = Duration::from_secs(121);
+
+    /// `count` cached partitions of topic `t`.
+    fn partitions(count: i32) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+        (0..count)
+            .map(|partition| {
+                (
+                    FetchSessionKey {
+                        topic_name: "t".into(),
+                        topic_id: WireUuid::ZERO,
+                        partition,
+                    },
+                    CachedPartitionState::default(),
+                )
+            })
+            .collect()
+    }
+
+    /// The ids of the live sessions, ascending.
+    fn live_ids(cache: &FetchSessionCache) -> Vec<FetchSessionId> {
+        let guard = cache.inner.lock().unwrap();
+        let mut ids: Vec<FetchSessionId> = guard.sessions.keys().copied().collect();
         ids.sort_unstable();
-        assert!(!ids.contains(&a) && ids == vec![b, c]);
+        ids
+    }
+
+    /// An incremental fetch on `id` that changes nothing: it uses the session,
+    /// which is what Kafka's `touch` records.
+    fn use_session(cache: &FetchSessionCache, id: FetchSessionId, epoch: i32) {
+        assert!(matches!(
+            cache.classify(&req(id, epoch, vec![], vec![]), NAME_FETCH_VERSION),
+            SessionDecision::Incremental { .. }
+        ));
+    }
+
+    /// A full cache hands a newcomer nothing while its sessions are in use.
+    /// Displacing one would make its client reconnect with a full fetch and
+    /// displace another, so Kafka answers the newcomer sessionless instead.
+    #[test]
+    fn a_full_cache_refuses_a_newcomer_while_its_sessions_are_active() {
+        let (cache, clock) = manual_cache(2);
+        let a = cache.try_allocate(false, false, "a".into(), partitions(1));
+        clock.advance(TICK).expect("manual time moves forward");
+        let b = cache.try_allocate(false, false, "b".into(), partitions(1));
+        clock.advance(TICK).expect("manual time moves forward");
+
+        let newcomer = cache.try_allocate(false, false, "c".into(), partitions(100));
+
+        check!(newcomer == INVALID_SESSION_ID);
+        check!(cache.evictions_total() == 0);
+        check!(live_ids(&cache) == vec![a, b]);
+    }
+
+    /// The session unused for more than the minimum is displaced whoever asks
+    /// and whoever it belongs to, and however small the newcomer is. Its
+    /// neighbour, idle for less, stays.
+    #[test]
+    fn the_session_unused_for_more_than_the_minimum_is_displaced() {
+        let cases = [
+            ("consumer for consumer", false, false),
+            ("consumer for follower", false, true),
+            ("follower for consumer", true, false),
+            ("follower for follower", true, true),
+        ];
+        for (label, holder_is_follower, newcomer_is_follower) in cases {
+            let (cache, clock) = manual_cache(2);
+            let stale = cache.try_allocate(holder_is_follower, false, "a".into(), partitions(9));
+            clock
+                .advance(MIN_EVICTION / 2)
+                .expect("manual time moves forward");
+            let active = cache.try_allocate(holder_is_follower, false, "b".into(), partitions(9));
+            clock
+                .advance(MIN_EVICTION / 2 + Duration::from_secs(1))
+                .expect("manual time moves forward");
+
+            let newcomer = cache.try_allocate(newcomer_is_follower, false, "c".into(), vec![]);
+
+            check!(cache.evictions_total() == 1, "{label}");
+            check!(live_ids(&cache) == vec![active, newcomer], "{label}");
+            check!(!live_ids(&cache).contains(&stale), "{label}");
+        }
+    }
+
+    /// An incremental fetch is a use, so a busy session is not the stale one.
+    #[test]
+    fn an_incremental_fetch_keeps_a_session_from_going_stale() {
+        let (cache, clock) = manual_cache(2);
+        let busy = cache.try_allocate(false, false, "busy".into(), partitions(1));
+        let idle = cache.try_allocate(false, false, "idle".into(), partitions(1));
+
+        clock
+            .advance(Duration::from_secs(100))
+            .expect("manual time moves forward");
+        use_session(&cache, busy, 1);
+        clock
+            .advance(Duration::from_secs(30))
+            .expect("manual time moves forward");
+        // `idle` has gone 130 s unused and `busy` 30 s.
+        let newcomer = cache.try_allocate(false, false, "newcomer".into(), partitions(1));
+
+        check!(cache.evictions_total() == 1);
+        check!(live_ids(&cache) == vec![busy, newcomer]);
+        check!(!live_ids(&cache).contains(&idle));
+    }
+
+    /// Short of staleness, a consumer newcomer may displace a consumer session
+    /// that was created more than the minimum ago, when it caches more
+    /// partitions than that session does. Kafka keys the newcomer with id 0,
+    /// so on equal size it loses.
+    #[test]
+    fn a_larger_newcomer_displaces_a_smaller_session_older_than_the_minimum() {
+        let cases = [
+            ("larger", 3, true),
+            ("equal", 2, false),
+            ("smaller", 1, false),
+        ];
+        for (label, newcomer_partitions, displaces) in cases {
+            let (cache, clock) = manual_cache(1);
+            let held = cache.try_allocate(false, false, "held".into(), partitions(2));
+            clock
+                .advance(PAST_MIN_EVICTION)
+                .expect("manual time moves forward");
+            // The use just now is what makes the session evictable by its age,
+            // and it keeps the session from being stale.
+            use_session(&cache, held, 1);
+
+            let newcomer =
+                cache.try_allocate(false, false, "new".into(), partitions(newcomer_partitions));
+
+            check!((newcomer != INVALID_SESSION_ID) == displaces, "{label}");
+            check!(cache.evictions_total() == u64::from(displaces), "{label}");
+            check!(
+                live_ids(&cache)
+                    == if displaces {
+                        vec![newcomer]
+                    } else {
+                        vec![held]
+                    },
+                "{label}"
+            );
+        }
+    }
+
+    /// A follower fetch may displace a consumer session outright, whatever its
+    /// age or size: the replication that keeps the cluster in sync outranks a
+    /// consumer's incremental session.
+    #[test]
+    fn a_follower_displaces_a_consumer_session_that_is_still_active() {
+        let (cache, _clock) = manual_cache(1);
+        let consumer = cache.try_allocate(false, false, "consumer".into(), partitions(5));
+
+        let follower = cache.try_allocate(true, false, "follower".into(), vec![]);
+
+        check!(follower != INVALID_SESSION_ID);
+        check!(follower != consumer);
+        check!(cache.evictions_total() == 1);
+        check!(live_ids(&cache) == vec![follower]);
     }
 
     #[test]
@@ -194,132 +335,58 @@ mod tests {
         check!(cache.len() == 1);
     }
 
+    /// A follower session is displaced by another follower only when it is
+    /// stale, or older than the minimum and smaller than the newcomer.
     #[test]
-    fn privileged_can_evict_privileged() {
+    fn a_recent_follower_session_is_not_displaced_by_another_follower() {
         let (cache, clock) = manual_cache(1);
-        let p1 = cache.try_allocate(true, false, "f1".into(), vec![]);
-        // Advance so `f2` is strictly newer than `f1`; `f1` is the LRU victim.
+        let first = cache.try_allocate(true, false, "f1".into(), partitions(1));
         clock.advance(TICK).expect("manual time moves forward");
-        let p2 = cache.try_allocate(true, false, "f2".into(), vec![]);
-        // p2 gets the next monotonic id (p1 + 1) after evicting p1.
-        check!(p2 == p1 + 1);
-        check!(cache.len() == 1);
-        check!(cache.evictions_total() == 1);
-        let g = cache.inner.lock().unwrap();
-        assert!(!g.sessions.contains_key(&p1));
-        assert!(g.sessions.contains_key(&p2));
-    }
 
-    #[test]
-    fn incremental_fetch_moves_a_session_off_the_victim_slot() {
-        // The recency order is only useful if a live session's own traffic
-        // updates it. `refetched` is allocated first, so it starts as the
-        // victim; one incremental fetch on it must hand that role to `idle`.
-        //
-        // Each session is seeded with one cached partition: a session with no
-        // partitions never occurs against real Kafka (a full fetch with no
-        // partition data is never cached, and `classify` closes a session
-        // whose partition set becomes empty), so an empty-partition fixture
-        // here would exercise that close path instead of the recency touch
-        // this test is about.
-        let mk = |p| {
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: p,
-                },
-                CachedPartitionState::default(),
-            )
-        };
-        let (cache, clock) = manual_cache(2);
-        let refetched = cache.try_allocate(false, false, "refetched".into(), vec![mk(0)]);
-        clock.advance(TICK).expect("manual time moves forward");
-        let idle = cache.try_allocate(false, false, "idle".into(), vec![mk(0)]);
+        let second = cache.try_allocate(true, false, "f2".into(), partitions(50));
 
-        clock.advance(TICK).expect("manual time moves forward");
-        let incremental = req(refetched, 1, vec![], vec![]);
-        assert!(matches!(
-            cache.classify(&incremental, NAME_FETCH_VERSION),
-            SessionDecision::Incremental { .. }
-        ));
-
-        clock.advance(TICK).expect("manual time moves forward");
-        let newcomer = cache.try_allocate(false, false, "newcomer".into(), vec![]);
-        check!(cache.evictions_total() == 1);
-        let guard = cache.inner.lock().unwrap();
-        let mut ids: Vec<i32> = guard.sessions.keys().copied().collect();
-        ids.sort_unstable();
-        assert!(!ids.contains(&idle) && ids == vec![refetched, newcomer]);
-    }
-
-    #[test]
-    fn privileged_caller_takes_the_older_of_the_two_classes() {
-        // A follower may displace either class, so the victim is simply the
-        // oldest session, whichever class it belongs to. Run it both ways
-        // round so neither answer can come from a standing class preference.
-        let cases = [("follower is older", true), ("consumer is older", false)];
-        for (label, follower_first) in cases {
-            let (cache, clock) = manual_cache(2);
-            let first = cache.try_allocate(follower_first, false, "first".into(), vec![]);
-            clock.advance(TICK).expect("manual time moves forward");
-            let second = cache.try_allocate(!follower_first, false, "second".into(), vec![]);
-            clock.advance(TICK).expect("manual time moves forward");
-            let third = cache.try_allocate(true, false, "follower".into(), vec![]);
-
-            check!(cache.evictions_total() == 1, "{label}");
-            let g = cache.inner.lock().unwrap();
-            let mut ids: Vec<i32> = g.sessions.keys().copied().collect();
-            ids.sort_unstable();
-            check!(!ids.contains(&first), "{label}");
-            check!(ids == vec![second, third], "{label}");
-        }
+        check!(second == INVALID_SESSION_ID);
+        check!(cache.evictions_total() == 0);
+        check!(live_ids(&cache) == vec![first]);
     }
 
     #[test]
     fn a_closed_session_is_never_chosen_as_a_victim() {
-        // Close has to drop the session from the recency order as well as from
-        // the map. If it did not, the order would still name the closed
-        // session as the oldest and the next allocation into a full cache
+        // Close has to drop the session from the eviction index as well as
+        // from the map. If it did not, the index would still name the closed
+        // session as the stale one and the next allocation into a full cache
         // would go looking for a session that is no longer there.
         let (cache, clock) = manual_cache(2);
-        let closed = cache.try_allocate(false, false, "closed".into(), vec![]);
+        let closed = cache.try_allocate(false, false, "closed".into(), partitions(1));
         clock.advance(TICK).expect("manual time moves forward");
-        let oldest_live = cache.try_allocate(false, false, "oldest-live".into(), vec![]);
+        let oldest_live = cache.try_allocate(false, false, "oldest-live".into(), partitions(1));
         cache.close(closed);
 
         clock.advance(TICK).expect("manual time moves forward");
-        let refill = cache.try_allocate(false, false, "refill".into(), vec![]);
-        clock.advance(TICK).expect("manual time moves forward");
-        let newcomer = cache.try_allocate(false, false, "newcomer".into(), vec![]);
+        let refill = cache.try_allocate(false, false, "refill".into(), partitions(1));
+        clock
+            .advance(PAST_MIN_EVICTION)
+            .expect("manual time moves forward");
+        let newcomer = cache.try_allocate(false, false, "newcomer".into(), partitions(1));
 
-        // The cache refilled to {oldest_live, refill}; `newcomer` displaced
-        // `oldest_live`, the oldest session that is still there.
+        // The cache refilled to {oldest_live, refill}; both are stale by now,
+        // and `newcomer` displaced `oldest_live`, the one unused the longest.
         check!(cache.len() == 2);
-        let guard = cache.inner.lock().unwrap();
-        let mut ids: Vec<i32> = guard.sessions.keys().copied().collect();
-        ids.sort_unstable();
-        assert!(!ids.contains(&oldest_live) && ids == vec![refill, newcomer]);
+        check!(live_ids(&cache) == vec![refill, newcomer]);
+        check!(!live_ids(&cache).contains(&oldest_live));
     }
 
     #[test]
     fn counters_track_eviction() {
-        let cache = FetchSessionCache::new(1);
-        let mk = |p| {
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: p,
-                },
-                CachedPartitionState::default(),
-            )
-        };
-        cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
+        let (cache, clock) = manual_cache(1);
+        cache.try_allocate(false, false, "a".into(), partitions(2));
         assert!(cache.total_partitions_cached() == 2);
-        // Allocating into the full cache evicts the lone session (2 parts)
-        // and inserts a fresh one (1 part).
-        cache.try_allocate(false, false, "b".into(), vec![mk(0)]);
+        clock
+            .advance(PAST_MIN_EVICTION)
+            .expect("manual time moves forward");
+        // Allocating into the full cache evicts the lone stale session (2
+        // parts) and inserts a fresh one (1 part).
+        cache.try_allocate(false, false, "b".into(), partitions(1));
         assert!(cache.len() == 1);
         assert!(cache.total_partitions_cached() == 1);
     }

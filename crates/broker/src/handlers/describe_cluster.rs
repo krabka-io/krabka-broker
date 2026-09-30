@@ -18,7 +18,7 @@
 //! `Describe` gates only this field, not the rest of the response.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, BrokerEndpoint, BrokerRegistrationRecord, ResourceType};
+use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -34,6 +34,7 @@ use crate::{
     error::BrokerError,
     handlers::{
         acl_wire::CLUSTER_RESOURCE_NAME, authorized_operations::authorized_operations_bits,
+        offline_replicas::listener_endpoint,
     },
 };
 
@@ -58,19 +59,6 @@ const ENDPOINT_TYPE_CONTROLLER: i8 = 2;
 #[cfg_attr(test, mutants::skip)]
 fn wire_broker_id(node_id: u64) -> i32 {
     i32::try_from(node_id).unwrap_or(-1)
-}
-
-/// The endpoint of `broker` named `listener`, as Kafka's
-/// `BrokerRegistration.node(listenerName)` finds it, or `None` when the broker
-/// has no endpoint on that listener.
-fn listener_endpoint<'a>(
-    broker: &'a BrokerRegistrationRecord,
-    listener: &str,
-) -> Option<&'a BrokerEndpoint> {
-    broker
-        .endpoints
-        .iter()
-        .find(|endpoint| endpoint.name == listener)
 }
 
 #[tracing::instrument(

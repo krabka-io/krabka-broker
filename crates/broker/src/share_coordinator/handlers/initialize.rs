@@ -134,6 +134,7 @@ mod tests {
 
     use super::*;
     use crate::share_coordinator::{
+        config::ShareCoordinatorConfig,
         coordinator::{
             ShareStateSummary,
             test_support::{Logged, NOW_MS, image_with_topic, logged_records},
@@ -219,17 +220,23 @@ mod tests {
         appended: Vec<Logged>,
     }
 
-    fn rows() -> Vec<Row> {
+    /// The rows under Kafka 4.3.1's rules, or under Kafka trunk's when `trunk`.
+    fn rows(trunk: bool) -> Vec<Row> {
         let fenced = "The coordinator rejected the request because the state epoch did not match.";
         let unknown = "This server does not host this topic-partition.";
         vec![
+            // Trunk takes a repeat as a no-op; 4.3.1 writes a new snapshot.
             Row {
-                name: "an equal epoch and start offset is a no-op",
+                name: "an equal epoch and start offset",
                 led: true,
                 request: request("g", TOPIC, 0, 5, 10),
                 response: response(TOPIC, 0, codes::NONE, None),
                 summary: Some((5, 0, Offset(10), 0)),
-                appended: vec![],
+                appended: if trunk {
+                    vec![]
+                } else {
+                    vec![snapshot(1, 5, 10, 0)]
+                },
             },
             Row {
                 name: "an equal epoch with a new start offset writes the next snapshot",
@@ -268,18 +275,31 @@ mod tests {
                 summary: None,
                 appended: vec![],
             },
-            Row {
-                name: "a negative state epoch",
-                led: true,
-                request: request("g", TOPIC, 0, -1, 0),
-                response: response(
-                    TOPIC,
-                    0,
-                    codes::INVALID_REQUEST,
-                    Some("The state epoch cannot be a negative number."),
-                ),
-                summary: Some((5, 0, Offset(10), 0)),
-                appended: vec![],
+            // Trunk refuses a negative state epoch; 4.3.1 reads -1 as "not
+            // supplied", skips the fence and writes the snapshot.
+            if trunk {
+                Row {
+                    name: "a negative state epoch",
+                    led: true,
+                    request: request("g", TOPIC, 0, -1, 0),
+                    response: response(
+                        TOPIC,
+                        0,
+                        codes::INVALID_REQUEST,
+                        Some("The state epoch cannot be a negative number."),
+                    ),
+                    summary: Some((5, 0, Offset(10), 0)),
+                    appended: vec![],
+                }
+            } else {
+                Row {
+                    name: "a state epoch of -1",
+                    led: true,
+                    request: request("g", TOPIC, 0, -1, 0),
+                    response: response(TOPIC, 0, codes::NONE, None),
+                    summary: Some((-1, 0, Offset(0), 0)),
+                    appended: vec![snapshot(1, -1, 0, 0)],
+                }
             },
             Row {
                 name: "a partition past the partition count",
@@ -333,9 +353,18 @@ mod tests {
     /// partition 0 of a three-partition topic.
     #[tokio::test]
     async fn initialize_state_answers_as_kafka() {
-        for row in rows() {
+        for (trunk, row) in [false, true]
+            .into_iter()
+            .flat_map(|trunk| rows(trunk).into_iter().map(move |row| (trunk, row)))
+        {
             let dir = tempfile::TempDir::new().expect("tempdir");
-            let coordinator = super::super::test_support::coordinator(dir.path());
+            let coordinator = super::super::test_support::coordinator_with(
+                dir.path(),
+                ShareCoordinatorConfig {
+                    trunk_rules: trunk,
+                    ..ShareCoordinatorConfig::default()
+                },
+            );
             let image = image_with_topic(TOPIC, 3);
             coordinator.lead_all_partitions_for_test().await;
             coordinator
@@ -362,19 +391,19 @@ mod tests {
             }
 
             let resp = initialize_state(&coordinator, &image, row.request).await;
-            check!(resp == row.response, "{}", row.name);
+            check!(resp == row.response, "{}, trunk {trunk}", row.name);
             let appended: Vec<Logged> = logged_records(&coordinator, state_partition)
                 .into_iter()
                 .skip(before)
                 .map(|(_, logged)| logged)
                 .collect();
-            check!(appended == row.appended, "{}", row.name);
+            check!(appended == row.appended, "{}, trunk {trunk}", row.name);
             let summary = coordinator
                 .read_summary(&key_group, topic_id, partition)
                 .await
                 .ok()
                 .flatten();
-            check!(summary == row.summary, "{}", row.name);
+            check!(summary == row.summary, "{}, trunk {trunk}", row.name);
         }
     }
 

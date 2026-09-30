@@ -339,8 +339,10 @@ async fn open_transaction(
     producer
 }
 
-/// The `EndTxn` v5 answer for a completed transaction. Transaction version 2
-/// bumps the epoch on completion (`epoch_bump` 1). Lower versions keep it.
+/// The `EndTxn` v5 answer for a completed transaction. A v5 request is a `TV_2`
+/// client whatever `transaction.version` the cluster finalized, so completion
+/// bumps the epoch (`epoch_bump` 1) at every level. A client below v5 would keep
+/// it.
 fn completed(producer: Identity, epoch_bump: i16) -> EndTxnResponse {
     EndTxnResponse {
         producer_id: producer.producer_id,
@@ -417,7 +419,7 @@ async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
             topic: "cut-commit-tv1",
             committed: true,
             downgrade_to: Some(1),
-            epoch_bump: 0,
+            epoch_bump: 1,
             visible: &["a", "b", "c", "z"],
         },
     ];

@@ -499,3 +499,68 @@ async fn an_empty_version_0_request_asks_for_every_topic() {
     assert!(response.topics == Vec::<MetadataResponseTopic>::new());
     fixture.broker.shutdown().await;
 }
+
+/// The checks that Kafka's `KafkaApis.handleTopicMetadataRequest` makes with
+/// `logIfDenied = false` leave no Deny in `authorization_denied_total` (or in
+/// the audit trail behind it): the `Describe` filter of an all-topics request,
+/// the cluster `Create` probe for auto-creation, and every operation of an
+/// authorized-operations field. A `Describe` denied on a topic the request
+/// names is a refusal and is counted.
+#[tokio::test]
+async fn quiet_probes_leave_no_denial_behind_and_a_named_refusal_does() {
+    use AclOperation::{Alter, Create, Describe};
+
+    use crate::metrics::AuthorizationDeniedLabel;
+
+    let fixture = start(true).await;
+    let shared = fixture.broker.broker_arc_for_test();
+    let denied = |operation: &str, resource_type: &str| {
+        shared
+            .metrics
+            .authorization_denied
+            .get_or_create(&AuthorizationDeniedLabel {
+                operation: operation.into(),
+                resource_type: resource_type.into(),
+            })
+            .get()
+    };
+
+    // An all-topics request hides the topic the principal may not describe.
+    fixture.grants.set(&[]);
+    let response = fixture.metadata(12, &MetadataRequest::default()).await;
+    assert!(response.topics == Vec::<MetadataResponseTopic>::new());
+    assert!(denied("Describe", "Topic") == 0);
+
+    // Auto-creation with topic `Create` alone: the cluster `Create` probe is
+    // denied, and the per-topic check allows the topic.
+    fixture.grants.set(&[
+        topic("authz-quiet-probe", Describe),
+        topic("authz-quiet-probe", Create),
+    ]);
+    let response = fixture
+        .metadata(12, &named(&["authz-quiet-probe"], true, false))
+        .await;
+    assert!(response.topics[0].error_code == codes::UNKNOWN_TOPIC_OR_PARTITION);
+    fixture
+        .broker
+        .wait_until_partition_present("authz-quiet-probe", 0)
+        .await;
+    assert!(denied("Create", "Cluster") == 0);
+    assert!(denied("Create", "Topic") == 0);
+
+    // The operations of a topic the principal may describe, all but `Describe`
+    // denied: a probe, not a refusal.
+    fixture.grants.set(&[topic(EXISTING, Describe)]);
+    let response = fixture.metadata(12, &named(&[EXISTING], false, true)).await;
+    assert!(response.topics[0].topic_authorized_operations == DESCRIBE_BIT);
+    assert!(denied("Alter", "Topic") == 0);
+
+    // The same topic named without the `Describe` grant is a refusal.
+    fixture.grants.set(&[topic(EXISTING, Alter)]);
+    let response = fixture
+        .metadata(12, &named(&[EXISTING], false, false))
+        .await;
+    assert!(response.topics[0].error_code == codes::TOPIC_AUTHORIZATION_FAILED);
+    assert!(denied("Describe", "Topic") == 1);
+    fixture.broker.shutdown().await;
+}

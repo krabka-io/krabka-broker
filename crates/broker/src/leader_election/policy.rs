@@ -9,7 +9,7 @@ use krabka_verified::consensus::{
     FailoverAction, FailoverFacts, FailoverRecovery, LiveIsr, OutOfIsrFacts, failover_action,
 };
 
-use crate::config_keys::RecoveryStrategy;
+use crate::{config_keys::RecoveryStrategy, elr::state::PartitionElr};
 
 /// Output of a failover scan: immediate metadata changes plus partitions
 /// that need asynchronous offset-aware recovery through the URM.
@@ -18,7 +18,8 @@ pub(crate) struct FailoverPlan {
     pub changes: Vec<MetadataRecord>,
     pub recoveries: Vec<(String, i32, RecoveryStrategy)>,
     /// Partitions the dead broker leads that have no live ISR replica to
-    /// elect. The scan leaves them alone. The caller decides how loudly to
+    /// elect. The scan leaves their records alone and marks them leaderless
+    /// through the ELR they publish. The caller decides how loudly to
     /// report them: the death edge warns once, the per-tick sweep does not
     /// repeat that warning every second.
     pub unavailable: Vec<(String, i32)>,
@@ -45,6 +46,8 @@ pub(crate) enum FailoverDecision {
     /// Dead broker was a non-leader ISR member: shrink ISR (leader/epoch kept).
     ShrinkIsr { isr: Vec<NodeId> },
     /// Leader is dead, ISR empty, and no unclean path is permitted/available.
+    /// Kafka writes `leader = -1` for this; the scans keep the record and
+    /// publish the last-known ELR that marks the partition as leaderless.
     Unavailable,
     /// Nothing to do for this partition.
     NoChange,
@@ -53,8 +56,8 @@ pub(crate) enum FailoverDecision {
 /// Decide the failover action for one partition. `alive` is the controller's
 /// snapshot of live brokers. `witnesses` is the set of data-bearing witness
 /// nodes, which replicate the partition and count toward
-/// `min.insync.replicas` but never lead it. `eligible` is the partition's
-/// published KIP-966 eligible-leader-replica set. `strategy` and
+/// `min.insync.replicas` but never lead it. `elr` is the partition's published
+/// KIP-966 eligible and last-known replicas. `strategy` and
 /// `unclean_enabled` are the topic's resolved recovery policy.
 ///
 /// # One broker leaves, and the leader is re-checked
@@ -134,6 +137,22 @@ pub(crate) enum FailoverDecision {
 /// election, but the only id that recomputation adds is `dead`, which fails
 /// the acceptable-leader half of the test regardless.
 ///
+/// The last known leader is the next rung. `canElectLastKnownLeader` fires
+/// when ELR is enabled, the target ISR and the target ELR are both empty, the
+/// partition's `lastKnownElr` holds exactly one replica, and that replica is
+/// acceptable; Kafka elects it as `ElectionResult(node, true)`, so
+/// `tryElection` sets the ISR to that replica alone and the leader recovery
+/// state to `RECOVERING`. It sits under the ELR pick and above the
+/// `Election.UNCLEAN` branch in both `electAnyLeader` and
+/// `electPreferredLeader`, and like the ELR pick it consults neither
+/// `unclean.leader.election.enable` nor `unclean.recovery.strategy`.
+/// [`FailoverAction::ElectLastKnown`] is that rung and it returns
+/// `unclean: true`, which is what puts the partition in `Recovering`. The
+/// target ELR is the published one plus `dead` when `dead` is in the ISR the
+/// change leaves, so an ordinary death never empties it; the rung is open to
+/// [`elect_leaderless_one`], and to a replica that restarted uncleanly, which
+/// Kafka keeps out of the target ELR.
+///
 /// # Min ISR, and a partition that cannot elect
 ///
 /// `min.insync.replicas` never blocks the ISR change: Kafka's builder lets the
@@ -143,19 +162,22 @@ pub(crate) enum FailoverDecision {
 /// applies `maybePopulateTargetElr`'s rule to the change.
 ///
 /// When no rung can elect, Kafka writes `leader = -1` alongside the target
-/// ISR. A krabka partition record always names a leader, so the change is
-/// split. A partition led by `dead` is [`FailoverDecision::Unavailable`] and
-/// its record is left alone, because a dead leader dropped from its own ISR
-/// would be a leader outside its ISR. A partition led by a broker that is
-/// down, but whose failover has not run, still loses `dead` from its ISR,
-/// which is [`FailoverDecision::ShrinkIsr`]; that leader stays in the ISR,
-/// and its own scan reports the partition unavailable.
+/// ISR, the ELR that ISR implies, and the last leader as `lastKnownElr`. A
+/// krabka partition record always names a leader, so the change is split. A
+/// partition led by `dead` is [`FailoverDecision::Unavailable`] and its record
+/// is left alone, because a dead leader dropped from its own ISR would be a
+/// leader outside its ISR; the scans publish the rest through
+/// [`ElrPublisher::leaderless`](crate::elr::ElrPublisher::leaderless), and the
+/// one-member last-known ELR is what marks it as having no leader. A partition
+/// led by a broker that is down, but whose failover has not run, still loses
+/// `dead` from its ISR, which is [`FailoverDecision::ShrinkIsr`]; that leader
+/// stays in the ISR, and its own scan reports the partition unavailable.
 pub(crate) fn failover_one(
     pr: &PartitionRecord,
     dead: NodeId,
     alive: &std::collections::HashSet<NodeId>,
     witnesses: &std::collections::HashSet<NodeId>,
-    eligible: &[i32],
+    elr: &PartitionElr,
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
 ) -> FailoverDecision {
@@ -164,9 +186,101 @@ pub(crate) fn failover_one(
     if pr.leader != dead && !pr.isr.contains(&dead) {
         return FailoverDecision::NoChange;
     }
-    // `Replicas.copyWithout(partition.isr, brokerId)`: `dead` alone leaves.
-    let target_isr: Vec<NodeId> = pr.isr.iter().copied().filter(|n| *n != dead).collect();
-    let live = |n: &NodeId| *n != dead && alive.contains(n);
+    let departure = Departure {
+        node: dead,
+        down: true,
+        // `dead` joins the target ELR: it is in the ISR the change leaves.
+        joins_elr: pr.isr.contains(&dead),
+    };
+    decide(
+        pr,
+        &departure,
+        &Ladder {
+            alive,
+            witnesses,
+            elr,
+            strategy,
+            unclean_enabled,
+        },
+    )
+}
+
+/// Decide what to do with a partition that has no leader, read out of the
+/// last-known ELR that marks it (see [`PartitionElr::is_leaderless`]), now that
+/// `alive` is the cluster as the caller sees it.
+///
+/// This is Kafka's `handleBrokerUnfenced`, which runs
+/// `generateLeaderAndIsrUpdates` over `brokersToIsrs.partitionsWithNoLeader()`
+/// with the unfencing broker as an acceptable leader, so the election ladder of
+/// [`failover_one`] runs again for a partition that had nothing to elect when
+/// it lost its leader. Nothing leaves the partition this time. The last leader
+/// is out of the ISR Kafka holds, as it was when the partition lost its leader,
+/// and it can lead once `alive` names it: from the ELR when the fence put it
+/// there, and as the last known leader when an unclean restart kept it out.
+/// A partition that is not marked leaderless is [`FailoverDecision::NoChange`].
+pub(crate) fn elect_leaderless_one(
+    pr: &PartitionRecord,
+    alive: &std::collections::HashSet<NodeId>,
+    witnesses: &std::collections::HashSet<NodeId>,
+    elr: &PartitionElr,
+    strategy: RecoveryStrategy,
+    unclean_enabled: bool,
+) -> FailoverDecision {
+    if !elr.is_leaderless(pr.leader) {
+        return FailoverDecision::NoChange;
+    }
+    let departure = Departure {
+        node: pr.leader,
+        // Whether the last leader is alive is the caller's `alive` to say.
+        down: false,
+        // It is in the published ELR when it belongs there.
+        joins_elr: false,
+    };
+    decide(
+        pr,
+        &departure,
+        &Ladder {
+            alive,
+            witnesses,
+            elr,
+            strategy,
+            unclean_enabled,
+        },
+    )
+}
+
+/// What the ladder reads about the cluster and the partition's topic.
+struct Ladder<'a> {
+    alive: &'a std::collections::HashSet<NodeId>,
+    witnesses: &'a std::collections::HashSet<NodeId>,
+    elr: &'a PartitionElr,
+    strategy: RecoveryStrategy,
+    unclean_enabled: bool,
+}
+
+/// The replica whose removal from the ISR the ladder answers.
+struct Departure {
+    node: NodeId,
+    /// It cannot lead, whatever the alive set says of it.
+    down: bool,
+    /// Kafka's `targetElr` gains it.
+    joins_elr: bool,
+}
+
+/// The election ladder for one partition: `Replicas.copyWithout(partition.isr,
+/// brokerId)` is the target ISR, and the rungs are the ones the module docs
+/// walk through.
+fn decide(pr: &PartitionRecord, gone: &Departure, ctx: &Ladder<'_>) -> FailoverDecision {
+    let Ladder {
+        alive,
+        witnesses,
+        elr,
+        strategy,
+        unclean_enabled,
+    } = *ctx;
+    // `Replicas.copyWithout(partition.isr, brokerId)`: `gone` alone leaves.
+    let target_isr: Vec<NodeId> = pr.isr.iter().copied().filter(|n| *n != gone.node).collect();
+    let live = |n: &NodeId| !(gone.down && *n == gone.node) && alive.contains(n);
     // Kafka's `isAcceptableLeader`, plus the witness rule krabka adds to
     // every election path.
     let acceptable = |n: &NodeId| live(n) && !witnesses.contains(n);
@@ -177,8 +291,17 @@ pub(crate) fn failover_one(
     // only in the test.
     let pick = |test: &dyn Fn(&NodeId) -> bool| pr.replicas.iter().copied().find(|n| test(n));
     let clean_candidate = pick(&|n| target_isr.contains(n) && acceptable(n));
-    let elr_candidate =
-        pick(&|n| acceptable(n) && i32::try_from(n.0).is_ok_and(|id| eligible.contains(&id)));
+    let elr_candidate = pick(&|n| {
+        acceptable(n)
+            && i32::try_from(n.0).is_ok_and(|id| elr.eligible_leader_replicas.contains(&id))
+    });
+    // `canElectLastKnownLeader`: the target ELR is empty, and the one replica
+    // `lastKnownElr` holds is acceptable.
+    let target_elr_empty = elr.eligible_leader_replicas.is_empty() && !gone.joins_elr;
+    let last_known_candidate = match elr.last_known_elr.as_slice() {
+        [only] if target_elr_empty => pick(&|n| acceptable(n) && u64::try_from(*only) == Ok(n.0)),
+        _ => None,
+    };
     let unclean_candidate = pick(&acceptable);
     let recovery = match strategy {
         RecoveryStrategy::None => FailoverRecovery::None,
@@ -199,6 +322,7 @@ pub(crate) fn failover_one(
         live_isr,
         out_of_isr: OutOfIsrFacts {
             has_electable_elr: elr_candidate.is_some(),
+            last_known_leader_electable: last_known_candidate.is_some(),
             recovery,
             unclean_election_available: unclean_enabled && unclean_candidate.is_some(),
         },
@@ -226,6 +350,20 @@ pub(crate) fn failover_one(
                 unclean: false,
             }
         }
+        FailoverAction::ElectLastKnown => {
+            // The one replica that led when the partition lost its leader is
+            // back. It may have lost an unflushed tail, so Kafka calls this
+            // election unclean -- singleton ISR, `RECOVERING` -- and takes it
+            // without `unclean.leader.election.enable` or
+            // `unclean.recovery.strategy`.
+            let new_leader =
+                last_known_candidate.expect("verified last-known election has a candidate");
+            FailoverDecision::Elect {
+                leader: new_leader,
+                isr: vec![new_leader],
+                unclean: true,
+            }
+        }
         FailoverAction::Recover(_) => FailoverDecision::Recover(strategy),
         FailoverAction::ElectUnclean => {
             // KIP-841: ISR is dead but the operator opted into possible data
@@ -237,7 +375,9 @@ pub(crate) fn failover_one(
                 unclean: true,
             }
         }
-        FailoverAction::Unavailable if pr.leader != dead && target_isr.contains(&pr.leader) => {
+        FailoverAction::Unavailable
+            if pr.leader != gone.node && target_isr.contains(&pr.leader) =>
+        {
             // Nothing can replace a leader that is down but whose own failover
             // has not run. Kafka's record would still carry the target ISR, so
             // `dead` leaves it; the leader stays in it, and its own scan
@@ -297,28 +437,37 @@ pub(crate) fn failover_one(
 /// -- so it is the same question the dead-broker scan asks, and it deserves
 /// the same answer, up to and including an offset-aware recovery.
 ///
-/// `eligible` is the partition's published ELR, and it is read as the image
-/// still holds it: the withdrawal this event also performs takes `returning`
-/// out of every eligible set, and `returning` is the one node
-/// [`failover_one`] will not elect anyway, so the two orders agree.
+/// `elr` is the partition's published ELR, and it is read as the image still
+/// holds it: the withdrawal this event also performs takes `returning` out of
+/// every eligible set, and `returning` is the one node [`failover_one`] will
+/// not elect anyway, so the two orders agree. Kafka's `uncleanShutdownReplicas`
+/// keeps `returning` out of the target ELR, so it is not what keeps that set
+/// from being empty, as a fenced broker is.
 pub(crate) fn unclean_restart_one(
     pr: &PartitionRecord,
     returning: NodeId,
     alive: &std::collections::HashSet<NodeId>,
     witnesses: &std::collections::HashSet<NodeId>,
-    eligible: &[i32],
+    elr: &PartitionElr,
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
 ) -> FailoverDecision {
     if pr.leader == returning {
-        return failover_one(
+        let departure = Departure {
+            node: returning,
+            down: true,
+            joins_elr: false,
+        };
+        return decide(
             pr,
-            returning,
-            alive,
-            witnesses,
-            eligible,
-            strategy,
-            unclean_enabled,
+            &departure,
+            &Ladder {
+                alive,
+                witnesses,
+                elr,
+                strategy,
+                unclean_enabled,
+            },
         );
     }
     if !pr.isr.contains(&returning) {
@@ -355,10 +504,19 @@ mod tests {
             NodeId(dead),
             &alive,
             &witnesses(witness_ids),
-            eligible,
+            &elr(eligible, &[]),
             strategy,
             unclean_enabled,
         )
+    }
+
+    /// The published ELR state of a partition: the eligible and the last-known
+    /// replicas.
+    fn elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
+        PartitionElr {
+            eligible_leader_replicas: eligible.to_vec(),
+            last_known_elr: last_known.to_vec(),
+        }
     }
 
     /// [`decide_with_elr`] for a partition that publishes no ELR at all, which
@@ -651,7 +809,7 @@ mod tests {
             NodeId(returning),
             &alive,
             &witnesses(&[]),
-            &[],
+            &PartitionElr::default(),
             strategy,
             unclean_enabled,
         )
@@ -944,5 +1102,289 @@ mod tests {
                 case.unclean_enabled
             );
         }
+    }
+
+    /// One row of the leaderless table.
+    struct LeaderlessCase<'a> {
+        label: &'a str,
+        replicas: &'a [u64],
+        isr: &'a [u64],
+        elr: PartitionElr,
+        alive: &'a [u64],
+        witness_ids: &'a [u64],
+        strategy: RecoveryStrategy,
+        unclean_enabled: bool,
+        expected: super::FailoverDecision,
+    }
+
+    /// The decision for a partition that lost its leader: the record still
+    /// names broker 1 as leader and lists it in the ISR, which is how krabka
+    /// holds a partition Kafka holds as `leader = -1`.
+    fn decide_leaderless(case: &LeaderlessCase<'_>) -> super::FailoverDecision {
+        let pr = partition_record(/*leader*/ 1, case.replicas, case.isr);
+        let alive: std::collections::HashSet<NodeId> =
+            case.alive.iter().copied().map(NodeId).collect();
+        elect_leaderless_one(
+            &pr,
+            &alive,
+            &witnesses(case.witness_ids),
+            &case.elr,
+            case.strategy,
+            case.unclean_enabled,
+        )
+    }
+
+    /// `PartitionChangeBuilderTest` at 4.3.1: `testEligibleLeaderReplicas_ElectLastKnownLeader`,
+    /// `_ElectLastKnownLeaderShouldFail`, `_NotEligibleLastKnownLeader` and
+    /// `_ElrCanBeElected`, each with `useLastKnownLeaderInBalancedRecovery` on,
+    /// which is how Kafka runs it. The partition there has `leader = -1`, an
+    /// empty ISR and replicas `[1, 2, 3, 4]`; the state here is the same one
+    /// under krabka's marker.
+    #[test]
+    fn the_last_known_leader_is_elected_unclean_as_kafka_does() {
+        let elected = |leader: u64, unclean: bool| super::FailoverDecision::Elect {
+            leader: NodeId(leader),
+            isr: vec![NodeId(leader)],
+            unclean,
+        };
+        // The replicas are `[1, 2, 3, 4]` and the record's ISR is `[1]`, the
+        // last leader alone, unless a row says otherwise.
+        let case =
+            |label, elr, alive, witness_ids, strategy, unclean_enabled, expected| LeaderlessCase {
+                label,
+                replicas: &[1, 2, 3, 4],
+                isr: &[1],
+                elr,
+                alive,
+                witness_ids,
+                strategy,
+                unclean_enabled,
+                expected,
+            };
+        let none = RecoveryStrategy::None;
+        let cases = [
+            // ElectLastKnownLeader: ISR and ELR empty, `lastKnownElr = [1]`, every
+            // broker acceptable. Broker 1 leads under a singleton ISR and
+            // `RECOVERING`, which is `unclean: true`.
+            case(
+                "the last known leader returns",
+                elr(&[], &[1]),
+                &[1, 2, 3, 4][..],
+                &[][..],
+                none,
+                false,
+                elected(1, true),
+            ),
+            // No `unclean.leader.election.enable` and no
+            // `unclean.recovery.strategy` sits in front of it.
+            case(
+                "with the unclean election on",
+                elr(&[], &[1]),
+                &[1, 2, 3, 4],
+                &[],
+                none,
+                true,
+                elected(1, true),
+            ),
+            case(
+                "over balanced recovery",
+                elr(&[], &[1]),
+                &[1, 2, 3, 4],
+                &[],
+                RecoveryStrategy::Balanced,
+                false,
+                elected(1, true),
+            ),
+            case(
+                "over aggressive recovery and the unclean election",
+                elr(&[], &[1]),
+                &[1, 2, 3, 4],
+                &[],
+                RecoveryStrategy::Aggressive,
+                true,
+                elected(1, true),
+            ),
+            // It is broker 1 that is elected, though broker 2 comes first in
+            // the assignment and the unclean election is on: the rung sits
+            // above `Election.UNCLEAN`, which would pick broker 2.
+            LeaderlessCase {
+                label: "the last known leader wins over the first live replica",
+                replicas: &[2, 3, 1, 4],
+                isr: &[1],
+                elr: elr(&[], &[1]),
+                alive: &[1, 2, 3, 4],
+                witness_ids: &[],
+                strategy: none,
+                unclean_enabled: true,
+                expected: elected(1, true),
+            },
+            // ElectLastKnownLeaderShouldFail: the ELR is not empty, and its
+            // one member is offline, so nothing is elected.
+            case(
+                "a non-empty ELR shuts the last-known rung",
+                elr(&[3], &[1]),
+                &[1, 2, 4],
+                &[],
+                none,
+                false,
+                super::FailoverDecision::Unavailable,
+            ),
+            // ElrCanBeElected: an electable ELR member wins over the last
+            // known leader, and its election is clean.
+            case(
+                "an ELR member outranks the last known leader",
+                elr(&[3], &[1]),
+                &[1, 3],
+                &[],
+                none,
+                false,
+                elected(3, false),
+            ),
+            case(
+                "the last known leader in the ELR is a clean election",
+                elr(&[1, 2, 3], &[1]),
+                &[1, 2, 3, 4],
+                &[],
+                none,
+                false,
+                elected(1, false),
+            ),
+            // NotEligibleLastKnownLeader: nobody is acceptable, whichever
+            // election type the topic asks for.
+            case(
+                "nobody alive, unclean election off",
+                elr(&[], &[1]),
+                &[],
+                &[],
+                none,
+                false,
+                super::FailoverDecision::Unavailable,
+            ),
+            case(
+                "nobody alive, unclean election on",
+                elr(&[], &[1]),
+                &[],
+                &[],
+                none,
+                true,
+                super::FailoverDecision::Unavailable,
+            ),
+            // `isAcceptableLeader` is false for the last known leader, so the
+            // `Election.UNCLEAN` branch below the rung decides.
+            case(
+                "the last known leader is down: KIP-841 is what is left",
+                elr(&[], &[1]),
+                &[2, 3],
+                &[],
+                none,
+                true,
+                elected(2, true),
+            ),
+            case(
+                "the last known leader is down and the unclean election is off",
+                elr(&[], &[1]),
+                &[2, 3],
+                &[],
+                none,
+                false,
+                super::FailoverDecision::Unavailable,
+            ),
+            // krabka adds the witness rule to every election path.
+            case(
+                "a witness is never the last known leader",
+                elr(&[], &[1]),
+                &[1, 2, 3, 4],
+                &[1],
+                none,
+                false,
+                super::FailoverDecision::Unavailable,
+            ),
+            // A live ISR member is an ordinary clean election under the ISR
+            // Kafka holds, which lost the last leader when the partition lost
+            // its leader.
+            LeaderlessCase {
+                label: "a live ISR member leads before any out-of-ISR rung",
+                replicas: &[1, 2, 3, 4],
+                isr: &[1, 2],
+                elr: elr(&[], &[1]),
+                alive: &[1, 2],
+                witness_ids: &[],
+                strategy: none,
+                unclean_enabled: false,
+                expected: elected(2, false),
+            },
+            // `lastKnownElr.length != 1`: not a last known leader, and not a
+            // partition that lost its leader either.
+            case(
+                "a multi-member last-known set is no marker",
+                elr(&[], &[1, 2]),
+                &[1, 2, 3, 4],
+                &[],
+                none,
+                false,
+                super::FailoverDecision::NoChange,
+            ),
+            case(
+                "a partition that has a leader is not touched",
+                elr(&[], &[]),
+                &[1, 2, 3, 4],
+                &[],
+                none,
+                false,
+                super::FailoverDecision::NoChange,
+            ),
+            case(
+                "the marker names the recorded leader and nobody else",
+                elr(&[], &[2]),
+                &[1, 2, 3, 4],
+                &[],
+                none,
+                false,
+                super::FailoverDecision::NoChange,
+            ),
+        ];
+        for case in cases {
+            assert!(decide_leaderless(&case) == case.expected, "{}", case.label);
+        }
+    }
+
+    /// Kafka's target ELR is `(elr ∪ isr) - targetIsr - uncleanShutdownReplicas`
+    /// and `canElectLastKnownLeader` needs it empty. A fenced broker in the ISR
+    /// lands in it, so an ordinary death keeps the last-known rung shut; an
+    /// unclean shutdown keeps the broker out of it, and the rung opens.
+    #[test]
+    fn only_an_unclean_shutdown_keeps_the_dead_broker_out_of_the_target_elr() {
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
+        let state = elr(&[], &[2]);
+        let alive: std::collections::HashSet<NodeId> = [NodeId(2), NodeId(3)].into();
+
+        let fenced = failover_one(
+            &pr,
+            NodeId(1),
+            &alive,
+            &witnesses(&[]),
+            &state,
+            RecoveryStrategy::None,
+            false,
+        );
+        let restarted = unclean_restart_one(
+            &pr,
+            NodeId(1),
+            &alive,
+            &witnesses(&[]),
+            &state,
+            RecoveryStrategy::None,
+            false,
+        );
+
+        assert!(fenced == super::FailoverDecision::Unavailable);
+        assert!(
+            restarted
+                == super::FailoverDecision::Elect {
+                    leader: NodeId(2),
+                    isr: vec![NodeId(2)],
+                    unclean: true,
+                }
+        );
     }
 }

@@ -8,8 +8,11 @@
 //!   rest report `DEFAULT_CONFIG (5)`.
 //! - `resource_type=4` (BROKER): a numeric name returns the effective dynamic
 //!   per-broker and cluster-default overrides, plus the settings read from
-//!   the serving process itself. An empty name returns the cluster-wide
-//!   defaults. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)` from
+//!   the serving process itself, and every other non-internal key of Kafka
+//!   4.3.1's `KafkaConfig` at its default ([`crate::config_keys::kafka_broker`]).
+//!   An empty name returns the cluster-wide defaults, each stored key typed by
+//!   the same roster: only a `PASSWORD` key and a name Kafka does not define
+//!   are withheld. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)` from
 //!   `DYNAMIC_DEFAULT_BROKER_CONFIG (3)` and `STATIC_BROKER_CONFIG (4)`. A
 //!   numeric name that is not this node is refused with `INVALID_REQUEST`,
 //!   which is what `ConfigHelper` in the pinned image does; the JVM
@@ -20,8 +23,10 @@
 //! - `resource_type=8` (`BROKER_LOGGER`) reports this node's live `tracing`
 //!   targets and their effective levels at `DYNAMIC_BROKER_LOGGER_CONFIG (6)`.
 //!   The resource is node-local, so its name must be this broker's id.
-//! - Every other resource type receives an empty configs list and no error.
-//!   The JVM `AdminClient` accepts that.
+//! - Any other resource type refuses the whole request: every resource in it is
+//!   answered `INVALID_REQUEST` with no configs, which is what Kafka's
+//!   `ConfigHelper` does when it throws on the type. The JVM `AdminClient`
+//!   never sends one.
 //!
 //! Each entry carries the typed metadata `ConfigEntry` exposes: the
 //! `ConfigDef` type byte the client parses the value with, the documentation
@@ -101,7 +106,7 @@ mod resources;
 mod static_configs;
 mod wire;
 
-pub(crate) use self::resources::effective_topic_configs;
+pub(crate) use self::resources::{effective_topic_configs, static_settings};
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,
@@ -131,6 +136,15 @@ pub(crate) fn handle(
         let mut cur: &[u8] = req_bytes;
         let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
+        if let Some(results) = authz::unexpected_resource_type_results(&req.resources) {
+            let resp = DescribeConfigsResponse {
+                throttle_time_ms: 0,
+                results,
+                ..Default::default()
+            };
+            return crate::handlers::encode_response(&resp, version);
+        }
+
         let image = controller.current_image();
         // KIP-226: the chain of sources behind each value goes out only when
         // the client asks for it. `req.resources` is consumed below, so the
@@ -148,7 +162,8 @@ pub(crate) fn handle(
         // as what the operator named, not as what the broker runs: the source
         // a key reports is provenance, so a key set to its own default is
         // still `STATIC_BROKER_CONFIG`.
-        let origins = broker.config.static_config_origins;
+        let origins = &broker.config.static_config_origins;
+        let settings = static_settings(&broker.config);
         let static_broker = StaticBrokerConfigs {
             txn_id_expiration: StaticBrokerSetting {
                 value_ms: broker.config.txn_id_expiration.millis_i32(),
@@ -183,6 +198,7 @@ pub(crate) fn handle(
                 .then_some(broker.config.auto_create_topics_enable),
             connections_max_idle: broker.config.connections_max_idle,
             connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
+            settings: &settings,
         };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`, Group →
@@ -218,11 +234,9 @@ pub(crate) fn handle(
                             node_id: broker.config.broker_id,
                             levels: &broker.config.log_levels,
                         },
-                        static_min_insync_replicas: broker.config.default_min_insync_replicas,
                         unstable_api_versions: broker.config.features.unstable_api_versions,
                     },
                     broker.config.client_metrics_default_interval.millis_i32(),
-                    &broker.config.streams_group,
                     options,
                 )
             })

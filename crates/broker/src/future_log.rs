@@ -11,6 +11,15 @@
 //! 3. Once `future_log.LEO == current_log.LEO`, ask the partition
 //!    writer to swap atomically with `WriterMessage::SwapFutureLog`.
 //!
+//! The swap itself checks only the log end offsets, as Kafka's
+//! `Partition.runCallbackIfFutureReplicaCaughtUp` does. What keeps the future
+//! log a prefix of the current one is the truncation module: a truncation of
+//! the current log, which a follower makes after a leader change, cuts the
+//! future log to the same offset first
+//! (`WriterMessage::TakeFutureTruncation`), and a move that starts or resumes
+//! compares the two logs by leader epoch and cuts the future log to what they
+//! share. So the swap can never install records that the current log dropped.
+//!
 //! The on-disk `*-future` directory is the only persisted state. A
 //! crash mid-move leaves it behind. Broker startup re-discovers it with
 //! `log_dir::scan_future` and re-spawns the replicator.
@@ -33,6 +42,7 @@ mod replicator;
 mod start;
 #[cfg(test)]
 mod test_support;
+mod truncation;
 
 pub(crate) use self::{
     cleanup::{abort_moves, shutdown_moves},

@@ -89,7 +89,6 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = authorizer;
-        cfg.share_group.enable = true;
     })
     .await
 }

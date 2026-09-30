@@ -10,14 +10,16 @@ use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::{
     owned::produce_response::BatchIndexAndErrorMessage,
     records::{
-        Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch,
+        Attributes, RecordBatch, RecordsError, RecordsPayload, TimestampType, ValidatedBatch,
         validate_one_v2_batch,
     },
 };
 use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
 use super::{
-    framing::PartitionPayload, owned_decode::decode_owned_batch, topic_settings::TimestampPolicy,
+    framing::{NextBatch, PartitionPayload, V2_HEADER_LEN, next_batch},
+    owned_decode::decode_owned_batch,
+    topic_settings::TimestampPolicy,
 };
 use crate::codes;
 
@@ -148,6 +150,20 @@ impl PreparedBatch {
         }
     }
 
+    /// Wire length of the record set the writer appends: the producer's own
+    /// bytes on the verbatim path, and the measure [`Self::stored_len`] takes
+    /// on the owned one. What Kafka's `UnifiedLog.append` holds against the
+    /// topic's `segment.bytes`.
+    pub(super) fn appended_len(
+        &self,
+        topic_compression: Option<krabka_compression::CompressionType>,
+    ) -> usize {
+        match &self.source {
+            PreparedSource::Verbatim(bytes) => bytes.len(),
+            PreparedSource::Owned(_) => self.stored_len(topic_compression).unwrap_or(0),
+        }
+    }
+
     /// Wire length of this batch as the writer will store it, when storing it
     /// means encoding it afresh.
     ///
@@ -251,13 +267,13 @@ pub(super) fn prepare_batch(
     };
 
     // Extract the header fields into owned values up front so the borrow of
-    // `bytes` (via the `ValidatedBatch`) ends before any `owned_fallback(bytes)`
-    // move or the final `Verbatim(bytes)` construction.
+    // `bytes` (via the `ValidatedBatch`) ends before the final
+    // `Verbatim(bytes)` move.
     let validated = match validate_one_v2_batch(&bytes) {
         Ok(batch) if batch.total_len == bytes.len() => batch,
         _ => {
             return owned_fallback(
-                bytes,
+                &bytes,
                 timestamps,
                 compacted_topic,
                 DecodeEnv {
@@ -278,7 +294,7 @@ pub(super) fn prepare_batch(
         && target != attributes.compression()
     {
         return owned_fallback(
-            bytes,
+            &bytes,
             timestamps,
             compacted_topic,
             DecodeEnv {
@@ -352,9 +368,10 @@ fn invalid_timestamp_message(offset: i64, timestamp: i64, window: (i64, i64)) ->
 /// opaque) by the magic byte — then through [`decode_owned_batch`], the same
 /// pipeline the request decoder used before the verbatim path existed. This is
 /// what up-converts a v1 `MessageSet` carried over a v≥3 produce (older
-/// message-format clients) and surfaces `INVALID_RECORD` on malformed bytes.
+/// message-format clients) and surfaces `CORRUPT_MESSAGE` or `INVALID_RECORD` on
+/// malformed bytes, whichever [`decode_failure_code`] says Kafka answers.
 pub(super) fn owned_fallback(
-    bytes: Bytes,
+    bytes: &Bytes,
     timestamps: TimestampPolicy,
     compacted_topic: bool,
     env: DecodeEnv<'_>,
@@ -365,7 +382,13 @@ pub(super) fn owned_fallback(
         metrics,
         policy,
     } = env;
-    match RecordsPayload::from_bytes_with_policy(bytes, policy) {
+    // Kafka frames a field before it decodes any of it, and a size or a magic
+    // that no batch can have is `CorruptRecordException` however the field
+    // would have decoded, a legacy `MessageSet` included.
+    if matches!(next_batch(bytes), NextBatch::Corrupt) {
+        return Err(codes::CORRUPT_MESSAGE);
+    }
+    match RecordsPayload::from_bytes_with_policy(bytes.clone(), policy) {
         Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
             validate_owned_client_batch(&batch, version)?;
             Ok(PreparedBatch::from_owned(
@@ -374,7 +397,41 @@ pub(super) fn owned_fallback(
                 timestamps,
             ))
         }),
-        Err(_) => Err(codes::INVALID_RECORD),
+        Err(error) => Err(decode_failure_code(&error, bytes)),
+    }
+}
+
+/// The row code of a records field that failed to decode.
+///
+/// Kafka answers `CORRUPT_MESSAGE` for what it raises as
+/// `CorruptRecordException`, and the JVM producer retries it: a size field or
+/// magic byte that no batch can have (`ByteBufferLogInputStream
+/// .nextBatchSize`, which `ProduceRequest.validateRecords` runs), a batch too
+/// short to hold a v2 header, and a batch whose CRC does not match
+/// (`UnifiedLog.analyzeAndValidateRecords`, `!batch.isValid()`). What is left
+/// is `InvalidRecordException`, `INVALID_RECORD`, which no producer retries:
+/// no complete batch, a magic below 2, more than one batch, and a batch whose
+/// CRC holds but whose records do not parse.
+///
+/// Kafka frames the batches before the log checks a CRC, so a second batch
+/// decides the answer whatever the first one's CRC is. [`owned_fallback`]
+/// has already answered a first batch that cannot be framed.
+fn decode_failure_code(error: &RecordsError, records: &[u8]) -> i16 {
+    let NextBatch::Batch { len, magic } = next_batch(records) else {
+        return codes::INVALID_RECORD;
+    };
+    if magic != 2 {
+        return codes::INVALID_RECORD;
+    }
+    match next_batch(&records[len..]) {
+        NextBatch::Corrupt => return codes::CORRUPT_MESSAGE,
+        NextBatch::Batch { .. } => return codes::INVALID_RECORD,
+        NextBatch::Incomplete => {}
+    }
+    if len < V2_HEADER_LEN || matches!(error, RecordsError::CrcMismatch { .. }) {
+        codes::CORRUPT_MESSAGE
+    } else {
+        codes::INVALID_RECORD
     }
 }
 

@@ -33,19 +33,17 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: std::net::IpAddr) -> O
     let image = broker.controller.current_image();
     let (entity_key, rate) = crate::quota::lookup_ip_quota_with_key(
         &image,
+        broker.quota_buckets.ip_names(),
         peer_ip,
         CONNECTION_CREATION_RATE_QUOTA_KEY,
     )?;
     if rate <= 0.0 {
         return None;
     }
-    let bucket = broker.quota_buckets.get_or_create(
-        CONNECTION_CREATION_RATE_QUOTA_KEY,
-        &entity_key,
-        "",
-        "",
-        rate,
-    );
+    let bucket =
+        broker
+            .quota_buckets
+            .get_or_create(CONNECTION_CREATION_RATE_QUOTA_KEY, &entity_key, rate);
     (bucket.try_consume(1) == 0)
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
 }
@@ -128,10 +126,10 @@ pub(super) async fn accept_loop(
                             Ok(guard) => guard,
                             Err(limit) => {
                                 let reason = match limit {
-                                    crate::broker::connection_limiter::ConnectionLimit::Global => {
+                                    krabka_raft::ConnectionLimit::Global => {
                                         crate::metrics::ConnectionCloseReason::MaxConnections
                                     }
-                                    crate::broker::connection_limiter::ConnectionLimit::PerIp => {
+                                    krabka_raft::ConnectionLimit::PerIp => {
                                         crate::metrics::ConnectionCloseReason::MaxConnectionsPerIp
                                     }
                                 };

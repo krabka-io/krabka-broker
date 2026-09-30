@@ -6,13 +6,16 @@ use std::net::SocketAddr;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::SinkExt;
-use krabka_units::convert::ByteSizeExt as _;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::Framed;
 use tracing::Instrument as _;
 
 use super::{AfterResponse, response::encode_response, session::principal_or_anonymous};
-use crate::{broker::Broker, error::BrokerError, network::fetch_writer::WriteOp};
+use crate::{
+    broker::Broker,
+    error::BrokerError,
+    network::{codec::KafkaCodec, fetch_writer::WriteOp},
+};
 
 /// A finished fetch: the ordered write plan for its response, and the KIP-219
 /// window the fetch quotas charged. The connection loop writes the plan first
@@ -23,7 +26,7 @@ struct FetchPlan {
 }
 
 pub(super) async fn dispatch_fetch<S>(
-    framed: &mut Framed<S, LengthDelimitedCodec>,
+    framed: &mut Framed<S, KafkaCodec>,
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
@@ -118,7 +121,7 @@ async fn handle_fetch_frame_from_parsed(
     let ctx = crate::handlers::RequestContext::new(
         principal,
         peer,
-        parsed.client_id.unwrap_or(""),
+        parsed.client_id,
         "",
         sendfile_capable && parsed.api_version >= 4,
         listener_name,
@@ -145,15 +148,10 @@ async fn handle_fetch_frame_from_parsed(
             parsed.correlation_id,
             parsed.body_flexible,
             &body_bytes,
-            broker.config.socket_request_max.bytes_usize(),
         )?;
         // Prepend the 4-byte frame length so the writer path is uniform.
         let mut framed_with_len = BytesMut::with_capacity(4 + framed.len());
-        framed_with_len.put_u32(u32::try_from(framed.len()).map_err(|_| {
-            BrokerError::Io(std::io::Error::other(
-                "fetch response exceeds max frame size",
-            ))
-        })?);
+        framed_with_len.put_u32(crate::network::codec::response_frame_length(framed.len())?);
         framed_with_len.put_slice(&framed);
         return Ok(FetchPlan {
             operations: vec![WriteOp::Inline(framed_with_len.freeze())],
@@ -182,7 +180,6 @@ async fn handle_fetch_frame_from_parsed(
                 version,
                 parsed.correlation_id,
                 parsed.body_flexible,
-                broker.config.socket_request_max.bytes_usize(),
                 crate::network::fetch_writer::resolve_records_sendfile,
             )
             .map(|operations| FetchPlan {
@@ -197,7 +194,6 @@ async fn handle_fetch_frame_from_parsed(
         version,
         parsed.correlation_id,
         parsed.body_flexible,
-        broker.config.socket_request_max.bytes_usize(),
         crate::network::fetch_writer::resolve_records_inline,
     )
     .map(|operations| FetchPlan {

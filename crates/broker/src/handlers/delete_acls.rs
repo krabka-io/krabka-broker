@@ -13,6 +13,8 @@
 //! Filter decoding lives in `filter`, the response rows and the encoder in
 //! `response`, and the audit trail in `audit`.
 
+use std::collections::HashSet;
+
 use bytes::Bytes;
 use krabka_metadata::{AclEntry, MetadataRecord};
 use krabka_protocol::{
@@ -38,7 +40,8 @@ use self::{
     },
 };
 use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE, binding_filter::UnknownElement,
+    CLUSTER_RESOURCE_NAME, MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
+    binding_filter::{AclBindingFilter, UnknownElement},
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -50,6 +53,41 @@ use crate::{
 /// "Request <request> needs ALTER permission.", where `<request>` is the JVM
 /// `toString` of the channel request; krabka names the API in its place.
 const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request DeleteAcls needs ALTER permission.";
+
+/// The distinct ACLs a request removes, in the order its filters first match
+/// them.
+#[derive(Default)]
+struct Doomed<'a> {
+    entries: Vec<&'a AclEntry>,
+    /// The position in the image's ACL iteration of each entry, which
+    /// identifies it without comparing the whole tuple.
+    positions: HashSet<usize>,
+}
+
+/// The ACLs of `acls` that `filter` matches, added to `doomed`, or `None` once
+/// a match would take a request past `bound` removals.
+///
+/// `AclControlManager.deleteAclsForFilter` checks the bound before it adds a
+/// match, so the match after the last one that fits fails the request, even
+/// when an earlier filter already collected that ACL.
+fn match_filter<'a>(
+    acls: impl Iterator<Item = &'a AclEntry>,
+    filter: &AclBindingFilter,
+    doomed: &mut Doomed<'a>,
+    bound: usize,
+) -> Option<Vec<&'a AclEntry>> {
+    let mut matched = Vec::new();
+    for (position, entry) in acls.enumerate().filter(|(_, entry)| filter.matches(entry)) {
+        if doomed.entries.len() >= bound {
+            return None;
+        }
+        matched.push(entry);
+        if doomed.positions.insert(position) {
+            doomed.entries.push(entry);
+        }
+    }
+    Some(matched)
+}
 
 #[tracing::instrument(
     name = "handle_delete_acls",
@@ -113,7 +151,7 @@ pub(crate) async fn handle(
             .map(|_| {
                 filter_result(
                     codes::SECURITY_DISABLED,
-                    Some(NO_AUTHORIZER_MESSAGE.into()),
+                    Some(NO_AUTHORIZER_EXCEPTION_MESSAGE.into()),
                     Vec::new(),
                 )
             })
@@ -125,7 +163,7 @@ pub(crate) async fn handle(
     // same ACL set, so an ACL two filters match is listed under both, and it
     // collects the removal records into a set, so that ACL is removed once.
     let mut filter_results: Vec<DeleteAclsFilterResult> = Vec::with_capacity(filters.len());
-    let mut doomed: Vec<&AclEntry> = Vec::new();
+    let mut doomed = Doomed::default();
     for filter in &filters {
         if let Some(message) = filter.unknown_message() {
             filter_results.push(filter_result(
@@ -135,20 +173,32 @@ pub(crate) async fn handle(
             ));
             continue;
         }
-        let matched: Vec<&AclEntry> = image.all_acls().filter(|e| filter.matches(e)).collect();
+        let Some(matched) = match_filter(
+            image.all_acls(),
+            filter,
+            &mut doomed,
+            MAX_ACL_RECORDS_PER_REQUEST,
+        ) else {
+            // No filter keeps a partial result and nothing is deleted.
+            let message = format!(
+                "Cannot remove more than {MAX_ACL_RECORDS_PER_REQUEST} acls in a single delete \
+                 operation."
+            );
+            let filter_results = filters
+                .iter()
+                .map(|_| filter_result(codes::INVALID_REQUEST, Some(message.clone()), Vec::new()))
+                .collect();
+            return encode_response(&delete_acls_response(filter_results), api_version);
+        };
         filter_results.push(filter_result(
             codes::NONE,
             None,
             matched.iter().map(|e| matching_acl_result(e)).collect(),
         ));
-        for entry in matched {
-            if !doomed.contains(&entry) {
-                doomed.push(entry);
-            }
-        }
     }
 
     let to_submit: Vec<MetadataRecord> = doomed
+        .entries
         .into_iter()
         .map(|entry| MetadataRecord::V1DeleteAccessControlEntry(exact_filter(entry)))
         .collect();

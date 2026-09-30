@@ -484,6 +484,7 @@ fn consumer_group_seed(topic_id: WireUuid) -> GroupSeed {
             ("classic".to_string(), current),
         ]
         .into(),
+        ..GroupSeed::default()
     }
 }
 

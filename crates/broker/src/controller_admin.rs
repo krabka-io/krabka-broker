@@ -180,7 +180,7 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                     api_version: request.api_version,
                     correlation_id: request.correlation_id,
                     body: &request.body,
-                    client_id: request.client_id.as_deref().unwrap_or(""),
+                    client_id: request.client_id.as_deref(),
                     peer: &request.peer,
                     principal: &principal,
                     authenticated_via_token: request.authenticated_via_token,
@@ -220,7 +220,7 @@ struct Invocation<'a> {
     api_version: ApiVersion,
     correlation_id: CorrelationId,
     body: &'a [u8],
-    client_id: &'a str,
+    client_id: Option<&'a str>,
     /// The address the handler authorizes and audits against. For a forwarded
     /// request this is the *client's* address, out of
     /// `EnvelopeRequest.client_host_address`, not the forwarding hop's.
@@ -319,7 +319,7 @@ async fn serve_envelope(
                     api_version: forwarded.api_version,
                     correlation_id: forwarded.correlation_id,
                     body: &forwarded.body,
-                    client_id: forwarded.client_id.as_deref().unwrap_or(""),
+                    client_id: forwarded.client_id.as_deref(),
                     // The *client's* address, not this connection's: the peer
                     // here is the forwarding broker, and authorizing or
                     // auditing the embedded request against that address both
@@ -404,9 +404,11 @@ fn unwrap_envelope(
     let forwarded_principal =
         envelope::deserialize_principal(envelope.request_principal.as_deref())?;
     let client_host = envelope::deserialize_client_host_address(&envelope.client_host_address)?;
-    let forwarded = envelope::unwrap_request(&envelope.request_data, |api_key, api_version| {
-        broker.handlers().body_flexible(api_key, api_version)
-    })?;
+    let forwarded = envelope::unwrap_request(
+        &envelope.request_data,
+        |api_key, api_version| broker.handlers().body_flexible(api_key, api_version),
+        broker.config.features.unstable_api_versions,
+    )?;
     // The embedded key is forwardable in Kafka's table; it still has to be one
     // this broker serves, at a version it serves, before a handler sees it.
     let entry = broker

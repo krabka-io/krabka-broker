@@ -617,11 +617,14 @@ mod tests {
                 principal_type: "User".into(),
                 name: "alice".into(),
             },
+            requester: KafkaPrincipal {
+                principal_type: "User".into(),
+                name: "alice".into(),
+            },
             issue_timestamp_ms: 10,
             max_timestamp_ms: 20,
             expiry_timestamp_ms: 15,
             renewers: vec![],
-            hmac: vec![1, 2, 3],
         };
         let mutations = vec![crate::DelegationTokenMutation::Delete { expected: rec }];
         let body = encode_delegation_token_mutation_body(&mutations).expect("encode");

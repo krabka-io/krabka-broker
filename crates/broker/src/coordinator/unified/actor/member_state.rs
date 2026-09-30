@@ -3,7 +3,7 @@
 //! driving the reconciler when the group is dirty.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -12,30 +12,54 @@ use krabka_protocol::{
     owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest, primitives::uuid::Uuid,
 };
 
-use super::{FALLBACK_REBALANCE_TIMEOUT_MS, MetadataProvider};
+use super::{
+    FALLBACK_REBALANCE_TIMEOUT_MS, MetadataProvider,
+    regex_resolution::{
+        RegexRecord, RegexResolution, RegexUpdate, maybe_update_regular_expressions,
+    },
+    views::preferred_server_assignor,
+};
 use crate::coordinator::unified::{
     ClientIdentity,
     assignor::Assignor,
     config::NextGenConfig,
     consumer_state::{GroupState, MemberState},
     persistence_next_gen::MemberAssignmentState,
-    reconciler,
+    reconciler::{self, ReconcileOutcome},
 };
 
-/// The partitions a member reports that it owns in its heartbeat. An absent
-/// `topic_partitions` means "unchanged". The caller then substitutes the
-/// member's current assignment, so that a keepalive can still take newly freed
-/// partitions.
-pub(super) fn reported_owned(req: &ConsumerGroupHeartbeatRequest) -> HashMap<Uuid, Vec<i32>> {
-    req.topic_partitions
-        .as_ref()
-        .map(|tp| {
-            tp.iter()
-                .map(|t| (t.topic_id, t.partitions.clone()))
-                .collect()
-        })
-        .unwrap_or_default()
+/// The partitions a member reports that it owns in its heartbeat, or `None`
+/// when the heartbeat carries no `topic_partitions`. The Java client sends the
+/// list only when its assignment changed, so `None` means "unchanged", and the
+/// reconciler reads it as Kafka does: the member still owns everything it
+/// holds.
+///
+/// A request may list a topic more than once. Kafka's
+/// `ownsRevokedPartitions` reads every entry, so the partitions of the entries
+/// of one topic add up.
+pub(super) fn reported_owned(
+    req: &ConsumerGroupHeartbeatRequest,
+) -> Option<HashMap<Uuid, Vec<i32>>> {
+    req.topic_partitions.as_ref().map(|tp| {
+        let mut owned: HashMap<Uuid, Vec<i32>> = HashMap::new();
+        for topic in tp {
+            owned
+                .entry(topic.topic_id)
+                .or_default()
+                .extend(&topic.partitions);
+        }
+        owned
+    })
 }
+
+/// The longest regular expression the coordinator can store, in UTF-8 bytes.
+///
+/// The group keeps the topics a pattern resolved to under a
+/// `ConsumerGroupRegularExpressionKey`, whose `RegularExpression` is a
+/// non-flexible string with an `i16` length prefix. Kafka's generated
+/// serializer throws for a longer one ("field is too long to be serialized"),
+/// so its regex resolution write fails and the pattern never resolves.
+const MAX_REGEX_BYTES: usize = i16::MAX as usize;
 
 /// Rejects a heartbeat whose `SubscribedTopicRegex` does not compile, with the
 /// message Kafka builds in
@@ -46,20 +70,47 @@ pub(super) fn reported_owned(req: &ConsumerGroupHeartbeatRequest) -> HashMap<Uui
 /// 128) before it writes any member record, so the heartbeat that carries the
 /// bad pattern fails and the member is not admitted.
 ///
+/// A pattern longer than [`MAX_REGEX_BYTES`] is refused the same way. Kafka
+/// admits such a member and then cannot persist the resolution of the pattern,
+/// so the member would never receive a topic from it. Here the resolution is
+/// written with the heartbeat, and a key that cannot be encoded must not reach
+/// the log writer, so the heartbeat fails before it changes any state.
+///
 /// The pattern is compiled by [`crate::re2j`], which documents where its
 /// dialect and RE2J's differ. The pattern is only ever matched against Kafka
 /// topic names, whose legal alphabet is `[a-zA-Z0-9._-]`, so the ASCII and
 /// Unicode readings of `\d`, `\w`, `\s` and `\b` cannot differ here.
 pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+    if pattern.len() > MAX_REGEX_BYTES {
+        return Err(format!(
+            "SubscribedTopicRegex is {} bytes long, and the longest regular expression the \
+             group coordinator stores is {MAX_REGEX_BYTES} bytes.",
+            pattern.len()
+        ));
+    }
     crate::re2j::check(pattern).map_err(|detail| {
         format!("SubscribedTopicRegex `{pattern}` is not a valid regular expression: {detail}.")
     })
 }
 
+/// What a steady-state heartbeat did to a member and to the regular
+/// expressions of its group.
+pub(super) struct MemberUpdate {
+    /// `true` when a change happened that needs a log write.
+    pub(super) changed: bool,
+    /// The `ConsumerGroupRegularExpression` records the heartbeat wrote.
+    pub(super) regex_records: Vec<RegexRecord>,
+}
+
+/// Kafka's `isNotEmpty` gate on a subscribed regular expression: the empty
+/// pattern is how a client drops its regex subscription.
+pub(super) fn non_empty_regex(pattern: &str) -> Option<String> {
+    (!pattern.is_empty()).then(|| pattern.to_owned())
+}
+
 /// Applies steady-state member updates and runs reconciliation. It returns
-/// `true` when a change happened that needs a log write, and the
-/// `INVALID_REGULAR_EXPRESSION` message when the heartbeat carries a
-/// `SubscribedTopicRegex` that does not compile.
+/// what changed, and the `INVALID_REGULAR_EXPRESSION` message when the
+/// heartbeat carries a `SubscribedTopicRegex` that does not compile.
 pub(super) fn update_member_state(
     state: &mut GroupState,
     config: &NextGenConfig,
@@ -67,30 +118,42 @@ pub(super) fn update_member_state(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
-    regex_authorized_topics: &HashSet<String>,
-) -> Result<bool, String> {
-    // The member's epoch before this heartbeat's updates -- nothing below
-    // touches `member_epoch` until `advance_member_epoch`, so reading it here
-    // (before any mutation) matches what the caller would have measured.
-    let cur_epoch = state
+    regexes: &RegexResolution<'_>,
+) -> Result<MemberUpdate, String> {
+    let old_regex = state
         .members
         .get(&req.member_id)
-        .map_or(0, |m| m.member_epoch);
+        .and_then(|m| m.subscribed_topic_regex.clone());
+    // Kafka's `maybeUpdateSubscribedTopicRegex`: an absent pattern keeps the
+    // stored one (the Java client sends the pattern only when it changed), and
+    // the empty string drops it.
+    let new_regex = req
+        .subscribed_topic_regex
+        .as_deref()
+        .map_or_else(|| old_regex.clone(), non_empty_regex);
     // Kafka validates the pattern before it touches member state, and only
-    // when the heartbeat carries one that differs from the member's stored
+    // when the heartbeat brings one that differs from the member's stored
     // pattern. Do the same, so a rejected heartbeat leaves the group exactly
     // as it found it.
-    if let Some(pattern) = req.subscribed_topic_regex.as_deref()
-        && state
-            .members
-            .get(&req.member_id)
-            .is_none_or(|m| m.subscribed_topic_regex.as_deref() != Some(pattern))
+    if new_regex != old_regex
+        && let Some(pattern) = new_regex.as_deref()
     {
         check_subscribed_topic_regex(pattern)?;
     }
+    // Kafka's `maybeUpdateRegularExpressions`, before the member's new pattern
+    // reaches the group's counts.
+    let mut regex_records = Vec::new();
+    let regex_update = maybe_update_regular_expressions(
+        state,
+        old_regex.as_deref(),
+        new_regex.as_deref(),
+        regexes,
+        &mut regex_records,
+    );
     let mut member_metadata_changed = false;
-    let mut became_dirty = false;
-    let mut regex_resolved = false;
+    // Kafka's `hasSubscriptionChanged`: the heartbeat changed the subscribed
+    // topic names or the subscribed regex.
+    let mut names_changed = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
         if m.client_id != client.id {
@@ -124,66 +187,46 @@ pub(super) fn update_member_state(
             let set: std::collections::HashSet<String> = names.iter().cloned().collect();
             if set != m.subscribed_topic_names {
                 m.subscribed_topic_names = set;
-                became_dirty = true;
+                names_changed = true;
                 member_metadata_changed = true;
             }
         }
-        // KIP-848 v1+: `subscribed_topic_regex` may change independently
-        // of `subscribed_topic_names`. Only mark dirty when it actually
-        // changes; the client re-sends the same regex on every
-        // heartbeat as long as the subscription is stable.
-        if req.subscribed_topic_regex != m.subscribed_topic_regex {
-            // Recompile the cached regex only here — the one place the
-            // pattern actually changes (the client re-sends the same regex
-            // every heartbeat while the subscription is stable).
-            m.set_regex(req.subscribed_topic_regex.clone());
-            state.dirty = true;
+        if new_regex != m.subscribed_topic_regex {
+            m.subscribed_topic_regex = new_regex;
+            member_metadata_changed = true;
         }
-        // The handler recomputes the Describe-authorized subset of the
-        // regex-matched topics on every heartbeat that carries a pattern (see
-        // `consumer_group_heartbeat::regex_subscription_describe_authorized`),
-        // because ACLs and cluster topics can both change between heartbeats.
-        // Refresh it here even when the pattern string itself is unchanged,
-        // and mark the group dirty when the authorized set shrinks or grows
-        // so the reconciler drops or regains those topics.
-        if &m.regex_authorized_topics != regex_authorized_topics {
-            m.regex_authorized_topics
-                .clone_from(regex_authorized_topics);
-            state.dirty = true;
-        }
-        // This heartbeat carried the pattern, so the handler resolved it; or
-        // the member has none left to resolve.
-        regex_resolved = req.subscribed_topic_regex.is_some() || m.subscribed_topic_regex.is_none();
     }
-    if regex_resolved {
-        state.mark_regex_resolved(&req.member_id);
-    }
-    if became_dirty {
+    let subscription_changed = names_changed || regex_update.regex_updated();
+    // Kafka bumps the group epoch when the member changed its names, or its
+    // pattern to one that the group resolved. A pattern that is not resolved
+    // yet waits for its resolution, which bumps the epoch when it finds
+    // topics.
+    if names_changed || regex_update == RegexUpdate::UpdatedAndResolved {
         state.dirty = true;
     }
     refresh_expired_metadata(state, metadata);
-    let was_dirty = state.dirty;
-    run_reconcile(state, config, metadata);
-    let epoch_advanced = state.target.epoch > cur_epoch;
-    if epoch_advanced {
-        state.advance_member_epoch(&req.member_id);
-    }
-    // Reconcile this member's current assignment against the (possibly new)
-    // target and what it reports owning: grant free target partitions, mark
-    // revocations, and withhold partitions still held by another member. A
-    // heartbeat without `topic_partitions` is a keepalive — reuse the member's
-    // current assignment as its owned set so it can still pick up freed partitions.
-    let owned = if req.topic_partitions.is_some() {
-        reported_owned(req)
-    } else {
-        state
-            .members
-            .get(&req.member_id)
-            .map(|m| m.assigned_partitions.clone())
-            .unwrap_or_default()
-    };
-    let assignment_changed = state.reconcile_member(&req.member_id, &owned);
-    Ok(member_metadata_changed || was_dirty || epoch_advanced || assignment_changed)
+    // A new target makes the log write the group epoch and the target records.
+    // A group that waits for its assignment interval stays dirty with nothing
+    // new to write, so its heartbeats write only what they change.
+    let target_recomputed = run_reconcile(state, config, metadata);
+    // Kafka's `maybeReconcile`: reconcile this member's current assignment
+    // against the (possibly new) target and what it reports owning, in this
+    // heartbeat only. A heartbeat without `topic_partitions` reports no change,
+    // so the member still owns what it holds.
+    let owned = reported_owned(req);
+    let assignment_changed = state.reconcile_member(
+        &req.member_id,
+        owned.as_ref(),
+        subscription_changed,
+        metadata,
+    );
+    Ok(MemberUpdate {
+        changed: member_metadata_changed
+            || target_recomputed
+            || assignment_changed
+            || !regex_records.is_empty(),
+        regex_records,
+    })
 }
 
 /// Kafka's `group.hasMetadataExpired(currentTimeMs)` check in
@@ -200,39 +243,45 @@ pub(super) fn refresh_expired_metadata(state: &mut GroupState, metadata: &dyn Me
     reconciler::refresh_metadata(state, &metadata.snapshot());
 }
 
+/// Recomputes the target of a dirty group, and returns `true` when it did. A
+/// group that waits for its assignment interval keeps its target and stays
+/// dirty, so a later heartbeat computes it.
 pub(super) fn run_reconcile(
     state: &mut GroupState,
     config: &NextGenConfig,
     metadata: &dyn MetadataProvider,
-) {
+) -> bool {
     // `metadata.snapshot()` rebuilds HashMaps over every cluster topic /
     // partition — far too expensive to run on a steady-state no-op
     // heartbeat. `reconcile_if_dirty` early-returns when `!dirty`, so gate
     // the snapshot on the same condition: only pay for it when we will
     // actually recompute. Behavior when dirty is identical to before.
     if !state.dirty {
-        return;
+        return false;
+    }
+    // Kafka's `maybeUpdateTargetAssignment`: the target assignment waits for
+    // the group's assignment interval.
+    if state.assignment_delayed(config.assignment_interval, Instant::now()) {
+        return false;
     }
     let input = metadata.snapshot();
     let assignor = pick_assignor(state, config);
-    reconciler::reconcile_if_dirty(state, &input, &*assignor);
-    // A new target can end the revocation of any member, not only the one
-    // whose heartbeat got here.
-    state.prune_rebalance_timeouts();
+    let recomputed =
+        reconciler::reconcile_if_dirty(state, &input, &*assignor) == ReconcileOutcome::Recomputed;
+    if recomputed {
+        state.record_assignment(Instant::now());
+    }
+    recomputed
 }
 
+/// Kafka's `maybeUpdateTargetAssignment`: the group runs the assignor that the
+/// most members name (`ConsumerGroup.computePreferredServerAssignor`), and the
+/// first of `group.consumer.assignors` when no member names one. `Describe`
+/// reports the same choice.
 fn pick_assignor(state: &GroupState, config: &NextGenConfig) -> Arc<dyn Assignor> {
-    for m in state.members.values() {
-        if let Some(name) = m.server_assignor.as_deref()
-            && let Some(a) = config.find_assignor(name)
-        {
-            return a;
-        }
-    }
-    config
-        .assignors
-        .first()
-        .cloned()
+    preferred_server_assignor(state)
+        .and_then(|name| config.find_assignor(&name))
+        .or_else(|| config.assignors.first().cloned())
         .expect("NextGenConfig must have at least one registered assignor")
 }
 
@@ -247,18 +296,15 @@ pub(super) fn try_build_member(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
-    regex_authorized_topics: &HashSet<String>,
 ) -> Result<MemberState, String> {
-    if let Some(pattern) = req.subscribed_topic_regex.as_deref() {
+    if let Some(pattern) = req
+        .subscribed_topic_regex
+        .as_deref()
+        .filter(|pattern| !pattern.is_empty())
+    {
         check_subscribed_topic_regex(pattern)?;
     }
-    Ok(build_member(
-        member_id,
-        req,
-        client,
-        now,
-        regex_authorized_topics,
-    ))
+    Ok(build_member(member_id, req, client, now))
 }
 
 pub(super) fn build_member(
@@ -266,7 +312,6 @@ pub(super) fn build_member(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
-    regex_authorized_topics: &HashSet<String>,
 ) -> MemberState {
     let subs: std::collections::HashSet<String> = req
         .subscribed_topic_names
@@ -274,16 +319,17 @@ pub(super) fn build_member(
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let mut member = MemberState {
+    MemberState {
         member_id: member_id.into(),
         instance_id: req.instance_id.clone(),
         rack_id: req.rack_id.clone(),
         client_id: client.id.into(),
         client_host: client.host.into(),
         subscribed_topic_names: subs,
-        subscribed_topic_regex: req.subscribed_topic_regex.clone(),
-        compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-        regex_authorized_topics: regex_authorized_topics.clone(),
+        subscribed_topic_regex: req
+            .subscribed_topic_regex
+            .as_deref()
+            .and_then(non_empty_regex),
         server_assignor: req.server_assignor.clone(),
         rebalance_timeout: Duration::from_millis(
             u64::try_from(req.rebalance_timeout_ms.max(0)).unwrap_or(FALLBACK_REBALANCE_TIMEOUT_MS),
@@ -296,13 +342,7 @@ pub(super) fn build_member(
         assignment_epochs: HashMap::new(),
         last_seen: now,
         classic: None,
-    };
-    // The struct literal above sets the pattern string directly, so fill the
-    // compiled cache from it. Without this a member that joins with a regex
-    // never compiles one: the steady-state path recompiles only when the
-    // pattern *changes*, and the client re-sends the same pattern forever.
-    member.sync_regex_cache();
-    member
+    }
 }
 
 #[cfg(test)]
@@ -322,11 +362,12 @@ mod tests {
         assignor::{Assignment, GroupSpec, TopicMetadata},
         offsets_log::fake::InMemoryOffsetsLog,
         reconciler::ReconcileInput,
+        regex_resolver::FixedRegexResolver,
     };
 
     #[test]
     fn subscription_change_persists_every_reconciled_assignment() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let first_topic = Uuid([10; 16]);
         let second_topic = Uuid([11; 16]);
         let metadata = StaticMetadata {
@@ -354,7 +395,6 @@ mod tests {
                     host: "host",
                 },
                 Instant::now(),
-                &HashSet::new(),
             ));
         }
         run_reconcile(&mut state, &config, &metadata);
@@ -379,7 +419,7 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
-            &HashSet::new(),
+            &RegexResolution::none(),
         );
 
         let mut target_ids: Vec<&str> = step
@@ -402,10 +442,161 @@ mod tests {
         assert!(current_ids == vec!["m1", "m2"]);
     }
 
+    /// A heartbeat may list a topic twice. The partitions of its entries add
+    /// up, so a member that reports a partition it must revoke in any entry
+    /// still owns it, and a later entry of the same topic does not hide it.
+    #[test]
+    fn a_topic_listed_twice_reports_the_partitions_of_both_entries() {
+        use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+
+        let topic = Uuid([1; 16]);
+        let other = Uuid([2; 16]);
+        let entry = |topic_id, partitions: &[i32]| TopicPartitions {
+            topic_id,
+            partitions: partitions.to_vec(),
+            ..Default::default()
+        };
+        let report = |entries| ConsumerGroupHeartbeatRequest {
+            topic_partitions: entries,
+            ..Default::default()
+        };
+        check!(reported_owned(&report(None)).is_none());
+        check!(
+            reported_owned(&report(Some(vec![
+                entry(topic, &[2]),
+                entry(other, &[1]),
+                entry(topic, &[0]),
+            ]))) == Some(HashMap::from([(topic, vec![2, 0]), (other, vec![1])]))
+        );
+
+        // A member at epoch 5 that must still revoke partition 2 stays there
+        // when it reports the partition in the first of two entries.
+        let config = NextGenConfig::assigning_at_once();
+        let metadata = StaticMetadata {
+            input: ReconcileInput {
+                topic_id_by_name: [("t".into(), topic)].into(),
+                partitions_per_topic: [(topic, 3)].into(),
+                ..Default::default()
+            },
+        };
+        let client = ClientIdentity {
+            id: "client",
+            host: "host",
+        };
+        let mut state = GroupState::new("g");
+        let mut member = build_member(
+            "m1",
+            &ConsumerGroupHeartbeatRequest {
+                subscribed_topic_names: Some(vec!["t".into()]),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            client,
+            Instant::now(),
+        );
+        member.member_epoch = 5;
+        member.previous_member_epoch = 4;
+        member.assignment_state = MemberAssignmentState::UnrevokedPartitions;
+        member.assigned_partitions = [(topic, vec![0])].into();
+        member.partitions_pending_revocation = [(topic, vec![2])].into();
+        state.add_or_update_member(member);
+        state.group_epoch = 6;
+        state.dirty = false;
+        state.install_target([("m1".to_owned(), [(topic, vec![0])].into())].into());
+
+        let step = step_heartbeat(
+            &mut state,
+            &config,
+            &metadata,
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 5,
+                topic_partitions: Some(vec![entry(topic, &[2]), entry(topic, &[0])]),
+                ..Default::default()
+            },
+            client,
+            Instant::now(),
+            &RegexResolution::none(),
+        );
+
+        check!(step.response.error_code == 0);
+        let member = &state.members["m1"];
+        check!(member.member_epoch == 5);
+        check!(member.assignment_state == MemberAssignmentState::UnrevokedPartitions);
+        check!(member.partitions_pending_revocation == HashMap::from([(topic, vec![2])]));
+    }
+
+    /// A group that waits for its assignment interval stays dirty, because the
+    /// target that a member joined for is not computed yet. Its heartbeats that
+    /// change nothing write nothing, and a member that changes its
+    /// subscription writes only its own member record, until the heartbeat that
+    /// computes the target writes the group and target records.
+    #[test]
+    fn heartbeats_inside_the_assignment_interval_write_only_what_they_change() {
+        let config = NextGenConfig {
+            assignment_interval: Duration::from_mins(1),
+            ..NextGenConfig::default()
+        };
+        let metadata = orders_metadata();
+        let client = ClientIdentity {
+            id: "client",
+            host: "host",
+        };
+        let request =
+            |member_id: &str, member_epoch: i32, names: &[&str]| ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.into(),
+                member_epoch,
+                subscribed_topic_names: Some(names.iter().map(|name| (*name).into()).collect()),
+                rebalance_timeout_ms: 60_000,
+                topic_partitions: Some(vec![]),
+                ..Default::default()
+            };
+        let mut state = GroupState::new("g");
+        let mut heartbeat = |member_id: &str, names: &[&str]| {
+            let epoch = state.members.get(member_id).map_or(0, |m| m.member_epoch);
+            step_heartbeat(
+                &mut state,
+                &config,
+                &metadata,
+                &request(member_id, epoch, names),
+                client,
+                Instant::now(),
+                &RegexResolution::none(),
+            )
+        };
+
+        // The first member computes the first target. The second joins inside
+        // the interval, and the group waits to compute for it.
+        check!(
+            heartbeat("m1", &["orders-eu"])
+                .pending
+                .group_metadata
+                .is_some()
+        );
+        heartbeat("m2", &["orders-eu"]);
+
+        let unchanged = heartbeat("m1", &["orders-eu"]);
+        check!(unchanged.response.error_code == 0);
+        check!(unchanged.pending.is_empty());
+        let resubscribed = heartbeat("m1", &["orders-eu", "other"]);
+        check!(resubscribed.response.error_code == 0);
+        check!(resubscribed.pending.target_metadata.is_none());
+        check!(resubscribed.pending.target_per_member.is_empty());
+        let written: Vec<&str> = resubscribed
+            .pending
+            .member_metadata
+            .iter()
+            .map(|(member_id, _)| member_id.as_str())
+            .collect();
+        check!(written == vec!["m1"]);
+    }
+
     /// A group holding one member subscribed by regex, already reconciled and
     /// at a stable epoch.
     fn group_with_regex_member(metadata: &StaticMetadata, pattern: &str) -> GroupState {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let mut state = GroupState::new("g");
         state.add_or_update_member(build_member(
             "m1",
@@ -419,7 +610,6 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
-            &HashSet::new(),
         ));
         run_reconcile(&mut state, &config, metadata);
         state.advance_member_epoch("m1");
@@ -442,7 +632,7 @@ mod tests {
     /// joining member is never admitted.
     #[test]
     fn invalid_regex_on_join_rejects_the_heartbeat() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
         for pattern in ["(", "[a-", "a{2,1}"] {
             let mut state = GroupState::new("g");
@@ -463,7 +653,7 @@ mod tests {
                     host: "host",
                 },
                 Instant::now(),
-                &HashSet::new(),
+                &RegexResolution::none(),
             );
 
             check!(
@@ -489,7 +679,7 @@ mod tests {
     /// member exactly as it was: same pattern, same epoch, group not dirty.
     #[test]
     fn invalid_regex_on_pattern_change_leaves_member_untouched() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
         for pattern in ["(", "[a-", "a{2,1}"] {
             let mut state = group_with_regex_member(&metadata, "^orders-.*");
@@ -513,7 +703,7 @@ mod tests {
                     host: "other-host",
                 },
                 Instant::now(),
-                &HashSet::new(),
+                &RegexResolution::none(),
             );
 
             check!(result.is_err(), "{pattern}");
@@ -533,8 +723,9 @@ mod tests {
     /// the member and reconciles the topics it matches.
     #[test]
     fn valid_regex_still_reconciles() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let metadata = orders_metadata();
+        let resolver = FixedRegexResolver::new(&[("^orders-.*", &["orders-eu"])]);
         let mut state = GroupState::new("g");
 
         let step = step_heartbeat(
@@ -554,7 +745,7 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
-            &HashSet::from(["orders-eu".to_string()]),
+            &RegexResolution::with(&resolver),
         );
 
         check!(step.response.error_code == 0);
@@ -566,6 +757,71 @@ mod tests {
             .copied()
             .collect();
         assert!(assigned.len() == 2, "{:?}", state.members["m1"]);
+    }
+
+    /// Kafka's `maybeUpdateSubscribedTopicRegex`: an absent pattern leaves the
+    /// stored one alone (the Java client sends the pattern only when it
+    /// changed), and the empty string drops it (the client's way to remove a
+    /// pattern). The dropped pattern selects no topic, where the empty regex
+    /// used to match every topic the principal may describe, and its
+    /// resolution, which no member uses any more, is tombstoned.
+    #[test]
+    fn an_absent_pattern_keeps_the_regex_and_an_empty_one_drops_it() {
+        let config = NextGenConfig::assigning_at_once();
+        let metadata = orders_metadata();
+        let resolver = FixedRegexResolver::new(&[("orders-.*", &["orders-eu"])]);
+        // (pattern sent at the steady-state heartbeat, the member's pattern,
+        // the topics of its target afterwards, the resolution records)
+        for (sent, pattern, target_topics, records) in [
+            (None, Some("orders-.*"), 1, vec![]),
+            (Some(""), None, 0, vec![("orders-.*".to_owned(), None)]),
+            (Some("orders-.*"), Some("orders-.*"), 1, vec![]),
+        ] {
+            let mut state = GroupState::new("g");
+            let request = |member_epoch, regex: Option<&str>| ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch,
+                subscribed_topic_regex: regex.map(str::to_owned),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            };
+            let client = ClientIdentity {
+                id: "client",
+                host: "host",
+            };
+            step_heartbeat(
+                &mut state,
+                &config,
+                &metadata,
+                &request(0, Some("orders-.*")),
+                client,
+                Instant::now(),
+                &RegexResolution::with(&resolver),
+            );
+            let member_epoch = state.members["m1"].member_epoch;
+
+            let step = step_heartbeat(
+                &mut state,
+                &config,
+                &metadata,
+                &request(member_epoch, sent),
+                client,
+                Instant::now(),
+                &RegexResolution::with(&resolver),
+            );
+
+            check!(step.response.error_code == 0, "{sent:?}");
+            check!(step.pending.resolved_regexes == records, "{sent:?}");
+            check!(
+                state.members["m1"].subscribed_topic_regex.as_deref() == pattern,
+                "{sent:?}"
+            );
+            check!(
+                state.target.per_member.get("m1").map_or(0, HashMap::len) == target_topics,
+                "{sent:?}"
+            );
+        }
     }
 
     /// Acceptance parity with RE2J, the engine Kafka validates with. Rust's
@@ -662,7 +918,7 @@ mod tests {
 
     #[test]
     fn pick_assignor_skips_unregistered_member_preference() {
-        let config = NextGenConfig::default();
+        let config = NextGenConfig::assigning_at_once();
         let mut state = crate::coordinator::unified::consumer_state::GroupState::new("g");
         let mut m = build_member(
             "m1",
@@ -672,7 +928,6 @@ mod tests {
                 host: "h",
             },
             Instant::now(),
-            &HashSet::new(),
         );
         m.server_assignor = Some("ghost".into());
         state.members.insert("m1".into(), m);
@@ -681,10 +936,62 @@ mod tests {
         assert!(picked.name() == "uniform");
     }
 
+    /// Kafka's `computePreferredServerAssignor`: the group runs the assignor
+    /// the most members name, and the first configured one when none does.
+    /// `Describe` reports the same choice.
+    #[test]
+    fn pick_assignor_follows_the_majority_of_members() {
+        let config = NextGenConfig::assigning_at_once();
+        let uniform = || vec![Some("uniform"); 1];
+        let range = |count| vec![Some("range"); count];
+        // (assignors the members name, the assignor the group runs)
+        for (named, expected) in [
+            (vec![], "uniform"),
+            (vec![None, None], "uniform"),
+            (range(1), "range"),
+            (uniform().into_iter().chain(range(20)).collect(), "range"),
+            (range(20).into_iter().chain(uniform()).collect(), "range"),
+            ([uniform(), vec![None; 3], range(2)].concat(), "range"),
+            (
+                uniform()
+                    .into_iter()
+                    .chain(uniform())
+                    .chain(range(1))
+                    .collect(),
+                "uniform",
+            ),
+        ] {
+            let mut state = GroupState::new("g");
+            for (index, assignor) in named.iter().enumerate() {
+                let mut member = build_member(
+                    &format!("m{index}"),
+                    &ConsumerGroupHeartbeatRequest::default(),
+                    ClientIdentity {
+                        id: "client",
+                        host: "host",
+                    },
+                    Instant::now(),
+                );
+                member.server_assignor = assignor.map(str::to_owned);
+                state.members.insert(member.member_id.clone(), member);
+            }
+
+            check!(
+                pick_assignor(&state, &config).name() == expected,
+                "{named:?}"
+            );
+            check!(
+                preferred_server_assignor(&state).unwrap_or_else(|| "uniform".to_string())
+                    == expected,
+                "{named:?}"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn custom_assignor_invoked_when_requested() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut config = NextGenConfig::default();
+        let mut config = NextGenConfig::assigning_at_once();
         config
             .register_assignor(Arc::new(CountingAssignor {
                 calls: calls.clone(),
@@ -694,7 +1001,7 @@ mod tests {
         let log = Arc::new(InMemoryOffsetsLog::default());
         let coord = Arc::new(GroupCoordinator::new(
             config,
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             empty_metadata(),
             log,
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -716,7 +1023,8 @@ mod tests {
                 },
                 client_id: "client-a".into(),
                 client_host: String::new(),
-                regex_authorized_topics: std::collections::HashSet::new(),
+                regex_resolver:
+                    crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
                 reply: tx,
             })
             .await

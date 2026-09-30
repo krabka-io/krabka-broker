@@ -50,7 +50,7 @@ use self::{
     runner::{
         PINNED_UNIQUE_STATES_DEFERRAL, PINNED_UNIQUE_STATES_DEFERRAL_WIDE,
         PINNED_UNIQUE_STATES_FAILOVER, PINNED_UNIQUE_STATES_INFLIGHT_FULL,
-        PINNED_UNIQUE_STATES_INFLIGHT_ONE, PINNED_UNIQUE_STATES_LOG_START_ADVANCE, run,
+        PINNED_UNIQUE_STATES_LOG_START_ADVANCE, PINNED_UNIQUE_STATES_RECORD_LOCK_LIMIT, run,
     },
 };
 
@@ -65,12 +65,14 @@ fn share_concurrency_inflight_full() {
 }
 
 #[test]
-fn share_concurrency_inflight_one() {
-    // max_inflight = 1: exercises drain-then-rematerialize across Produce steps.
+fn share_concurrency_record_lock_limit() {
+    // A record lock limit of 2 under three records: the window fills to the
+    // limit and grows again only after an acknowledgement moves the SPSO, so
+    // the model exercises drain-then-rematerialize across Produce steps.
     run(
-        ShareModel::concurrency(3, 1),
-        "share_concurrency_inflight_one",
-        PINNED_UNIQUE_STATES_INFLIGHT_ONE,
+        ShareModel::concurrency(3, 2),
+        "share_concurrency_record_lock_limit",
+        PINNED_UNIQUE_STATES_RECORD_LOCK_LIMIT,
     );
 }
 

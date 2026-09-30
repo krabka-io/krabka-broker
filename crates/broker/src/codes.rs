@@ -85,12 +85,16 @@ kafka_codes! {
     /// `message.max.bytes`. The JVM maps it to `RecordTooLargeException`,
     /// which no producer retries.
     MESSAGE_TOO_LARGE = 10;
+    /// `RECORD_LIST_TOO_LARGE` (18): a produced record set is larger than the
+    /// topic's `segment.bytes`. Kafka's `RecordBatchTooLargeException`, which a
+    /// JVM producer does not retry.
+    RECORD_LIST_TOO_LARGE = 18;
     /// `OFFSET_METADATA_TOO_LARGE` (12): an `OffsetCommit` partition row
     /// carries committed metadata longer than `offset.metadata.max.bytes`.
     OFFSET_METADATA_TOO_LARGE = 12;
     /// `KAFKA_STORAGE_ERROR` (56, KIP-113): a log-dir-level I/O failure on
-    /// open, rename, or remove, or a concurrent move with a conflicting
-    /// target.
+    /// open, rename, remove, append, or read, or a concurrent move with a
+    /// conflicting target.
     KAFKA_STORAGE_ERROR = 56;
     /// `LOG_DIR_NOT_FOUND` (57, KIP-113): the destination directory in an
     /// `AlterReplicaLogDirs` request is not one of this broker's configured
@@ -126,6 +130,11 @@ kafka_codes! {
     INVALID_PARTITIONS = 37;
     INVALID_REPLICATION_FACTOR = 38;
     NOT_CONTROLLER = 41;
+    /// `LISTENER_NOT_FOUND` (72): the leader of a partition is registered but
+    /// has no endpoint on the listener the request arrived on. `Metadata` v6
+    /// and later answer it beside a `-1` leader; earlier versions answer
+    /// `LEADER_NOT_AVAILABLE`.
+    LISTENER_NOT_FOUND = 72;
     /// `TOPIC_DELETION_DISABLED` (73): `delete.topic.enable` is `false`, so
     /// `DeleteTopics` v3 and later refuse every topic.
     TOPIC_DELETION_DISABLED = 73;
@@ -639,6 +648,13 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         // fault: the produce row carries the same code the produce-side
         // `delivery.max.delay.ms` bound answers with.
         BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards { .. }) => INVALID_TIMESTAMP,
+        // Kafka's `LocalLog.maybeHandleIOException` turns every `IOException`
+        // of an append or a read into `KafkaStorageException`, which
+        // `Errors.forException` answers with `KAFKA_STORAGE_ERROR`: retriable,
+        // and it makes the client refresh its metadata. Left to the catch-all
+        // below, a disk fault is `UNKNOWN_SERVER_ERROR`, which the JVM
+        // producer never retries.
+        BrokerError::Log(krabka_log::LogError::Io(_)) => KAFKA_STORAGE_ERROR,
         BrokerError::UnsupportedApi { .. } => UNSUPPORTED_VERSION,
         // A raft write that reached a node which is no longer the leader is
         // the same answer to a client as a partition whose writer is gone:

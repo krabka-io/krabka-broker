@@ -38,6 +38,9 @@ pub enum FailoverRecovery {
 pub enum FailoverAction {
     ElectClean,
     ElectFromElr,
+    /// The partition's single last-known leader comes back as an unclean
+    /// leader (Kafka's `canElectLastKnownLeader`).
+    ElectLastKnown,
     Recover(FailoverRecovery),
     ElectUnclean,
     Unavailable,
@@ -65,6 +68,11 @@ pub enum LiveIsr {
 pub struct OutOfIsrFacts {
     /// A live KIP-966 eligible leader replica can lead.
     pub has_electable_elr: bool,
+    /// Kafka's `canElectLastKnownLeader`, less the empty-ISR test that
+    /// [`LiveIsr::Empty`] already carries: the target ELR is empty, the
+    /// partition's `lastKnownElr` holds exactly one replica, and that replica
+    /// is live and can lead.
+    pub last_known_leader_electable: bool,
     /// The topic's resolved offset-aware recovery strategy.
     pub recovery: FailoverRecovery,
     /// The KIP-841 out-of-ISR election is both permitted by
@@ -93,12 +101,12 @@ pub struct FailoverFacts {
 /// What the contract proves is the ladder, and only the ladder. For a dead
 /// leader it picks, in order: a clean election when a live ISR member can
 /// lead; otherwise, and only when no ISR member is live, an election from the
-/// eligible leader replicas; otherwise the configured offset-aware recovery;
-/// otherwise the KIP-841 election when it is available; otherwise the
-/// partition stays unavailable. A live ISR of witnesses only stops the ladder
-/// at unavailable. For a live leader it only shrinks the ISR or leaves it
-/// alone. Each outcome is pinned to exactly one combination of
-/// [`FailoverFacts`].
+/// eligible leader replicas; otherwise the last known leader; otherwise the
+/// configured offset-aware recovery; otherwise the KIP-841 election when it is
+/// available; otherwise the partition stays unavailable. A live ISR of
+/// witnesses only stops the ladder at unavailable. For a live leader it only
+/// shrinks the ISR or leaves it alone. Each outcome is pinned to exactly one
+/// combination of [`FailoverFacts`].
 ///
 /// Why each rung is safe is not part of the proof. It rests on the host's
 /// classification and on Kafka's semantics: an ISR member holds every
@@ -108,6 +116,12 @@ pub struct FailoverFacts {
 /// toggle nor `unclean.recovery.strategy` gates it. Its rung is reachable only
 /// once the live ISR is empty, the same guard Apache Kafka's
 /// `PartitionChangeBuilder.isValidNewLeader` puts on its `targetElr` disjunct.
+/// The last known leader is the one replica that led when the partition lost
+/// its leader, but it may have lost an unflushed tail, so electing it is an
+/// unclean election that Kafka takes without either toggle: its rung sits
+/// directly under the ELR one, exactly where `electAnyLeader` and
+/// `electPreferredLeader` put `canElectLastKnownLeader`, ahead of the
+/// KIP-841 branch.
 ///
 /// `unclean_election_available` joins the KIP-841 toggle and the existence of
 /// a replica that can serve, because the ladder never separates them: an
@@ -118,20 +132,27 @@ pub struct FailoverFacts {
     FailoverAction::ElectFromElr => facts.leader_dead
         && facts.live_isr == LiveIsr::Empty
         && facts.out_of_isr.has_electable_elr,
+    FailoverAction::ElectLastKnown => facts.leader_dead
+        && facts.live_isr == LiveIsr::Empty
+        && !facts.out_of_isr.has_electable_elr
+        && facts.out_of_isr.last_known_leader_electable,
     FailoverAction::Recover(selected) => facts.leader_dead
         && facts.live_isr == LiveIsr::Empty
         && !facts.out_of_isr.has_electable_elr
+        && !facts.out_of_isr.last_known_leader_electable
         && facts.out_of_isr.recovery != FailoverRecovery::None
         && selected == facts.out_of_isr.recovery,
     FailoverAction::ElectUnclean => facts.leader_dead
         && facts.live_isr == LiveIsr::Empty
         && !facts.out_of_isr.has_electable_elr
+        && !facts.out_of_isr.last_known_leader_electable
         && facts.out_of_isr.recovery == FailoverRecovery::None
         && facts.out_of_isr.unclean_election_available,
     FailoverAction::Unavailable => facts.leader_dead
         && (facts.live_isr == LiveIsr::WitnessesOnly
             || (facts.live_isr == LiveIsr::Empty
                 && !facts.out_of_isr.has_electable_elr
+                && !facts.out_of_isr.last_known_leader_electable
                 && facts.out_of_isr.recovery == FailoverRecovery::None
                 && !facts.out_of_isr.unclean_election_available)),
     FailoverAction::ShrinkIsr => !facts.leader_dead && facts.isr_shrunk,
@@ -154,6 +175,9 @@ pub fn failover_action(facts: FailoverFacts) -> FailoverAction {
     let out_of_isr = facts.out_of_isr;
     if out_of_isr.has_electable_elr {
         return FailoverAction::ElectFromElr;
+    }
+    if out_of_isr.last_known_leader_electable {
+        return FailoverAction::ElectLastKnown;
     }
     match out_of_isr.recovery {
         FailoverRecovery::Balanced | FailoverRecovery::Aggressive => {
@@ -801,28 +825,37 @@ mod tests {
     #[test]
     fn failover_action_covers_clean_unclean_recovery_and_shrink_paths() {
         use FailoverAction::{
-            ElectClean, ElectFromElr, ElectUnclean, NoChange, Recover, ShrinkIsr, Unavailable,
+            ElectClean, ElectFromElr, ElectLastKnown, ElectUnclean, NoChange, Recover, ShrinkIsr,
+            Unavailable,
         };
         use FailoverRecovery::{Aggressive, Balanced, None};
         use LiveIsr::{Electable, Empty, WitnessesOnly};
 
-        let dead =
-            |live_isr, has_electable_elr, recovery, unclean_election_available| FailoverFacts {
-                leader_dead: true,
-                isr_shrunk: true,
-                live_isr,
-                out_of_isr: OutOfIsrFacts {
+        // The arguments are the live ISR, then `has_electable_elr`,
+        // `last_known_leader_electable`, the recovery strategy and
+        // `unclean_election_available`.
+        let dead = |live_isr,
                     has_electable_elr,
+                    last_known_leader_electable,
                     recovery,
-                    unclean_election_available,
-                },
-            };
+                    unclean_election_available| FailoverFacts {
+            leader_dead: true,
+            isr_shrunk: true,
+            live_isr,
+            out_of_isr: OutOfIsrFacts {
+                has_electable_elr,
+                last_known_leader_electable,
+                recovery,
+                unclean_election_available,
+            },
+        };
         let alive = |isr_shrunk| FailoverFacts {
             leader_dead: false,
             isr_shrunk,
             live_isr: Electable,
             out_of_isr: OutOfIsrFacts {
                 has_electable_elr: false,
+                last_known_leader_electable: false,
                 recovery: None,
                 unclean_election_available: false,
             },
@@ -830,48 +863,80 @@ mod tests {
         for (name, facts, expected) in [
             (
                 "a live ISR member leads, whatever the out-of-ISR options",
-                dead(Electable, true, Aggressive, true),
+                dead(Electable, true, true, Aggressive, true),
                 ElectClean,
             ),
             // An electable ELR member outranks every offset-aware strategy and
             // the KIP-841 election, and never reaches either.
-            ("ELR alone", dead(Empty, true, None, false), ElectFromElr),
+            (
+                "ELR alone",
+                dead(Empty, true, false, None, false),
+                ElectFromElr,
+            ),
             (
                 "ELR over the unclean election",
-                dead(Empty, true, None, true),
+                dead(Empty, true, false, None, true),
                 ElectFromElr,
             ),
             (
                 "ELR over offset-aware recovery",
-                dead(Empty, true, Balanced, false),
+                dead(Empty, true, false, Balanced, false),
+                ElectFromElr,
+            ),
+            // The last known leader is Kafka's `canElectLastKnownLeader`: it
+            // sits under the ELR rung and over both the offset-aware recovery
+            // and the KIP-841 election, and neither toggle gates it.
+            (
+                "last known leader alone",
+                dead(Empty, false, true, None, false),
+                ElectLastKnown,
+            ),
+            (
+                "last known leader over the unclean election",
+                dead(Empty, false, true, None, true),
+                ElectLastKnown,
+            ),
+            (
+                "last known leader over balanced recovery",
+                dead(Empty, false, true, Balanced, false),
+                ElectLastKnown,
+            ),
+            (
+                "last known leader over aggressive recovery and the unclean election",
+                dead(Empty, false, true, Aggressive, true),
+                ElectLastKnown,
+            ),
+            (
+                "ELR over the last known leader",
+                dead(Empty, true, true, None, false),
                 ElectFromElr,
             ),
             (
                 "balanced recovery",
-                dead(Empty, false, Balanced, false),
+                dead(Empty, false, false, Balanced, false),
                 Recover(Balanced),
             ),
             (
                 "aggressive recovery over the unclean election",
-                dead(Empty, false, Aggressive, true),
+                dead(Empty, false, false, Aggressive, true),
                 Recover(Aggressive),
             ),
             (
                 "KIP-841 unclean election",
-                dead(Empty, false, None, true),
+                dead(Empty, false, false, None, true),
                 ElectUnclean,
             ),
             (
                 "nothing to elect",
-                dead(Empty, false, None, false),
+                dead(Empty, false, false, None, false),
                 Unavailable,
             ),
             // A live ISR that holds only witnesses is unavailable even with an
-            // ELR, a recovery strategy, and an unclean election: every
-            // out-of-ISR rung is guarded on an empty ISR.
+            // ELR, a last known leader, a recovery strategy, and an unclean
+            // election: every out-of-ISR rung is guarded on an empty ISR.
             (
                 "witness-only ISR",
-                dead(WitnessesOnly, true, Balanced, true),
+                dead(WitnessesOnly, true, true, Balanced, true),
                 Unavailable,
             ),
             ("a follower left the ISR", alive(true), ShrinkIsr),

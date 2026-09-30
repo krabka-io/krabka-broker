@@ -23,6 +23,7 @@ use krabka_protocol::owned::{
 
 use super::{StreamsDescribeMember, StreamsDescribeView};
 use crate::{
+    api_catalog::UnstableApiVersions,
     codes,
     coordinator::unified::streams::{
         config::StreamsGroupConfig,
@@ -50,6 +51,9 @@ fn map_to_task_ids(map: &BTreeMap<String, Vec<i32>>) -> Vec<RespTaskIds> {
 /// group's `acceptable.recovery.lag` in the `int64` field of version 1
 /// (KIP-1331), which version 0 does not encode. It never sets version 0's
 /// `int32` field, so that one carries 0 here too, as 4.3.0 sends it.
+/// Trunk also sets `TaskOffsetIntervalMs` from `streams.task.offset.interval.ms`,
+/// which 4.3.1 leaves at 0, so that field follows the config only while
+/// `unstable.api.versions.enable` is on.
 /// `TopologyDescriptionRequired` stays false: without a topology description
 /// plugin Kafka's `maybeSetTopologyDescriptionRequired` never asks for one.
 pub(super) fn base_resp(
@@ -57,11 +61,15 @@ pub(super) fn base_resp(
     member_epoch: i32,
     config: &StreamsGroupConfig,
 ) -> StreamsGroupHeartbeatResponse {
+    let task_offset_interval_ms = match config.unstable_api_versions {
+        UnstableApiVersions::Enabled => duration_ms(config.task_offset_interval, 30_000),
+        UnstableApiVersions::Disabled => 0,
+    };
     StreamsGroupHeartbeatResponse {
         error_code,
         member_epoch,
         heartbeat_interval_ms: duration_ms(config.heartbeat_interval, 5_000),
-        task_offset_interval_ms: duration_ms(config.task_offset_interval, 30_000),
+        task_offset_interval_ms,
         acceptable_recovery_lag_legacy: 0,
         acceptable_recovery_lag: config.acceptable_recovery_lag,
         topology_description_required: false,
@@ -201,16 +209,23 @@ pub(super) fn add_missing_client_tags(
 /// with a user endpoint, the other members in id order and `member_id` last.
 ///
 /// An entry lists the source and repartition source topic partitions of the
-/// member's active tasks, and of its standby and warmup tasks together, as
-/// `EndpointToPartitionsManager` does. A task partition that a topic does not
-/// have is left out. Kafka throws when the topology is not configured; this
-/// builder lists no partitions instead, because a member of such a group has
-/// no tasks.
+/// member's active tasks, and of its standby tasks, as
+/// `EndpointToPartitionsManager` does. Kafka throws when the topology is not
+/// configured; this builder lists no partitions instead, because a member of
+/// such a group has no tasks.
+///
+/// Kafka 4.3.1 lists the standby tasks alone. It cuts a task's partitions to
+/// the partition count of a topic that has fewer partitions than the task
+/// has, and keeps an entry that is left empty. Kafka trunk lists standby and
+/// warmup tasks together, leaves out a task partition that a topic does not
+/// have, and drops an entry with no partition. Those are the rules while
+/// `unstable.api.versions.enable` is on.
 pub(super) fn endpoint_to_partitions(
     state: &StreamsGroupState,
     member_id: &str,
     subtopologies: Option<&BTreeMap<String, ConfiguredSubtopology>>,
     image: Option<&MetadataImage>,
+    unstable: UnstableApiVersions,
 ) -> Vec<EndpointToPartitions> {
     let mut members: Vec<&StreamsMemberState> = state
         .members
@@ -223,12 +238,14 @@ pub(super) fn endpoint_to_partitions(
         .into_iter()
         .filter_map(|member| {
             let (host, port) = member.user_endpoint.as_ref()?;
-            let mut standby_and_warmup = member.standby.clone();
-            for (subtopology, partitions) in &member.warmup {
-                standby_and_warmup
-                    .entry(subtopology.clone())
-                    .or_default()
-                    .extend(partitions.iter().copied());
+            let mut standby = member.standby.clone();
+            if unstable == UnstableApiVersions::Enabled {
+                for (subtopology, partitions) in &member.warmup {
+                    standby
+                        .entry(subtopology.clone())
+                        .or_default()
+                        .extend(partitions.iter().copied());
+                }
             }
             Some(EndpointToPartitions {
                 user_endpoint: Endpoint {
@@ -236,19 +253,21 @@ pub(super) fn endpoint_to_partitions(
                     port: *port,
                     ..Default::default()
                 },
-                active_partitions: topic_partitions(&member.active, subtopologies, image),
-                standby_partitions: topic_partitions(&standby_and_warmup, subtopologies, image),
+                active_partitions: topic_partitions(&member.active, subtopologies, image, unstable),
+                standby_partitions: topic_partitions(&standby, subtopologies, image, unstable),
                 ..Default::default()
             })
         })
         .collect()
 }
 
-/// Kafka's `EndpointToPartitionsManager.topicPartitions`.
+/// Kafka's `EndpointToPartitionsManager.topicPartitions`, with the rules of
+/// 4.3.1 or of trunk as `endpoint_to_partitions` describes.
 fn topic_partitions(
     tasks: &BTreeMap<String, Vec<i32>>,
     subtopologies: Option<&BTreeMap<String, ConfiguredSubtopology>>,
     image: Option<&MetadataImage>,
+    unstable: UnstableApiVersions,
 ) -> Vec<TopicPartition> {
     let (Some(subtopologies), Some(image)) = (subtopologies, image) else {
         return Vec::new();
@@ -269,20 +288,28 @@ fn topic_partitions(
                 continue;
             }
             let partition_count = image.topic_partition_count(topic);
-            let mut partitions: Vec<i32> = task_partitions
-                .iter()
-                .copied()
-                .filter(|partition| *partition < partition_count)
-                .collect();
+            let mut partitions: Vec<i32> = task_partitions.clone();
             partitions.sort_unstable();
             partitions.dedup();
-            if !partitions.is_empty() {
-                out.push(TopicPartition {
-                    topic: topic.to_string(),
-                    partitions,
-                    ..Default::default()
-                });
+            match unstable {
+                UnstableApiVersions::Enabled => {
+                    partitions.retain(|partition| *partition < partition_count);
+                    if partitions.is_empty() {
+                        continue;
+                    }
+                }
+                // Kafka cuts the sorted task partitions to the topic's
+                // partition count only when the task has more partitions than
+                // the topic, and it keeps the entry when nothing is left.
+                UnstableApiVersions::Disabled => {
+                    partitions.truncate(usize::try_from(partition_count).unwrap_or(0));
+                }
             }
+            out.push(TopicPartition {
+                topic: topic.to_string(),
+                partitions,
+                ..Default::default()
+            });
         }
     }
     out

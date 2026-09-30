@@ -67,16 +67,21 @@ async fn commit_then_read_committed_sees_records() {
 
 // ── test 2 ────────────────────────────────────────────────────────────────────
 
+const SEGMENT_BYTES: u64 = 128;
+
 /// Aborts a transaction. `read_committed` then sees 0 records, and
 /// `read_uncommitted` sees 3.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_then_read_committed_skips_records() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic_with_segment_bytes(&bootstrap, "ta", 1).await;
+    // Every batch is about 75 bytes, so 128 seals a segment behind each one, and
+    // a smaller value would refuse the batch itself with RECORD_LIST_TOO_LARGE, as
+    // `UnifiedLog.append` does for a batch above `segmentSize()`.
+    create_topic_with_segment_bytes(&bootstrap, "ta", SEGMENT_BYTES).await;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !broker
         .partition_log_config_for_test("ta", 0)
-        .is_some_and(|config| config.segment_size == bytes(1))
+        .is_some_and(|config| config.segment_size == bytes(u32::try_from(SEGMENT_BYTES).unwrap()))
     {
         assert!(
             std::time::Instant::now() < deadline,

@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     config_keys::RecoveryStrategy,
+    elr::state::PartitionElr,
     leader_election::{ElectionType, FailoverDecision, select_new_leader_for_partition},
 };
 
@@ -32,7 +33,7 @@ impl StretchModel {
                         replica,
                         &alive,
                         &self.witnesses,
-                        &[],
+                        &PartitionElr::default(),
                         RecoveryStrategy::None,
                         false,
                     ),
@@ -52,7 +53,7 @@ impl StretchModel {
             dead,
             &alive,
             &self.witnesses,
-            &[],
+            &PartitionElr::default(),
             RecoveryStrategy::None,
             false,
         );

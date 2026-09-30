@@ -210,6 +210,44 @@ async fn member_limit_rejects_only_new_members() {
     check!(existing.member_epoch == joined.member_epoch);
 }
 
+/// Kafka 4.3.1's `throwIfStreamsGroupIsFull(group)` runs on every join and
+/// counts a member that is already in the group, so a rejoin at epoch 0 to a
+/// full group is refused. Trunk exempts the known member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_known_member_that_rejoins_a_full_group_is_refused_by_4_3_1_only() {
+    use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
+
+    for (unstable, expected) in [
+        (Disabled, codes::GROUP_MAX_SIZE_REACHED),
+        (Enabled, codes::NONE),
+    ] {
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(EmptyMetadata),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig {
+                max_size: 1,
+                unstable_api_versions: unstable,
+                ..undelayed()
+            },
+        ));
+        let handle = coord.get_or_create_streams("g");
+        let join = StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: 0,
+            ..Default::default()
+        };
+
+        let joined = heartbeat(&handle, join.clone()).await;
+        let rejoined = heartbeat(&handle, join).await;
+
+        check!(joined.error_code == codes::NONE, "{unstable:?}");
+        check!(rejoined.error_code == expected, "{unstable:?}");
+    }
+}
+
 /// The member epoch rule of Kafka's `throwIfStreamsGroupMemberEpochIsInvalid`.
 /// Member `m1` is at epoch 4 with previous epoch 3: it joins at epoch 2, the
 /// first bump past the initial group epoch 1, `m2` joins (group epoch 3), `m1`
@@ -1678,13 +1716,15 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
 /// `streamsGroupStaticMemberGroupLeave` run it. Member `m1` holds instance id
 /// `i1` in a group with a one-partition topic. Each row sends its heartbeats
 /// and compares the whole last response and the members afterwards, as
-/// `(member id, member epoch, active tasks)`.
+/// `(member id, member epoch, active tasks)`. Static membership is Kafka
+/// trunk's: 4.3.1 refuses an instance id before the group sees the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_static_member_follows_kafka_static_membership() {
     use crate::test_support::FakeMetadataSource;
 
     let config = StreamsGroupConfig {
         max_size: 2,
+        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         ..undelayed()
     };
     let join = |member_id: &str, instance_id: &str| StreamsGroupHeartbeatRequest {
@@ -2127,8 +2167,8 @@ fn heartbeat_response_carries_the_recovery_lag_at_version_1_only() {
         heartbeat_interval_ms: 5_000,
         acceptable_recovery_lag_legacy: 0,
         acceptable_recovery_lag: 10_000,
-        task_offset_interval_ms: i32::try_from(config.task_offset_interval.as_millis())
-            .expect("fits"),
+        // Kafka 4.3.1 never sets the field.
+        task_offset_interval_ms: 0,
         ..Default::default()
     };
     assert!(response == expected);
@@ -2144,6 +2184,145 @@ fn heartbeat_response_carries_the_recovery_lag_at_version_1_only() {
             ) == (legacy, lag),
             "version {version}"
         );
+    }
+}
+
+/// Kafka 4.3.1 never sets `TaskOffsetIntervalMs`, so a heartbeat response
+/// carries 0 on the wire. Kafka trunk sets it from
+/// `streams.task.offset.interval.ms`, whose default is one minute, and the
+/// group config answers the same only while `unstable.api.versions.enable` is
+/// on.
+#[test]
+fn the_task_offset_interval_of_a_heartbeat_response_is_trunks_alone() {
+    use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
+
+    for (unstable, expected) in [(Disabled, 0), (Enabled, 60_000)] {
+        let config = StreamsGroupConfig {
+            unstable_api_versions: unstable,
+            ..undelayed()
+        };
+
+        let response = response::base_resp(codes::NONE, 3, &config);
+
+        check!(response.task_offset_interval_ms == expected, "{unstable:?}");
+    }
+}
+
+/// `partitionsByUserEndpoint` follows the `EndpointToPartitionsManager` of the
+/// release. Kafka 4.3.1 lists the standby tasks alone, cuts a task's
+/// partitions to the partition count of a topic that has fewer partitions than
+/// the task has (and does nothing else), and keeps an entry that is left
+/// empty. Kafka trunk lists standby and warmup tasks together, leaves out the
+/// task partitions a topic does not have, and drops an entry with no partition.
+#[test]
+fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use krabka_protocol::owned::{
+        common::streams_group_heartbeat_response::{
+            endpoint::Endpoint, topic_partition::TopicPartition,
+        },
+        streams_group_heartbeat_response::EndpointToPartitions,
+    };
+
+    use crate::{
+        api_catalog::UnstableApiVersions::{Disabled, Enabled},
+        coordinator::unified::streams::{
+            state::{StreamsGroupState, StreamsMemberState},
+            topology::ConfiguredSubtopology,
+        },
+    };
+
+    // The topic `in` has two partitions.
+    let image = image_of(None, &[("in", 1, 2)]);
+    let subtopologies = BTreeMap::from([(
+        "0".to_string(),
+        ConfiguredSubtopology {
+            number_of_tasks: 4,
+            source_topics: BTreeSet::from(["in".to_string()]),
+            repartition_source_topics: BTreeMap::new(),
+            repartition_sink_topics: BTreeSet::new(),
+            state_changelog_topics: BTreeMap::new(),
+        },
+    )]);
+    let entry = |active: &[i32], standby: &[i32]| {
+        let partitions = |partitions: &[i32]| {
+            vec![TopicPartition {
+                topic: "in".into(),
+                partitions: partitions.to_vec(),
+                ..Default::default()
+            }]
+        };
+        EndpointToPartitions {
+            user_endpoint: Endpoint {
+                host: "localhost".into(),
+                port: 1,
+                ..Default::default()
+            },
+            active_partitions: if active.is_empty() {
+                vec![]
+            } else {
+                partitions(active)
+            },
+            standby_partitions: if standby.is_empty() {
+                vec![]
+            } else {
+                partitions(standby)
+            },
+            ..Default::default()
+        }
+    };
+    // (name, active, standby and warmup tasks of subtopology 0, 4.3.1, trunk)
+    let rows = [
+        (
+            "standby tasks over the partition count are cut",
+            vec![0, 1],
+            (vec![1, 2, 3], vec![0]),
+            entry(&[0, 1], &[1, 2]),
+            entry(&[0, 1], &[0, 1]),
+        ),
+        (
+            "a warmup task is a standby task for trunk only",
+            vec![0],
+            (vec![], vec![1]),
+            entry(&[0], &[]),
+            entry(&[0], &[1]),
+        ),
+        (
+            "a partition the topic lacks is kept below the count and filtered by trunk",
+            vec![5],
+            (vec![], vec![]),
+            entry(&[5], &[]),
+            entry(&[], &[]),
+        ),
+    ];
+    for (name, active, (standby, warmup), released, trunk) in rows {
+        let mut member = StreamsMemberState::joining("m1", "c", "h");
+        member.user_endpoint = Some(("localhost".into(), 1));
+        let tasks = |partitions: Vec<i32>| {
+            if partitions.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([("0".to_string(), partitions)])
+            }
+        };
+        member.active = tasks(active);
+        member.standby = tasks(standby);
+        member.warmup = tasks(warmup);
+        let mut state = StreamsGroupState::new("g");
+        state.members.insert("m1".into(), member);
+
+        for (unstable, expected) in [(Disabled, released), (Enabled, trunk)] {
+            let listed = response::endpoint_to_partitions(
+                &state,
+                "m1",
+                Some(&subtopologies),
+                Some(&image),
+                unstable,
+            );
+
+            check!(listed == vec![expected], "{name}: {unstable:?}");
+        }
     }
 }
 

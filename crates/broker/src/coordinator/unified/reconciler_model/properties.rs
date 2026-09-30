@@ -14,14 +14,16 @@ use stateright::{Model, Property};
 
 use super::{
     config::{ReconModel, config},
-    heartbeat::{advertised_of, hb_request},
+    heartbeat::{advertised_of, hb_request, keepalive_request},
     projection::{assert_epoch_monotonic, project, rebuild_group},
     state::{
         ReconAction, ReconState, advertised_for, advertised_map, member, owned_map, owned_to_vec,
     },
 };
 use crate::coordinator::unified::{
-    ClientIdentity, actor::step_heartbeat, persistence_next_gen::MemberAssignmentState,
+    ClientIdentity,
+    actor::{RegexResolution, step_heartbeat},
+    persistence_next_gen::MemberAssignmentState,
 };
 
 impl Model for ReconModel {
@@ -54,6 +56,7 @@ impl Model for ReconModel {
             if under_cap {
                 actions.push(ReconAction::Leave(m.id.clone()));
                 actions.push(ReconAction::Heartbeat(m.id.clone()));
+                actions.push(ReconAction::Keepalive(m.id.clone()));
             }
             // Faithful-client moves gate on the ADVERTISED assignment (what the
             // member was last told), not the raw target. No cross-member check.
@@ -116,11 +119,11 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.entry(id.clone()).or_default(); // new member owns nothing yet
-                adv.insert(id, advertised_of(&step));
+                adv.insert(id, advertised_of(&step).unwrap_or_default());
                 Some(project(&g, &owned, &adv))
             }
             ReconAction::Leave(id) => {
@@ -134,7 +137,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.remove(&id);
@@ -153,10 +156,31 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
-                    &HashSet::new(),
+                    &RegexResolution::none(),
                 );
                 assert_epoch_monotonic(last, &g);
-                adv.insert(id, advertised_of(&step));
+                adv.insert(id, advertised_of(&step).unwrap_or_default());
+                Some(project(&g, &owned, &adv))
+            }
+            ReconAction::Keepalive(id) => {
+                let epoch = member(last, &id)?.member_epoch;
+                let mut g = rebuild_group(last);
+                let req = keepalive_request(&id, epoch);
+                let step = step_heartbeat(
+                    &mut g,
+                    &config(),
+                    &self.metadata(),
+                    &req,
+                    ClientIdentity { id: "", host: "" },
+                    Instant::now(),
+                    &RegexResolution::none(),
+                );
+                assert_epoch_monotonic(last, &g);
+                // Without an assignment in the answer, the member keeps the one
+                // it was last told.
+                if let Some(assignment) = advertised_of(&step) {
+                    adv.insert(id, assignment);
+                }
                 Some(project(&g, &owned, &adv))
             }
         }

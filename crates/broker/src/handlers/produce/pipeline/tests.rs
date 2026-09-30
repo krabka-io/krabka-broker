@@ -92,9 +92,9 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
                 transactional_id: None,
                 version: 9,
                 producer_id_expiration_ms: 86_400_000,
+                verification_enabled: true,
             },
             acks: 1,
-            timeout: Duration::from_millis(1),
         },
         PartitionServices {
             schema_validator: Some(&schema_validator),
@@ -196,9 +196,9 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
                 transactional_id: None,
                 version: 9,
                 producer_id_expiration_ms: 86_400_000,
+                verification_enabled: true,
             },
             acks: 1,
-            timeout: Duration::from_millis(1),
         },
         PartitionServices {
             schema_validator: None,

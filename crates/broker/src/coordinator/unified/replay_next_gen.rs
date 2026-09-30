@@ -175,6 +175,41 @@ impl GroupCoordinator {
         }
     }
 
+    /// Applies a `ConsumerGroupRegularExpression` record: what `regex`
+    /// resolved to in the group. Kafka's `GroupMetadataManager.replay` of the
+    /// record updates the resolved regular expressions of the group, which is
+    /// how a coordinator failover restores the topics of every regex
+    /// subscription.
+    pub fn replay_regular_expression(
+        &self,
+        group_id: &str,
+        regex: &str,
+        v: persistence_next_gen::RegularExpressionValue,
+    ) {
+        {
+            if let Some(mut seed) = self.seeds.get_mut(group_id)
+                && replay_mutation(
+                    ReplayRecordKind::RegularExpression,
+                    Some(ReplayRecordKind::RegularExpression),
+                    true,
+                    false,
+                ) == ReplayMutation::Apply
+            {
+                seed.resolved_regexes.insert(regex.into(), v.clone());
+            }
+        }
+        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
+            && replay_mutation(
+                ReplayRecordKind::RegularExpression,
+                Some(ReplayRecordKind::RegularExpression),
+                true,
+                false,
+            ) == ReplayMutation::Apply
+        {
+            cached.resolved_regexes.insert(regex.into(), v);
+        }
+    }
+
     /// Apply a tombstone for a next-gen key.
     ///
     /// The method removes the matching entry from both `seeds` and
@@ -205,7 +240,8 @@ impl GroupCoordinator {
             | K::MemberMetadata { group_id, .. }
             | K::TargetAssignmentMetadata { group_id }
             | K::TargetAssignmentMember { group_id, .. }
-            | K::CurrentMemberAssignment { group_id, .. } => group_id.as_str(),
+            | K::CurrentMemberAssignment { group_id, .. }
+            | K::RegularExpression { group_id, .. } => group_id.as_str(),
         };
         let scrub = |seed: &mut GroupSeed| match key {
             // Unreachable: the `GroupMetadata` tombstone removes the whole seed
@@ -227,6 +263,9 @@ impl GroupCoordinator {
             }
             K::CurrentMemberAssignment { member_id, .. } => {
                 seed.current_per_member.remove(member_id);
+            }
+            K::RegularExpression { regex, .. } => {
+                seed.resolved_regexes.remove(regex);
             }
         };
         {
@@ -271,6 +310,12 @@ mod tests {
         );
         coord.replay_target_assignment_member("g", "member-a", target.clone());
         coord.replay_current_member_assignment("g", "member-a", current.clone());
+        let resolved = persistence_next_gen::RegularExpressionValue {
+            topics: vec!["topic-a".into()],
+            version: 40,
+            timestamp_ms: 1_000,
+        };
+        coord.replay_regular_expression("g", "topic-.*", resolved.clone());
 
         let expected = GroupSeed {
             group_epoch: 11,
@@ -278,9 +323,50 @@ mod tests {
             members: maplit::hashmap! {"member-a".to_string() => member},
             target_per_member: maplit::hashmap! {"member-a".to_string() => target},
             current_per_member: maplit::hashmap! {"member-a".to_string() => current},
+            resolved_regexes: maplit::hashmap! {"topic-.*".to_string() => resolved},
         };
         assert!(*coord.seeds.get("g").unwrap() == expected);
         assert!(coord.cached_seed("g") == Some(expected));
+    }
+
+    /// A `ConsumerGroupRegularExpression` record needs its group, and its
+    /// tombstone removes the entry from the seed and from the cache.
+    #[test]
+    fn a_regular_expression_record_follows_its_group_and_its_tombstone() {
+        use persistence_next_gen::NextGenKey;
+
+        let coord = make_coord();
+        let resolved = |topics: &[&str]| persistence_next_gen::RegularExpressionValue {
+            topics: topics.iter().map(|topic| (*topic).to_string()).collect(),
+            version: 1,
+            timestamp_ms: 2,
+        };
+        // No group yet: the record is ignored.
+        coord.replay_regular_expression("g", "a.*", resolved(&["a"]));
+        check!(coord.cached_seed("g").is_none());
+
+        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 1 });
+        coord.replay_regular_expression("g", "a.*", resolved(&["a"]));
+        coord.replay_regular_expression("g", "b.*", resolved(&["b"]));
+        coord.replay_regular_expression("g", "a.*", resolved(&["a", "a2"]));
+        let seed = coord.cached_seed("g").unwrap();
+        check!(
+            seed.resolved_regexes
+                == maplit::hashmap! {
+                    "a.*".to_string() => resolved(&["a", "a2"]),
+                    "b.*".to_string() => resolved(&["b"]),
+                }
+        );
+
+        coord.replay_next_gen_tombstone(&NextGenKey::RegularExpression {
+            group_id: "g".into(),
+            regex: "a.*".into(),
+        });
+        check!(
+            coord.cached_seed("g").unwrap().resolved_regexes
+                == maplit::hashmap! {"b.*".to_string() => resolved(&["b"])}
+        );
+        check!(coord.seeds.get("g").unwrap().resolved_regexes.len() == 1);
     }
 
     #[test]

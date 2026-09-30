@@ -104,6 +104,7 @@ pub(crate) async fn handle(
                 directory_id: uuid::Uuid::from_bytes(req.voter_directory_id.0),
             })
             .await,
+        voter_requests::VoterOperation::Remove,
         req.voter_id,
         req.voter_directory_id,
     );

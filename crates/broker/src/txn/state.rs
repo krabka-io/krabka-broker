@@ -100,10 +100,14 @@ pub struct TxnEntry {
     pub prev_producer_id: ProducerId,
     pub next_producer_id: ProducerId,
     pub next_producer_epoch: i16,
-    /// KIP-360 fencing state. `last_producer_epoch` is `TransactionLogValue`'s
-    /// `LastProducerEpoch` (tag 4), the epoch the entry held before an epoch
-    /// fence was prepared for an abort, so it survives a coordinator restart
-    /// or a partition move (#892). `has_failed_epoch_fence` says that abort
+    /// KIP-360 fencing state. `last_producer_epoch` is the epoch the entry held
+    /// before its last bump or before an epoch fence was prepared for an abort,
+    /// which is how a retry that names it is recognised. Kafka keeps it in
+    /// memory only, and a reload sees `-1`. Kafka trunk persists it as
+    /// `TransactionLogValue`'s `LastProducerEpoch` (tag 4, KAFKA-20357), and so
+    /// does this broker under `unstable.api.versions.enable`, so it survives a
+    /// coordinator restart or a partition move there (#892).
+    /// `has_failed_epoch_fence` says that abort
     /// then failed, so the producer that still holds `last_producer_epoch`
     /// may retry its `InitProducerId`; it stays in-memory only, since a
     /// reload always sees the fence as not yet attempted.
@@ -112,10 +116,16 @@ pub struct TxnEntry {
     pub last_update_ms: i64,
     pub start_ms: i64,
     /// `TransactionLogValue.ClientTransactionVersion`: the transaction
-    /// version the *client* asked for on this append, not the cluster's live
-    /// transaction.version level. `2` when completion bumped the epoch under
-    /// KIP-890's version-2 rule, `0` otherwise. A reloaded `Prepare*`
-    /// transaction completes under the version this stamps.
+    /// version of the request that made the latest transition, not the
+    /// cluster's live transaction.version level. Kafka derives it from the
+    /// request's API version: `2` for `EndTxn` v5 and `AddPartitionsToTxn` v4
+    /// and later (completion bumps the epoch under KIP-890's version-2 rule),
+    /// `0` for every earlier version and for `AddOffsetsToTxn`. A server-side
+    /// abort (the timeout reaper, the `InitProducerId` fence) stamps `2` on a
+    /// `transaction.version` 2 cluster and `0` below it, since
+    /// `endTransactionWithTV1` stamps `TV_0`. The transition that completes a
+    /// transaction keeps the stamp of the one that prepared it, and the
+    /// `WriteTxnMarkers` `transaction_version` reads it.
     pub client_transaction_version: i16,
 }
 

@@ -11,7 +11,7 @@
 //! `acks=all` partition hands back so the handler can drive every partition's
 //! wait together.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use krabka_log::{Offset, VerbatimBatch};
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
@@ -40,7 +40,6 @@ pub(super) struct AppendContext<'a> {
     pub(super) producer_state: &'a Arc<crate::producer_state::ProducerState>,
     pub(super) partition_index: i32,
     pub(super) acks: i16,
-    pub(super) timeout: Duration,
     pub(super) leader_epoch: i32,
     /// The request's phase accumulator. This partition's writer round-trip is
     /// charged to the local phase here; its `acks=-1` high-watermark wait is
@@ -181,9 +180,8 @@ pub(super) async fn dispatch_prepared(
     shared_topic: &Arc<str>,
 ) -> Result<AppendOutcome, BrokerError> {
     // No offset is assigned until the writer answers with one. Every failure
-    // below — the writer channel gone, the append itself erroring, the ack
-    // timing out — leaves the row without an append, which Kafka answers with
-    // `firstOffset` -1. `logStartOffset` stays -1 too, except on the refusals
+    // below — the writer channel gone, the append itself erroring — leaves the
+    // row without an append, which Kafka answers with `firstOffset` -1. `logStartOffset` stays -1 too, except on the refusals
     // `failed_append_log_start` names. `finalize_ack` overwrites both on the
     // one path that appends.
     let mut response = PartitionProduceResponse {
@@ -219,17 +217,23 @@ pub(super) async fn dispatch_prepared(
         response.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         return Ok(AppendOutcome::Answered(response));
     }
-    let acked = tokio::time::timeout(context.timeout, ack_rx).await;
+    // The wait has no deadline. Kafka's `ReplicaManager.appendRecords` appends
+    // to the local log synchronously, and the request's `timeout.ms` bounds
+    // only the `acks=-1` wait for replication that follows
+    // (`DelayedProduce`, which `PendingAck` is). Bounding this wait as well
+    // answered `REQUEST_TIMED_OUT` for a batch the writer then appended anyway,
+    // and a producer that retried it wrote it twice. It closed the connection
+    // of an `acks=0` producer too, which Kafka never does over a timeout.
+    let acked = ack_rx.await;
     context.phases.add_local(local_started.elapsed());
     match acked {
-        Ok(Ok(Ok(appended))) => return Ok(finalize_ack(response, context, appended, commit).await),
-        Ok(Ok(Err(error))) => {
+        Ok(Ok(appended)) => return Ok(finalize_ack(response, context, appended, commit).await),
+        Ok(Err(error)) => {
             response.error_code = codes::from_broker_error(&error);
             response.log_start_offset =
                 failed_append_log_start(response.error_code, context.partition);
         }
-        Ok(Err(_)) => response.error_code = codes::NOT_LEADER_OR_FOLLOWER,
-        Err(_) => response.error_code = codes::REQUEST_TIMED_OUT,
+        Err(_) => response.error_code = codes::NOT_LEADER_OR_FOLLOWER,
     }
     Ok(AppendOutcome::Answered(response))
 }
@@ -597,5 +601,135 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    /// One `acks=1` append of a one-record batch through
+    /// [`super::dispatch_prepared`], to a partition whose writer answers
+    /// `answer` once `delay` has passed. Returns the partition's row.
+    async fn append_answered_by_the_writer(
+        delay: std::time::Duration,
+        answer: Result<crate::partition::AppendedBatch, crate::error::BrokerError>,
+    ) -> PartitionProduceResponse {
+        use bytes::Bytes;
+        use krabka_compression::RecordDecompressionPolicy;
+        use krabka_protocol::records::{Record, RecordBatch};
+
+        use crate::{
+            handlers::produce::{
+                framing::PartitionPayload,
+                hot_path::TimestampPolicy,
+                prepare::{DecodeEnv, prepare_batch},
+                test_support::encode_batch,
+            },
+            partition::{Partition, WriterMessage},
+        };
+
+        let (partition, _dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel(1);
+        let partition = Arc::new(Partition {
+            writer_tx,
+            ..partition
+        });
+        tokio::spawn(async move {
+            if let Some(WriterMessage::Produce(job)) = writer_rx.recv().await {
+                tokio::time::sleep(delay).await;
+                let _ = job.ack.send(answer);
+            }
+        });
+        let topic: Arc<str> = Arc::from("orders");
+        let prepared = prepare_batch(
+            PartitionPayload::Slice(encode_batch(&RecordBatch {
+                records: vec![Record {
+                    value: Some(Bytes::from_static(b"payload")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            None,
+            TimestampPolicy::default(),
+            false,
+            DecodeEnv {
+                topic_name: &topic,
+                metrics: &crate::metrics::BrokerMetrics::new(),
+                policy: RecordDecompressionPolicy::default(),
+            },
+            13,
+        )
+        .expect("a well-formed batch");
+
+        let outcome = super::dispatch_prepared(
+            prepared,
+            super::AppendContext {
+                partition: &partition,
+                producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
+                partition_index: 0,
+                acks: 1,
+                leader_epoch: 0,
+                phases: &crate::metrics::RequestPhases::default(),
+                producer_check: None,
+            },
+            &topic,
+        )
+        .await
+        .expect("dispatch");
+        let super::AppendOutcome::Answered(row) = outcome else {
+            panic!("an acks=1 append is answered without a high-watermark wait");
+        };
+        row
+    }
+
+    /// The first append after a disk fault answers `KAFKA_STORAGE_ERROR`:
+    /// Kafka's `LocalLog.maybeHandleIOException` turns the `IOException` into
+    /// `KafkaStorageException`, which is retriable and makes the client
+    /// refresh its metadata. `UNKNOWN_SERVER_ERROR` would fail the batch for
+    /// good, and only the requests after it would meet the offline-dir gate.
+    #[tokio::test]
+    async fn an_io_failure_of_the_append_is_a_storage_error() {
+        let row = append_answered_by_the_writer(
+            std::time::Duration::ZERO,
+            Err(crate::partition_writer::storage_failure_error(
+                "append failed",
+                "synthetic EIO",
+            )),
+        )
+        .await;
+
+        assert!(
+            row == PartitionProduceResponse {
+                index: 0,
+                error_code: codes::KAFKA_STORAGE_ERROR,
+                base_offset: -1,
+                ..Default::default()
+            }
+        );
+    }
+
+    /// A writer that answers late still gets its append reported. Kafka's
+    /// `timeout.ms` bounds only the `acks=-1` wait for replication, and the
+    /// local append is synchronous, so a slow disk never makes the row
+    /// `REQUEST_TIMED_OUT` for a batch the writer then appends anyway. The
+    /// clock is paused, so the hour the writer takes costs the test nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_writer_still_gets_its_append_reported() {
+        let row = append_answered_by_the_writer(
+            std::time::Duration::from_secs(3600),
+            Ok(crate::partition::AppendedBatch {
+                base_offset: Offset(5),
+                log_append_time_ms: None,
+            }),
+        )
+        .await;
+
+        assert!(
+            row == PartitionProduceResponse {
+                index: 0,
+                error_code: codes::NONE,
+                base_offset: 5,
+                log_append_time_ms: super::NO_LOG_APPEND_TIME,
+                log_start_offset: 0,
+                ..Default::default()
+            }
+        );
     }
 }

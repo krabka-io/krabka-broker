@@ -16,8 +16,10 @@
 //! * [`Algorithm::Locked`] is production. A consumer reads the rate mirror
 //!   without the lock and grants a rate-0 request there. Otherwise it takes the
 //!   lock, reads the clock, stores the claimed `last_refill`, stores
-//!   `available`, and releases. A reset takes the lock, reads the clock, stores
-//!   the group, publishes the mirror, and releases.
+//!   `available`, and releases. A reset takes the lock, reads the clock, refills
+//!   the old configuration to now, keeps that balance under the new burst,
+//!   stores the group, publishes the mirror, and releases. A bucket with no old
+//!   or no new rate starts full instead.
 //! * [`Algorithm::SeqlockCas`] is the lock-free design production used before.
 //!   A consumer reads the rate, then the seqlock generation (spinning while it
 //!   is odd), the rate and the burst, the clock, and `last_refill`, then claims
@@ -49,8 +51,8 @@
 //! # Properties
 //!
 //! The ghost state records, for the configuration in force since the last
-//! reset, the reset's clock reading `t0`, the tokens granted, and the tokens
-//! the burst capped away. Both safety properties are checked whenever no reset
+//! reset, the reset's clock reading `t0`, the balance the reset started with,
+//! the tokens granted, and the tokens the burst capped away. Both safety properties are checked whenever no reset
 //! is part-way through its stores; a seqlock reader never acts on such a
 //! state, and under the lock nobody can see one.
 //!
@@ -58,16 +60,21 @@
 //! * `grants_whole_tokens`: every grant in the configuration is a whole
 //!   number of tokens, even when the bucket holds a part token.
 //! * `claimed_refill_conserved`: `available + granted + capped + in_flight ==
-//!   burst + rate * (last_refill - t0)`. The right side is every token the
-//!   configuration has made available: its initial burst plus the refill for
-//!   all the time consumers have claimed. `in_flight` is the refill a consumer
+//!   base + rate * (last_refill - t0)`. The right side is every token the
+//!   configuration has made available: the balance it started with plus the
+//!   refill for all the time consumers have claimed. `in_flight` is the refill a consumer
 //!   has claimed time for in this configuration but not committed yet. The
 //!   equation fails if a claimed refill vanishes (tokens lost) or if a commit
 //!   adds tokens the configuration never made (tokens over-granted).
 //!
 //! Reachability witnesses show that consumers overlap, a reset overlaps a
 //! consume, a claimed refill is in flight, a refill is granted and another is
-//! capped, a reset shrinks the burst, and the bucket drains.
+//! capped, a reset shrinks the burst, the bucket drains, and a reset keeps a
+//! balance under the new burst. Debt is outside the model: `try_consume`
+//! never creates it, and `record` differs from a consume only in what it does
+//! with the part it cannot grant, which it keeps as debt, at most what the
+//! refill repays in `max_wait` for `record_bounded`. The unit tests in
+//! `src/runtime/consume.rs` cover both.
 //!
 //! # Runs
 //!
@@ -105,10 +112,12 @@ const MAX_DEPTH: usize = 80;
 // like production: separate shared accesses per step, a burst apart from the
 // rate, a clock and `last_refill` instead of a `pending` counter, a dedicated
 // resetter over several configurations, the rate mirror and the lock, and the
-// conservation ghosts.
-const PINNED_UNIQUE_STATES_BASIC: usize = 41_601;
-const PINNED_UNIQUE_STATES_WIDE: usize = 222_236;
-const PINNED_UNIQUE_STATES_FRACTIONAL: usize = 25_984;
+// conservation ghosts. They then moved from 41,601, 222,236 and 25,984 when a
+// reset began to keep the balance: a reset now lands in states with any
+// carried balance, and the ghost `base` tells configurations apart by it.
+const PINNED_UNIQUE_STATES_BASIC: usize = 56_259;
+const PINNED_UNIQUE_STATES_WIDE: usize = 372_204;
+const PINNED_UNIQUE_STATES_FRACTIONAL: usize = 33_964;
 
 /// Which consume and reset protocol the model steps through.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -295,6 +304,10 @@ struct BucketState {
     // Ghost state for the configuration in force since the last reset.
     epoch: u64,
     t0: u64,
+    /// The balance the configuration started with: the burst under the first
+    /// configuration and under the seqlock's resets, the balance the reset
+    /// carried over under production's.
+    base: u64,
     granted: u64,
     capped: u64,
 }
@@ -361,7 +374,7 @@ fn available_within_burst(s: &BucketState) -> bool {
 fn claimed_refill_conserved(s: &BucketState) -> bool {
     s.resetting()
         || s.available + s.granted + s.capped + s.in_flight()
-            == s.burst + s.rate * (s.last_refill - s.t0)
+            == s.base + s.rate * (s.last_refill - s.t0)
 }
 
 struct BucketModel {
@@ -526,11 +539,26 @@ impl BucketModel {
                 Resetter::Write { config }
             }
             Resetter::Write { config } => {
+                // Production's reset keeps the balance: the time up to now is
+                // refilled at the old rate and capped at the old burst, then
+                // the balance is capped at the new burst. A bucket with no old
+                // or no new rate starts full.
+                s.available = if s.rate == 0 || config.rate == 0 {
+                    config.burst
+                } else {
+                    let (_, refilled) = plan_consume(
+                        AvailableTokens(s.available),
+                        RefillTokens(s.now.saturating_sub(s.last_refill) * s.rate),
+                        BurstCapacity(s.burst),
+                        RequestedTokens(0),
+                    );
+                    refilled.0.min(config.burst)
+                };
                 s.rate = config.rate;
                 s.burst = config.burst;
-                s.available = config.burst;
                 s.last_refill = s.now;
                 s.t0 = s.now;
+                s.base = s.available;
                 s.start_epoch();
                 Resetter::Publish { config }
             }
@@ -556,6 +584,7 @@ impl BucketModel {
             }
             Resetter::StoreAvail { config } => {
                 s.available = config.burst;
+                s.base = config.burst;
                 Resetter::StoreLast
             }
             Resetter::StoreLast => {
@@ -593,6 +622,7 @@ impl Model for BucketModel {
             resetter: Resetter::Idle,
             epoch: 0,
             t0: 0,
+            base: burst,
             granted: 0,
             capped: 0,
         }]
@@ -644,7 +674,7 @@ impl Model for BucketModel {
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        vec![
+        let mut properties = vec![
             Property::always("available_within_burst", |_, s: &BucketState| {
                 available_within_burst(s)
             }),
@@ -674,7 +704,18 @@ impl Model for BucketModel {
             Property::sometimes("bucket_drained", |_, s: &BucketState| {
                 s.rate > 0 && s.available == 0
             }),
-        ]
+        ];
+        // A reset that carries a balance under the new burst instead of
+        // refilling to it. Whole-token grants at two storage units to a token
+        // never leave a balance under the smaller burst of that search, so it
+        // has no such reset to show.
+        if self.units_per_token == 1 {
+            properties.push(Property::sometimes(
+                "reset_keeps_the_balance",
+                |_, s: &BucketState| s.epoch > 0 && s.base < s.burst,
+            ));
+        }
+        properties
     }
 }
 

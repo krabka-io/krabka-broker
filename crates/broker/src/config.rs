@@ -11,6 +11,7 @@ mod broker_config;
 mod defaults;
 mod feature_flags;
 mod freeze;
+mod kafka_static_keys;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
@@ -27,6 +28,7 @@ mod test_support;
 mod tiered_storage;
 mod validate;
 
+pub(crate) use self::kafka_static_keys::KAFKA_STATIC_KEYS;
 pub use self::{
     break_glass::{BackgroundUncleanRecovery, BreakGlassConfig},
     broker_config::{BrokerConfig, PlainCredentials},
@@ -35,7 +37,10 @@ pub use self::{
     listener::{InterBrokerCredentials, ListenerSpec},
     replication::ReplicationRuntimeConfig,
     roles::NodeRole,
-    static_origins::{StaticConfigOrigins, TopicAdminOrigins, TopicCreationOrigins},
+    static_origins::{
+        AuthenticationOrigins, LogOrigins, StaticConfigOrigins, TopicAdminOrigins,
+        TopicCreationOrigins,
+    },
     stretch::StretchProfile,
     tiered_storage::{KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
 };
@@ -180,6 +185,10 @@ pub const DEFAULT_RLMM_TOPIC_NUM_PARTITIONS: i32 = 50;
 /// KIP-405: default replication factor for `__remote_log_metadata` on first
 /// creation. Matches Kafka's `remote.log.metadata.topic.replication.factor`.
 pub const DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR: i32 = 3;
+
+/// KIP-405: default `min.insync.replicas` for `__remote_log_metadata` on first
+/// creation. Matches Kafka's `remote.log.metadata.topic.min.isr`.
+pub const DEFAULT_RLMM_TOPIC_MIN_ISR: i32 = 2;
 
 /// Default internal topic name for `FedRAMP` MLA audit records.
 pub const DEFAULT_AUDIT_TOPIC: &str = "__krabka_audit";

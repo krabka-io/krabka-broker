@@ -39,8 +39,9 @@ broker serving nothing.
 
 ## Diagnose
 
-1. Read the reason. `partition write/fsync failed:` is a runtime flip; the
-   text after it is the operating system's own error. `create_all`, `open
+1. Read the reason. `partition write/fsync failed:` and `partition read
+   failed:` are runtime flips, from a failed append or a failed fetch read;
+   the text after them is the operating system's own error. `create_all`, `open
    probe`, `write probe`, `sync probe` and `remove probe` are the five
    startup-probe steps.
 2. `EIO` or an `Input/output error` is the device. Check `dmesg` and the

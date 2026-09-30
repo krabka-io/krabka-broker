@@ -32,26 +32,24 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
         if requested.replace(*level).is_some() {
             return Err("feature kraft.version specified more than once".into());
         }
-        if !(0..=1).contains(level) {
-            return Err(super::features::no_feature_level(
-                KRAFT_VERSION_FEATURE,
-                *level,
-            ));
-        }
     }
 
+    // As in `Formatter.effectiveKRaftFeatureLevel`, the level is reconciled
+    // with the quorum flags before `Feature.fromFeatureLevel` checks that the
+    // feature defines it, so a level above 1 without a quorum flag is a mode
+    // conflict and not a `No feature` error.
     match (dynamic, requested) {
-        (true, None | Some(1)) => Ok(true),
         (true, Some(0)) => Err(
             "--standalone, --initial-controllers, and --no-initial-controllers require kraft.version=1"
                 .into(),
         ),
-        (false, None | Some(0)) => Ok(false),
-        (false, Some(1)) => Err(
-            "kraft.version=1 requires --standalone, --initial-controllers, or --no-initial-controllers"
-                .into(),
-        ),
-        _ => unreachable!("kraft.version range was validated above"),
+        (false, Some(level)) if level != 0 => Err(format!(
+            "kraft.version={level} requires --standalone, --initial-controllers, or --no-initial-controllers"
+        )),
+        (_, Some(level)) if !(0..=1).contains(&level) => Err(format!(
+            "No feature:kraft.version with feature level {level}"
+        )),
+        (dynamic, _) => Ok(dynamic),
     }
 }
 
@@ -202,6 +200,31 @@ mod tests {
     #[test]
     fn rejects_initial_controller_bad_uuid() {
         assert2::assert!(parse_initial_controller("3@host:9093:not-a-uuid").is_err());
+    }
+
+    /// A `kraft.version` level the feature does not define gets Kafka's
+    /// `Feature.fromFeatureLevel` text.
+    #[test]
+    fn a_kraft_version_level_out_of_range_is_kafkas_no_feature_error() {
+        use clap::Parser as _;
+
+        for level in ["2", "-1", "9"] {
+            let cli = crate::Cli::try_parse_from([
+                "krabka-format",
+                "--log-dir",
+                "/data",
+                "--no-initial-controllers",
+                "--feature",
+                &format!("kraft.version={level}"),
+            ])
+            .expect("parse");
+            assert2::assert!(
+                is_dynamic_format(&cli.args)
+                    == Err(format!(
+                        "No feature:kraft.version with feature level {level}"
+                    ))
+            );
+        }
     }
 
     #[test]

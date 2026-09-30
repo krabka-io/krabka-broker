@@ -50,6 +50,9 @@ pub(super) enum CgcAction {
     Join(String),
     Leave(String),
     Heartbeat(String),
+    /// A heartbeat that carries no owned partitions: what the Java client
+    /// sends while its assignment is unchanged.
+    Keepalive(String),
     ClientAdd(String, i32),
     ClientRevoke(String, i32),
     Commit(String, i32, EpochKind), // (member, partition, presented-epoch) — fenced commit

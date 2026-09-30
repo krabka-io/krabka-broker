@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_metadata::{
     AclEntry, AclOperation, FeatureLevelRecord, MetadataRecord, PatternType, PermissionType,
     ResourceType,
@@ -176,7 +176,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 
     let disabled = AclCreationResult {
         error_code: codes::SECURITY_DISABLED,
-        error_message: Some("No Authorizer is configured on the broker".into()),
+        error_message: Some("No Authorizer is configured.".into()),
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     let expected = CreateAclsResponse {
@@ -189,6 +189,57 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
     broker_handle.shutdown().await;
 }
 
+/// A broker with `unstable.feature.versions.enable`, the mode in which
+/// `CreateAcls` applies Kafka trunk's host validation.
+async fn start_trunk_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = configured_authorizer();
+        cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
+    })
+    .await
+}
+
+/// Kafka 4.3.1 has no host check, so by default `CreateAcls` stores a host
+/// containing `/` and an empty host as the text they arrive as, where trunk's
+/// `validateHostPattern` (KIP-1276) would refuse both.
+#[tokio::test]
+async fn handle_stores_any_host_by_default() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let hosts = ["10.0.0.0/8", "not/a/cidr", ""];
+    let creations = hosts
+        .iter()
+        .map(|host| {
+            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
+            c.host = (*host).into();
+            c
+        })
+        .collect();
+
+    let resp = handle(&broker, request(creations), &ctx, VERSION)
+        .await
+        .expect("handle");
+    let resp = decode_response(&resp);
+
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![committed(), committed(), committed()],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    let mut stored: Vec<String> = all_acls(&broker_handle)
+        .into_iter()
+        .map(|acl| acl.host)
+        .collect();
+    stored.sort();
+    assert!(stored == vec!["", "10.0.0.0/8", "not/a/cidr"]);
+    broker_handle.shutdown().await;
+}
+
 /// #652 / KIP-1276: a CIDR host is accepted, and stored as the literal text
 /// the operator typed, once `metadata.version` reaches
 /// [`crate::features::CIDR_ACL_HOST_MIN_LEVEL`]. The test seeds that level
@@ -197,7 +248,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 /// seed their own metadata-version floors.
 #[tokio::test]
 async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let (broker_handle, _dir) = start_trunk_broker().await;
     let broker = broker_handle.broker_arc_for_test();
     broker
         .controller
@@ -241,7 +292,7 @@ async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
 /// Kafka's exact `UNSUPPORTED_VERSION` message, and nothing is stored.
 #[tokio::test]
 async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let (broker_handle, _dir) = start_trunk_broker().await;
     let broker = broker_handle.broker_arc_for_test();
     broker
         .controller
@@ -380,13 +431,91 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
     broker_handle.shutdown().await;
 }
 
+/// Kafka's `AclControlManager.createAcls` collects the records of the new
+/// ACLs into a list bounded at 10,000, and does not catch the overflow: the
+/// controller answers every binding with `POLICY_VIOLATION`, the invalid ones
+/// included, and stores nothing. Only valid, new, distinct ACLs count.
+#[tokio::test]
+async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
+    let distinct = |count: usize| {
+        (0..count)
+            .map(|n| creation(&format!("topic-{n}"), "User:alice", OPERATION_READ))
+            .collect::<Vec<_>>()
+    };
+    let violation = AclCreationResult {
+        error_code: codes::POLICY_VIOLATION,
+        error_message: Some("Unable to perform excessively large batch operation.".into()),
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    let empty_name = AclCreationResult {
+        error_code: codes::INVALID_REQUEST,
+        error_message: Some("Invalid empty resource name".into()),
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    // 10,001 identical bindings are one new ACL.
+    let repeated = vec![creation("topic-a", "User:alice", OPERATION_READ); 10_001];
+    let mut with_invalid = distinct(10_000);
+    with_invalid.push(creation("", "User:alice", OPERATION_READ));
+    let mut over_with_invalid = distinct(10_001);
+    over_with_invalid.push(creation("", "User:alice", OPERATION_READ));
+    // (label, creations, results, ACLs stored)
+    let cases = [
+        (
+            "10,000 distinct",
+            distinct(10_000),
+            vec![committed(); 10_000],
+            10_000,
+        ),
+        (
+            "10,001 distinct",
+            distinct(10_001),
+            vec![violation.clone(); 10_001],
+            0,
+        ),
+        ("10,001 identical", repeated, vec![committed(); 10_001], 1),
+        (
+            "10,000 distinct and an invalid binding",
+            with_invalid,
+            [vec![committed(); 10_000], vec![empty_name]].concat(),
+            10_000,
+        ),
+        (
+            "10,001 distinct and an invalid binding",
+            over_with_invalid,
+            vec![violation; 10_002],
+            0,
+        ),
+    ];
+    for (label, creations, results, stored) in cases {
+        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let resp = handle(&broker, request(creations), &ctx, VERSION)
+            .await
+            .expect("handle");
+        let resp = decode_response(&resp);
+
+        let expected = CreateAclsResponse {
+            throttle_time_ms: 0,
+            results,
+            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+        };
+        check!(resp == expected, "{label}");
+        check!(all_acls(&broker_handle).len() == stored, "{label}");
+        broker_handle.shutdown().await;
+    }
+}
+
 /// A freshly bootstrapped cluster finalizes Kafka 4.3's `4.3-IV0`, below the
 /// `4.4-IV1` CIDR host patterns need, so it refuses a CIDR host until an
 /// operator opts into 4.4-IV1. (An image with no `metadata.version` at all is
 /// judged against 4.3-IV0 too; `features::tests` pins that.)
 #[tokio::test]
 async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let (broker_handle, _dir) = start_trunk_broker().await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("admin");
     let peer = peer();
@@ -412,4 +541,37 @@ async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
+}
+
+/// `count_new_acls` counts the distinct ACLs the image does not hold, as
+/// Kafka's `AclControlManager.createAcls` does with a hash set of each, and it
+/// does so in time linear in the request. A request of 300,000 bindings that
+/// repeat 12,000 ACLs, 2,000 of which the image holds, takes hash probes, not
+/// a scan of the request and of the image for every binding: a scan makes it
+/// tens of billions of comparisons on an async worker.
+#[test]
+fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
+    let acl = |n: usize| AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: format!("topic-{n}"),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    };
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    for n in 0..2_000 {
+        image.apply(&MetadataRecord::V1AccessControlEntry(acl(n)));
+    }
+    let to_submit: Vec<(usize, MetadataRecord)> = (0..300_000)
+        .map(|n| (n, MetadataRecord::V1AccessControlEntry(acl(n % 12_000))))
+        .collect();
+
+    let started = std::time::Instant::now();
+    let counted = super::count_new_acls(&image, &to_submit);
+    let elapsed = started.elapsed();
+
+    check!(counted == 10_000);
+    check!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }

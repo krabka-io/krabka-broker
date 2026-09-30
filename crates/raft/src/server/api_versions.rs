@@ -65,10 +65,11 @@ pub(crate) struct ApiVersionsView<'a> {
     pub(crate) metadata_offset: i64,
     /// The KIP-919 Admin surface the broker attaches, if any.
     pub(crate) admin_router: Option<&'a dyn crate::ControllerAdminRouter>,
-    /// Kafka's `unstable.api.versions.enable`.
+    /// Kafka's `unstable.api.versions.enable`. It caps both the API table and
+    /// the supported features: the controller listener's
+    /// `SimpleApiVersionManager` is built with it and takes no
+    /// `unstable.feature.versions.enable`.
     pub(crate) unstable: UnstableApiVersions,
-    /// Kafka's `unstable.feature.versions.enable`.
-    pub(crate) unstable_features: UnstableFeatureVersions,
 }
 
 /// The offset of the last record `engine`'s image contains, or `-1` before
@@ -112,7 +113,7 @@ pub(crate) fn api_versions_response(
         return Ok(encode_body(&unsupported_version_response(view.unstable), 0));
     }
     let request = ApiVersionsRequest::decode(&mut &body[..], req_version)?;
-    if !is_valid_request(&request, req_version) {
+    if !is_valid_api_versions_request(&request, req_version) {
         return Ok(encode_body(
             &ApiVersionsResponse {
                 error_code: API_VERSIONS_INVALID_REQUEST,
@@ -144,7 +145,8 @@ pub fn unsupported_version_response(unstable: UnstableApiVersions) -> ApiVersion
 }
 
 /// Kafka's `ApiVersionsRequest.isValid`.
-fn is_valid_request(request: &ApiVersionsRequest, version: i16) -> bool {
+#[must_use]
+pub fn is_valid_api_versions_request(request: &ApiVersionsRequest, version: i16) -> bool {
     if version >= API_VERSIONS_ROUTING_MIN_VERSION
         && (request.cluster_id.is_none() != (request.node_id == -1))
     {
@@ -223,10 +225,13 @@ pub(super) fn is_disabled_version(
 /// attaches contributes the rest.
 ///
 /// The feature rows follow Kafka's `SimpleApiVersionManager`: the supported
-/// set of `BrokerFeatures.defaultSupportedFeatures`, filtered for
-/// `alterFeatureLevel0` below v4, and the finalized levels above 0 with the
-/// image offset as their epoch. [`features`] holds the rules, shared with the
-/// broker listener.
+/// set of `BrokerFeatures.defaultSupportedFeatures(enableUnstableLastVersion)`,
+/// filtered for `alterFeatureLevel0` below v4, and the finalized levels above 0
+/// with the image offset as their epoch. The controller listener builds that
+/// manager with `unstable.api.versions.enable`, so that flag, and not
+/// `unstable.feature.versions.enable`, caps the supported levels. The broker
+/// listener caps them with the feature flag. [`features`] holds the rules the
+/// two share.
 ///
 /// Body is the flexible (v3+) `ApiVersionsResponse` shape: `error_code(i16)`,
 /// `api_keys` compact-array of `{api_key(i16), min(i16), max(i16), tagged(0)}`,
@@ -236,7 +241,10 @@ pub(super) fn is_disabled_version(
 pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView<'_>) -> Bytes {
     let resp = ApiVersionsResponse {
         api_keys: advertised_api_keys(view.admin_router, view.unstable),
-        supported_features: supported_feature_keys(req_version, view.unstable_features),
+        supported_features: supported_feature_keys(
+            req_version,
+            UnstableFeatureVersions::from(view.unstable == UnstableApiVersions::Enabled),
+        ),
         finalized_features_epoch: view.metadata_offset,
         finalized_features: finalized_feature_keys(view.image),
         ..Default::default()
@@ -268,7 +276,6 @@ mod tests {
             metadata_offset,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
-            unstable_features: UnstableFeatureVersions::Disabled,
         }
     }
 
@@ -696,8 +703,8 @@ mod tests {
             max_version_level: level,
             ..Default::default()
         };
-        // The listener's default, `unstable.feature.versions.enable=false`,
-        // caps metadata.version at 4.3.1's latest production level.
+        // The listener's default, `unstable.api.versions.enable=false`, caps
+        // metadata.version at 4.3.1's latest production level.
         let metadata_max = crate::LATEST_PRODUCTION_METADATA_VERSION;
         let legacy = vec![supported(
             "metadata.version",
@@ -769,6 +776,43 @@ mod tests {
                     resp.finalized_features_epoch
                 ) == (want_supported, &want_finalized, 1234),
                 "v{version}, kraft.version {kraft_version}"
+            );
+        }
+    }
+
+    /// Kafka's `ControllerServer` builds the listener's
+    /// `SimpleApiVersionManager` with `unstable.api.versions.enable`, so that
+    /// flag alone caps the supported `metadata.version` here. With only
+    /// `unstable.feature.versions.enable` set the listener stays at the latest
+    /// production level, and with only the API flag set it advertises the
+    /// highest level krabka knows. The listener takes no feature flag at all:
+    /// its view has none.
+    #[test]
+    fn the_controller_listener_caps_supported_features_with_the_api_flag() {
+        use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
+
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        for (unstable, want_max) in [
+            (
+                UnstableApiVersions::Disabled,
+                crate::LATEST_PRODUCTION_METADATA_VERSION,
+            ),
+            (UnstableApiVersions::Enabled, METADATA_VERSION_MAX),
+        ] {
+            let view = ApiVersionsView {
+                unstable,
+                ..view(&image, 0)
+            };
+            let body = super::api_versions_response_body(4, view);
+            let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
+            let metadata_version = resp
+                .supported_features
+                .iter()
+                .find(|feature| feature.name == "metadata.version")
+                .expect("metadata.version is supported");
+            assert2::check!(
+                metadata_version.max_version == want_max,
+                "unstable.api.versions.enable {unstable:?}"
             );
         }
     }

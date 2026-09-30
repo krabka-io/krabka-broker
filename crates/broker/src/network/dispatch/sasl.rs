@@ -7,7 +7,6 @@ use std::net::SocketAddr;
 
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::api_key::ApiKey;
-use krabka_units::convert::ByteSizeExt as _;
 
 use super::response::encode_response;
 use crate::{broker::Broker, codes, error::BrokerError, handlers::ApiKeyCode};
@@ -59,6 +58,10 @@ pub(super) struct SaslSession {
     raw_tokens: bool,
     /// When this connection last started a KIP-368 re-authentication.
     last_reauth_start_ms: Option<i64>,
+    /// A valid `ApiVersions` was answered before any handshake. Kafka's
+    /// `SaslServerAuthenticator` then sits in `HANDSHAKE_REQUEST`, which takes
+    /// only a `SaslHandshake`.
+    api_versions_answered: bool,
 }
 
 impl SaslSession {
@@ -66,6 +69,81 @@ impl SaslSession {
     pub(super) fn expects_raw_token(&self, auth: &crate::network::auth::ConnectionAuth) -> bool {
         self.raw_tokens && auth.negotiated_mechanism().is_some()
     }
+
+    /// Whether a request of `api_key` is a second `ApiVersions` before the
+    /// handshake. The per-state gate admits `ApiVersions` there, but Kafka's
+    /// `SaslServerAuthenticator.handleApiVersionsRequest` throws
+    /// `IllegalStateException` for one outside `HANDSHAKE_OR_VERSIONS_REQUEST`,
+    /// which closes the connection.
+    pub(super) fn repeats_api_versions(
+        &self,
+        auth: &crate::network::auth::ConnectionAuth,
+        api_key: ApiKeyCode,
+    ) -> bool {
+        self.api_versions_answered
+            && api_key == API_VERSIONS_KEY
+            && matches!(auth, crate::network::auth::ConnectionAuth::Anonymous)
+    }
+
+    /// Records that the request in `parsed` gets a full `ApiVersions` answer
+    /// before the handshake. An `UNSUPPORTED_VERSION` or `INVALID_REQUEST`
+    /// answer leaves Kafka's state as it was, so the client can ask again.
+    pub(super) fn note_api_versions(
+        &mut self,
+        auth: &crate::network::auth::ConnectionAuth,
+        parsed: &crate::network::request::ParsedRequest<'_>,
+    ) {
+        if parsed.api_key == API_VERSIONS_KEY
+            && matches!(auth, crate::network::auth::ConnectionAuth::Anonymous)
+            && crate::handlers::api_versions::is_valid_request_body(parsed.api_version, parsed.body)
+        {
+            self.api_versions_answered = true;
+        }
+    }
+}
+
+/// Waits out Kafka's `connection.failed.authentication.delay.ms`.
+///
+/// `Selector.maybeDelayCloseOnAuthenticationFailure` holds a failed
+/// authentication's response, and the close that follows it, back by at least
+/// that long, which slows credential guessing on one connection. The
+/// connection's own task sleeps, so no other connection waits.
+pub(super) async fn delay_failed_authentication(broker: &Broker) {
+    let delay = broker.config.failed_authentication_delay();
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+}
+
+/// Counts and audits one authentication that failed before any credential was
+/// judged: a request the per-state gate refused, or a frame over
+/// `sasl.server.max.receive.size`. The row names the mechanism a handshake
+/// chose, or the `Unknown` sentinel when none did.
+pub(super) fn record_refused_authentication(
+    (metrics, audit_log): (&crate::metrics::BrokerMetrics, &krabka_audit::AuditLog),
+    auth: &crate::network::auth::ConnectionAuth,
+    peer: &SocketAddr,
+    reason: &str,
+) {
+    let mech_label = auth.negotiated_mechanism().map_or(
+        crate::metrics::UNKNOWN_LABEL,
+        krabka_security::SaslMechanism::wire_name,
+    );
+    metrics.record_authentication(mech_label, false);
+    emit_authentication(
+        audit_log,
+        peer,
+        mech_label,
+        auth.principal().map_or_else(
+            || krabka_audit::AuditPrincipal {
+                name: String::new(),
+                auth_method: format!("{:?}", krabka_security::AuthMethod::Anonymous),
+            },
+            audit_principal,
+        ),
+        krabka_audit::AuditOutcome::Failure,
+        Some(reason.to_string()),
+    );
 }
 
 /// Accounts for a request the per-state auth gate refused, and returns the
@@ -75,7 +153,15 @@ impl SaslSession {
 /// the mechanism a handshake named, or under the `Unknown` sentinel when none
 /// did, so a peer that opens a SASL connection and immediately sends Produce
 /// is not closed uncounted.
-pub(super) fn refuse_gated_request(
+///
+/// Once a handshake has run, Kafka fails the refusal with an
+/// `AuthenticationException` (`IllegalSaslStateException`, or the
+/// `SaslAuthenticationException` of a re-authentication that named another
+/// mechanism), and its `Selector` delays the answer and the close. This waits
+/// that delay out before it returns. Before a handshake the refusal is an
+/// `InvalidRequestException` or an `IllegalStateException` (a second
+/// `ApiVersions`), and Kafka closes at once.
+pub(super) async fn refuse_gated_request(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
@@ -87,28 +173,18 @@ pub(super) fn refuse_gated_request(
         listener = %listener_name,
         "request blocked by per-state auth gate (ILLEGAL_SASL_STATE), closing connection"
     );
-    let mechanism = auth.negotiated_mechanism();
-    let mech_label = mechanism.map_or(
-        crate::metrics::UNKNOWN_LABEL,
-        krabka_security::SaslMechanism::wire_name,
-    );
-    broker.metrics.record_authentication(mech_label, false);
-    emit_authentication(
-        &broker.audit_log,
+    record_refused_authentication(
+        (&broker.metrics, &broker.audit_log),
+        auth,
         peer,
-        mech_label,
-        auth.principal().map_or_else(
-            || krabka_audit::AuditPrincipal {
-                name: String::new(),
-                auth_method: format!("{:?}", krabka_security::AuthMethod::Anonymous),
-            },
-            audit_principal,
-        ),
-        krabka_audit::AuditOutcome::Failure,
-        Some("request blocked by per-state auth gate".to_string()),
+        "request blocked by per-state auth gate",
     );
+    if !matches!(auth, crate::network::auth::ConnectionAuth::Anonymous) {
+        delay_failed_authentication(broker).await;
+    }
     // Only mid-exchange does Kafka answer before closing.
-    mechanism.and_then(|_| unexpected_request_during_exchange(broker, parsed))
+    auth.negotiated_mechanism()
+        .and_then(|_| unexpected_request_during_exchange(parsed))
 }
 
 /// The typed `ILLEGAL_SASL_STATE` answer Kafka's `SaslServerAuthenticator`
@@ -120,7 +196,6 @@ pub(super) fn refuse_gated_request(
 /// krabka has no generic equivalent of; any other `api_key` gets `None` and
 /// the connection closes with no response.
 fn unexpected_request_during_exchange(
-    broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
 ) -> Option<Bytes> {
     use krabka_protocol::Encode;
@@ -147,7 +222,6 @@ fn unexpected_request_during_exchange(
         parsed.correlation_id,
         parsed.body_flexible,
         &body,
-        broker.config.socket_request_max.bytes_usize(),
     )
     .ok()
 }
@@ -173,6 +247,7 @@ pub(super) async fn handle_raw_sasl_token(
     };
     let resp = run_authenticate(broker, &req, auth, listener.max_reauth, peer).await;
     if resp.error_code != 0 {
+        delay_failed_authentication(broker).await;
         return None;
     }
     if auth.is_authenticated() {
@@ -209,7 +284,7 @@ pub(super) async fn try_handle_sasl_frame(
         return None;
     }
     if !listener.is_sasl {
-        return Some(non_sasl_listener_response(broker, parsed));
+        return Some(non_sasl_listener_response(parsed));
     }
     Some(handle_sasl_frame(broker, parsed, auth, listener, session, peer).await)
 }
@@ -222,7 +297,6 @@ pub(super) async fn try_handle_sasl_frame(
 /// `SaslAuthenticate` gets `ILLEGAL_SASL_STATE` and Kafka's message. The
 /// request body is not read, and the connection stays open.
 fn non_sasl_listener_response(
-    broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
 ) -> Result<SaslFrameOutcome, BrokerError> {
     use krabka_protocol::Encode;
@@ -250,7 +324,6 @@ fn non_sasl_listener_response(
         parsed.correlation_id,
         parsed.body_flexible,
         &body,
-        broker.config.socket_request_max.bytes_usize(),
     )?;
     Ok(SaslFrameOutcome {
         response_bytes,
@@ -324,8 +397,12 @@ async fn handle_sasl_frame(
         parsed.correlation_id,
         parsed.body_flexible,
         &resp_body,
-        broker.config.socket_request_max.bytes_usize(),
     )?;
+    if close_after {
+        // The answer to a failed exchange goes out, and the connection
+        // closes, only once the failed-authentication delay has passed.
+        delay_failed_authentication(broker).await;
+    }
     Ok(SaslFrameOutcome {
         response_bytes,
         close_after,
@@ -366,6 +443,7 @@ async fn run_authenticate(
             req,
             auth,
             &*broker.controller,
+            broker.config.delegation_token_secret_key.as_ref(),
             max_reauth,
         ),
         Some(krabka_security::SaslMechanism::OAuthBearer) => {

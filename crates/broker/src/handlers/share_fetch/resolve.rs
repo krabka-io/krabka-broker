@@ -54,8 +54,11 @@ pub(super) struct RowContext<'a> {
 /// unresolved topic id is `UNKNOWN_TOPIC_ID`, then batches that
 /// `validateAcknowledgementBatches` refuses are `INVALID_REQUEST`, then the
 /// topic `Read` check, then the metadata check. A partition with no batches
-/// then answers `NONE` without reaching the share partition. The row keeps
-/// its batches only when they are to be applied.
+/// then answers `NONE` without reaching the share partition, and a partition
+/// that another broker leads answers `UNKNOWN_TOPIC_OR_PARTITION`, as
+/// `SharePartitionManager.acknowledge` does for a partition with no cached
+/// share partition. The row keeps its batches only when they are to be
+/// applied.
 pub(super) fn resolve_row(
     row: &RowContext<'_>,
     (topic_id, partition_index): (uuid::Uuid, i32),
@@ -134,8 +137,12 @@ pub(super) fn resolve_row(
             out = not_leader_response(partition_index, leader_id, leader_epoch);
             out.acknowledge_error_code = acknowledge_error_code;
         }
+        // Kafka's `SharePartitionManager.acknowledge` has no leadership check:
+        // a broker that does not lead the partition holds no share partition
+        // for it, so the acknowledge half answers UNKNOWN_TOPIC_OR_PARTITION,
+        // and no leader hint goes with it.
         if !ack_batches.is_empty() {
-            out.acknowledge_error_code = codes::NOT_LEADER_OR_FOLLOWER;
+            out.acknowledge_error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
         }
         return pending(out, false, Vec::new());
     }

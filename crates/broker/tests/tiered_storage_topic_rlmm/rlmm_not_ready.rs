@@ -65,6 +65,7 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
         bootstrap: "127.0.0.1:1".into(),
         num_partitions: 1,
         replication: 1,
+        min_isr: 1,
         snapshot_interval: krabka_units::hours(1),
         snapshot_dir: log_dir.path().join("rlmm-snap"),
         security: None,

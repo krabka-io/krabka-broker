@@ -11,6 +11,7 @@ use super::{
     pass::compact_pass,
     state::{Cleaner, CompactAction, CompactModel, CompactState, Entry, EntryKind},
 };
+use crate::compact::TxnDataState;
 
 impl CompactState {
     /// Whether `rule` holds for the pass that produced this state. A state
@@ -135,28 +136,33 @@ impl Model for CompactModel {
                     .count()
                     >= 2
             }),
-            // A marker is retained because its producer's transaction data
-            // survives this compaction.
+            // A marker is retained because the pass reads data of its
+            // transaction in front of it.
             Property::sometimes(
-                "marker_retained_for_live_data",
-                |m: &CompactModel, s: &CompactState| {
-                    let om = m.cleaner.offset_map(&s.log);
-                    let ds = Cleaner::data_survives(&s.log, &om);
-                    s.log.iter().any(|e| {
-                        matches!(&e.kind, EntryKind::Marker { producer_id, .. } if ds.contains(producer_id))
-                    })
+                "marker_retained_for_observed_data",
+                |_, s: &CompactState| {
+                    Cleaner::marker_states(&s.log)
+                        .into_values()
+                        .any(|state| state == TxnDataState::DataSurvives)
                 },
             ),
-            // A marker whose horizon has elapsed is kept by a pass because its
-            // producer's data is live: the case `marker_data_precedence`
-            // exists for.
-            Property::sometimes("aged_marker_kept_for_live_data", |_, s: &CompactState| {
-                let live = live_keys(&s.log);
-                s.last_pass.is_some()
-                    && s.log.iter().any(|e| {
-                        matches!(e.kind, EntryKind::Marker { producer_id, .. } if live.contains(&producer_id))
-                            && e.horizon_elapsed(s.clock)
-                    })
+            // A pass ages a marker out while its producer still has live data
+            // in the log: the case a producer-wide survivor rule would have
+            // kept forever, and `marker_data_precedence` leaves to the
+            // marker's own transaction.
+            Property::sometimes("marker_ages_out_beside_live_data", |_, s: &CompactState| {
+                let markers_of = |log: &[Entry], pid: u8| {
+                    log.iter()
+                            .filter(|e| {
+                                matches!(e.kind, EntryKind::Marker { producer_id, .. } if producer_id == pid)
+                            })
+                            .count()
+                };
+                s.last_pass.as_ref().is_some_and(|input| {
+                    live_keys(&s.log)
+                        .into_iter()
+                        .any(|pid| markers_of(input, pid) > markers_of(&s.log, pid))
+                })
             }),
             // A retained tombstone reaches an elapsed horizon.
             Property::sometimes("tombstone_horizon_elapsed", |_, s: &CompactState| {

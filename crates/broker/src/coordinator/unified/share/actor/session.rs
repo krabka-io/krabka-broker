@@ -36,7 +36,7 @@ pub(super) async fn handle_session_tick(
         return Ok(());
     }
     // `evict_expired` set `dirty`; the reconcile owns the single `bump_epoch`.
-    if !reconcile(state, metadata) {
+    if !reconcile(state, metadata, config.assignment_interval) {
         return Err(crate::error::BrokerError::Share(
             "group epoch is exhausted".to_owned(),
         ));
@@ -120,7 +120,7 @@ mod tests {
             .checked_sub(Duration::from_millis(50))
             .expect("50ms is always within Instant range");
         state.add_or_update_member(m);
-        reconcile(&mut state, &*metadata);
+        reconcile(&mut state, &*metadata, Duration::ZERO);
         assert!(!state.dirty, "baseline must be clean before eviction");
         let epoch_before = state.group_epoch;
 

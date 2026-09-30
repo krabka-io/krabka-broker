@@ -57,7 +57,26 @@ pub(super) async fn handle_transactional(
             // Fresh tid — allocate a new producer id.
             let (pid, epoch) = coord.producer_ids.allocate().await?;
             let entry = TxnEntry::new_empty(tid.to_string(), pid, epoch, txn_timeout, now_ms);
-            coord.put(entry, txnv).await?;
+            // Kafka's `putTransactionStateIfNotExists` creates the metadata
+            // under the state lock and hands a racing caller the winner's
+            // object. That caller runs `prepareInitProducerIdTransit` on it:
+            // `CONCURRENT_TRANSACTIONS` while the winner's transit is pending,
+            // and an epoch bump once the winner's append has completed.
+            // `allocate` yields, so another first `InitProducerId` for this id
+            // can create the entry meanwhile; recheck under the partition's
+            // write lock, which every append takes, so the two never persist
+            // two identities for one id. The winner publishes only after its
+            // append, so a loser here would find it completed and Kafka would
+            // bump at once. It answers `CONCURRENT_TRANSACTIONS` instead, and
+            // the client's retry finds the winner's entry and takes that bump.
+            // The id ends at the same identity and timeout either way, one
+            // round trip later, so this does not run the reuse path below
+            // from here.
+            let _state_partition_write = coord.lock_state_partition_for(tid).await;
+            if coord.get(tid).is_some() {
+                return Ok(concurrent_transactions_response());
+            }
+            coord.put_under_state_partition_lock(entry, txnv).await?;
             Ok(InitProducerIdResponse {
                 error_code: codes::NONE,
                 // Unwrap the allocated `ProducerId` into the raw-`i64` wire field.
@@ -165,27 +184,17 @@ pub(super) async fn handle_transactional(
                     // durable, other callers must still see Ongoing.
                     let mut prepared = e.clone();
                     prepared.state = TxnState::PrepareAbort;
-                    // A retry token from an earlier, unrelated epoch bump
-                    // names a generation this fence ends. Kafka's own
-                    // fence-then-abort answers `CONCURRENT_TRANSACTIONS` to
-                    // exactly one producer -- the one that owned the
-                    // now-fenced epoch -- and that recognition is
-                    // `last_producer_epoch`/`has_failed_epoch_fence` below,
-                    // set fresh once the fence is known to have succeeded or
-                    // failed. Clearing it here, before either outcome, keeps
-                    // a zombie that still holds the older token from being
-                    // admitted as a retry of this fence.
-                    prepared.last_producer_epoch = -1;
-                    // Kafka `prepareFenceProducerEpoch`: the epoch of the
-                    // ongoing transaction is raised before the abort, so every
-                    // abort marker fences the producer at its partitions. The
-                    // epoch is never answered to the client. It is not raised
-                    // again after a fence whose abort failed, and never past
-                    // `i16::MAX`.
-                    if !prepared.has_failed_epoch_fence && prepared.producer_epoch < i16::MAX {
-                        prepared.producer_epoch += 1;
-                    }
-                    crate::txn::handlers::end_txn::prepare_completion_identities(
+                    // Kafka `prepareFenceProducerEpoch` and the abort it runs
+                    // at the cluster's transaction version. The epoch of the
+                    // ongoing transaction is raised once before the markers, so
+                    // every abort marker fences the producer at its partitions,
+                    // and that epoch is never answered to the client. Below
+                    // `TV_2` the fence raises it and clears the last epoch, a
+                    // retry token from an earlier, unrelated bump that a
+                    // zombie could otherwise present as a retry of this fence.
+                    // At `TV_2` the completion bump is the only bump, and the
+                    // last epoch is the one the producer still holds.
+                    crate::txn::handlers::end_txn::prepare_server_abort_identities(
                         &mut prepared,
                         txnv,
                         &coord.producer_ids,
@@ -211,10 +220,14 @@ pub(super) async fn handle_transactional(
                         // entry and let only that producer retry its
                         // `InitProducerId`. Kafka keeps `hasFailedEpochFence`
                         // in memory too: a coordinator that loses it fails
-                        // closed, and the producer is fenced.
+                        // closed, and the producer is fenced. At `TV_2` the
+                        // fence raised nothing, so a retry raises nothing
+                        // twice and Kafka never sets the flag there.
                         let mut fenced = published.lock().await;
                         fenced.last_producer_epoch = fenced_from_epoch;
-                        fenced.has_failed_epoch_fence = true;
+                        if !txnv.verified() {
+                            fenced.has_failed_epoch_fence = true;
+                        }
                         drop(fenced);
                         // The PrepareAbort record is durable. Kafka answers
                         // the fence with CONCURRENT_TRANSACTIONS and finishes
@@ -243,6 +256,9 @@ pub(super) async fn handle_transactional(
                     completed.producer_epoch = completed_epoch;
                     completed.next_producer_id = krabka_log::ProducerId(-1);
                     completed.next_producer_epoch = -1;
+                    // Kafka's `prepareComplete`: the abort of a failed epoch
+                    // fence has now been written.
+                    completed.has_failed_epoch_fence = false;
                     completed.partitions.clear();
                     if let Err(error) = coord.put(completed, txnv).await {
                         tracing::warn!(
@@ -308,6 +324,9 @@ pub(super) async fn handle_transactional(
                 next_init_producer_identity(&e3, &coord.producer_ids).await?;
             let mut staged =
                 TxnEntry::new_empty(tid.to_string(), new_pid, new_epoch, txn_timeout, now_ms);
+            // The transition keeps the transaction version of the record before
+            // it (Kafka's `TransitionData` defaults to it).
+            staged.client_transaction_version = e3.client_transaction_version;
             // Kafka's `prepareIncrementProducerEpoch` and
             // `prepareProducerIdRotation` record the epoch the entry held, so
             // a retry of this call is recognised. A caller that named no
@@ -683,19 +702,29 @@ mod tests {
     }
 
     /// Kafka `prepareInitProducerIdTransit` on an `ONGOING` transaction:
-    /// `prepareFenceProducerEpoch` raises the epoch, the coordinator aborts
-    /// the transaction at that epoch, and the client gets
+    /// `prepareFenceProducerEpoch` names the epoch above the live one, the
+    /// coordinator aborts the transaction at that epoch, and the client gets
     /// `CONCURRENT_TRANSACTIONS`. The retry then bumps the epoch a second
     /// time.
+    ///
+    /// Below transaction version 2 the fence raises the epoch and keeps no last
+    /// epoch, so the epoch the producer held is fenced. At version 2 the fence
+    /// raises nothing and `prepareAbortOrCommit` bumps once, keeping the held
+    /// epoch as the last epoch, so a retry that names it is answered the epoch
+    /// the abort landed on.
     #[tokio::test]
     async fn an_ongoing_transaction_is_fenced_aborted_and_answered_concurrent() {
         struct Case {
             name: &'static str,
             txnv: TxnVersion,
             /// The epoch the abort completes at, which is also the epoch its
-            /// markers carry. Transaction version 2 bumps the epoch again for
-            /// the markers, as `prepareAbortOrCommit` does.
+            /// markers carry.
             aborted_epoch: i16,
+            /// The last epoch the completed abort records, `-1` for none.
+            last_epoch: i16,
+            /// What the producer that held the fenced epoch is answered when it
+            /// names it again: `(error code, producer id, producer epoch)`.
+            stale: (i16, i64, i16),
             /// The epoch the retry of a producer that names no identity
             /// hands to the client.
             retried_epoch: i16,
@@ -705,13 +734,17 @@ mod tests {
                 name: "transaction version 1",
                 txnv: TxnVersion::Flexible,
                 aborted_epoch: 4,
+                last_epoch: -1,
+                stale: (codes::PRODUCER_FENCED, -1, -1),
                 retried_epoch: 5,
             },
             Case {
                 name: "transaction version 2",
                 txnv: TxnVersion::Verified,
-                aborted_epoch: 5,
-                retried_epoch: 6,
+                aborted_epoch: 4,
+                last_epoch: 3,
+                stale: (codes::NONE, 1000, 4),
+                retried_epoch: 5,
             },
         ];
         for case in cases {
@@ -748,12 +781,17 @@ mod tests {
                 .await
                 .clone();
             check!(
-                (entry.state, entry.producer_id, entry.producer_epoch)
-                    == (
-                        TxnState::CompleteAbort,
-                        ProducerId(1000),
-                        case.aborted_epoch
-                    ),
+                (
+                    entry.state,
+                    entry.producer_id,
+                    entry.producer_epoch,
+                    entry.last_producer_epoch
+                ) == (
+                    TxnState::CompleteAbort,
+                    ProducerId(1000),
+                    case.aborted_epoch,
+                    case.last_epoch
+                ),
                 "{}",
                 case.name
             );
@@ -765,10 +803,12 @@ mod tests {
                 case.name
             );
 
-            // The producer that held the fenced epoch is fenced when it
-            // names it again: the fence bump is what the abort markers
-            // carried, and Kafka's `prepareIncrementProducerEpoch` matches an
-            // expected epoch against the current and the last epoch only.
+            // Kafka's `prepareIncrementProducerEpoch` matches an expected
+            // epoch against the current and the last epoch only. The
+            // producer that held the fenced epoch is fenced below
+            // transaction version 2, where the fence keeps no last epoch, and
+            // it is answered the epoch the abort landed on at version 2, where
+            // that epoch is the last one.
             let stale = handle_transactional(
                 &coordinator,
                 "tid-fenced",
@@ -783,9 +823,9 @@ mod tests {
             check!(
                 stale
                     == InitProducerIdResponse {
-                        error_code: codes::PRODUCER_FENCED,
-                        producer_id: -1,
-                        producer_epoch: -1,
+                        error_code: case.stale.0,
+                        producer_id: case.stale.1,
+                        producer_epoch: case.stale.2,
                         ..Default::default()
                     },
                 "{}: the stale identity",
@@ -1025,6 +1065,66 @@ mod tests {
         check!((entry.producer_id, entry.producer_epoch) == (ProducerId(1000), 4));
     }
 
+    /// Two first `InitProducerId` calls race for one unknown transactional id.
+    /// Kafka's `putTransactionStateIfNotExists` gives the loser the winner's
+    /// metadata, which it finds mid-transition and answers
+    /// `CONCURRENT_TRANSACTIONS`, so one identity exists. Both calls allocate a
+    /// producer id, which yields; the test holds the partition's write lock so
+    /// both are parked behind it when the winner creates the entry.
+    #[tokio::test]
+    async fn two_first_inits_for_one_unknown_id_create_one_identity() {
+        const TID: &str = "tid-fresh-race";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) =
+            coordinator_with_completed_transaction(dir.path(), "tid-seeded").await;
+        check!(coordinator.get(TID).is_none());
+
+        let write_lock = coordinator.lock_state_partition_for(TID).await;
+        let mut calls = Vec::new();
+        for _ in 0..2 {
+            let coordinator = Arc::clone(&coordinator);
+            calls.push(tokio::spawn(async move {
+                handle_transactional(
+                    &coordinator,
+                    TID,
+                    TxnVersion::Verified,
+                    60_000,
+                    false,
+                    false,
+                    (-1, -1),
+                )
+                .await
+            }));
+        }
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        drop(write_lock);
+
+        let mut answers = Vec::new();
+        for call in calls {
+            let response = call.await.expect("init task").expect("init responds");
+            answers.push((
+                response.error_code,
+                response.producer_id,
+                response.producer_epoch,
+            ));
+        }
+        // NONE sorts before CONCURRENT_TRANSACTIONS.
+        answers.sort_unstable();
+        let entry = coordinator.get(TID).expect("the winner's entry");
+        let entry = entry.lock().await.clone();
+        check!(
+            answers
+                == vec![
+                    (codes::NONE, entry.producer_id.get(), 0),
+                    (codes::CONCURRENT_TRANSACTIONS, -1, -1),
+                ]
+        );
+        check!(entry.producer_epoch == 0);
+    }
+
     /// A failed abort fan-out records the epoch fence on the entry the
     /// coordinator publishes, not on the handle this call started from: `put`
     /// republishes the tid under a fresh `Arc`, so a write to the superseded
@@ -1037,83 +1137,93 @@ mod tests {
     /// the abort completes, KIP-360 lets exactly the producer that still holds
     /// the pre-fence epoch retry, and a zombie that names any other epoch is
     /// fenced.
+    ///
+    /// Only below transaction version 2 does the entry carry the failed fence
+    /// flag: at version 2 the fence raises no epoch, so Kafka never sets
+    /// `hasFailedEpochFence` there, and the `PrepareAbort` record already keeps
+    /// the pre-fence epoch as its last epoch.
     #[tokio::test]
     async fn a_failed_abort_fan_out_records_the_fence_and_completes_before_a_retry() {
         const TID: &str = "tid-failed-fence";
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        // (transaction version, whether the fence is recorded as failed)
+        for (txnv, failed_fence) in [(TxnVersion::Flexible, true), (TxnVersion::Verified, false)] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (coordinator, _part) =
+                coordinator_with_completed_transaction(dir.path(), TID).await;
 
-        // An ongoing transaction over a partition this broker does not host
-        // yet: the abort marker cannot be delivered, so the fan-out fails
-        // after the epoch fence is already persisted.
-        let mut ongoing = TxnEntry::new_empty(TID.to_string(), ProducerId(1000), 3, 60_000, 0);
-        ongoing.state = TxnState::Ongoing;
-        ongoing.partitions.insert(TopicPartition {
-            topic: "ghost".to_string(),
-            partition: PartitionIndex(0),
-        });
-        seed(&coordinator, ongoing).await;
+            // An ongoing transaction over a partition this broker does not
+            // host yet: the abort marker cannot be delivered, so the fan-out
+            // fails after the epoch fence is already persisted.
+            let mut ongoing = TxnEntry::new_empty(TID.to_string(), ProducerId(1000), 3, 60_000, 0);
+            ongoing.state = TxnState::Ongoing;
+            ongoing.partitions.insert(TopicPartition {
+                topic: "ghost".to_string(),
+                partition: PartitionIndex(0),
+            });
+            seed(&coordinator, ongoing).await;
 
-        let init = |identity| {
-            let coordinator = Arc::clone(&coordinator);
-            async move {
-                handle_transactional(
-                    &coordinator,
-                    TID,
-                    TxnVersion::Verified,
-                    60_000,
-                    false,
-                    false,
-                    identity,
-                )
-                .await
-                .expect("InitProducerId responds")
+            let init = |identity| {
+                let coordinator = Arc::clone(&coordinator);
+                async move {
+                    handle_transactional(&coordinator, TID, txnv, 60_000, false, false, identity)
+                        .await
+                        .expect("InitProducerId responds")
+                }
+            };
+            let concurrent = InitProducerIdResponse {
+                error_code: codes::CONCURRENT_TRANSACTIONS,
+                producer_id: -1,
+                producer_epoch: -1,
+                ..Default::default()
+            };
+
+            check!(init((1000, 3)).await == concurrent, "{txnv:?}");
+            let published = coordinator.get(TID).expect("entry").lock().await.clone();
+            check!(published.has_failed_epoch_fence == failed_fence, "{txnv:?}");
+            check!(published.last_producer_epoch == 3, "{txnv:?}");
+            check!(published.state == TxnState::PrepareAbort, "{txnv:?}");
+
+            // While the abort is pending, the producer ID decides, not the
+            // epoch.
+            for identity in [(1000, 2), (1000, 3), (-1, -1)] {
+                check!(init(identity).await == concurrent, "{txnv:?} {identity:?}");
             }
-        };
-        let concurrent = InitProducerIdResponse {
-            error_code: codes::CONCURRENT_TRANSACTIONS,
-            producer_id: -1,
-            producer_epoch: -1,
-            ..Default::default()
-        };
+            check!(init((2000, 0)).await == fenced_response(), "{txnv:?}");
 
-        check!(init((1000, 3)).await == concurrent);
-        let published = coordinator.get(TID).expect("entry").lock().await.clone();
-        check!(published.has_failed_epoch_fence);
-        check!(published.last_producer_epoch == 3);
-        check!(published.state == TxnState::PrepareAbort);
-
-        // While the abort is pending, the producer ID decides, not the epoch.
-        for identity in [(1000, 2), (1000, 3), (-1, -1)] {
-            check!(init(identity).await == concurrent, "{identity:?}");
-        }
-        check!(init((2000, 0)).await == fenced_response());
-
-        // The partition appears, and the completion task finishes the abort.
-        let ghost_dir = crate::log_dir::partition_dir(dir.path(), "ghost", 0);
-        std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
-        let ghost = crate::broker::spawn_partition(
-            "ghost".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
-        coordinator
-            .partitions
-            .insert("ghost".into(), PartitionIndex(0), ghost);
-        check!(
+            // The partition appears, and the completion task finishes the
+            // abort.
+            let ghost_dir = crate::log_dir::partition_dir(dir.path(), "ghost", 0);
+            std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
+            let ghost = crate::broker::spawn_partition(
+                "ghost".to_string(),
+                PartitionIndex(0),
+                dir.path().to_path_buf(),
+                Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
+                crate::log_dir_status::LogDirRegistry::default(),
+                Arc::new(crate::producer_state::ProducerState::new()),
+                false,
+            );
             coordinator
-                .complete_prepared_transaction(TID, TxnVersion::Verified)
-                .await
-                == crate::txn::coordinator::completion::CompletionAttempt::Completed
-        );
+                .partitions
+                .insert("ghost".into(), PartitionIndex(0), ghost);
+            check!(
+                coordinator.complete_prepared_transaction(TID, txnv).await
+                    == crate::txn::coordinator::completion::CompletionAttempt::Completed,
+                "{txnv:?}"
+            );
 
-        check!(init((1000, 2)).await.error_code == codes::PRODUCER_FENCED);
-        check!(init((1000, 3)).await.error_code == codes::NONE);
+            // Kafka's `prepareComplete` clears the failed fence, so a later
+            // fence of this transactional id raises the epoch again.
+            let completed = coordinator.get(TID).expect("entry").lock().await.clone();
+            check!(!completed.has_failed_epoch_fence, "{txnv:?}");
+
+            check!(
+                init((1000, 2)).await.error_code == codes::PRODUCER_FENCED,
+                "{txnv:?}"
+            );
+            check!(init((1000, 3)).await.error_code == codes::NONE, "{txnv:?}");
+        }
     }
 
     /// The KIP-98 expiry sweep and an `InitProducerId` already parked on the
@@ -1197,9 +1307,11 @@ mod tests {
     /// aborted right at the epoch-exhaustion boundary rotates to a fresh
     /// producer id during the abort's own completion, exactly as a normal
     /// commit or abort does (`prepare_completion_identities`). The client
-    /// that owned the zombie epoch is fenced, not treated as a retry: the
-    /// fence bump already consumed its epoch, so only a caller that names no
-    /// identity -- Kafka's `initTransactions()` -- gets the rotated pair.
+    /// that owned the exhausted epoch is not fenced: Kafka records that epoch
+    /// as the last epoch of the rotation, and `isValidProducerId` admits the
+    /// old id at an exhausted epoch, so its retry is answered the rotated pair.
+    /// A caller that names no identity -- Kafka's `initTransactions()` --
+    /// bumps the rotated pair.
     #[tokio::test]
     async fn an_ongoing_transaction_fenced_at_the_exhausted_epoch_rotates_the_producer_id() {
         const TID: &str = "tid-abort-rotation";
@@ -1246,9 +1358,9 @@ mod tests {
         // abort's own completion step landed on.
         check!(entry.prev_producer_id == ProducerId(1000));
 
-        // The zombie that names its old, exhausted identity again is fenced,
-        // not recognised as a retry: the fence bump already consumed that
-        // epoch.
+        // The producer that names its old, exhausted identity again is
+        // recognised as a retry of the rotation, and answered the rotated pair
+        // without a write.
         let stale = handle_transactional(
             &coordinator,
             TID,
@@ -1260,7 +1372,14 @@ mod tests {
         )
         .await
         .expect("init responds");
-        check!(stale.error_code == codes::PRODUCER_FENCED);
+        check!(
+            stale
+                == InitProducerIdResponse {
+                    producer_id: entry.producer_id.get(),
+                    producer_epoch: entry.producer_epoch,
+                    ..Default::default()
+                }
+        );
 
         // `initTransactions()` names no identity, so the retry gets the
         // rotated identity the abort's completion already staged.
@@ -1288,7 +1407,8 @@ mod tests {
     /// token. The live producer then opens a transaction at epoch 5 without
     /// another `InitProducerId` call, exactly as `a_stale_retry_answers_...`
     /// sets up. A second `InitProducerId` call finds that transaction
-    /// `Ongoing` and fences it: epoch 5 -> 6, abort, `CompleteAbort`. The old
+    /// `Ongoing` and fences it: abort, `CompleteAbort` at epoch 6, and the
+    /// epoch 5 the fenced producer held becomes the last epoch. The old
     /// token from the 4->5 bump names a generation the fence just ended, so
     /// a zombie that still holds it must be fenced, not answered the live
     /// identity as a recognized retry.
@@ -1339,6 +1459,7 @@ mod tests {
 
         // A second InitProducerId call finds the transaction Ongoing and
         // fences it, aborting at epoch 6.
+        // (Kafka `prepareAbortOrCommit` at TV2: `epoch + 1`, `lastEpoch = epoch`.)
         let fenced = handle_transactional(
             &coordinator,
             TID,
@@ -1352,9 +1473,12 @@ mod tests {
         .expect("init responds");
         check!(fenced == concurrent_transactions_response());
         let entry = coordinator.get(TID).expect("entry").lock().await.clone();
-        // TV2 bumps once for the fence (5 -> 6) and once more on completion
-        // for the abort marker (6 -> 7).
-        check!((entry.state, entry.producer_epoch) == (TxnState::CompleteAbort, 7));
+        // TV2 bumps once, and the epoch the fenced producer held is the last
+        // epoch.
+        check!(
+            (entry.state, entry.producer_epoch, entry.last_producer_epoch)
+                == (TxnState::CompleteAbort, 6, 5)
+        );
 
         // The zombie holding the pre-bump token (4) belongs to the
         // generation the fence just ended and must be fenced, not admitted

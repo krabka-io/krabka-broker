@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn automatic_placement_excludes_a_fenced_broker_for_create_and_expand() {
+async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
     let mut cluster = start_n_node_with_retry(3).await;
     wait_for_all_brokers_registered(&cluster, 3).await;
     // Stop a broker that is neither the one the test talks to nor the
@@ -80,12 +80,40 @@ async fn automatic_placement_excludes_a_fenced_broker_for_create_and_expand() {
         assert!(!record.isr.contains(&fenced));
     }
 
+    // Kafka's placer counts a fenced broker toward the replication factor and
+    // takes it last, so a replication factor of 3 on the 3 registered brokers
+    // succeeds. The fenced replica stays out of the ISR and never leads.
+    let last_resort = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "t-last-resort".into(),
+                num_partitions: 1,
+                replication_factor: 3,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(last_resort.topics[0].error_code == 0);
+    broker
+        .wait_until_partition_present("t-last-resort", 0)
+        .await;
+    let record = broker
+        .partition_record_for_test("t-last-resort", 0)
+        .unwrap();
+    assert!(record.replicas.len() == 3);
+    assert!(record.replicas[2] == fenced);
+    assert!(record.isr == record.replicas[..2]);
+    assert!(record.leader == record.replicas[0]);
+
     let rejected = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
                 name: "t-too-many-replicas".into(),
                 num_partitions: 1,
-                replication_factor: 3,
+                replication_factor: 4,
                 ..Default::default()
             }],
             timeout_ms: 5_000,

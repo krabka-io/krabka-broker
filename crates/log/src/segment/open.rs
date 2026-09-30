@@ -20,11 +20,28 @@ use crate::{
     name,
 };
 
+/// One sparse-index point the tail scan found, as Kafka's `LogSegment.recover`
+/// writes it: the offset index gets the indexed batch's last offset and its
+/// byte position, and the time index gets the running maximum timestamp with
+/// the last offset of the batch that set it.
+struct IndexPoint {
+    /// Last offset of the indexed batch, relative to the segment base.
+    last_offset: u32,
+    /// Byte position where the indexed batch starts.
+    position: u32,
+    /// Maximum timestamp of every batch up to and including the indexed one.
+    max_timestamp: i64,
+    /// Last offset of the batch that set `max_timestamp`, relative to the
+    /// segment base.
+    max_timestamp_offset: u32,
+}
+
 struct TailScan {
     valid_end: u64,
     last_offset: Offset,
     max_timestamp: i64,
-    index_entries: Vec<(u32, u32, i64)>,
+    max_timestamp_offset: Offset,
+    index_points: Vec<IndexPoint>,
 }
 
 impl Segment {
@@ -57,6 +74,7 @@ impl Segment {
             time_index,
             sealed: false,
             max_timestamp: i64::MIN,
+            max_timestamp_offset: base_offset - 1,
             last_offset: base_offset - 1,
         })
     }
@@ -122,12 +140,18 @@ impl Segment {
         seek_to_log_size(&self.log_file, self.log_size)?;
         self.offset_index.truncate_by_position(0)?;
         self.time_index.truncate_by_relative_offset(0)?;
-        for (relative, position, max_timestamp) in recovered.index_entries {
-            self.offset_index.append(relative, position)?;
-            self.time_index.append(max_timestamp, relative)?;
+        for point in recovered.index_points {
+            self.offset_index
+                .append(point.last_offset, point.position)?;
+            self.time_index
+                .maybe_append(point.max_timestamp, point.max_timestamp_offset)?;
         }
         self.last_offset = recovered.last_offset;
         self.max_timestamp = recovered.max_timestamp;
+        self.max_timestamp_offset = recovered.max_timestamp_offset;
+        // Kafka's `LogSegment.recover` ends the same way: a segment that
+        // closed normally always had its newest timestamp in the index.
+        self.append_running_max_time_entry()?;
         tracing::Span::current().record("recovered_last_offset", self.last_offset.0);
         Ok(())
     }
@@ -147,7 +171,8 @@ impl Segment {
             .map(Offset)
             .ok_or_else(|| LogError::Corrupt("recovery offset underflow".into()))?;
         let mut max_timestamp = i64::MIN;
-        let mut index_entries: Vec<(u32, u32, i64)> = Vec::new();
+        let mut max_timestamp_offset = last_offset;
+        let mut index_points: Vec<IndexPoint> = Vec::new();
         while !cur.is_empty() {
             let batch_position = valid_end;
             let before = cur.len();
@@ -169,33 +194,41 @@ impl Segment {
             valid_end = step.valid_end;
             last_offset = Offset(step.last_offset);
             next_offset = step.next_offset;
-            max_timestamp = max_timestamp.max(batch.max_timestamp);
-            let should_index = match index_entries.last() {
-                None => true,
-                Some((_, previous_position, _)) => {
-                    batch_position.saturating_sub(u64::from(*previous_position))
-                        >= index_interval.bytes_u64()
-                }
-            };
+            if batch.max_timestamp > max_timestamp {
+                max_timestamp = batch.max_timestamp;
+                max_timestamp_offset = last_offset;
+            }
+            // Kafka's `LogSegment.recover`: `validBytes - lastIndexEntry >
+            // indexIntervalBytes`, the last entry starting at zero.
+            let last_indexed = index_points
+                .last()
+                .map_or(0, |previous| u64::from(previous.position));
+            let should_index =
+                batch_position.saturating_sub(last_indexed) > index_interval.bytes_u64();
             if should_index {
-                let relative = krabka_verified::truncation_relative_offset(
-                    self.base_offset.0,
-                    batch.base_offset,
-                )
-                .ok_or_else(|| {
-                    LogError::Corrupt("recovered batch offset exceeds index range".into())
-                })?;
+                let relative = |offset: Offset| {
+                    krabka_verified::truncation_relative_offset(self.base_offset.0, offset.0)
+                        .ok_or_else(|| {
+                            LogError::Corrupt("recovered batch offset exceeds index range".into())
+                        })
+                };
                 let position = u32::try_from(batch_position).map_err(|_| {
                     LogError::Corrupt("recovered batch position exceeds index range".into())
                 })?;
-                index_entries.push((relative, position, max_timestamp));
+                index_points.push(IndexPoint {
+                    last_offset: relative(last_offset)?,
+                    position,
+                    max_timestamp,
+                    max_timestamp_offset: relative(max_timestamp_offset)?,
+                });
             }
         }
         Ok(TailScan {
             valid_end,
             last_offset,
             max_timestamp,
-            index_entries,
+            max_timestamp_offset,
+            index_points,
         })
     }
 
@@ -230,6 +263,7 @@ impl Segment {
             time_index,
             sealed: false,
             max_timestamp: i64::MIN,
+            max_timestamp_offset: base_offset - 1,
             last_offset: base_offset - 1,
         })
     }
@@ -239,6 +273,7 @@ impl Segment {
 mod tests {
     use std::io::Write;
 
+    use krabka_units::prelude::kibibytes;
     use tempfile::tempdir;
 
     use super::*;
@@ -299,8 +334,11 @@ mod tests {
         assert2::assert!(seg.last_offset() == Offset(4));
         assert2::assert!(seg.log_size == valid_size);
         assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
-        assert2::assert!(seg.offset_index.entry_count() == 2);
-        assert2::assert!(seg.time_index.entry_count() == 2);
+        // The first batch takes no entry (Kafka's `LogSegment.recover` indexes
+        // a batch once more than the interval lies between it and the last
+        // entry, which starts at zero), so the second batch's is the one.
+        assert2::assert!(seg.offset_index.entry_count() == 1);
+        assert2::assert!(seg.time_index.entry_count() == 1);
         assert2::assert!(u64::from(seg.offset_index.lookup(999)) < valid_size);
         assert2::assert!(seg.time_index.last_entry().unwrap().1 < 999);
         drop(seg);
@@ -313,8 +351,29 @@ mod tests {
         assert2::assert!(retry.last_offset() == Offset(4));
         assert2::assert!(retry.log_size == valid_size);
         assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
-        assert2::assert!(retry.offset_index.entry_count() == 2);
-        assert2::assert!(retry.time_index.entry_count() == 2);
+        assert2::assert!(retry.offset_index.entry_count() == 1);
+        assert2::assert!(retry.time_index.entry_count() == 1);
+    }
+
+    /// Recovery ends with Kafka's final time-index entry, `(maxTimestampSoFar,
+    /// shallowOffsetOfMaxTimestampSoFar)`: the sparse index holds no point for
+    /// these small batches, so without it the index would not know any of
+    /// their timestamps.
+    #[test]
+    fn recover_active_tail_appends_the_final_time_index_entry() {
+        let dir = tempdir().unwrap();
+        {
+            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+            for (base, timestamp) in [(0, 100), (1, 300), (2, 200)] {
+                seg.append(&sample_batch(base, 1, timestamp), kibibytes(4))
+                    .unwrap();
+            }
+        }
+
+        let seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
+
+        assert2::assert!(seg.time_index.entry_count() == 1);
+        assert2::assert!(seg.time_index.last_entry() == Some((300, 1)));
     }
 
     #[test]

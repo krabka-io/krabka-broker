@@ -60,9 +60,9 @@ fn micros_to_tokens(micros: u64) -> f64 {
 }
 
 impl TokenBucket {
-    /// Updates the rate in raw tokens per second.
-    ///
-    /// This method resets `available` to a one-second burst at the new rate.
+    /// Updates the rate in raw tokens per second, with a one-second burst at
+    /// the new rate. The balance is kept: see
+    /// [`Self::set_token_rate_with_burst`].
     ///
     /// This is the primitive. The bucket counts tokens and does not know what a
     /// token means. Callers that meter a dimensioned quantity should use the
@@ -74,7 +74,13 @@ impl TokenBucket {
 
     /// Updates the rate and the independent burst capacity, both in raw tokens.
     ///
-    /// This method refills the bucket to `burst` and restarts the refill clock.
+    /// A bucket that already has a rate keeps its balance across the change,
+    /// as Kafka's `ClientQuotaManager.updateQuotaMetricConfigs` only swaps a
+    /// metric's bound and leaves what it recorded: the time up to now is
+    /// refilled at the old rate, the balance is capped at the new burst, and
+    /// debt stays debt, so a client in debt is still throttled after a change
+    /// of its quota. A bucket that had no rate has recorded nothing, so it
+    /// starts at `burst`.
     pub fn set_token_rate_with_burst(&self, new_rate: u64, burst: u64) {
         self.set_micro_rate_with_burst(
             new_rate.saturating_mul(MICROS_PER_TOKEN),
@@ -82,19 +88,28 @@ impl TokenBucket {
         );
     }
 
-    /// Updates the rate and the burst, both in micro-tokens.
+    /// Updates the rate and the burst, both in micro-tokens, as
+    /// [`Self::set_token_rate_with_burst`] does.
     ///
-    /// It stores the whole `{rate, burst, available, last_refill}` group in one
-    /// critical section, so a concurrent [`Self::try_consume`] runs either
-    /// wholly before the reset or wholly after it. No consume can commit a
-    /// balance it computed under the old configuration.
+    /// It stores the whole `{rate, burst, available, debt, last_refill}` group
+    /// in one critical section, so a concurrent [`Self::try_consume`] runs
+    /// either wholly before the reset or wholly after it. No consume can
+    /// commit a balance it computed under the old configuration.
     fn set_micro_rate_with_burst(&self, micro_rate_per_sec: u64, micro_burst: u64) {
         let mut state = self.lock_state();
         let now = self.now_nanos();
+        let (micro_available, micro_debt) =
+            if state.micro_rate_per_sec == 0 || micro_rate_per_sec == 0 {
+                (micro_burst, 0)
+            } else {
+                let refilled = state.refilled(now);
+                (refilled.available.min(micro_burst), refilled.debt)
+            };
         *state = BucketState {
             micro_rate_per_sec,
             micro_burst,
-            micro_available: micro_burst,
+            micro_available,
+            micro_debt,
             last_refill_nanos: now,
         };
         self.micro_rate_per_sec.store(micro_rate_per_sec, Relaxed);
@@ -115,7 +130,8 @@ impl TokenBucket {
         self.lock_state().micro_burst / MICROS_PER_TOKEN
     }
 
-    /// Updates a byte throughput and bursts one second's worth.
+    /// Updates a byte throughput and bursts one second's worth, keeping the
+    /// balance as [`Self::set_token_rate_with_burst`] says.
     ///
     /// The burst is `rate * DEFAULT_BURST_WINDOW`. `uom` type-checks this as a
     /// [`ByteRate`] times a [`Time`], which gives a [`ByteSize`].
@@ -128,7 +144,8 @@ impl TokenBucket {
     /// Both keep their fractional part to a millionth of a byte, so a rate of
     /// half a byte per second is enforced as half a byte per second. Kafka
     /// holds a byte-rate quota as a double. A positive rate is never stored
-    /// as the unlimited rate `0`.
+    /// as the unlimited rate `0`. The balance is kept, as
+    /// [`Self::set_token_rate_with_burst`] says.
     pub fn set_byte_rate_with_burst(&self, new_rate: ByteRate, burst: ByteSize) {
         self.set_micro_rate_with_burst(
             rate_to_micros(new_rate.bytes_per_sec_f64()),
@@ -148,8 +165,8 @@ impl TokenBucket {
     ///
     /// A caller that re-applies a configured rate compares with this rather
     /// than with [`Self::byte_rate`]: a rate finer than a micro-token per
-    /// second reads back rounded, and a reset refills the bucket, so a
-    /// comparison that never matched would refill it on every re-apply.
+    /// second reads back rounded, so a comparison that never matched would
+    /// reset the bucket on every re-apply.
     #[must_use]
     pub fn runs_at_byte_rate(&self, rate: ByteRate) -> bool {
         self.fast_path_rate() == rate_to_micros(rate.bytes_per_sec_f64())

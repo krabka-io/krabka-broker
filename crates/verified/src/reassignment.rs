@@ -66,16 +66,22 @@ pub fn reassignment_plan_admission(
         }
 }
 
-/// Wait for new replicas, hand leadership to the first eligible target, or
-/// complete while the existing leader remains in the target assignment.
-#[ensures(!additions_caught_up ==> result == ReassignmentAction::WaitForReplication)]
-#[ensures(additions_caught_up && !leader_removed ==> result == ReassignmentAction::Complete)]
+/// Wait until the reassignment may complete, hand leadership to the first
+/// eligible target, or complete while the existing leader remains in the target
+/// assignment.
+///
+/// `completion_ready` is Kafka's `PartitionReassignmentReplicas
+/// .maybeCompleteReassignment` predicate: every adding replica is in the ISR,
+/// and a replication factor decrease does not shrink the ISR. The host
+/// evaluates it, so a handoff, like a completion, never runs ahead of it.
+#[ensures(!completion_ready ==> result == ReassignmentAction::WaitForReplication)]
+#[ensures(completion_ready && !leader_removed ==> result == ReassignmentAction::Complete)]
 #[ensures(match result {
-    ReassignmentAction::WaitForLeader => additions_caught_up
+    ReassignmentAction::WaitForLeader => completion_ready
         && leader_removed
         && (forall<i: Int> 0 <= i && i < eligible_handoffs@.len()
             ==> !eligible_handoffs@[i]),
-    ReassignmentAction::Handoff(index) => additions_caught_up
+    ReassignmentAction::Handoff(index) => completion_ready
         && leader_removed
         && index@ < eligible_handoffs@.len()
         && eligible_handoffs@[index@]
@@ -84,11 +90,11 @@ pub fn reassignment_plan_admission(
 })]
 #[must_use]
 pub fn reassignment_action(
-    additions_caught_up: bool,
+    completion_ready: bool,
     leader_removed: bool,
     eligible_handoffs: &[bool],
 ) -> ReassignmentAction {
-    if !additions_caught_up {
+    if !completion_ready {
         return ReassignmentAction::WaitForReplication;
     }
     if !leader_removed {

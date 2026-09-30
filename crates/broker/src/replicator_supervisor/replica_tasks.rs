@@ -216,6 +216,7 @@ impl ReplicatorSupervisor {
             log_dir_status: self.log_dir_status.clone(),
             producer_state: self.producer_state.clone(),
             metrics: self.metrics.clone(),
+            lag: replicator::ReplicaLag::default(),
         }
     }
 }

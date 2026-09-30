@@ -65,6 +65,13 @@ pub(super) fn apply_next_gen_record(
                 ng::CurrentMemberAssignmentValue::decode(value_bytes)?,
             );
         }
+        ng::NextGenKey::RegularExpression { group_id, regex } => {
+            coordinator.replay_regular_expression(
+                &group_id,
+                &regex,
+                ng::RegularExpressionValue::decode(value_bytes)?,
+            );
+        }
     }
     Ok(())
 }

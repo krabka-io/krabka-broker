@@ -535,7 +535,7 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
     let original = DelegationTokenRecord {
         token_id: "token-273".to_string(),
         owner: principal("alice"),
-        hmac: vec![0x27; 32],
+        requester: principal("alice"),
         issue_timestamp_ms: now - 1_000,
         expiry_timestamp_ms: now + 60_000,
         max_timestamp_ms: now + 600_000,

@@ -35,7 +35,8 @@ mod tests;
 /// the KIP-595 RPC over [`krabka_client_core::Connection::raw_request`].
 ///
 /// The sender caches one connection per peer. A failed RPC evicts the cached
-/// connection, so the next send dials again.
+/// connection, so the next send dials again, and so does a send that finds the
+/// cached connection closed, as the client's idle close leaves it.
 pub(crate) struct RealPeerSender {
     connections: DashMap<NodeId, Arc<Connection>>,
     voters: RwLock<VoterSet>,
@@ -80,8 +81,21 @@ impl RealPeerSender {
     /// Looks up or opens a connection to `peer`.
     #[tracing::instrument(level = "debug", skip_all, fields(peer), err)]
     async fn connect(&self, peer: NodeId) -> Result<Arc<Connection>, RaftError> {
-        if let Some(c) = self.connections.get(&peer) {
-            return Ok(Arc::clone(c.value()));
+        let cached = self
+            .connections
+            .get(&peer)
+            .map(|cached| Arc::clone(cached.value()));
+        if let Some(cached) = cached {
+            if !cached.is_closed() {
+                return Ok(cached);
+            }
+            // The client closes a link that carried nothing for
+            // `connections.max.idle.ms`, nine minutes by default, and a peer
+            // may have closed it too. A vote goes out once and is not
+            // retried, so sending into the dead link would cost the election
+            // a whole timeout. Dial again instead.
+            self.connections
+                .remove_if(&peer, |_, current| Arc::ptr_eq(current, &cached));
         }
         let addr = {
             let voters = self

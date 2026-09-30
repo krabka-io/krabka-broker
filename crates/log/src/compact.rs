@@ -5,7 +5,9 @@
 //! The algorithm makes a single pass over the **sealed** segment list, from
 //! oldest to newest. It builds a key-to-latest-offset map, then rewrites the
 //! surviving records into a single new segment at the lowest input base
-//! offset. It never touches the active segment.
+//! offset. It never touches the active segment. Both walks track the
+//! transactions they meet with a [`CleanedTransactionMetadata`], so a batch of
+//! an aborted transaction never wins the map and never survives the rewrite.
 //!
 //! The algorithm drops records with `key.is_none()`, as Kafka's `LogCleaner`
 //! does. A tombstone is a record with `key.is_some()` and `value.is_none()`.
@@ -20,6 +22,7 @@ mod decision;
 mod offset_map;
 mod rewrite;
 mod swap;
+mod txn_metadata;
 
 #[cfg(test)]
 mod test_support;
@@ -28,9 +31,12 @@ pub(crate) use self::decision::{
     BatchMeta, RecordMeta, RetainDecision, TxnDataState, retain_decision, should_index_key,
 };
 pub use self::{
-    offset_map::{CleanedTransactionMetadata, build_offset_map},
-    rewrite::{RewriteOutput, RewriteRetention, rewrite_segments},
+    offset_map::build_offset_map,
+    rewrite::{
+        CleaningRound, ProducerLastRecord, RewriteOutput, RewriteRetention, rewrite_segments,
+    },
     swap::atomic_swap,
+    txn_metadata::CleanedTransactionMetadata,
 };
 
 // Exhaustive stateright enumeration of the KIP-534 retention contract over the

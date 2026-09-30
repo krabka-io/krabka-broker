@@ -90,50 +90,53 @@ fn of_topic_reads_legacy_elr_until_it_is_migrated() {
     assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[2, 3], &[4]));
 }
 
-/// A broker that can no longer be trusted to hold every committed record
-/// stops being eligible and becomes last-known, for every partition that
-/// named it, and a partition that never named it is untouched.
+/// Kafka 4.3.1 keeps one replica in `lastKnownElr`, the last leader, while a
+/// partition has no leader (`PartitionChangeBuilder.maybeUpdateLastKnownLeader`),
+/// so that one replica, when it is the leader the record still names, is what
+/// says the partition has none. `canElectLastKnownLeader` reads the same shape:
+/// a last-known ELR of any other length is not a last known leader.
 #[test]
-fn demote_node_moves_it_to_the_last_known_set() {
-    for (label, value, node, moved, want) in [
-        (
-            "the only eligible member becomes last-known",
-            "0:3:",
-            3,
-            true,
-            "0::3",
-        ),
-        (
-            "the others keep their places",
-            "0:2,3:4",
-            3,
-            true,
-            "0:2:3,4",
-        ),
-        (
-            "every partition that named it moves",
-            "0:3:;1:2,3:",
-            3,
-            true,
-            "0::3;1:2:3",
-        ),
-        (
-            "a member that is already last-known is not listed twice",
-            "0:3:3",
-            3,
-            true,
-            "0::3",
-        ),
-        (
-            "a node no partition names moves nothing",
-            "0:2:4",
-            3,
-            false,
-            "0:2:4",
-        ),
+fn a_one_member_last_known_elr_naming_the_recorded_leader_marks_the_partition() {
+    for (label, state, recorded_leader, want) in [
+        ("the last leader alone", elr(&[], &[1]), 1, true),
+        ("with an ELR beside it", elr(&[2, 3], &[1]), 1, true),
+        ("a different replica", elr(&[], &[2]), 1, false),
+        ("two members", elr(&[], &[1, 2]), 1, false),
+        ("no last-known ELR", elr(&[2], &[]), 1, false),
+        ("no ELR at all", elr(&[], &[]), 1, false),
     ] {
-        let mut elr = TopicElr::parse(value);
-        assert!(elr.demote_node(node) == moved, "{label}");
-        assert!(elr.render() == want, "{label}");
+        assert!(
+            state.is_leaderless(NodeId(recorded_leader)) == want,
+            "{label}"
+        );
     }
+}
+
+/// The image-level reader answers from what the log published, per partition.
+#[test]
+fn the_image_marks_only_the_partition_whose_last_known_elr_names_its_leader() {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    for partition in 0..3 {
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: "orders".into(),
+            partition,
+            leader: NodeId(1),
+            ..Default::default()
+        }));
+    }
+    for (partition, last_known) in [(0, vec![NodeId(1)]), (1, vec![NodeId(2)])] {
+        image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+            topic: "orders".into(),
+            partition,
+            eligible_leader_replicas: vec![],
+            last_known_elr: last_known,
+        }));
+    }
+
+    let marked: Vec<bool> = image
+        .partitions_of("orders")
+        .map(|partition| super::is_leaderless(&image, partition))
+        .collect();
+
+    assert!(marked == vec![true, false, false]);
 }

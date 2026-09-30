@@ -11,7 +11,7 @@ use std::{
 
 use arc_swap::ArcSwap;
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, Offset};
+use krabka_log::Log;
 use krabka_units::Time;
 
 use super::storage::{flag_storage_failure, lock_log, storage_failure_error};
@@ -25,12 +25,12 @@ async fn active_producers_for_compaction(
     partition: PartitionIndex,
     now_ms: i64,
     producer_id_expiration: Time,
-) -> std::collections::HashMap<krabka_log::ProducerId, Offset> {
+) -> std::collections::HashMap<krabka_log::ProducerId, krabka_log::ProducerLastRecord> {
     producer_state
         .active_snapshot(topic, partition, now_ms, producer_id_expiration)
         .await
         .into_iter()
-        .map(|(producer_id, offset)| (krabka_log::ProducerId(producer_id), Offset(offset)))
+        .map(|(producer_id, last)| (krabka_log::ProducerId(producer_id), last))
         .collect()
 }
 
@@ -93,6 +93,7 @@ pub(super) async fn handle_compact(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_log::Offset;
     use krabka_units::millis;
 
     use super::*;
@@ -112,9 +113,15 @@ mod tests {
         assert!(expired.is_empty());
         assert!(
             active
-                == [(krabka_log::ProducerId(7), Offset(12))]
-                    .into_iter()
-                    .collect()
+                == [(
+                    krabka_log::ProducerId(7),
+                    krabka_log::ProducerLastRecord {
+                        last_data_offset: Some(Offset(12)),
+                        producer_epoch: 0,
+                    },
+                )]
+                .into_iter()
+                .collect()
         );
     }
 }

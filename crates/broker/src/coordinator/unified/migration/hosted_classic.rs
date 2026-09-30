@@ -176,8 +176,6 @@ pub(crate) fn upsert_classic_member(
         client_host,
         subscribed_topic_names: subscription_topics,
         subscribed_topic_regex: None,
-        compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-        regex_authorized_topics: HashSet::new(),
         server_assignor: None,
         rebalance_timeout,
         member_epoch,
@@ -230,7 +228,6 @@ mod tests {
     use krabka_protocol::primitives::uuid::Uuid;
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::CompiledRegex;
 
     const TOPIC: Uuid = Uuid([7; 16]);
 
@@ -243,8 +240,6 @@ mod tests {
             client_host: "/127.0.0.1".into(),
             subscribed_topic_names: ["t".to_string()].into(),
             subscribed_topic_regex: None,
-            compiled_regex: CompiledRegex::Absent,
-            regex_authorized_topics: HashSet::new(),
             server_assignor: None,
             rebalance_timeout: Duration::from_secs(60),
             member_epoch: 3,

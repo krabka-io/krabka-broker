@@ -91,7 +91,7 @@ The reason for a failure is on stderr. The exit code names its cause:
 | --- | --- | --- |
 | `--log-dir <path>` | required | A directory to format. Repeat the flag or separate paths with commas. The first is the metadata log directory. A directory must be absent, empty, or formatted by an interrupted run. |
 | `--cluster-id <id>` | kept or generated | The cluster id, in Kafka's base64 form or the hyphenated form. Without it, the id of an already formatted directory is kept, else a new id is generated. |
-| `--release-version <version>` | the broker's maximum | The bootstrap `metadata.version` (KIP-778), for example `4.0` or `4.0-IV3`. |
+| `--release-version <version>` | the broker's maximum | The bootstrap `metadata.version` (KIP-778), for example `4.0` or `4.0-IV3`. A string with more than two dot-separated segments keeps the first two, as in Kafka, so `4.3.1` is `4.3`. |
 | `--feature <name>=<level>` | none | Set one feature's finalized level (KIP-1022), for example `transaction.version=2`. Repeat for each feature. Conflicts with `--release-version` for `metadata.version` only. |
 | `--add-scram <spec>` | none | Seed a SCRAM credential. The spec is `SCRAM-SHA-256=[name=<u>,password=<p>,iterations=<n>]` or the `SCRAM-SHA-512` form. `iterations` defaults to `4096`. Repeat for each credential. |
 | `--add-acl <spec>` | none | Seed an ACL entry. The spec is `principal=User:<name>,host=<ip or *>,operation=<Op>,permission=<Allow or Deny>,resource=<Type>:<Name>[:<Pattern>]`. `Pattern` defaults to `Literal`. Repeat for each entry. |

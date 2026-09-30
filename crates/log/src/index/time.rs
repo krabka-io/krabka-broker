@@ -1,5 +1,7 @@
 //! Sparse time index. Each entry is 12 bytes: a timestamp as i64 BE and a
-//! `relative_offset` as u32 BE. The offset column increases monotonically.
+//! `relative_offset` as u32 BE. Both columns increase strictly, as Kafka's
+//! `TimeIndex.maybeAppend` keeps them, and the offset is the last offset of the
+//! batch that set the timestamp.
 
 use std::{
     fs::{File, OpenOptions},
@@ -20,6 +22,10 @@ use crate::{
 
 /// 12 bytes per entry: timestamp as i64 BE and `relative_offset` as u32 BE.
 pub const TIME_ENTRY_SIZE: usize = 12;
+
+/// Kafka's `RecordBatch.NO_TIMESTAMP`: the timestamp a batch without one
+/// reports.
+const NO_TIMESTAMP: i64 = -1;
 
 /// On-disk byte layout of one time-index entry.
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
@@ -59,9 +65,9 @@ impl TimeIndex {
             .expect("length is a multiple of TIME_ENTRY_SIZE and TimeEntryRaw is Unaligned");
         // Relative offsets strictly increase across real entries; trailing
         // `(0, 0)` padding from a preallocated Kafka index decodes as a
-        // non-increasing offset. Stop there. (Timestamps may repeat when
-        // `max_timestamp` is unchanged between index points, so the offset
-        // column — not the timestamp — is the monotonic discriminator.)
+        // non-increasing offset. Stop there. Padding carries timestamp 0,
+        // which is a legal timestamp, so the offset column is the
+        // discriminator.
         let mut entries: Vec<(i64, u32)> = Vec::with_capacity(raws.len());
         for r in raws {
             let (ts, rel) = (r.timestamp.get(), r.relative_offset.get());
@@ -78,6 +84,22 @@ impl TimeIndex {
             io: crate::io::file_io(),
             entries,
         })
+    }
+
+    /// Kafka's `TimeIndex.maybeAppend`: append the entry only when `timestamp`
+    /// is greater than the newest entry's, so the timestamps in the file
+    /// strictly increase. `kafka-dump-log` reports any other order as out of
+    /// order. An empty index compares against `NO_TIMESTAMP` (`-1`), so a run
+    /// of batches without timestamps leaves it empty.
+    pub fn maybe_append(&mut self, timestamp: i64, relative_offset: u32) -> Result<(), LogError> {
+        let newest = self
+            .entries
+            .last()
+            .map_or(NO_TIMESTAMP, |&(newest, _)| newest);
+        if timestamp > newest {
+            self.append(timestamp, relative_offset)?;
+        }
+        Ok(())
     }
 
     /// Append an entry. The caller must keep the entries monotonic.
@@ -182,6 +204,41 @@ mod time_tests {
             std::fs::metadata(&path).unwrap().len() == 0,
             "a bound of zero drops everything"
         );
+    }
+
+    /// Kafka's `TimeIndex.maybeAppend` takes an entry only when its timestamp
+    /// is above the newest entry's, and an empty index compares against
+    /// `NO_TIMESTAMP`. `kafka-dump-log` reports any other order as out of
+    /// order.
+    #[test]
+    fn maybe_append_takes_only_strictly_newer_timestamps() {
+        for (label, existing, appended, want) in [
+            ("no timestamp on an empty index", vec![], (-1, 0), vec![]),
+            ("first timestamp", vec![], (0, 0), vec![(0, 0)]),
+            (
+                "same timestamp, later offset",
+                vec![(100, 5)],
+                (100, 9),
+                vec![(100, 5)],
+            ),
+            ("older timestamp", vec![(100, 5)], (99, 9), vec![(100, 5)]),
+            (
+                "newer timestamp",
+                vec![(100, 5)],
+                (101, 9),
+                vec![(100, 5), (101, 9)],
+            ),
+        ] {
+            let dir = tempdir().unwrap();
+            let mut idx = TimeIndex::open(&dir.path().join("0.timeindex")).unwrap();
+            for (timestamp, relative_offset) in existing {
+                idx.append(timestamp, relative_offset).unwrap();
+            }
+            idx.maybe_append(appended.0, appended.1).unwrap();
+            check!(idx.entries == want, "case {label}");
+            let reopened = TimeIndex::open(&dir.path().join("0.timeindex")).unwrap();
+            check!(reopened.entries == want, "case {label}: on disk");
+        }
     }
 
     #[test]

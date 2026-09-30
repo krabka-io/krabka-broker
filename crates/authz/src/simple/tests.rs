@@ -368,6 +368,86 @@ mod authorize_by_resource_type {
                 == AuthorizationResult::Allow
         );
     }
+
+    /// Kafka's default `authorizeByResourceType` first authorizes the
+    /// hard-coded topic name `hardcode`. Under
+    /// `allow.everyone.if.no.acl.found` that probe is allowed whenever no
+    /// topic ACL covers the name, so a principal with no topic ACL gets in
+    /// even though it has no ALLOW entry for the scan to find. This is what
+    /// admits an idempotent producer once a cluster ACL exists.
+    #[test]
+    fn hardcoded_name_probe_honours_allow_everyone_if_no_acl_found() {
+        // (stored entries, allow.everyone.if.no.acl.found, result)
+        let other_topic = |pattern, name| {
+            topic_acl(
+                PermissionType::Allow,
+                AclOperation::Write,
+                "User:bob",
+                "*",
+                pattern,
+                name,
+            )
+        };
+        let cases = [
+            (
+                "no acls, flag off",
+                vec![],
+                false,
+                AuthorizationResult::Deny,
+            ),
+            ("no acls, flag on", vec![], true, AuthorizationResult::Allow),
+            (
+                "acl on another topic, flag off",
+                vec![other_topic(PatternType::Literal, "orders")],
+                false,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "acl on another topic, flag on",
+                vec![other_topic(PatternType::Literal, "orders")],
+                true,
+                AuthorizationResult::Allow,
+            ),
+            (
+                "literal acl on hardcode, flag on",
+                vec![other_topic(PatternType::Literal, "hardcode")],
+                true,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "prefixed acl covering hardcode, flag on",
+                vec![other_topic(PatternType::Prefixed, "hard")],
+                true,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "wildcard acl, flag on",
+                vec![other_topic(PatternType::Literal, "*")],
+                true,
+                AuthorizationResult::Deny,
+            ),
+        ];
+        for (label, entries, flag, expected) in cases {
+            let mut img = img();
+            for entry in entries {
+                img.apply(&MetadataRecord::V1AccessControlEntry(entry));
+            }
+            let a = alice();
+            let h = addr();
+            let auth =
+                SimpleAclAuthorizer::new(no_super()).with_allow_everyone_if_no_acl_found(flag);
+            assert2::check!(
+                auth.authorize_by_resource_type(
+                    &img,
+                    &a,
+                    &h,
+                    ResourceType::Topic,
+                    AclOperation::Write
+                ) == expected,
+                "{label}"
+            );
+        }
+    }
 }
 
 /// #650: `allow.everyone.if.no.acl.found` (default `false`) allows a

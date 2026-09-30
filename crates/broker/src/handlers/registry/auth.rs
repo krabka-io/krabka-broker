@@ -246,10 +246,11 @@ pub(super) fn describe_delegation_token_adapter<'a>(
 /// id, never the HMAC: the HMAC *is* the token's password equivalent, and an
 /// audit topic an auditor can read is not a place to keep one.
 fn token_id_for_hmac(broker: &Broker, hmac: &[u8]) -> Option<String> {
+    let secret_key = broker.config.delegation_token_secret_key.as_ref()?;
     broker
         .controller
         .current_image()
-        .delegation_token_by_hmac(hmac)
+        .delegation_token_by_hmac(secret_key.as_bytes(), hmac)
         .map(|token| token.token_id.clone())
 }
 

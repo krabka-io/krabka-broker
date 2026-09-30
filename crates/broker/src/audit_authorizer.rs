@@ -11,9 +11,11 @@ use crate::{
 };
 
 /// Wraps an [`Authorizer`]. It forwards decisions, bumps
-/// `authorization_denied_total` and emits an audit record on every Deny. The
-/// handlers audit Allow decisions for admin operations separately (Task 8),
-/// so this decorator does not duplicate them.
+/// `authorization_denied_total` and emits an audit record on every Deny of
+/// [`Authorizer::authorize`]. [`Authorizer::authorize_quiet`] forwards the
+/// decision and leaves neither behind, for the checks that Kafka makes with
+/// `logIfDenied = false`. The handlers audit Allow decisions for admin
+/// operations separately (Task 8), so this decorator does not duplicate them.
 ///
 /// The broker installs it whether or not audit is enabled: with
 /// `audit.enabled=false` the [`AuditLog`] is the disabled one and drops the
@@ -64,6 +66,21 @@ impl Authorizer for AuditingAuthorizer {
             });
         }
         result
+    }
+
+    /// The decision without the audit record and the counter. Kafka makes some
+    /// checks with `logIfDenied = false`: the cluster-wide `Create` and
+    /// `Delete` shortcuts that fall back to a per-topic check, the
+    /// `DescribeConfigs` disclosure check of `CreateTopics`, the `Describe`
+    /// filter of an all-topics `Metadata`, and every operations bit field. A
+    /// Deny there is not a refusal, so it must not show up in the audit trail
+    /// or in `authorization_denied_total`.
+    fn authorize_quiet(
+        &self,
+        source: &dyn krabka_authz::AclSource,
+        req: &AuthorizationRequest<'_>,
+    ) -> AuthorizationResult {
+        self.inner.authorize_quiet(source, req)
     }
 
     /// Forward the wrapped authorizer's answer: the decorator adds auditing,
@@ -259,5 +276,43 @@ mod tests {
 
         check!(over_fixed_ttl.decision_ttl() == Some(ttl));
         check!(over_no_ttl.decision_ttl() == None);
+    }
+
+    /// A check that Kafka makes with `logIfDenied = false` takes the decision
+    /// of the wrapped authorizer and leaves neither an audit record nor a
+    /// count, where the same Deny through `authorize` leaves both.
+    #[tokio::test]
+    async fn a_quiet_deny_leaves_no_audit_record_and_no_count() {
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let authz = AuditingAuthorizer::new(Arc::new(DenyAll), log, metrics.clone());
+        let principal = request_principal();
+        let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
+        let image = krabka_metadata::MetadataImage::default();
+        let request = AuthorizationRequest {
+            principal: &principal,
+            host: &host,
+            resource_type: ResourceType::Topic,
+            resource_name: "secrets",
+            operation: AclOperation::Write,
+        };
+        let denied = || {
+            metrics
+                .authorization_denied
+                .get_or_create(&denied_label())
+                .get()
+        };
+
+        let quiet = authz.authorize_quiet(&image, &request);
+
+        check!(quiet == AuthorizationResult::Deny);
+        check!(rx.try_recv().is_err());
+        check!(denied() == 0);
+
+        let loud = authz.authorize(&image, &request);
+
+        check!(loud == AuthorizationResult::Deny);
+        check!(rx.try_recv().is_ok());
+        check!(denied() == 1);
     }
 }

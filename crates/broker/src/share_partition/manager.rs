@@ -15,10 +15,12 @@
 //! and the release path a disconnect takes, `metadata_lookup` answers the
 //! topic, leader, and epoch questions against the metadata image, `cells` owns
 //! the lazily loaded per-partition machines, `persistence` writes a dirty
-//! machine back to the persister, and `sweeper` runs the background
-//! acquisition-lock timeout.
+//! machine back to the persister, `sweeper` runs the background
+//! acquisition-lock timeout, `dead_letter` runs the second phase of the
+//! share-group dead-letter queue (KIP-1191), and `toggle` clears the manager
+//! when the finalized `share.version` drops to 0.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use dashmap::DashMap;
 use krabka_metadata::NodeId;
@@ -29,17 +31,19 @@ use crate::{
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
     share_coordinator::persister_client::SharePersister,
-    share_partition::{session::ShareSessionCache, state::AcquisitionState},
+    share_partition::{dlq::DlqSink, session::ShareSessionCache, state::AcquisitionState},
 };
 
 mod cells;
+mod dead_letter;
 mod metadata_lookup;
 pub(crate) mod persistence;
 mod sessions;
 mod sweeper;
+mod toggle;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 /// Live acquisition-state machines keyed by `(group, topic_id, partition)`.
 type LeaderKey = (String, uuid::Uuid, i32);
@@ -56,6 +60,16 @@ pub(crate) struct SharePartitionLeaderManager {
     config: Arc<ShareGroupConfig>,
     sessions: ShareSessionCache,
     leaders: DashMap<LeaderKey, Arc<Mutex<AcquisitionState>>>,
+    /// Where the records of a group's dead-letter queue are written
+    /// (KIP-1191).
+    dlq: Arc<dyn DlqSink>,
+    /// The writes to the dead-letter queue that may run at once, across every
+    /// partition this broker leads: the writes that wait for a permit hold
+    /// their records in `Archiving`, and hold the SPSO with them.
+    dead_letter_writes: tokio::sync::Semaphore,
+    /// This manager, for the tasks that finish a dead-letter write after the
+    /// request that began it has answered.
+    me: Weak<Self>,
 }
 
 impl std::fmt::Debug for SharePartitionLeaderManager {
@@ -75,8 +89,9 @@ impl SharePartitionLeaderManager {
         persister: Arc<SharePersister>,
         config: Arc<ShareGroupConfig>,
         session_max: usize,
-    ) -> Self {
-        Self {
+        dlq: Arc<dyn DlqSink>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|me| Self {
             node_id,
             partitions,
             controller,
@@ -84,7 +99,12 @@ impl SharePartitionLeaderManager {
             config,
             sessions: ShareSessionCache::new(session_max),
             leaders: DashMap::new(),
-        }
+            dlq,
+            dead_letter_writes: tokio::sync::Semaphore::new(
+                dead_letter::MAX_CONCURRENT_DEAD_LETTER_WRITES,
+            ),
+            me: me.clone(),
+        })
     }
 }
 

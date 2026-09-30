@@ -367,6 +367,19 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub socket_request_max: Option<ByteSize>,
+    /// Largest request frame a connection may send before it finishes
+    /// authenticating on a SASL listener, Kafka's
+    /// `sasl.server.max.receive.size`. It replaces `socket_request_max` for
+    /// that stretch, and a larger frame fails the authentication.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub sasl_server_max_receive: Option<ByteSize>,
+    /// How long a failed SASL authentication holds its response and the close
+    /// that follows, Kafka's `connection.failed.authentication.delay.ms`. Zero
+    /// closes at once.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub connection_failed_authentication_delay: Option<Time>,
     /// Maximum number of queued requests allowed in the broker dispatch queue,
     /// Kafka's `queued.max.requests`.
     pub queued_max_requests: Option<usize>,
@@ -659,7 +672,11 @@ pub struct RuntimeFileConfig {
     pub tls_reload_interval: Option<Time>,
     /// KIP-227: maximum number of incremental-fetch sessions kept in the per-
     /// broker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When
-    /// the cache is full a non-privileged session is evicted in LRU order.
+    /// the cache is full, a new session displaces only a session that has been
+    /// unused for more than two minutes, or a smaller one created more than two
+    /// minutes ago (a follower-fetch session may also displace any consumer
+    /// session); otherwise it is refused and the fetch runs sessionless, as in
+    /// Kafka's `FetchSessionCacheShard.tryEvict`.
     pub max_incremental_fetch_session_cache_slots: Option<usize>,
     /// Maximum number of live broker connections across all listeners, Kafka's
     /// `max.connections`. A connection accepted past this ceiling is closed
@@ -691,9 +708,6 @@ pub struct RuntimeFileConfig {
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub remote_log_manager_interval: Option<Time>,
 
-    /// Whether the broker serves KIP-932 share groups, Kafka's
-    /// `group.share.enable`.
-    pub share_group_enable: Option<bool>,
     /// Default share-group session timeout, Kafka's
     /// `group.share.session.timeout.ms`.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
@@ -827,6 +841,7 @@ impl RuntimeFileConfig {
         mut self,
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
+        self.record_supplied_kafka_keys(cfg);
         self.apply_core(cfg)?;
         self.apply_replication(cfg)?;
         self.apply_coordinators(cfg)?;
@@ -837,6 +852,27 @@ impl RuntimeFileConfig {
         self.apply_broker_policy(cfg)?;
         self.apply_share_group(cfg)?;
         self.apply_streams_group(cfg)
+    }
+
+    /// Records, in [`crate::config::StaticConfigOrigins`], the Kafka keys of
+    /// [`crate::config::KAFKA_STATIC_KEYS`] whose `[runtime]` field is set.
+    /// The presence of the field is the provenance: a value equal to Kafka's
+    /// default still reports at `STATIC_BROKER_CONFIG`.
+    ///
+    /// The overlay of a command line or the environment applies through this
+    /// too, after the file, so it adds to what the file recorded.
+    fn record_supplied_kafka_keys(&self, cfg: &mut crate::config::BrokerConfig) {
+        let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
+            return;
+        };
+        let supplied = crate::config::KAFKA_STATIC_KEYS.iter().filter(|key| {
+            key.runtime_field
+                .and_then(|field| fields.get(field))
+                .is_some_and(|value| !value.is_null())
+        });
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .extend(supplied.map(|key| key.name));
     }
 }
 

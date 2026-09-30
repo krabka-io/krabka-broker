@@ -86,6 +86,10 @@ impl ClassicGroup {
             return;
         };
         self.joined_this_round.remove(old_member_id);
+        // The replacement owes the `SyncGroup` the old id did.
+        if self.pending_sync_members.remove(old_member_id) {
+            self.pending_sync_members.insert(new_member_id.to_string());
+        }
         member.id = new_member_id.to_string();
         member.is_new = false;
         self.members.insert(new_member_id.to_string(), member);
@@ -193,18 +197,43 @@ impl ClassicGroup {
         }
         self.joined_this_round.remove(member_id);
         self.pending_members.remove(member_id);
+        self.pending_sync_members.remove(member_id);
         if self.members.is_empty() {
             self.state = GroupState::Empty;
             self.leader_id = None;
             self.protocol_name = None;
             self.rebalance_deadline = None;
+            self.clear_sync_expiration();
         }
+    }
+
+    /// Kafka's `expireClassicGroupMemberHeartbeat` on a pending member: a
+    /// `MEMBER_ID_REQUIRED` id that never joined goes away after the session
+    /// timeout of the request that got it. It returns the expired ids so the
+    /// caller can complete a join phase they were the last to block, as
+    /// Kafka's `removePendingMemberAndUpdateClassicGroup` does.
+    pub fn expire_pending_members(&mut self, now: Instant) -> Vec<String> {
+        let mut expired: Vec<String> = self
+            .pending_members
+            .iter()
+            .filter(|(_, expires_at)| now > **expires_at)
+            .map(|(member_id, _)| member_id.clone())
+            .collect();
+        expired.sort_unstable();
+        for member_id in &expired {
+            self.pending_members.remove(member_id);
+        }
+        expired
     }
 
     /// Drops every member whose `last_heartbeat` is older than its
     /// `session_timeout`. It returns the dropped member IDs. The group moves
-    /// to `PreparingRebalance` when it dropped at least one member and still
-    /// has members. It moves to `Empty` when it became empty.
+    /// to `Empty` when it became empty. When members remain, a `Stable` or
+    /// `CompletingRebalance` group prepares a rebalance and waits for the
+    /// survivors for the group rebalance timeout, the way Kafka's
+    /// `removeMemberAndUpdateClassicGroup` reaches `prepareRebalance`. The
+    /// initial rebalance delay applies only to a round that opens from
+    /// `Empty`, and this one does not.
     ///
     /// KIP-345: a static member, one with `group_instance_id.is_some()`,
     /// expires like a dynamic one, and its `static_members` entry goes with
@@ -230,11 +259,6 @@ impl ClassicGroup {
         // equal to the initial rebalance delay). With the default session timeout
         // 45s and a 3s rebalance delay this race is impossible in practice, and
         // real Kafka expires members regardless of group state.
-        // Kafka's `expireClassicGroupMemberHeartbeat` on a pending member:
-        // a `MEMBER_ID_REQUIRED` id that never joined goes away after the
-        // session timeout of the request that got it.
-        self.pending_members
-            .retain(|_, expires_at| now <= *expires_at);
         if self.state == GroupState::Empty {
             return Vec::new();
         }
@@ -259,18 +283,21 @@ impl ClassicGroup {
                 self.rebalance_deadline = None;
                 self.joined_this_round.clear();
                 self.rebalance_from_empty = false;
+                self.clear_sync_expiration();
+            } else if self.can_rebalance() {
+                // Kafka's `maybePrepareRebalanceOrCompleteJoin`: the survivors
+                // of a `Stable` or `CompletingRebalance` group get the whole
+                // group rebalance timeout to rejoin, and the round completes
+                // early once they all have.
+                self.prepare_rebalance(initial_rebalance_delay, now);
             } else {
-                self.state = GroupState::PreparingRebalance;
-                // Live-membership change (a member timed out), not a
-                // start-from-empty herd: eager-complete once the survivors
-                // rejoin rather than holding the initial-delay window.
+                // A member timed out during a round that is already open.
+                // This is a live-membership change, not a start-from-empty
+                // herd: eager-complete once the survivors rejoin rather than
+                // holding the initial-delay window.
                 self.rebalance_from_empty = false;
-                // If we just evicted from CompletingRebalance, rebalance_deadline
-                // is None (complete_rebalance clears it). Set a fresh deadline so
-                // parked joiners/followers wake up via the actor's opt_sleep path
-                // rather than waiting indefinitely for a rejoin that never comes.
                 if self.rebalance_deadline.is_none() {
-                    self.rebalance_deadline = Some(now + initial_rebalance_delay);
+                    self.rebalance_deadline = Some(now + self.rebalance_timeout());
                 }
             }
         }
@@ -459,25 +486,41 @@ mod tests {
         check!(g.members.contains_key("static-1"));
     }
 
+    /// Kafka's `removeMemberAndUpdateClassicGroup` reaches `prepareRebalance`,
+    /// which waits for the survivors for `group.rebalanceTimeoutMs()`, the
+    /// largest member rebalance timeout. `group.initial.rebalance.delay.ms`
+    /// applies only to a round that opens from `Empty`.
     #[test]
-    fn completing_rebalance_expiry_uses_configured_initial_delay() {
-        let mut g = ClassicGroup::new("g");
-        let mut stale = sample_member("stale");
-        stale.session_timeout = Duration::from_millis(1);
-        stale.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
-        g.add_member(stale);
-        g.add_member(sample_member("survivor"));
-        g.complete_rebalance("range");
-        check!(g.state == GroupState::CompletingRebalance);
-        check!(g.rebalance_deadline.is_none());
+    fn session_expiry_gives_survivors_the_group_rebalance_timeout() {
+        for (name, from_stable) in [("completing", false), ("stable", true)] {
+            let mut g = ClassicGroup::new("g");
+            let mut stale = sample_member("stale");
+            stale.session_timeout = Duration::from_millis(1);
+            stale.rebalance_timeout = Duration::from_mins(10);
+            stale.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+            g.add_member(stale);
+            let mut survivor = sample_member("survivor");
+            survivor.rebalance_timeout = Duration::from_secs(90);
+            g.add_member(survivor);
+            g.complete_rebalance("range");
+            if from_stable {
+                g.install_assignments(HashMap::new());
+            }
+            check!(g.rebalance_deadline.is_none(), "{name}");
 
-        let delay = Duration::from_millis(19);
-        let now = Instant::now();
-        let dropped = g.expire_dead_members(now, delay);
+            let delay = Duration::from_millis(19);
+            let now = Instant::now();
+            let dropped = g.expire_dead_members(now, delay);
 
-        check!(dropped == vec!["stale".to_string()]);
-        check!(g.state == GroupState::PreparingRebalance);
-        assert!(g.rebalance_deadline == Some(now + delay));
+            check!(dropped == vec!["stale".to_string()], "{name}");
+            check!(g.state == GroupState::PreparingRebalance, "{name}");
+            check!(!g.rebalance_from_empty, "{name}");
+            check!(g.initial_join.is_none(), "{name}");
+            check!(
+                g.rebalance_deadline == Some(now + Duration::from_secs(90)),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -608,14 +651,16 @@ mod tests {
     }
 
     /// A `MEMBER_ID_REQUIRED` id that never joins goes away after its
-    /// session timeout.
+    /// session timeout, and the expiry is reported so that the caller can
+    /// complete a join phase the id was blocking.
     #[test]
     fn pending_member_expires() {
         let mut g = ClassicGroup::new("g");
         let now = Instant::now();
         g.add_pending_member("late".into(), now);
         g.add_pending_member("waiting".into(), now + Duration::from_secs(10));
-        let _ = g.expire_dead_members(now + Duration::from_secs(1), Duration::from_secs(3));
+        let expired = g.expire_pending_members(now + Duration::from_secs(1));
+        check!(expired == vec!["late".to_string()]);
         check!(g.pending_members.keys().collect::<Vec<_>>() == vec!["waiting"]);
     }
 }

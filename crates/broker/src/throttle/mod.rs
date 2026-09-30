@@ -1,11 +1,28 @@
 //! KIP-73 throttled replication: the value types and the parser.
 
+use std::collections::BTreeSet;
+
 pub use krabka_throttle::{MICROS_PER_TOKEN, ThrottleState, TokenBucket};
 
 mod refresh;
 use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::{Time, secs};
 pub(crate) use refresh::apply_image;
 pub use refresh::run;
+
+/// How long a throttled-replication quota remembers what it measured: Kafka's
+/// `replication.quota.window.num` (11) times
+/// `replication.quota.window.size.seconds` (1), after which a sample leaves
+/// the window (`ReplicationQuotaManagerConfig`, whose defaults are
+/// `QuotaConfig.NUM_QUOTA_SAMPLES_DEFAULT` and
+/// `QuotaConfig.QUOTA_WINDOW_SIZE_SECONDS_DEFAULT`).
+///
+/// The bytes of an in-sync follower count against the bucket, so the debt they
+/// leave stops an out-of-sync follower drawing from it. That debt is kept for
+/// no longer than this window, so a burst of in-sync traffic starves a lagging
+/// follower for at most the window and it cannot fall out of the ISR on a
+/// debt that Kafka would already have forgotten.
+pub(crate) const REPLICATION_QUOTA_WINDOW: Time = secs(11);
 
 /// Topic-level `*.throttled.replicas` config value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,36 +70,80 @@ impl ThrottledReplicas {
         Ok(Self::List(out))
     }
 
+    /// The partitions this list throttles on `broker`, as Kafka's
+    /// `ConfigHandler.parseThrottledPartitions` reduces it: only the entries
+    /// that name `broker` count, and `*` throttles every partition.
+    ///
+    /// The broker id in an entry is the replica the throttle is for, on the
+    /// broker that holds it. `kafka-reassign-partitions --throttle` writes the
+    /// leader list as `partition:sourceReplica` and the follower list as
+    /// `partition:destinationReplica`, so a leader throttles a partition when
+    /// its own id is listed for it, whichever follower fetches (#1210).
     #[must_use]
-    pub fn contains(&self, partition: i32, node: NodeId) -> bool {
+    pub fn partitions_of(&self, broker: NodeId) -> ThrottledPartitions {
         match self {
-            Self::None => false,
-            Self::All => true,
-            Self::List(v) => v.iter().any(|&(p, n)| p == partition && n == node),
+            Self::None => ThrottledPartitions::None,
+            Self::All => ThrottledPartitions::All,
+            Self::List(entries) => ThrottledPartitions::Listed(
+                entries
+                    .iter()
+                    .filter(|&&(_, node)| node == broker)
+                    .map(|&(partition, _)| partition)
+                    .collect(),
+            ),
         }
     }
 }
 
-/// Both leader-side and follower-side throttled replicas for a topic.
+/// The partitions of one topic that a `*.replication.throttled.replicas` list
+/// throttles on one broker, which is Kafka's
+/// `ReplicationQuotaManager.isThrottled(TopicPartition)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThrottledPartitions {
+    /// No partition is throttled.
+    None,
+    /// Every partition is throttled: the list is `*`.
+    All,
+    /// The partitions the list names for this broker.
+    Listed(BTreeSet<i32>),
+}
+
+impl ThrottledPartitions {
+    #[must_use]
+    pub fn contains(&self, partition: i32) -> bool {
+        match self {
+            Self::None => false,
+            Self::All => true,
+            Self::Listed(partitions) => partitions.contains(&partition),
+        }
+    }
+}
+
+/// The partitions of a topic that the leader-side and the follower-side
+/// throttled-replicas lists throttle on one broker.
 #[derive(Debug, Clone)]
 pub struct TopicThrottle {
-    pub leader: ThrottledReplicas,
-    pub follower: ThrottledReplicas,
+    pub leader: ThrottledPartitions,
+    pub follower: ThrottledPartitions,
 }
 
 impl TopicThrottle {
+    /// The throttles of `topic` on the broker `broker`, which is the broker
+    /// that reads the lists: Kafka applies them per broker
+    /// (`ConfigHandler.processConfigChanges`).
     #[must_use]
-    pub fn for_topic(image: &MetadataImage, topic: &str) -> Self {
+    pub fn for_topic(image: &MetadataImage, topic: &str, broker: NodeId) -> Self {
         let configs = image.topic_config(topic);
-        let read = |key: &str| -> ThrottledReplicas {
+        let read = |key: &str| -> ThrottledPartitions {
             configs
                 .and_then(|c| c.get(key))
                 .and_then(|v| ThrottledReplicas::parse(v).ok())
                 .unwrap_or(ThrottledReplicas::None)
+                .partitions_of(broker)
         };
         Self {
-            leader: read("leader.replication.throttled.replicas"),
-            follower: read("follower.replication.throttled.replicas"),
+            leader: read(LEADER_THROTTLED_REPLICAS_KEY),
+            follower: read(FOLLOWER_THROTTLED_REPLICAS_KEY),
         }
     }
 }
@@ -111,23 +172,84 @@ mod tests {
     }
 
     #[test]
-    fn single_pair_parses() {
-        let r = ThrottledReplicas::parse("0:1").unwrap();
-        for (partition, broker, want) in [(0, 1, true), (0, 2, false), (1, 1, false)] {
+    fn pairs_parse_in_order() {
+        for (input, want) in [
+            ("0:1", vec![(0, NodeId(1))]),
+            (
+                "0:1,0:2,1:3",
+                vec![(0, NodeId(1)), (0, NodeId(2)), (1, NodeId(3))],
+            ),
+        ] {
             assert!(
-                r.contains(partition, NodeId(broker)) == want,
-                "{partition}:{broker}"
+                ThrottledReplicas::parse(input) == Ok(ThrottledReplicas::List(want)),
+                "{input}"
+            );
+        }
+    }
+
+    /// Each broker reads only the entries that name it, as Kafka's
+    /// `ConfigHandler.parseThrottledPartitions` filters on its own broker id,
+    /// and `*` throttles every partition (#1210).
+    #[test]
+    fn a_broker_keeps_only_the_entries_that_name_it() {
+        let listed =
+            |partitions: &[i32]| ThrottledPartitions::Listed(partitions.iter().copied().collect());
+        // (list, broker, partitions it throttles there)
+        let cases = [
+            ("", 1, ThrottledPartitions::None),
+            ("*", 1, ThrottledPartitions::All),
+            ("*", 9, ThrottledPartitions::All),
+            ("0:1,0:2,1:3", 1, listed(&[0])),
+            ("0:1,0:2,1:3", 2, listed(&[0])),
+            ("0:1,0:2,1:3", 3, listed(&[1])),
+            ("0:1,0:2,1:3", 4, listed(&[])),
+            ("0:1,2:1,5:1,3:2", 1, listed(&[0, 2, 5])),
+        ];
+        for (list, broker, want) in cases {
+            let parsed = ThrottledReplicas::parse(list).unwrap();
+            assert!(
+                parsed.partitions_of(NodeId(broker)) == want,
+                "{list:?} on broker {broker}"
             );
         }
     }
 
     #[test]
-    fn multiple_pairs_parse() {
-        let r = ThrottledReplicas::parse("0:1,0:2,1:3").unwrap();
-        for (partition, broker, want) in [(0, 1, true), (0, 2, true), (1, 3, true), (1, 1, false)] {
+    fn a_listed_partition_is_throttled_and_no_other() {
+        let listed = ThrottledPartitions::Listed([0, 3].into_iter().collect());
+        for (partition, want) in [(0, true), (1, false), (3, true), (4, false)] {
+            assert!(listed.contains(partition) == want, "partition {partition}");
+        }
+        assert!(ThrottledPartitions::All.contains(7));
+        assert!(!ThrottledPartitions::None.contains(0));
+    }
+
+    /// `kafka-reassign-partitions --throttle` writes the leader list as
+    /// `partition:sourceReplica` and the follower list as
+    /// `partition:destinationReplica`. Moving partition 0 from broker 1 to
+    /// broker 3 throttles the source broker's outbound replication and the
+    /// destination broker's inbound one, and no other broker's (#1210).
+    #[test]
+    fn a_reassignment_throttle_lands_on_the_source_and_the_destination() {
+        use krabka_metadata::{MetadataRecord, TopicConfigRecord};
+
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "moved".into(),
+            overrides: [
+                (LEADER_THROTTLED_REPLICAS_KEY.to_owned(), "0:1".to_owned()),
+                (FOLLOWER_THROTTLED_REPLICAS_KEY.to_owned(), "0:3".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        }));
+
+        // (broker, throttles its outbound replication, its inbound replication)
+        for (broker, leader, follower) in [(1, true, false), (2, false, false), (3, false, true)] {
+            let throttle = TopicThrottle::for_topic(&image, "moved", NodeId(broker));
             assert!(
-                r.contains(partition, NodeId(broker)) == want,
-                "{partition}:{broker}"
+                (throttle.leader.contains(0), throttle.follower.contains(0)) == (leader, follower),
+                "broker {broker}"
             );
         }
     }

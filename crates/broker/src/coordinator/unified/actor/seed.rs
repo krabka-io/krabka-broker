@@ -16,7 +16,7 @@
 //! exactly as it did before it.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
@@ -108,6 +108,12 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
     state.group_epoch = seed.group_epoch;
     state.target.epoch = seed.target_epoch;
     let group_generation = seed.group_epoch;
+    // What each regular expression resolved to, as the group last recorded it:
+    // the members keep the topics of their regex subscriptions across the
+    // failover, without a heartbeat that carries the pattern.
+    for (regex, resolved) in seed.resolved_regexes {
+        state.set_resolved_regex(regex, resolved.into());
+    }
     for (mid, meta) in seed.members {
         let mut sub = std::collections::HashSet::new();
         for n in meta.subscribed_topic_names {
@@ -129,12 +135,6 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             last_synced_assignment: Bytes::new(),
             awaiting_sync: true,
         });
-        // Kafka replays a regex's resolved topics; krabka persists none, so
-        // the member's regex subscription stays unresolved until its next
-        // heartbeat that carries the pattern.
-        if meta.subscribed_topic_regex.is_some() {
-            state.mark_regex_unresolved(&mid);
-        }
         state.add_or_update_member(MemberState {
             member_id: mid.clone(),
             instance_id: meta.instance_id,
@@ -142,16 +142,10 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             client_id: meta.client_id,
             client_host: meta.client_host,
             subscribed_topic_names: sub,
-            subscribed_topic_regex: meta.subscribed_topic_regex,
-            compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            // Fail-closed: no authorization decision is persisted in the raft
-            // log, so a member rebuilt after a coordinator failover starts
-            // with none of its regex matches authorized, exactly as if it had
-            // just joined. The member's next heartbeat re-derives this set
-            // from a live authorizer check and the reconciler grants the
-            // matches back once it lands, rather than the seed silently
-            // trusting whatever the pattern happens to match right now.
-            regex_authorized_topics: HashSet::new(),
+            // Kafka's `isNotEmpty` gate: an empty pattern is no regex.
+            subscribed_topic_regex: meta
+                .subscribed_topic_regex
+                .filter(|regex| !regex.is_empty()),
             server_assignor: meta.server_assignor,
             rebalance_timeout: Duration::from_millis(
                 u64::try_from(meta.rebalance_timeout_ms.max(0))
@@ -233,10 +227,11 @@ mod tests {
     use crate::{
         codes,
         coordinator::unified::{
+            consumer_state::ResolvedRegularExpression,
             migration::serve_classic_heartbeat,
             persistence_next_gen::{
                 ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
-                MemberMetadataValue, TargetAssignmentMemberValue,
+                MemberMetadataValue, RegularExpressionValue, TargetAssignmentMemberValue,
             },
         },
     };
@@ -309,6 +304,7 @@ mod tests {
                 },
             )]
             .into(),
+            ..GroupSeed::default()
         }
     }
 
@@ -380,15 +376,54 @@ mod tests {
         check!(facade.awaiting_sync);
     }
 
+    /// The seed of a group whose member `m` subscribes to `orders` by name and
+    /// to `pay.*` by regex, with the resolution of `pay.*` when `resolved` has
+    /// one. That is what a coordinator failover replays.
+    fn regex_seed(resolved: Option<&[&str]>) -> GroupSeed {
+        GroupSeed {
+            group_epoch: 5,
+            target_epoch: 5,
+            members: [(
+                "m".to_string(),
+                MemberMetadataValue {
+                    instance_id: None,
+                    rack_id: None,
+                    client_id: "c".to_string(),
+                    client_host: "/127.0.0.1".to_string(),
+                    subscribed_topic_names: vec!["orders".to_string()],
+                    subscribed_topic_regex: Some("pay.*".to_string()),
+                    server_assignor: None,
+                    rebalance_timeout_ms: 60_000,
+                    classic: None,
+                },
+            )]
+            .into(),
+            resolved_regexes: resolved
+                .into_iter()
+                .map(|topics| {
+                    (
+                        "pay.*".to_string(),
+                        RegularExpressionValue {
+                            topics: topics.iter().map(|topic| (*topic).to_string()).collect(),
+                            version: 7,
+                            timestamp_ms: 1_000,
+                        },
+                    )
+                })
+                .collect(),
+            ..GroupSeed::default()
+        }
+    }
+
     /// Kafka replays the topics a regex resolved to
-    /// (`ConsumerGroupRegularExpression`), so offset expiration and
-    /// `OffsetDelete` still see them as subscribed after a failover. Krabka
-    /// persists no resolution, so a replayed regex member leaves the group
-    /// subscribed to every topic until a heartbeat resolves the pattern:
-    /// (label, heartbeat pattern and the handler's authorized topics after
-    /// replay, the group's subscribed topics).
+    /// (`ConsumerGroupRegularExpression`), so a group that a failover loads
+    /// still subscribes to them: `OffsetDelete` and offset expiration see
+    /// them, and no heartbeat that carries the pattern is needed. A regex with
+    /// no record is not resolved, which leaves the group subscribed to every
+    /// topic until it is. A heartbeat that drops the regex takes its topics
+    /// away.
     #[test]
-    fn a_replayed_regex_keeps_every_topic_subscribed_until_a_heartbeat_resolves_it() {
+    fn a_replayed_regex_keeps_the_topics_it_resolved_to() {
         use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
         use crate::coordinator::unified::{
@@ -396,71 +431,63 @@ mod tests {
             actor::{
                 member_state::update_member_state,
                 offset_delete::{SubscribedTopics, offset_delete_guard},
+                regex_resolution::RegexResolution,
                 test_support::StaticMetadata,
             },
             config::NextGenConfig,
             group::{CoordinatorGroup, GroupKind},
         };
 
-        // The heartbeat after replay: its pattern and the handler's authorized
-        // topics.
-        type Heartbeat = (Option<&'static str>, &'static [&'static str]);
-
+        // (label, the replayed resolution, the pattern of a heartbeat after
+        // the replay, the group's subscribed topics)
+        type Row<'a> = (
+            &'a str,
+            Option<&'a [&'a str]>,
+            Option<&'a str>,
+            SubscribedTopics,
+        );
         let named = |topics: &[&str]| {
             SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_string()).collect())
         };
-        let rows: [(&str, Option<Heartbeat>, SubscribedTopics); 3] = [
-            ("replayed and unresolved", None, SubscribedTopics::All),
+        let rows: [Row<'_>; 4] = [
             (
-                "a heartbeat carrying the pattern resolves it",
-                Some((Some("pay.*"), &["payments"])),
+                "replayed with its resolution",
+                Some(&["payments"]),
+                None,
                 named(&["orders", "payments"]),
             ),
             (
-                "a heartbeat without the pattern drops the regex",
-                Some((None, &[])),
+                "the resolution stands when a heartbeat does not carry the pattern",
+                Some(&["payments", "payouts"]),
+                None,
+                named(&["orders", "payments", "payouts"]),
+            ),
+            (
+                "replayed without a resolution",
+                None,
+                None,
+                SubscribedTopics::All,
+            ),
+            (
+                "a heartbeat with the empty pattern drops the regex",
+                Some(&["payments"]),
+                Some(""),
                 named(&["orders"]),
             ),
         ];
-        for (label, heartbeat, want) in rows {
+        for (label, resolved, heartbeat_pattern, want) in rows {
             let mut state = GroupState::new("g");
-            let seed = GroupSeed {
-                group_epoch: 5,
-                target_epoch: 5,
-                members: [(
-                    "m".to_string(),
-                    MemberMetadataValue {
-                        instance_id: None,
-                        rack_id: None,
-                        client_id: "c".to_string(),
-                        client_host: "/127.0.0.1".to_string(),
-                        subscribed_topic_names: vec!["orders".to_string()],
-                        subscribed_topic_regex: Some("pay.*".to_string()),
-                        server_assignor: None,
-                        rebalance_timeout_ms: 60_000,
-                        classic: None,
-                    },
-                )]
-                .into(),
-                target_per_member: HashMap::new(),
-                current_per_member: HashMap::new(),
-            };
-            apply_seed(&mut state, seed, &image());
-            if let Some((pattern, authorized)) = heartbeat {
-                let authorized: HashSet<String> = authorized
-                    .iter()
-                    .map(|topic| (*topic).to_string())
-                    .collect();
+            apply_seed(&mut state, regex_seed(resolved), &image());
+            if heartbeat_pattern.is_some() || resolved.is_some() {
                 update_member_state(
                     &mut state,
-                    &NextGenConfig::default(),
+                    &NextGenConfig::assigning_at_once(),
                     &StaticMetadata { input: image() },
                     &ConsumerGroupHeartbeatRequest {
                         group_id: "g".into(),
                         member_id: "m".into(),
                         member_epoch: 5,
-                        subscribed_topic_names: Some(vec!["orders".into()]),
-                        subscribed_topic_regex: pattern.map(str::to_owned),
+                        subscribed_topic_regex: heartbeat_pattern.map(str::to_owned),
                         rebalance_timeout_ms: 60_000,
                         ..Default::default()
                     },
@@ -469,7 +496,7 @@ mod tests {
                         host: "/127.0.0.1",
                     },
                     Instant::now(),
-                    &authorized,
+                    &RegexResolution::none(),
                 )
                 .unwrap();
             }
@@ -477,5 +504,25 @@ mod tests {
 
             check!(offset_delete_guard(&group) == Ok(want), "{label}");
         }
+    }
+
+    /// The seed hands the group the resolution of a regex as it was recorded,
+    /// and the member the pattern.
+    #[test]
+    fn the_seed_restores_the_resolution_and_the_pattern() {
+        let mut state = GroupState::new("g");
+        apply_seed(&mut state, regex_seed(Some(&["payments"])), &image());
+
+        check!(
+            state.resolved_regex("pay.*")
+                == Some(&ResolvedRegularExpression {
+                    topics: ["payments".to_string()].into(),
+                    version: 7,
+                    timestamp_ms: 1_000,
+                })
+        );
+        check!(state.members["m"].subscribed_topic_regex.as_deref() == Some("pay.*"));
+        let topics: Vec<&String> = state.regex_topics(&state.members["m"]).collect();
+        check!(topics == ["payments"]);
     }
 }

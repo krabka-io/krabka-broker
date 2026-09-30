@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 
+use super::parse::{check_range, parse_long};
+
 /// Marks a node as a data-bearing witness. The broker publishes this key for
 /// itself, in the same metadata batch that carries its registration record,
 /// so the controller can read the role from the metadata image.
@@ -176,20 +178,12 @@ pub(crate) const REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS: &str =
     "remote.list.offsets.request.timeout.ms";
 pub(crate) const DEFAULT_REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Parse KIP-1075's dynamic broker timeout.
+/// Parse KIP-1075's dynamic broker timeout: Kafka's `LONG` with
+/// `atLeast(1)`.
 pub(crate) fn parse_remote_list_offsets_timeout(value: &str) -> Result<Duration, String> {
-    let millis = value
-        .parse::<i32>()
-        .map_err(|_| format!("{REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS} must be a positive int"))?;
-    if millis <= 0 {
-        return Err(format!(
-            "{REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS} must be in 1..={}",
-            i32::MAX
-        ));
-    }
-    Ok(Duration::from_millis(
-        u64::try_from(millis).expect("positive i32 fits u64"),
-    ))
+    let key = REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS;
+    let millis = check_range(key, parse_long(key, value)?, Some(1), None)?;
+    Ok(Duration::from_millis(millis.unsigned_abs()))
 }
 
 /// Resolve the per-broker KIP-1075 timeout over the cluster default.

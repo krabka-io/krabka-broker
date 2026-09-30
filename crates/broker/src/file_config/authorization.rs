@@ -16,10 +16,9 @@ use serde::Deserialize;
 /// Omitting the whole block leaves the cluster with no authorizer, which is
 /// what Kafka has when `authorizer.class.name` is unset: every principal is
 /// allowed everything, and the ACL administration RPCs -- `DescribeAcls`,
-/// `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with
-/// "No Authorizer is configured on the broker" rather than an empty listing
-/// or a stored binding nothing would consult. `kafka-acls` reports that
-/// refusal.
+/// `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) rather
+/// than an empty listing or a stored binding nothing would consult.
+/// `kafka-acls` reports that refusal.
 ///
 /// `deny_unknown_fields` so a misspelled `super_user` typo at the top
 /// of the `[authorization]` block is rejected at parse time rather
@@ -66,7 +65,7 @@ pub(super) fn super_user_name(entry: &str) -> String {
 ///
 /// `allow_all` is the default and is not an authorizer: it allows every
 /// principal every operation, and the ACL administration RPCs answer
-/// `SECURITY_DISABLED` (54) with "No Authorizer is configured on the broker",
+/// `SECURITY_DISABLED` (54),
 /// as Kafka does with no `authorizer.class.name`. `simple` and `opa` are
 /// decision
 /// points, and under either the ACL RPCs serve requests normally.

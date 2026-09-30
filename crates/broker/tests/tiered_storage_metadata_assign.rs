@@ -61,6 +61,7 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
     let mut cfg = KafkaMetadataLogConfig::new(bootstrap);
     cfg.num_partitions = 3;
     cfg.replication = 1;
+    cfg.min_isr = Some(1);
     let log = KafkaMetadataEventLog::start(cfg).await.expect("log start");
     let pc = log.partition_count();
     assert!(pc >= 3);

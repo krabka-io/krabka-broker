@@ -62,8 +62,10 @@ impl Default for BrokerConfig {
             log_retention_check_interval: minutes(5),
             future_log_move_retry_backoff: millis(50),
             client_metrics_eviction_tick: minutes(1),
-            client_metrics_stale_floor: minutes(10),
-            client_metrics_default_interval: minutes(5),
+            client_metrics_stale_floor: minutes(1),
+            client_metrics_default_interval: millis(
+                crate::client_metrics::config::INTERVAL_MS_DEFAULT.unsigned_abs(),
+            ),
             client_metrics_otlp_queue_capacity: 256,
             client_metrics_telemetry_max: mebibytes(1),
             client_metrics_prom_snapshot_ttl: minutes(5),
@@ -104,6 +106,8 @@ impl Default for BrokerConfig {
             share_coordinator_load_buffer_size: mebibytes(5),
             share_session_cache_max_when_unlimited: 10_000,
             socket_request_max: mebibytes(100),
+            sasl_server_max_receive: kibibytes(512),
+            connection_failed_authentication_delay: millis(100),
             queued_max_requests: 500,
             queued_max_request_bytes: None,
             // The floor of `benches/fetch_drain.rs`'s sweep, not a
@@ -360,7 +364,7 @@ mod tests {
                 secs(30),
                 millis(50),
                 minutes(1),
-                minutes(10)
+                minutes(1)
             )
         );
         assert!(

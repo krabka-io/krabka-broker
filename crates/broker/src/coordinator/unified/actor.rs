@@ -13,7 +13,7 @@
 //! the mailbox loop, and the shared services and constants — while each RPC
 //! path lives in its own submodule.
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Instant};
 
 use tokio::{
     sync::{mpsc, oneshot},
@@ -33,6 +33,7 @@ mod metadata_update;
 mod offset_delete;
 mod pending_records;
 mod persistence;
+mod regex_resolution;
 mod retention;
 mod seed;
 mod tick;
@@ -40,6 +41,8 @@ mod topic_deletion;
 mod views;
 mod waiters;
 
+#[cfg(test)]
+mod group_config_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -61,7 +64,9 @@ pub use self::{
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };
 use self::{
-    dispatch::handle_actor_message, tick::handle_actor_tick, waiters::complete_classic_rebalance,
+    dispatch::handle_actor_message,
+    tick::{handle_actor_tick, handle_classic_sync_expiry},
+    waiters::complete_classic_rebalance,
 };
 use crate::{
     coordinator::unified::{
@@ -155,6 +160,20 @@ impl GroupActorHandle {
 
 pub trait MetadataProvider: Send + Sync + std::fmt::Debug {
     fn snapshot(&self) -> ReconcileInput;
+
+    /// The name of the topic with `topic_id`, or `None` when no such topic
+    /// exists: Kafka's `TopicIds.TopicResolver.name`.
+    ///
+    /// A member's reconciliation asks it once per topic of the member's target
+    /// and assignment, so the broker's provider answers from the image
+    /// directly. This default builds a whole [`snapshot`](Self::snapshot),
+    /// which only the static providers of the tests use.
+    fn topic_name(&self, topic_id: &krabka_protocol::primitives::uuid::Uuid) -> Option<String> {
+        self.snapshot()
+            .topic_id_by_name
+            .into_iter()
+            .find_map(|(name, id)| (id == *topic_id).then_some(name))
+    }
 }
 
 /// Parked classic-protocol waiters for one group.
@@ -267,8 +286,9 @@ async fn run_actor(
             msg = rx.recv() => match msg {
                 None => false,
                 Some(msg) => {
+                    let effective = effective_config(&config, &coordinator, &group.group_id);
                     let services = ActorServices {
-                        config: &config,
+                        config: &effective,
                         metadata: &*metadata,
                         offsets_log: &*offsets_log,
                         coordinator: &coordinator,
@@ -282,8 +302,9 @@ async fn run_actor(
                 // "stop" rather than returning outright: the loop tail still
                 // has to stamp `observe_membership` and break cleanly.
                 if time_util::fired(outcome, TICK_TASK) {
+                    let effective = effective_config(&config, &coordinator, &group.group_id);
                     let services = ActorServices {
-                        config: &config,
+                        config: &effective,
                         metadata: &*metadata,
                         offsets_log: &*offsets_log,
                         coordinator: &coordinator,
@@ -305,13 +326,25 @@ async fn run_actor(
                 // KIP-848: a member's rebalance timeout fired. Run the sweep
                 // now instead of at the next session tick, so the partitions it
                 // did not revoke reach their new owner on time.
+                let effective = effective_config(&config, &coordinator, &group.group_id);
                 let services = ActorServices {
-                    config: &config,
+                    config: &effective,
                     metadata: &*metadata,
                     offsets_log: &*offsets_log,
                     coordinator: &coordinator,
                 };
                 handle_actor_tick(&mut group, &mut parked, services).await
+            }
+            () = opt_sleep(classic_sync_deadline(&group)) => {
+                // Kafka's pending-sync timer: a member never sent SyncGroup.
+                let effective = effective_config(&config, &coordinator, &group.group_id);
+                let services = ActorServices {
+                    config: &effective,
+                    metadata: &*metadata,
+                    offsets_log: &*offsets_log,
+                    coordinator: &coordinator,
+                };
+                handle_classic_sync_expiry(&mut group, &mut parked, services).await
             }
             () = opt_sleep(deadline) => {
                 // Classic rebalance deadline fired: extend Kafka's initial
@@ -350,9 +383,33 @@ async fn run_actor(
     group
 }
 
+/// The settings `group_id` runs with: the `consumer.*` overrides of its group
+/// config in the current metadata image over the broker's `config`.
+///
+/// A classic group and a classic member ignore them: Kafka's classic groups
+/// read only the broker-wide `group.min.session.timeout.ms` and
+/// `group.max.session.timeout.ms`, and a coordinator with no metadata source
+/// runs every group with the broker values.
+fn effective_config<'a>(
+    config: &'a NextGenConfig,
+    coordinator: &GroupCoordinator,
+    group_id: &str,
+) -> Cow<'a, NextGenConfig> {
+    match coordinator.metadata_source() {
+        Some(source) => config.for_group(source.current_image().group_config(group_id)),
+        None => Cow::Borrowed(config),
+    }
+}
+
 /// The classic rebalance-completion deadline, if a rebalance is open.
 fn classic_deadline(group: &CoordinatorGroup) -> Option<Instant> {
     group.as_classic().and_then(|s| s.rebalance_deadline)
+}
+
+/// The classic pending-sync deadline, if a generation still awaits members'
+/// `SyncGroup`.
+fn classic_sync_deadline(group: &CoordinatorGroup) -> Option<Instant> {
+    group.as_classic().and_then(|s| s.sync_deadline)
 }
 
 /// A future that resolves at `deadline`, or never if `None`.
@@ -386,10 +443,13 @@ fn chrono_now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
 }
 
-// `reconciler_model` drives the real heartbeat step, so these two are
-// re-exported for it alone.
+// `reconciler_model` drives the real heartbeat step, so these are re-exported
+// for it alone.
 #[cfg(test)]
-pub(crate) use self::heartbeat::{HeartbeatStep, step_heartbeat};
+pub(crate) use self::{
+    heartbeat::{HeartbeatStep, step_heartbeat},
+    regex_resolution::RegexResolution,
+};
 
 #[cfg(test)]
 #[path = "reconciler_model.rs"]

@@ -113,7 +113,6 @@ impl RuntimeFileConfig {
     ) -> Result<(), FileConfigError> {
         let runtime = self;
         let share = &mut *cfg.share_group;
-        set_runtime_plain!(runtime, share_group_enable, share.enable);
         for (name, value, target, range) in [
             (
                 "share_group_session_timeout",

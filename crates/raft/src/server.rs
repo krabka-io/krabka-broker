@@ -14,6 +14,7 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
+use krabka_units::prelude::ByteSizeExt as _;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpListener,
@@ -35,11 +36,14 @@ mod sasl;
 mod test_support;
 #[cfg(test)]
 mod tests_api_versions;
+#[cfg(test)]
+mod tests_listener_limits;
 mod voter_admin;
 
 pub use self::api_versions::{
-    api_versions_max_version, finalized_feature_keys, is_valid_client_info, supported_feature_key,
-    supported_feature_keys, unsupported_version_response,
+    api_versions_max_version, finalized_feature_keys, is_valid_api_versions_request,
+    is_valid_client_info, supported_feature_key, supported_feature_keys,
+    unsupported_version_response,
 };
 use self::{
     api_versions::{API_KEY_API_VERSIONS, api_versions_response},
@@ -56,7 +60,7 @@ use self::{
         API_KEY_UPDATE_RAFT_VOTER, kip853_admin_response,
     },
 };
-use crate::{error::RaftError, kraft::KraftController};
+use crate::{ListenerLimits, error::RaftError, kraft::KraftController};
 
 /// The listener's own `ApiVersions` answer, handed to the handshake for the
 /// requests that arrive before SASL authentication.
@@ -66,14 +70,15 @@ struct ListenerApiVersions {
     unstable: Unstable,
 }
 
-/// Kafka's two internal `unstable.*.enable` settings, as one listener reads
-/// them.
+/// Kafka's internal `unstable.api.versions.enable`, as the controller listener
+/// reads it. Kafka's `ControllerServer` builds the listener's
+/// `SimpleApiVersionManager` with it alone: `unstable.feature.versions.enable`
+/// governs the controller's `UpdateFeatures` validation, not the listener's
+/// `ApiVersions` answer.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Unstable {
     /// `unstable.api.versions.enable`.
     pub(crate) api_versions: crate::UnstableApiVersions,
-    /// `unstable.feature.versions.enable`.
-    pub(crate) feature_versions: crate::UnstableFeatureVersions,
 }
 
 impl crate::ControllerApiVersions for ListenerApiVersions {
@@ -114,7 +119,6 @@ fn answer_api_versions(
             metadata_offset,
             admin_router,
             unstable: unstable.api_versions,
-            unstable_features: unstable.feature_versions,
         },
     )
 }
@@ -126,6 +130,8 @@ struct ConnectionContext {
     grants: Arc<dyn crate::ClusterGrants>,
     /// Kafka's `unstable.*.enable` settings for this listener.
     unstable: Unstable,
+    /// The request-size and idle limits of this listener.
+    limits: ListenerLimits,
 }
 
 pub(crate) async fn run(
@@ -135,34 +141,71 @@ pub(crate) async fn run(
     handshake: Option<Arc<dyn crate::RaftListenerHandshake>>,
     shard_router: Option<Arc<dyn crate::RaftShardRouter>>,
     admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
-    unstable: Unstable,
+    (unstable, limits): (Unstable, ListenerLimits),
 ) {
     match listener.local_addr() {
         Ok(addr) => info!(%addr, "controller listener started"),
         Err(e) => info!(error = %e, "controller listener started (addr unknown)"),
     }
+    // Kafka's `ControllerServer` builds its own `SocketServer`, whose
+    // `ConnectionQuotas` counts this listener's connections apart from any
+    // broker listener's.
+    let connections =
+        crate::ConnectionLimiter::new(limits.max_connections, limits.max_connections_per_ip);
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
             accept = listener.accept() => {
                 match accept {
                     Ok((stream, peer)) => {
+                        // `max.connections` and `max.connections.per.ip`: a
+                        // connection over either ceiling is closed at once.
+                        // The guard moves into the task, so the slot is
+                        // released however the connection ends.
+                        let connection_slot = match connections.try_acquire(peer.ip()) {
+                            Ok(slot) => slot,
+                            Err(limit) => {
+                                tracing::debug!(
+                                    %peer,
+                                    ?limit,
+                                    "controller connection limit reached; closing connection"
+                                );
+                                continue;
+                            }
+                        };
                         let engine = engine.clone();
                         let shutdown = shutdown.clone();
                         let handshake = handshake.clone();
                         let shard_router = shard_router.clone();
                         let admin_router = admin_router.clone();
                         tokio::spawn(async move {
+                            let _connection_slot = connection_slot;
                             let connection = if let Some(hs) = handshake {
                                 let api_versions = ListenerApiVersions {
                                     engine: engine.clone(),
                                     admin_router: admin_router.clone(),
                                     unstable,
                                 };
-                                match hs.upgrade(stream, &api_versions).await {
-                                    Ok(s) => s,
-                                    Err(e) => {
+                                // Kafka registers a channel with its `Selector` at
+                                // accept time, so `connections.max.idle.ms` also
+                                // covers a peer that never finishes the TLS or
+                                // SASL handshake.
+                                let upgraded = within_idle_window(
+                                    limits.max_idle,
+                                    hs.upgrade(stream, &api_versions),
+                                )
+                                .await;
+                                match upgraded {
+                                    Some(Ok(s)) => s,
+                                    Some(Err(e)) => {
                                         tracing::debug!(%peer, error = %e, "handshake failed");
+                                        return;
+                                    }
+                                    None => {
+                                        tracing::debug!(
+                                            %peer,
+                                            "handshake idle past connections.max.idle.ms, closing"
+                                        );
                                         return;
                                     }
                                 }
@@ -186,6 +229,7 @@ pub(crate) async fn run(
                                     authenticated_via_token: connection.authenticated_via_token,
                                     grants: connection.grants,
                                     unstable,
+                                    limits,
                                 },
                             ).await {
                                 error!(%peer, error = %e, "controller connection error");
@@ -201,6 +245,19 @@ pub(crate) async fn run(
     }
 }
 
+/// Runs `future`, giving up once `window` passes. `None` for the window waits
+/// as long as the future takes, and `None` from this function means it gave
+/// up.
+async fn within_idle_window<F: std::future::Future>(
+    window: Option<std::time::Duration>,
+    future: F,
+) -> Option<F::Output> {
+    match window {
+        Some(window) => tokio::time::timeout(window, future).await.ok(),
+        None => Some(future.await),
+    }
+}
+
 async fn handle_conn<S>(
     mut stream: S,
     engine: KraftController,
@@ -212,10 +269,27 @@ async fn handle_conn<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Kafka's `SocketServer` hands `socket.request.max.bytes` to each
+    // `Processor`, and its `Selector` closes a channel that goes
+    // `connections.max.idle.ms` without a request. The window restarts for
+    // every request, since each pass through the loop arms a fresh timer.
+    let max_request_bytes =
+        usize::try_from(context.limits.max_request_size.bytes_u64()).unwrap_or(usize::MAX);
     loop {
+        let request = within_idle_window(
+            context.limits.max_idle,
+            read_one_request(&mut stream, admin_router.as_deref(), max_request_bytes),
+        );
         tokio::select! {
             () = shutdown.cancelled() => return Ok(()),
-            res = read_one_request(&mut stream, admin_router.as_deref()) => {
+            res = request => {
+                let Some(res) = res else {
+                    tracing::debug!(
+                        peer = %context.peer,
+                        "controller connection idle past connections.max.idle.ms, closing"
+                    );
+                    return Ok(());
+                };
                 let (api_key_n, api_version, correlation_id, client_id, body, response_flexible) = match res {
                     Ok(v) => v,
                     Err(e) => {

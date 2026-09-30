@@ -169,12 +169,18 @@ impl Engine {
             self.log.log_end_offset(),
             self.log.last_epoch(),
         );
+        // A voter names itself by the directory its voters record holds, which
+        // may be absent under a static voter set. A replica that is not a voter
+        // yet, such as a controller waiting to be added, names its own, so the
+        // leader tracks it under the key `AddRaftVoter` will name.
         let replica_directory_id = self
             .core
             .quorum_state()
             .voters
             .get(self.me)
-            .map_or(uuid::Uuid::nil(), |v| v.directory_id);
+            .map(|voter| voter.directory_id)
+            .filter(|directory_id| !directory_id.is_nil())
+            .unwrap_or(self.directory_id);
         // Kafka's `buildFetchRequest`: the cluster id, `quorum.epoch()`, which
         // the responder's `validateLeaderOnlyRequest` checks, and the local
         // high watermark, which the leader answers at once when its own is

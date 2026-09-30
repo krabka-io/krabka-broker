@@ -28,7 +28,7 @@ use crate::{
 
 mod append;
 mod compaction;
-mod control;
+pub(crate) mod control;
 mod delivery;
 #[cfg(test)]
 mod faults;
@@ -198,7 +198,7 @@ pub struct Log {
 
     /// External next-offset authority used by diskless recovery. The broker
     /// sets this after it reads the committed `KRaft` frontier. Caller-supplied
-    /// append-at bases must then equal
+    /// append-at bases must then not be below
     /// `max(log_end_offset, reconciled_frontier)`.
     reconciled_frontier: Offset,
 

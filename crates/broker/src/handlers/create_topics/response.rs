@@ -54,21 +54,25 @@ pub(super) fn topic_error_result(
 /// there, and Kafka builds the same row from `creationConfigs` either way.
 pub(super) fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
     topic: &str,
     overrides: &std::collections::BTreeMap<String, String>,
     unstable: crate::api_catalog::UnstableApiVersions,
+    statics: &std::collections::BTreeMap<&'static str, String>,
 ) -> Vec<CreatableTopicConfigs> {
-    crate::handlers::describe_configs::effective_topic_configs(image, topic, overrides, unstable)
-        .into_iter()
-        .map(|entry| CreatableTopicConfigs {
-            name: entry.name,
-            value: entry.value,
-            read_only: entry.read_only,
-            config_source: entry.config_source,
-            is_sensitive: entry.is_sensitive,
-            ..Default::default()
-        })
-        .collect()
+    crate::handlers::describe_configs::effective_topic_configs(
+        image, node, topic, overrides, unstable, statics,
+    )
+    .into_iter()
+    .map(|entry| CreatableTopicConfigs {
+        name: entry.name,
+        value: entry.value,
+        read_only: entry.read_only,
+        config_source: entry.config_source,
+        is_sensitive: entry.is_sensitive,
+        ..Default::default()
+    })
+    .collect()
 }
 
 pub(super) fn create_topics_response(

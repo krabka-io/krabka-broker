@@ -59,13 +59,25 @@ fn open_state_partition(dir: &Path) -> Arc<crate::partition::Partition> {
 }
 
 fn coordinator(node: NodeId, partitions: &Arc<PartitionRegistry>) -> Arc<TxnCoordinator> {
-    Arc::new(TxnCoordinator::new(
+    coordinator_persisting_last_epoch(node, partitions, false)
+}
+
+/// A coordinator that writes and reads `LastProducerEpoch` (tag 4) as Kafka
+/// trunk does when `persist_last_epoch` is set, and as 4.3.1 does not.
+fn coordinator_persisting_last_epoch(
+    node: NodeId,
+    partitions: &Arc<PartitionRegistry>,
+    persist_last_epoch: bool,
+) -> Arc<TxnCoordinator> {
+    let mut coordinator = TxnCoordinator::new(
         node,
         Arc::clone(partitions),
         Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
         1,
         krabka_units::mebibytes(1),
-    ))
+    );
+    coordinator.set_persist_last_producer_epoch(persist_last_epoch);
+    Arc::new(coordinator)
 }
 
 fn prepared_entry() -> TxnEntry {
@@ -209,60 +221,70 @@ async fn a_new_term_refuses_the_generation_of_the_old_term() {
     check!(TxnCoordinator::require_generation(&leaders, P0, newer).is_ok());
 }
 
-/// #892: `last_producer_epoch` (`TransactionLogValue`'s `LastProducerEpoch`,
-/// tag 4) is persisted, so it survives the entry moving to a new coordinator
-/// through the log, and a retried `InitProducerId` naming it is still
-/// admitted after the reload.
+/// #892: under `unstable.api.versions.enable`, `last_producer_epoch`
+/// (`TransactionLogValue`'s `LastProducerEpoch`, tag 4, which Kafka trunk
+/// persists) survives the entry moving to a new coordinator through the log,
+/// and a retried `InitProducerId` naming it is still admitted after the
+/// reload. Kafka 4.3.1 keeps the last epoch in memory only and reloads
+/// `NO_PRODUCER_EPOCH`, so the same retry is fenced there.
 #[tokio::test]
-async fn a_reload_preserves_last_producer_epoch_and_admits_its_retry() {
-    let dir = TempDir::new().expect("tempdir");
-    let partitions = Arc::new(PartitionRegistry::new());
-    partitions.insert(
-        bootstrap::TOPIC.into(),
-        P0,
-        open_state_partition(dir.path()),
-    );
-    let first = coordinator(NodeId(1), &partitions);
-    let second = coordinator(NodeId(2), &partitions);
+async fn a_reload_keeps_last_producer_epoch_only_in_trunk_mode() {
+    use krabka_verified::transaction::InitProducerIdIdentityDecision::{Fenced, Retry};
 
-    first
-        .refresh_leader_partitions(&image(NodeId(1), 0))
-        .await
-        .finished()
-        .await;
-    let mut entry = prepared_entry();
-    // The entry's live epoch has moved past the one a failed epoch fence
-    // recorded, per `prepareIncrementProducerEpoch`/`prepareProducerIdRotation`,
-    // so a retry naming the recorded epoch is distinct from a fresh bump.
-    entry.producer_epoch = 5;
-    entry.last_producer_epoch = 4;
-    entry.has_failed_epoch_fence = true;
-    first
-        .put(entry, TxnVersion::Verified)
-        .await
-        .expect("persist the entry with a recorded last epoch");
+    // (mode, persist the tag, last epoch after the reload, the retry's verdict)
+    for (mode, persist_last_epoch, reloaded_last_epoch, verdict) in
+        [("4.3.1", false, -1, Fenced), ("trunk", true, 4, Retry)]
+    {
+        let dir = TempDir::new().expect("tempdir");
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            bootstrap::TOPIC.into(),
+            P0,
+            open_state_partition(dir.path()),
+        );
+        let first = coordinator_persisting_last_epoch(NodeId(1), &partitions, persist_last_epoch);
+        let second = coordinator_persisting_last_epoch(NodeId(2), &partitions, persist_last_epoch);
 
-    second
-        .refresh_leader_partitions(&image(NodeId(2), 1))
-        .await
-        .finished()
-        .await;
+        first
+            .refresh_leader_partitions(&image(NodeId(1), 0))
+            .await
+            .finished()
+            .await;
+        let mut entry = prepared_entry();
+        // The entry's live epoch has moved past the one a failed epoch fence
+        // recorded, per `prepareIncrementProducerEpoch`/`prepareProducerIdRotation`,
+        // so a retry naming the recorded epoch is distinct from a fresh bump.
+        entry.producer_epoch = 5;
+        entry.last_producer_epoch = 4;
+        entry.has_failed_epoch_fence = true;
+        first
+            .put(entry, TxnVersion::Verified)
+            .await
+            .expect("persist the entry with a recorded last epoch");
 
-    let reloaded = view(&second).await.entry.expect("reloaded from disk");
-    check!(reloaded.last_producer_epoch == 4);
+        second
+            .refresh_leader_partitions(&image(NodeId(2), 1))
+            .await
+            .finished()
+            .await;
 
-    let decision = krabka_verified::transaction::init_producer_id_identity_decision(
-        reloaded.producer_id.get(),
-        reloaded.producer_epoch,
-        reloaded.last_producer_epoch,
-        reloaded.prev_producer_id.get(),
-        reloaded.producer_id.get(),
-        reloaded.last_producer_epoch,
-    );
-    check!(
-        decision == krabka_verified::transaction::InitProducerIdIdentityDecision::Retry,
-        "a retry naming the persisted last epoch is admitted, not fenced"
-    );
+        let reloaded = view(&second).await.entry.expect("reloaded from disk");
+        check!(
+            reloaded.last_producer_epoch == reloaded_last_epoch,
+            "{mode}"
+        );
+
+        // The retry names the epoch the entry held before it was bumped to 5.
+        let decision = krabka_verified::transaction::init_producer_id_identity_decision(
+            reloaded.producer_id.get(),
+            reloaded.producer_epoch,
+            reloaded.last_producer_epoch,
+            reloaded.prev_producer_id.get(),
+            reloaded.producer_id.get(),
+            4,
+        );
+        check!(decision == verdict, "{mode}: the retry naming epoch 4");
+    }
 }
 
 /// A replay that fails leaves the partition unloaded until the next election.
@@ -283,7 +305,9 @@ async fn a_failed_load_answers_not_coordinator() {
     let mut batch = krabka_protocol::records::RecordBatch::default();
     batch.records.push(krabka_protocol::records::Record {
         key: Some(crate::txn::log_record::encode_key(&misplaced).into()),
-        value: Some(crate::txn::log_record::encode_value(&entry, TxnVersion::Verified).into()),
+        value: Some(
+            crate::txn::log_record::encode_value(&entry, TxnVersion::Verified, false).into(),
+        ),
         ..Default::default()
     });
     part.produce_batch(batch).await.expect("append");

@@ -17,7 +17,7 @@ use krabka_broker::{
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_request::CreateTopicsRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     records::{Record, RecordBatch},
@@ -186,12 +186,8 @@ async fn two_broker_sasl_plaintext_replication() {
         .unwrap();
     let resp = admin
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "sasl-repl".into(),
-                num_partitions: 1,
-                replication_factor: 2,
-                ..Default::default()
-            }],
+            // Node 1, which the produce below goes to, leads the partition.
+            topics: vec![crate::support::topic_on("sasl-repl", &[&[1, 2]])],
             timeout_ms: 5_000,
             ..Default::default()
         })

@@ -90,8 +90,10 @@ pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
         oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
         protocol: ListenerProtocol::SaslPlaintext,
         controller: Arc::new(OnceCell::new()),
+        delegation_token_secret_key: None,
         audit_log: Arc::new(OnceCell::new()),
-        max_frame_bytes: 4096,
+        sasl_max_receive_bytes: 4096,
+        failed_authentication_delay: std::time::Duration::ZERO,
         authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
         principal_mapper: crate::SslPrincipalMapper::default(),
     }

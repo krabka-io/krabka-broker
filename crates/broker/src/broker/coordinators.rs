@@ -54,6 +54,9 @@ pub(super) async fn start_coordinators(
         config.transaction_state_num_partitions,
         config.transaction_recovery_read_max,
     );
+    txn_coordinator.set_persist_last_producer_epoch(
+        config.features.unstable_api_versions == crate::api_catalog::UnstableApiVersions::Enabled,
+    );
     txn_coordinator.configure_marker_transport(
         Arc::clone(controller),
         Arc::clone(inter_broker_client),
@@ -68,6 +71,12 @@ pub(super) async fn start_coordinators(
     }
     let mut share_coordinator_config = (*config.share_coordinator).clone();
     share_coordinator_config.load_buffer_size = config.share_coordinator_load_buffer_size;
+    // Kafka trunk's newer `ShareCoordinatorShard` rules are what
+    // `unstable.api.versions.enable` unlocks; 4.3.1 has none of them.
+    share_coordinator_config.trunk_rules = matches!(
+        config.features.unstable_api_versions,
+        crate::api_catalog::UnstableApiVersions::Enabled
+    );
     let share_coordinator = Arc::new(
         crate::share_coordinator::coordinator::ShareCoordinator::new(
             config.node_id,
@@ -91,17 +100,25 @@ pub(super) async fn start_coordinators(
     );
     group_coordinator.set_share_persister(Arc::clone(&share_persister));
     group_coordinator.set_metadata_source(Arc::clone(controller));
-    let share_partition_leaders = Arc::new(
-        crate::share_partition::manager::SharePartitionLeaderManager::new(
-            config.node_id,
-            Arc::clone(partitions),
-            Arc::clone(controller),
-            Arc::clone(&share_persister),
-            Arc::new((*config.share_group).clone()),
-            config.share_session_cache_max_when_unlimited,
-        ),
+    let dead_letters = Arc::new(crate::share_partition::dlq::DlqWriter::new(
+        config,
+        Arc::clone(controller),
+        Arc::clone(partitions),
+        Arc::clone(auto_topic_creation),
+        Arc::clone(inter_broker_client),
+        listener_protocol,
+    ));
+    let share_partition_leaders = crate::share_partition::manager::SharePartitionLeaderManager::new(
+        config.node_id,
+        Arc::clone(partitions),
+        Arc::clone(controller),
+        Arc::clone(&share_persister),
+        Arc::new((*config.share_group).clone()),
+        config.share_session_cache_max_when_unlimited,
+        dead_letters,
     );
     share_partition_leaders.spawn_lock_sweeper();
+    share_partition_leaders.spawn_share_version_watcher();
     let mut barrier_coordinator = crate::barrier::coordinator::BarrierCoordinator::new(
         config.node_id,
         Arc::clone(partitions),

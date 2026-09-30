@@ -19,6 +19,7 @@ use krabka_protocol::{
         describe_share_group_offsets_response::{
             DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
         },
+        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     },
     primitives::uuid::Uuid,
 };
@@ -28,6 +29,9 @@ use crate::harness::{
     broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, join,
     produce_n, share_ack, topic_id, wait_for_share_init,
 };
+
+/// `UpdateFeatures` `UpgradeType` 2, `SAFE_DOWNGRADE`.
+const SAFE_DOWNGRADE: i8 = 2;
 
 /// Sends `DescribeShareGroupOffsets` for one `(group, topic, partitions)`
 /// and returns the group row.
@@ -209,17 +213,38 @@ async fn describe_unknown_topic() {
     assert!(group.topics == expected);
 }
 
-/// With `share_group.enable = false`, the admin offset RPCs are unavailable:
-/// `DescribeShareGroupOffsets` marks each requested group `UNSUPPORTED_VERSION`.
+/// With `share.version` finalized at 0, as `kafka-features downgrade
+/// --feature share.version=0` leaves it, the admin offset RPCs are
+/// unavailable: `DescribeShareGroupOffsets` marks each requested group
+/// `UNSUPPORTED_VERSION`, as Kafka's `isShareGroupProtocolEnabled` gate does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admin_offsets_rejected_when_share_disabled() {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.enable = false;
+    let cfg = broker_config(dir.path().to_path_buf());
     let broker = Broker::start(cfg).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
+    let enabled = describe_offsets(&client, "g1", "t", vec![0]).await;
+    assert!(
+        enabled.error_code != UNSUPPORTED_VERSION,
+        "a fresh cluster finalizes share.version 1, got {}",
+        enabled.error_code
+    );
+
+    let downgrade = client
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "share.version".into(),
+                max_version_level: 0,
+                upgrade_type: SAFE_DOWNGRADE,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures");
+    assert!(downgrade.error_code == NONE, "{downgrade:?}");
 
     let group = describe_offsets(&client, "g1", "t", vec![0]).await;
     assert!(

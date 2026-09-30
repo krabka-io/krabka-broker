@@ -352,7 +352,11 @@ impl Model for ShareModel {
                 );
                 member.last_seen = at(&state);
                 state.group.add_or_update_member(member);
-                if !reconcile(&mut state.group, &metadata(state.partitions)) {
+                if !reconcile(
+                    &mut state.group,
+                    &metadata(state.partitions),
+                    std::time::Duration::ZERO,
+                ) {
                     return None;
                 }
                 state.group.advance_member_epoch(member_id);
@@ -367,7 +371,11 @@ impl Model for ShareModel {
                 match state.group.validate_member_epoch(member_id, requested) {
                     Ok(_) => {
                         state.group.members.get_mut(member_id)?.last_seen = at(&state);
-                        if !reconcile(&mut state.group, &metadata(state.partitions)) {
+                        if !reconcile(
+                            &mut state.group,
+                            &metadata(state.partitions),
+                            std::time::Duration::ZERO,
+                        ) {
                             return None;
                         }
                         if state.group.target.epoch > current {
@@ -400,7 +408,11 @@ impl Model for ShareModel {
                     .evict_expired(at(&state), Duration::from_secs(1));
                 if !expired.is_empty() {
                     state.witnesses |= WITNESS_TIMEOUT;
-                    if !reconcile(&mut state.group, &metadata(state.partitions)) {
+                    if !reconcile(
+                        &mut state.group,
+                        &metadata(state.partitions),
+                        std::time::Duration::ZERO,
+                    ) {
                         return None;
                     }
                 }
@@ -410,7 +422,11 @@ impl Model for ShareModel {
                 state.partitions = partitions;
                 initialize(&mut state.group, partitions);
                 let before = state.group.group_epoch;
-                if !reconcile(&mut state.group, &metadata(state.partitions)) {
+                if !reconcile(
+                    &mut state.group,
+                    &metadata(state.partitions),
+                    std::time::Duration::ZERO,
+                ) {
                     return None;
                 }
                 if state.group.target.epoch > current {
