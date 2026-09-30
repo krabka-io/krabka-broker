@@ -11,18 +11,24 @@ use krabka_protocol::{
         delete_share_group_offsets_request::{
             self, DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
         },
+        delete_share_group_state_request::{self, DeleteShareGroupStateRequest},
         heartbeat_request::{self, HeartbeatRequest},
+        init_producer_id_request::{self, InitProducerIdRequest},
+        initialize_share_group_state_request::{self, InitializeShareGroupStateRequest},
         join_group_request::{self, JoinGroupRequest, JoinGroupRequestProtocol},
         leave_group_request::{self, LeaveGroupRequest, MemberIdentity},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
+        read_share_group_state_request::{self, ReadShareGroupStateRequest},
+        read_share_group_state_summary_request::{self, ReadShareGroupStateSummaryRequest},
         share_group_heartbeat_request::{self, ShareGroupHeartbeatRequest},
         streams_group_heartbeat_request::{self, StreamsGroupHeartbeatRequest},
         sync_group_request::{self, SyncGroupRequest, SyncGroupRequestAssignment},
         txn_offset_commit_request::{
             TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
         },
+        write_share_group_state_request::{self, WriteShareGroupStateRequest},
     },
 };
 
@@ -197,6 +203,43 @@ fn a_group_heartbeat_with_an_id_over_32767_bytes_is_refused() {
             ("member id", |r, s| r.member_id = s),
             ("instance id", |r, s| r.instance_id = Some(s)),
         ],
+    );
+}
+
+/// The share-state requests carry the group id of a `__share_group_state`
+/// record key, and `InitProducerId` carries the transactional id of a
+/// `__transaction_state` record key.
+#[test]
+fn a_state_request_with_an_id_over_32767_bytes_is_refused() {
+    check_request(
+        initialize_share_group_state_request::MAX_VERSION,
+        &InitializeShareGroupStateRequest::default(),
+        &[("group id", |r, s| r.group_id = s)],
+    );
+    check_request(
+        read_share_group_state_request::MAX_VERSION,
+        &ReadShareGroupStateRequest::default(),
+        &[("group id", |r, s| r.group_id = s)],
+    );
+    check_request(
+        read_share_group_state_summary_request::MAX_VERSION,
+        &ReadShareGroupStateSummaryRequest::default(),
+        &[("group id", |r, s| r.group_id = s)],
+    );
+    check_request(
+        write_share_group_state_request::MAX_VERSION,
+        &WriteShareGroupStateRequest::default(),
+        &[("group id", |r, s| r.group_id = s)],
+    );
+    check_request(
+        delete_share_group_state_request::MAX_VERSION,
+        &DeleteShareGroupStateRequest::default(),
+        &[("group id", |r, s| r.group_id = s)],
+    );
+    check_request(
+        init_producer_id_request::MAX_VERSION,
+        &InitProducerIdRequest::default(),
+        &[("transactional id", |r, s| r.transactional_id = Some(s))],
     );
 }
 

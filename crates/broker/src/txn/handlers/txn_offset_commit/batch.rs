@@ -99,11 +99,17 @@ pub(super) async fn append_txn_batch(
             batch.records.push(Record {
                 offset_delta: delta,
                 timestamp_delta: 0,
-                key: Some(OffsetCommitValue::encode_key(
-                    &req.group_id,
-                    &topic.name,
-                    part.partition_index,
-                )),
+                key: Some(
+                    OffsetCommitValue::encode_key(&req.group_id, &topic.name, part.partition_index)
+                        .map_err(|error| {
+                            tracing::warn!(
+                                group_id = %req.group_id,
+                                %error,
+                                "transactional offset commit key is not encodable",
+                            );
+                            codes::UNKNOWN_SERVER_ERROR
+                        })?,
+                ),
                 value: Some(value.encode_value()),
                 ..Default::default()
             });

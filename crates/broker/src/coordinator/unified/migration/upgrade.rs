@@ -315,8 +315,8 @@ mod tests {
         let first = convert_classic_to_consumer(&g);
         let second = convert_classic_to_consumer(&g);
         check!(first.group_epoch == 0);
-        let first_batch = upgrade_pending_records(&first).to_batch("g", 7);
-        let second_batch = upgrade_pending_records(&second).to_batch("g", 7);
+        let first_batch = upgrade_pending_records(&first).to_batch("g", 7).unwrap();
+        let second_batch = upgrade_pending_records(&second).to_batch("g", 7).unwrap();
         check!(first_batch.records.len() == 6);
         assert!(first_batch.records == second_batch.records);
 

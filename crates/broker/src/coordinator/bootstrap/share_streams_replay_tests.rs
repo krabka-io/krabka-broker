@@ -47,14 +47,16 @@ async fn share_group_records_replay_into_seed() {
         (
             sp::encode_share_key(&sp::ShareGroupKey::GroupMetadata {
                 group_id: "sg".into(),
-            }),
+            })
+            .unwrap(),
             sp::ShareGroupMetadataValue { epoch: 4 }.encode(),
         ),
         (
             sp::encode_share_key(&sp::ShareGroupKey::MemberMetadata {
                 group_id: "sg".into(),
                 member_id: "m1".into(),
-            }),
+            })
+            .unwrap(),
             sp::ShareGroupMemberMetadataValue {
                 rack_id: None,
                 client_id: "c1".into(),
@@ -67,7 +69,8 @@ async fn share_group_records_replay_into_seed() {
             sp::encode_share_key(&sp::ShareGroupKey::CurrentMemberAssignment {
                 group_id: "sg".into(),
                 member_id: "m1".into(),
-            }),
+            })
+            .unwrap(),
             sp::ShareGroupCurrentMemberAssignmentValue {
                 member_epoch: 4,
                 previous_member_epoch: 3,
@@ -91,12 +94,14 @@ async fn share_group_records_replay_into_seed() {
     check!(seed.current_per_member["m1"].member_epoch == 4);
 
     // A member tombstone scrubs the member from the seed.
-    let tomb_key =
-        persistence::parse_key(&sp::encode_share_key(&sp::ShareGroupKey::MemberMetadata {
+    let tomb_key = persistence::parse_key(
+        &sp::encode_share_key(&sp::ShareGroupKey::MemberMetadata {
             group_id: "sg".into(),
             member_id: "m1".into(),
-        }))
-        .unwrap();
+        })
+        .unwrap(),
+    )
+    .unwrap();
     apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
     let seed = coord.cached_share_seed("sg").expect("seed still present");
     assert!(!seed.members.contains_key("m1"), "tombstone removed member");
@@ -139,7 +144,8 @@ async fn streams_group_records_replay_into_seed() {
         (
             sp::encode_streams_key(&sp::StreamsGroupKey::GroupMetadata {
                 group_id: "stg".into(),
-            }),
+            })
+            .unwrap(),
             sp::StreamsGroupMetadataValue {
                 epoch: 7,
                 metadata_hash: 0,
@@ -150,7 +156,8 @@ async fn streams_group_records_replay_into_seed() {
             sp::encode_streams_key(&sp::StreamsGroupKey::MemberMetadata {
                 group_id: "stg".into(),
                 member_id: "m1".into(),
-            }),
+            })
+            .unwrap(),
             sp::StreamsGroupMemberMetadataValue {
                 instance_id: None,
                 rack_id: None,
@@ -168,7 +175,8 @@ async fn streams_group_records_replay_into_seed() {
             sp::encode_streams_key(&sp::StreamsGroupKey::CurrentMemberAssignment {
                 group_id: "stg".into(),
                 member_id: "m1".into(),
-            }),
+            })
+            .unwrap(),
             sp::StreamsGroupCurrentMemberAssignmentValue {
                 member_epoch: 7,
                 previous_member_epoch: 6,
@@ -198,12 +206,13 @@ async fn streams_group_records_replay_into_seed() {
     check!(seed.current_per_member["m1"].member_epoch == 7);
 
     // A member tombstone scrubs the member from the seed.
-    let tomb_key = persistence::parse_key(&sp::encode_streams_key(
-        &sp::StreamsGroupKey::MemberMetadata {
+    let tomb_key = persistence::parse_key(
+        &sp::encode_streams_key(&sp::StreamsGroupKey::MemberMetadata {
             group_id: "stg".into(),
             member_id: "m1".into(),
-        },
-    ))
+        })
+        .unwrap(),
+    )
     .unwrap();
     apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
     let seed = coord
@@ -237,11 +246,12 @@ fn malformed_and_orphan_records_do_not_publish_type_or_state() {
     let batch = RecordBatch::default();
     let mut acc = Replayed::default();
 
-    let malformed_share = persistence::parse_key(&share::encode_share_key(
-        &share::ShareGroupKey::GroupMetadata {
+    let malformed_share = persistence::parse_key(
+        &share::encode_share_key(&share::ShareGroupKey::GroupMetadata {
             group_id: "bad-share".into(),
-        },
-    ))
+        })
+        .unwrap(),
+    )
     .unwrap();
     check!(
         apply_record(
@@ -256,12 +266,13 @@ fn malformed_and_orphan_records_do_not_publish_type_or_state() {
     check!(coord.group_type("bad-share").is_none());
     check!(coord.cached_share_seed("bad-share").is_none());
 
-    let orphan_streams = persistence::parse_key(&streams::encode_streams_key(
-        &streams::StreamsGroupKey::MemberMetadata {
+    let orphan_streams = persistence::parse_key(
+        &streams::encode_streams_key(&streams::StreamsGroupKey::MemberMetadata {
             group_id: "orphan-streams".into(),
             member_id: "m".into(),
-        },
-    ))
+        })
+        .unwrap(),
+    )
     .unwrap();
     apply_record(
         &coord,

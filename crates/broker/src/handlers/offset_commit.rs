@@ -450,7 +450,15 @@ struct CommitRecords {
 }
 
 /// Build both halves of one commit.
-fn commit_records(req: &OffsetCommitRequest, commit: Commit<'_>) -> CommitRecords {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the group id or a topic name is longer
+/// than 32767 bytes, which a non-flexible record key cannot carry.
+fn commit_records(
+    req: &OffsetCommitRequest,
+    commit: Commit<'_>,
+) -> Result<CommitRecords, BrokerError> {
     let mut batch = RecordBatch {
         max_timestamp: commit.now_ms,
         ..RecordBatch::default()
@@ -476,7 +484,7 @@ fn commit_records(req: &OffsetCommitRequest, commit: Commit<'_>) -> CommitRecord
                     &req.group_id,
                     &topic.name,
                     part.partition_index,
-                )),
+                )?),
                 value: Some(OffsetCommitValue::from(&entry).encode_value()),
                 ..Default::default()
             });
@@ -485,7 +493,7 @@ fn commit_records(req: &OffsetCommitRequest, commit: Commit<'_>) -> CommitRecord
         }
     }
     batch.last_offset_delta = (delta - 1).max(0);
-    CommitRecords { batch, entries }
+    Ok(CommitRecords { batch, entries })
 }
 
 /// Append the commit and apply it to the group, both inside the group's actor.
@@ -505,7 +513,10 @@ async fn commit_through_actor(
     req: &OffsetCommitRequest,
     commit: Commit<'_>,
 ) -> Result<(), i16> {
-    let CommitRecords { batch, entries } = commit_records(req, commit);
+    let CommitRecords { batch, entries } = commit_records(req, commit).map_err(|error| {
+        tracing::warn!(group_id = %req.group_id, %error, "offset commit records are not encodable");
+        codes::UNKNOWN_SERVER_ERROR
+    })?;
     let (reply, result) = oneshot::channel();
     if handle
         .tx
@@ -582,6 +593,50 @@ mod tests {
             check!(
                 expire_timestamp_ms(retention_time_ms, now_ms) == want,
                 "retention_time_ms={retention_time_ms} now_ms={now_ms}"
+            );
+        }
+    }
+
+    /// The key of a committed offset writes the group id and the topic name
+    /// with an `INT16` length. A string of 32767 bytes encodes, and one of
+    /// 32768 bytes is an error that the commit answers `UNKNOWN_SERVER_ERROR`,
+    /// not a panic.
+    #[test]
+    fn a_commit_key_string_over_32767_bytes_does_not_encode() {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+        let rows = [
+            ("group id", limit, 1, true),
+            ("group id", limit + 1, 1, false),
+            ("topic name", 1, limit, true),
+            ("topic name", 1, limit + 1, false),
+        ];
+        for (name, group_length, topic_length, encodes) in rows {
+            let request = OffsetCommitRequest {
+                group_id: "g".repeat(group_length),
+                topics: vec![OffsetCommitRequestTopic {
+                    name: "t".repeat(topic_length),
+                    partitions: vec![OffsetCommitRequestPartition::default()],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let commit = Commit {
+                now_ms: 1,
+                expire_timestamp_ms: None,
+                image: &image,
+            };
+
+            let outcome = commit_records(&request, commit);
+
+            check!(
+                outcome.is_ok() == encodes,
+                "{name} of {} bytes",
+                group_length.max(topic_length)
+            );
+            check!(
+                encodes || matches!(outcome, Err(BrokerError::Protocol(_))),
+                "{name} is a protocol error"
             );
         }
     }

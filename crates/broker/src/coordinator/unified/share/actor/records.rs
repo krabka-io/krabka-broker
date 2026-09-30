@@ -9,18 +9,22 @@ use std::collections::HashMap;
 use krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch};
 
 use super::seed::snapshot_seed;
-use crate::coordinator::unified::{
-    GroupCoordinator, OffsetRecordBatchBuilder,
-    offsets_log::OffsetsLog,
-    share::{
-        persistence::{
-            ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMemberMetadataValue,
-            ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
-            ShareGroupTargetAssignmentMemberValue, ShareGroupTargetAssignmentMetadataValue,
-            TopicPartitionsInfo, UNKNOWN_TOPIC_NAME, encode_share_key,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, OffsetRecordBatchBuilder,
+        offsets_log::OffsetsLog,
+        share::{
+            persistence::{
+                ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
+                ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
+                ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
+                ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo, UNKNOWN_TOPIC_NAME,
+                encode_share_key,
+            },
+            state::ShareGroupState,
         },
-        state::ShareGroupState,
     },
+    error::BrokerError,
 };
 
 #[derive(Debug, Default)]
@@ -47,14 +51,20 @@ impl PendingShareRecords {
             && self.state_partition_metadata.is_none()
     }
 
-    pub fn into_batch(self, group_id: &str, now_ms: i64) -> RecordBatch {
+    /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when the group id or a member id is
+    /// longer than 32767 bytes, which a non-flexible key string cannot carry.
+    pub fn into_batch(self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
         let mut batch = OffsetRecordBatchBuilder::default();
 
         if let Some(v) = self.group_metadata {
             batch.push(
                 encode_share_key(&ShareGroupKey::GroupMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 Some(v.encode()),
             );
         }
@@ -63,7 +73,7 @@ impl PendingShareRecords {
                 encode_share_key(&ShareGroupKey::MemberMetadata {
                     group_id: group_id.into(),
                     member_id,
-                }),
+                })?,
                 v.map(|x| x.encode()),
             );
         }
@@ -71,7 +81,7 @@ impl PendingShareRecords {
             batch.push(
                 encode_share_key(&ShareGroupKey::TargetAssignmentMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 Some(v.encode()),
             );
         }
@@ -80,7 +90,7 @@ impl PendingShareRecords {
                 encode_share_key(&ShareGroupKey::TargetAssignmentMember {
                     group_id: group_id.into(),
                     member_id,
-                }),
+                })?,
                 v.map(|x| x.encode()),
             );
         }
@@ -89,7 +99,7 @@ impl PendingShareRecords {
                 encode_share_key(&ShareGroupKey::CurrentMemberAssignment {
                     group_id: group_id.into(),
                     member_id,
-                }),
+                })?,
                 v.map(|x| x.encode()),
             );
         }
@@ -97,12 +107,12 @@ impl PendingShareRecords {
             batch.push(
                 encode_share_key(&ShareGroupKey::StatePartitionMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 Some(v.encode()),
             );
         }
 
-        batch.finish(now_ms)
+        Ok(batch.finish(now_ms))
     }
 }
 
@@ -221,7 +231,7 @@ pub(super) async fn flush_pending(
     if pending.is_empty() {
         return Ok(());
     }
-    let batch = pending.into_batch(&state.group_id, now_ms);
+    let batch = pending.into_batch(&state.group_id, now_ms)?;
     offsets_log.append(&state.group_id, batch).await?;
     coordinator.update_share_cache(&state.group_id, snapshot_seed(state));
     Ok(())
@@ -293,8 +303,56 @@ mod tests {
             member_metadata: vec![("m1".into(), None)],
             ..Default::default()
         };
-        let batch = p.into_batch("g", 0);
+        let batch = p.into_batch("g", 0).unwrap();
         assert!(batch.records.len() == 1);
         assert!(batch.records[0].value.is_none());
+    }
+
+    /// The keys of the share-group records write the group id and the member
+    /// id with an `INT16` length. A string of 32767 bytes encodes, and one of
+    /// 32768 bytes makes the whole batch an error, not a panic in the actor.
+    #[test]
+    fn a_key_string_over_32767_bytes_does_not_encode() {
+        fn every_record() -> PendingShareRecords {
+            PendingShareRecords {
+                group_metadata: Some(ShareGroupMetadataValue { epoch: 1 }),
+                member_metadata: vec![("m".into(), None)],
+                target_per_member: vec![("m".into(), None)],
+                current_per_member: vec![("m".into(), None)],
+                ..Default::default()
+            }
+        }
+        type Field = (&'static str, fn(&mut PendingShareRecords, String));
+        let fields: [Field; 3] = [
+            ("member id of a member record", |p, s| {
+                p.member_metadata[0].0 = s;
+            }),
+            ("member id of a target assignment", |p, s| {
+                p.target_per_member[0].0 = s;
+            }),
+            ("member id of a current assignment", |p, s| {
+                p.current_per_member[0].0 = s;
+            }),
+        ];
+        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+        for (name, set) in fields {
+            for (length, encodes) in [(limit, true), (limit + 1, false)] {
+                let mut pending = every_record();
+                set(&mut pending, "a".repeat(length));
+
+                let outcome = pending.into_batch("g", 0);
+
+                assert!(outcome.is_ok() == encodes, "{name} of {length} bytes");
+                assert!(
+                    encodes || matches!(outcome, Err(BrokerError::Protocol(_))),
+                    "{name} of {length} bytes is a protocol error"
+                );
+            }
+        }
+        for (length, encodes) in [(limit, true), (limit + 1, false)] {
+            let outcome = every_record().into_batch(&"g".repeat(length), 0);
+
+            assert!(outcome.is_ok() == encodes, "group id of {length} bytes");
+        }
     }
 }

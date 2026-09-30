@@ -67,17 +67,15 @@ pub(super) async fn handle_classic_join_message(
             // group down the classic path, which deletes the consumer group
             // and creates a classic one; the committed offsets stay with the
             // group id.
-            let batch = super::retention::tombstone_batch(
+            if super::retention::append_tombstones(
+                services.offsets_log,
                 &group.group_id,
                 &[],
                 Some(&group.kind),
                 chrono_now_ms(),
-            );
-            if services
-                .offsets_log
-                .append(&group.group_id, batch)
-                .await
-                .is_err()
+            )
+            .await
+            .is_err()
             {
                 let _ = reply.send(JoinResult {
                     error_code: codes::COORDINATOR_NOT_AVAILABLE,

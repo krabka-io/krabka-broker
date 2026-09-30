@@ -1,4 +1,4 @@
-//! The bound on the strings a group request hands to a coordinator record.
+//! The bound on the strings a coordinator request hands to a record.
 //!
 //! Kafka's generated request readers refuse a string field longer than
 //! `0x7fff` bytes: `MessageDataGenerator.generateVariableLengthReader` throws
@@ -8,19 +8,24 @@
 //! without a response. Only a flexible version can carry such a string, since
 //! an older one has an `INT16` length.
 //!
-//! krabka's decoder accepts a longer compact string, and the group
-//! coordinator writes every record key, and the classic group value, with an
-//! `INT16` string length
-//! ([`put_string`](crate::coordinator::unified::persistence::put_string)). A
-//! group id, member id, instance id, or regular expression that long would
-//! therefore panic the group actor when it wrote the record.
-//! [`decode_group_request`] refuses it at the handler boundary as Kafka's
-//! reader does, before the request reaches any coordinator.
+//! krabka's decoder accepts a longer compact string, and the coordinators
+//! write every record key, and the classic group value, with an `INT16` string
+//! length ([`put_string`](crate::coordinator::unified::persistence::put_string)).
+//! [`decode_group_request`] refuses such a string at the handler boundary as
+//! Kafka's reader does, before the request reaches any coordinator.
+//!
+//! That matches the wire behaviour of Kafka, and it is not the only guard. Every
+//! record encoder refuses a string that does not fit an `INT16` length, and the
+//! transition that asked for the write answers with the error, as Kafka
+//! answers a record that its writer cannot serialize. A string that this list
+//! misses therefore cannot panic a coordinator. The same holds for a string
+//! that the broker derives: `handle_join` refuses a generated classic member id
+//! over the bound before it changes the group.
 //!
 //! The strings that a record can carry are listed once, per request type, in
 //! the [`RecordStrings`] impls below. A request that is not listed reads or
-//! writes only state that a listed request created, or has no flexible
-//! version (`OffsetDelete`), so its strings cannot pass the `INT16` bound.
+//! writes only state that a listed request created, or has no flexible version
+//! (`OffsetDelete`), so its strings cannot pass the `INT16` bound.
 
 use krabka_protocol::{
     Decode,
@@ -29,19 +34,21 @@ use krabka_protocol::{
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         delete_groups_request::DeleteGroupsRequest,
         delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
-        heartbeat_request::HeartbeatRequest, join_group_request::JoinGroupRequest,
-        leave_group_request::LeaveGroupRequest, offset_commit_request::OffsetCommitRequest,
+        delete_share_group_state_request::DeleteShareGroupStateRequest,
+        heartbeat_request::HeartbeatRequest, init_producer_id_request::InitProducerIdRequest,
+        initialize_share_group_state_request::InitializeShareGroupStateRequest,
+        join_group_request::JoinGroupRequest, leave_group_request::LeaveGroupRequest,
+        offset_commit_request::OffsetCommitRequest,
+        read_share_group_state_request::ReadShareGroupStateRequest,
+        read_share_group_state_summary_request::ReadShareGroupStateSummaryRequest,
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         sync_group_request::SyncGroupRequest, txn_offset_commit_request::TxnOffsetCommitRequest,
+        write_share_group_state_request::WriteShareGroupStateRequest,
     },
 };
 
-use crate::error::BrokerError;
-
-/// The longest string Kafka reads: `Short.MAX_VALUE`, the largest `INT16`
-/// length.
-const MAX_STRING_BYTES: usize = 0x7fff;
+use crate::{coordinator::unified::persistence::MAX_STRING_BYTES, error::BrokerError};
 
 /// A group request whose strings a coordinator record can carry.
 pub(crate) trait RecordStrings {
@@ -246,6 +253,32 @@ impl RecordStrings for DeleteShareGroupOffsetsRequest {
         )
     }
 }
+
+impl RecordStrings for InitProducerIdRequest {
+    fn longest_record_string(&self) -> usize {
+        longest(self.transactional_id.as_deref())
+    }
+}
+
+/// The share-state requests carry no string but the group id, which names the
+/// `__share_group_state` record key.
+macro_rules! share_state_group_id {
+    ($($request:ty),+ $(,)?) => {
+        $(impl RecordStrings for $request {
+            fn longest_record_string(&self) -> usize {
+                self.group_id.len()
+            }
+        })+
+    };
+}
+
+share_state_group_id!(
+    InitializeShareGroupStateRequest,
+    ReadShareGroupStateRequest,
+    ReadShareGroupStateSummaryRequest,
+    WriteShareGroupStateRequest,
+    DeleteShareGroupStateRequest,
+);
 
 #[cfg(test)]
 mod handler_tests;

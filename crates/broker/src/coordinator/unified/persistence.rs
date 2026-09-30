@@ -89,8 +89,12 @@ pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
 /// [`parse_key`]. This function encodes the k0/k1 `OffsetCommit` and k2
 /// `GroupMetadata` variants. The next-gen, share, and streams families delegate
 /// to their own `encode_*` helpers.
-#[must_use]
-pub fn encode_key(key: &Key) -> Bytes {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes, which no key can carry.
+pub fn encode_key(key: &Key) -> Result<Bytes, BrokerError> {
     match key {
         Key::OffsetCommit {
             group_id,
@@ -122,14 +126,18 @@ pub struct OffsetCommitValue {
 
 impl OffsetCommitValue {
     /// Encodes an `OffsetCommit` key, version 1.
-    #[must_use]
-    pub fn encode_key(group_id: &str, topic: &str, partition: i32) -> Bytes {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when the group id or the topic is
+    /// longer than 32767 bytes.
+    pub fn encode_key(group_id: &str, topic: &str, partition: i32) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i16(1); // key version
-        put_string(&mut buf, group_id);
-        put_string(&mut buf, topic);
+        put_string(&mut buf, group_id)?;
+        put_string(&mut buf, topic)?;
         buf.put_i32(partition);
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     /// The value version Kafka's `GroupCoordinatorRecordHelpers.
@@ -252,37 +260,46 @@ pub struct MemberMetadata {
 
 impl GroupMetadataValue {
     /// Encodes a `GroupMetadata` key, version 2.
-    #[must_use]
-    pub fn encode_key(group_id: &str) -> Bytes {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when the group id is longer than
+    /// 32767 bytes.
+    pub fn encode_key(group_id: &str) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i16(2);
-        put_string(&mut buf, group_id);
-        buf.freeze()
+        put_string(&mut buf, group_id)?;
+        Ok(buf.freeze())
     }
 
     /// Encodes a `GroupMetadata` value, version 3.
-    #[must_use]
-    pub fn encode_value(&self) -> Bytes {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when the protocol type or name, the
+    /// leader, or a member's id, instance id, client id or host is longer than
+    /// 32767 bytes.
+    pub fn encode_value(&self) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i16(3); // value version
-        put_string(&mut buf, &self.protocol_type);
+        put_string(&mut buf, &self.protocol_type)?;
         buf.put_i32(self.generation);
-        put_nullable_string(&mut buf, self.protocol_name.as_deref());
-        put_nullable_string(&mut buf, self.leader.as_deref());
+        put_nullable_string(&mut buf, self.protocol_name.as_deref())?;
+        put_nullable_string(&mut buf, self.leader.as_deref())?;
         buf.put_i64(self.current_state_timestamp_ms);
         let n = i32::try_from(self.members.len()).expect("members fit in i32");
         buf.put_i32(n);
         for m in &self.members {
-            put_string(&mut buf, &m.member_id);
-            put_nullable_string(&mut buf, m.group_instance_id.as_deref());
-            put_string(&mut buf, &m.client_id);
-            put_string(&mut buf, &m.client_host);
+            put_string(&mut buf, &m.member_id)?;
+            put_nullable_string(&mut buf, m.group_instance_id.as_deref())?;
+            put_string(&mut buf, &m.client_id)?;
+            put_string(&mut buf, &m.client_host)?;
             buf.put_i32(m.rebalance_timeout_ms);
             buf.put_i32(m.session_timeout_ms);
             put_bytes(&mut buf, &m.subscription);
             put_bytes(&mut buf, &m.assignment);
         }
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     pub fn decode_value(mut buf: &[u8]) -> Result<Self, BrokerError> {
@@ -424,24 +441,47 @@ pub(crate) fn get_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
     Ok(Bytes::from(out))
 }
 
+/// The longest string, in bytes, that Kafka reads or writes: `Short.MAX_VALUE`,
+/// the largest `INT16` length. Its generated request readers refuse a longer
+/// string field, and its generated writers refuse to serialize one.
+pub(crate) const MAX_STRING_BYTES: usize = 0x7fff;
+
 /// Writes `s` with an `INT16` length.
 ///
-/// # Panics
+/// Kafka's generated writer throws `'<field>' field is too long to be
+/// serialized` for a string longer than `0x7fff` bytes, and the coordinator
+/// runtime then fails the write, so the request that asked for it gets an
+/// error. This refuses the same string, and the record builders pass the
+/// refusal up to the transition that asked for the write.
 ///
-/// Panics on a string longer than `i16::MAX` bytes. Kafka's generated request
-/// readers refuse such a string, so the group handlers do too, at decode
-/// (`crate::handlers::decode_group_request`), before a request reaches a
-/// coordinator record. A caller that takes a string from anywhere else has to
-/// bound it first.
-pub(crate) fn put_string<B: BufMut>(buf: &mut B, s: &str) {
-    let n = i16::try_from(s.len()).expect("string < 32k");
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `s` is longer than `i16::MAX` bytes.
+pub(crate) fn put_string<B: BufMut>(buf: &mut B, s: &str) -> Result<(), BrokerError> {
+    let n = i16::try_from(s.len()).map_err(|_| {
+        BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
+            "STRING longer than 32767 bytes",
+        ))
+    })?;
     buf.put_i16(n);
     buf.put_slice(s.as_bytes());
+    Ok(())
 }
 
-pub(crate) fn put_nullable_string<B: BufMut>(buf: &mut B, s: Option<&str>) {
+/// Writes `s` as a nullable string with an `INT16` length.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `s` is longer than `i16::MAX` bytes.
+pub(crate) fn put_nullable_string<B: BufMut>(
+    buf: &mut B,
+    s: Option<&str>,
+) -> Result<(), BrokerError> {
     match s {
-        None => buf.put_i16(-1),
+        None => {
+            buf.put_i16(-1);
+            Ok(())
+        }
         Some(s) => put_string(buf, s),
     }
 }
@@ -608,7 +648,7 @@ mod tests {
                 assignment: Bytes::from_static(b"asgn"),
             }],
         };
-        let encoded = v.encode_value();
+        let encoded = v.encode_value().unwrap();
         let decoded = GroupMetadataValue::decode_value(&encoded).unwrap();
         assert!(decoded == v);
     }
@@ -621,20 +661,20 @@ mod tests {
         fn encode_at(version: i16) -> Bytes {
             let mut buf = BytesMut::new();
             buf.put_i16(version);
-            put_string(&mut buf, "consumer");
+            put_string(&mut buf, "consumer").unwrap();
             buf.put_i32(5);
-            put_nullable_string(&mut buf, Some("range"));
-            put_nullable_string(&mut buf, Some("m1"));
+            put_nullable_string(&mut buf, Some("range")).unwrap();
+            put_nullable_string(&mut buf, Some("m1")).unwrap();
             if version >= 2 {
                 buf.put_i64(12_345);
             }
             buf.put_i32(1);
-            put_string(&mut buf, "m1");
+            put_string(&mut buf, "m1").unwrap();
             if version >= 3 {
-                put_nullable_string(&mut buf, Some("inst"));
+                put_nullable_string(&mut buf, Some("inst")).unwrap();
             }
-            put_string(&mut buf, "c");
-            put_string(&mut buf, "h");
+            put_string(&mut buf, "c").unwrap();
+            put_string(&mut buf, "h").unwrap();
             if version >= 1 {
                 buf.put_i32(60_000);
             }
@@ -681,12 +721,91 @@ mod tests {
         assert!(decoded_rows == expected_rows);
         // The hand-built version 3 is what the broker itself writes.
         let current = GroupMetadataValue::decode_value(&encode_at(3)).unwrap();
-        assert!(current.encode_value() == encode_at(3));
+        assert!(current.encode_value().unwrap() == encode_at(3));
+    }
+
+    /// A key writes each of its strings with an `INT16` length, in every
+    /// family. A string of 32767 bytes encodes, and one of 32768 bytes is an
+    /// error rather than a panic.
+    #[test]
+    fn a_key_string_over_32767_bytes_does_not_encode() {
+        use crate::coordinator::unified::{
+            persistence_next_gen::NextGenKey, share::persistence::ShareGroupKey,
+            streams::persistence::StreamsGroupKey,
+        };
+
+        type Make = fn(String) -> Key;
+        let keys: [(&str, Make); 11] = [
+            ("offset group id", |s| Key::OffsetCommit {
+                group_id: s,
+                topic: "t".into(),
+                partition: 0,
+            }),
+            ("offset topic", |s| Key::OffsetCommit {
+                group_id: "g".into(),
+                topic: s,
+                partition: 0,
+            }),
+            ("classic group id", |s| Key::GroupMetadata { group_id: s }),
+            ("next-gen group id", |s| {
+                Key::NextGen(NextGenKey::GroupMetadata { group_id: s })
+            }),
+            ("next-gen member id", |s| {
+                Key::NextGen(NextGenKey::MemberMetadata {
+                    group_id: "g".into(),
+                    member_id: s,
+                })
+            }),
+            ("next-gen regular expression", |s| {
+                Key::NextGen(NextGenKey::RegularExpression {
+                    group_id: "g".into(),
+                    regex: s,
+                })
+            }),
+            ("share group id", |s| {
+                Key::Share(ShareGroupKey::GroupMetadata { group_id: s })
+            }),
+            ("share member id", |s| {
+                Key::Share(ShareGroupKey::MemberMetadata {
+                    group_id: "g".into(),
+                    member_id: s,
+                })
+            }),
+            ("streams group id", |s| {
+                Key::Streams(StreamsGroupKey::GroupMetadata { group_id: s })
+            }),
+            ("streams member id", |s| {
+                Key::Streams(StreamsGroupKey::MemberMetadata {
+                    group_id: "g".into(),
+                    member_id: s,
+                })
+            }),
+            ("streams topology group id", |s| {
+                Key::Streams(StreamsGroupKey::Topology { group_id: s })
+            }),
+        ];
+        for (name, make) in keys {
+            for (length, encodes) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+                let key = make("a".repeat(length));
+
+                let encoded = encode_key(&key);
+
+                assert!(encoded.is_ok() == encodes, "{name} of {length} bytes");
+                if let Ok(bytes) = encoded {
+                    assert!(parse_key(&bytes).unwrap() == key, "{name}");
+                } else {
+                    assert!(
+                        matches!(encoded, Err(BrokerError::Protocol(_))),
+                        "{name} of {length} bytes is a protocol error"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn parse_key_offset_commit_v1() {
-        let key = OffsetCommitValue::encode_key("grp", "topic", 7);
+        let key = OffsetCommitValue::encode_key("grp", "topic", 7).unwrap();
         assert!(
             parse_key(&key).unwrap()
                 == Key::OffsetCommit {
@@ -699,7 +818,7 @@ mod tests {
 
     #[test]
     fn parse_key_group_metadata_v2() {
-        let key = GroupMetadataValue::encode_key("grp");
+        let key = GroupMetadataValue::encode_key("grp").unwrap();
         match parse_key(&key).unwrap() {
             Key::GroupMetadata { group_id } => assert!(group_id == "grp"),
             k @ (Key::OffsetCommit { .. } | Key::NextGen(_) | Key::Share(_) | Key::Streams(_)) => {

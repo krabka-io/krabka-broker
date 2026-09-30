@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use tokio::sync::oneshot;
 
-use super::{chrono_now_ms, retention::tombstone_batch};
+use super::{chrono_now_ms, retention::append_tombstones};
 use crate::coordinator::unified::{group::CoordinatorGroup, offsets_log::OffsetsLog};
 
 #[cfg(test)]
@@ -71,8 +71,9 @@ async fn delete_topic_offsets(
     if keys.is_empty() {
         return keys;
     }
-    let batch = tombstone_batch(&group.group_id, &keys, None, chrono_now_ms());
-    if let Err(error) = offsets_log.append(&group.group_id, batch).await {
+    if let Err(error) =
+        append_tombstones(offsets_log, &group.group_id, &keys, None, chrono_now_ms()).await
+    {
         tracing::error!(
             group_id = %group.group_id,
             %error,

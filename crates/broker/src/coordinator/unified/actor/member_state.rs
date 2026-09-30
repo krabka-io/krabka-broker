@@ -52,15 +52,6 @@ pub(super) fn reported_owned(
     })
 }
 
-/// The longest regular expression the coordinator can store, in UTF-8 bytes.
-///
-/// The group keeps the topics a pattern resolved to under a
-/// `ConsumerGroupRegularExpressionKey`, whose `RegularExpression` is a
-/// non-flexible string with an `i16` length prefix. Kafka's generated
-/// serializer throws for a longer one ("field is too long to be serialized"),
-/// so its regex resolution write fails and the pattern never resolves.
-const MAX_REGEX_BYTES: usize = i16::MAX as usize;
-
 /// Rejects a heartbeat whose `SubscribedTopicRegex` does not compile, with the
 /// message Kafka builds in
 /// `GroupMetadataManager.throwIfRegularExpressionIsInvalid`.
@@ -70,24 +61,11 @@ const MAX_REGEX_BYTES: usize = i16::MAX as usize;
 /// 128) before it writes any member record, so the heartbeat that carries the
 /// bad pattern fails and the member is not admitted.
 ///
-/// A pattern longer than [`MAX_REGEX_BYTES`] is refused the same way. Kafka
-/// admits such a member and then cannot persist the resolution of the pattern,
-/// so the member would never receive a topic from it. Here the resolution is
-/// written with the heartbeat, and a key that cannot be encoded must not reach
-/// the log writer, so the heartbeat fails before it changes any state.
-///
 /// The pattern is compiled by [`crate::re2j`], which documents where its
 /// dialect and RE2J's differ. The pattern is only ever matched against Kafka
 /// topic names, whose legal alphabet is `[a-zA-Z0-9._-]`, so the ASCII and
 /// Unicode readings of `\d`, `\w`, `\s` and `\b` cannot differ here.
 pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
-    if pattern.len() > MAX_REGEX_BYTES {
-        return Err(format!(
-            "SubscribedTopicRegex is {} bytes long, and the longest regular expression the \
-             group coordinator stores is {MAX_REGEX_BYTES} bytes.",
-            pattern.len()
-        ));
-    }
     crate::re2j::check(pattern).map_err(|detail| {
         format!("SubscribedTopicRegex `{pattern}` is not a valid regular expression: {detail}.")
     })

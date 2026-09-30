@@ -322,7 +322,7 @@ mod tests {
             base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 3)),
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 3).unwrap()),
                 value: Some(
                     OffsetCommitValue {
                         offset: Offset(99),
@@ -678,7 +678,7 @@ mod tests {
             base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 0)),
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 0).unwrap()),
                 value: Some(
                     OffsetCommitValue {
                         offset: Offset(55),
@@ -787,7 +787,7 @@ mod tests {
             base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 0)),
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 0).unwrap()),
                 value: Some(
                     OffsetCommitValue {
                         offset: Offset(55),

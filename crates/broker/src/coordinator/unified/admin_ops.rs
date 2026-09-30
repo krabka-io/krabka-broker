@@ -146,7 +146,8 @@ impl GroupCoordinator {
             group_id,
             &[],
             crate::time_util::now_ms(),
-        );
+        )
+        .map_err(|_| DeleteGroupError::Internal)?;
         self.offsets_log
             .append(group_id, batch)
             .await

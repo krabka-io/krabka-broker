@@ -80,49 +80,54 @@ pub fn parse_key(version: i16, mut buf: &[u8]) -> Result<NextGenKey, BrokerError
     Ok(key)
 }
 
-#[must_use]
-pub fn encode_key(key: &NextGenKey) -> Bytes {
+/// Encodes a [`NextGenKey`] with its leading `i16` key version.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes, which a non-flexible key string cannot carry.
+pub fn encode_key(key: &NextGenKey) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     match key {
         NextGenKey::GroupMetadata { group_id } => {
             buf.put_i16(KEY_GROUP_METADATA);
-            put_string(&mut buf, group_id);
+            put_string(&mut buf, group_id)?;
         }
         NextGenKey::MemberMetadata {
             group_id,
             member_id,
         } => {
             buf.put_i16(KEY_MEMBER_METADATA);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, member_id);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, member_id)?;
         }
         NextGenKey::TargetAssignmentMetadata { group_id } => {
             buf.put_i16(KEY_TARGET_ASSIGNMENT_METADATA);
-            put_string(&mut buf, group_id);
+            put_string(&mut buf, group_id)?;
         }
         NextGenKey::TargetAssignmentMember {
             group_id,
             member_id,
         } => {
             buf.put_i16(KEY_TARGET_ASSIGNMENT_MEMBER);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, member_id);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, member_id)?;
         }
         NextGenKey::CurrentMemberAssignment {
             group_id,
             member_id,
         } => {
             buf.put_i16(KEY_CURRENT_MEMBER_ASSIGNMENT);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, member_id);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, member_id)?;
         }
         NextGenKey::RegularExpression { group_id, regex } => {
             buf.put_i16(KEY_REGULAR_EXPRESSION);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, regex);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, regex)?;
         }
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 #[cfg(test)]
@@ -144,8 +149,8 @@ mod tests {
             group_id: "g".into(),
             regex: "a.*".into(),
         };
-        assert!(&encode_key(&key)[..] == b"\x00\x10\x00\x01g\x00\x03a.*");
-        let encoded = encode_key(&key);
+        assert!(&encode_key(&key).unwrap()[..] == b"\x00\x10\x00\x01g\x00\x03a.*");
+        let encoded = encode_key(&key).unwrap();
         let mut r = &encoded[..];
         let v = bytes::Buf::get_i16(&mut r);
         assert!(parse_key(v, r).unwrap() == key);
@@ -157,7 +162,7 @@ mod tests {
             group_id: "g".into(),
             member_id: "m".into(),
         };
-        let kb = encode_key(&k);
+        let kb = encode_key(&k).unwrap();
         let mut r = &kb[..];
         let v = bytes::Buf::get_i16(&mut r);
         assert!(parse_key(v, r).unwrap() == k);
