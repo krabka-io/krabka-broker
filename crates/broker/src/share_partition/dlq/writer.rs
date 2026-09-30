@@ -165,8 +165,9 @@ fn classify_create(
         Ok(response) => match response.topics.first().map(|row| row.error_code) {
             Some(codes::NONE) => Attempt::Done(()),
             // The topic was created by a request that was in flight, or the
-            // controller is throttling: the next attempt finds the topic, or
-            // asks again.
+            // controller is throttling: the next attempt looks at the image
+            // again (see `ensure_topic`), and asks again only if the topic is
+            // still missing.
             Some(code @ (codes::TOPIC_ALREADY_EXISTS | codes::THROTTLING_QUOTA_EXCEEDED)) => {
                 Attempt::Retry(format!("creating {topic}: error {code}"))
             }
@@ -182,6 +183,59 @@ fn classify_create(
             "Unable to create the DLQ topic {topic}: {error}."
         ))),
     }
+}
+
+/// Runs `attempt` under Kafka's retry rule: up to [`MAX_ATTEMPTS`] tries with
+/// a growing pause between them.
+async fn with_backoff<T, F, Fut>(what: &str, mut attempt: F) -> Result<T, DlqError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Attempt<T>>,
+{
+    let backoff = Backoff::new(MAX_ATTEMPTS, BACKOFF_MIN, Some(BACKOFF_MAX));
+    for delay in backoff {
+        match attempt().await {
+            Attempt::Done(value) => return Ok(value),
+            Attempt::Fatal(error) => return Err(error),
+            Attempt::Retry(reason) => match delay {
+                Some(delay) => {
+                    tracing::debug!(%reason, what, "dead-letter request will retry");
+                    tokio::time::sleep(delay).await;
+                }
+                None => {
+                    return Err(DlqError::Write(format!(
+                        "Exhausted max retries to {what}: {reason}."
+                    )));
+                }
+            },
+        }
+    }
+    Err(DlqError::Write(format!("No attempt was made to {what}.")))
+}
+
+/// Gets the dead-letter `topic` made: `state` says how the topic stands in
+/// the metadata image, and `create` sends one `CreateTopics` request.
+///
+/// A retry of Kafka's topic creation starts over from the top. The timer task
+/// puts the handler back through `enqueue`, which validates the topic, and
+/// `dlqTopicExists`, which reads the metadata cache, before a `CreateTopics`
+/// goes out again. So a request that answers `TOPIC_ALREADY_EXISTS`, because
+/// a concurrent write made the topic, ends at the next attempt, when the image
+/// shows the topic. The request only repeats while the topic is still missing.
+async fn ensure_topic<S, C, Fut>(topic: &str, state: S, create: C) -> Result<(), DlqError>
+where
+    S: Fn() -> Result<TopicState, DlqError>,
+    C: Fn() -> Fut,
+    Fut: Future<Output = Result<CreateTopicsResponse, TopicCreatorError>>,
+{
+    with_backoff(&format!("create the DLQ topic {topic}"), || async {
+        match state() {
+            Err(error) => Attempt::Fatal(error),
+            Ok(TopicState::Exists) => Attempt::Done(()),
+            Ok(TopicState::Missing) => classify_create(create().await, topic),
+        }
+    })
+    .await
 }
 
 /// The inter-broker listener that the requests go over.
@@ -293,48 +347,26 @@ impl DlqWriter {
             .unwrap_or(i32::MAX)
     }
 
-    /// Runs `attempt` under Kafka's retry rule: up to [`MAX_ATTEMPTS`] tries
-    /// with a growing pause between them.
-    async fn with_backoff<T, F, Fut>(&self, what: &str, mut attempt: F) -> Result<T, DlqError>
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = Attempt<T>>,
-    {
-        let backoff = Backoff::new(MAX_ATTEMPTS, BACKOFF_MIN, Some(BACKOFF_MAX));
-        for delay in backoff {
-            match attempt().await {
-                Attempt::Done(value) => return Ok(value),
-                Attempt::Fatal(error) => return Err(error),
-                Attempt::Retry(reason) => match delay {
-                    Some(delay) => {
-                        tracing::debug!(%reason, what, "dead-letter request will retry");
-                        tokio::time::sleep(delay).await;
-                    }
-                    None => {
-                        return Err(DlqError::Write(format!(
-                            "Exhausted max retries to {what}: {reason}."
-                        )));
-                    }
-                },
-            }
-        }
-        Err(DlqError::Write(format!("No attempt was made to {what}.")))
-    }
-
-    /// Creates the dead-letter topic and waits for it to show in the metadata
-    /// image.
-    async fn create_topic(&self, topic: &str) -> Result<(), DlqError> {
-        self.with_backoff(&format!("create the DLQ topic {topic}"), || async {
-            let created = self.topics.create_dead_letter_topic(topic).await;
-            classify_create(created, topic)
-        })
+    /// Creates the dead-letter topic of `settings`, unless the image shows it
+    /// by the time an attempt looks.
+    async fn create_topic(&self, group: &str, settings: &GroupSettings) -> Result<(), DlqError> {
+        let topic = settings.topic.as_str();
+        ensure_topic(
+            topic,
+            || {
+                let image = self.controller.current_image();
+                let cluster = ClusterSettings::resolve(&image, self.node_id);
+                validate(&image, group, Some(settings.clone()), &cluster).map(|(_, state)| state)
+            },
+            || self.topics.create_dead_letter_topic(topic),
+        )
         .await
     }
 
     /// The dead-letter partition for `source_partition`, once the image shows
     /// it. It takes a moment for a new topic.
     async fn target(&self, topic: &str, source_partition: i32) -> Result<Target, DlqError> {
-        self.with_backoff(&format!("find the DLQ topic {topic}"), || async {
+        with_backoff(&format!("find the DLQ topic {topic}"), || async {
             let image = self.controller.current_image();
             let max_message_bytes = self.max_message_bytes(&image, topic);
             match resolve_target(&image, topic, source_partition, max_message_bytes) {
@@ -348,7 +380,7 @@ impl DlqWriter {
     /// Produces `batch` to the leader of `target`, with all replicas
     /// acknowledging.
     async fn produce(&self, target: &Target, batch: &RecordBatch) -> Result<(), DlqError> {
-        self.with_backoff(
+        with_backoff(
             &format!(
                 "produce to the DLQ topic {}-{}",
                 target.topic, target.partition
@@ -443,7 +475,7 @@ impl DlqSink for DlqWriter {
             &cluster,
         )?;
         if state == TopicState::Missing {
-            self.create_topic(&settings.topic).await?;
+            self.create_topic(&request.group, &settings).await?;
         }
         // Kafka puts the id of a topic whose name it cannot find in the header.
         let source_topic = image
@@ -767,6 +799,99 @@ mod tests {
             .into_iter()
             .map(|(result, _)| outcome(&classify_create(result, "dlq.g")))
             .collect();
+
+        assert!(actual == expected);
+    }
+
+    /// Runs `ensure_topic` for `dlq.g` with a scripted image and a scripted
+    /// controller. `states` is what the image shows at each attempt, and its
+    /// last entry holds from then on; each `CreateTopics` gets `answer`.
+    /// Returns the outcome and how many requests went out.
+    async fn ensure(
+        states: &[Result<TopicState, DlqError>],
+        answer: i16,
+    ) -> (Result<(), DlqError>, usize) {
+        let looks = std::cell::Cell::new(0_usize);
+        let requests = std::cell::Cell::new(0_usize);
+        let outcome = ensure_topic(
+            "dlq.g",
+            || {
+                let look = looks.get();
+                looks.set(look + 1);
+                states[look.min(states.len() - 1)].clone()
+            },
+            || {
+                requests.set(requests.get() + 1);
+                std::future::ready(Ok(created(answer)))
+            },
+        )
+        .await;
+        (outcome, requests.get())
+    }
+
+    /// Kafka's retry of a topic creation goes back through `enqueue` and
+    /// `dlqTopicExists`: a request that gets `TOPIC_ALREADY_EXISTS` because a
+    /// concurrent write made the topic ends when the image shows the topic,
+    /// rather than asking until the retries run out. The request repeats only
+    /// while the topic is missing, and a topic that turns up without
+    /// `errors.deadletterqueue.group.enable` is refused, as `validateDlqTopic`
+    /// refuses it.
+    #[tokio::test(start_paused = true)]
+    async fn a_topic_that_a_concurrent_write_created_ends_the_creation() {
+        let not_enabled = DlqError::Config("DLQ is not enabled on configured DLQ topic".to_owned());
+        let cases = [
+            // The image shows the topic already: nothing is asked.
+            (vec![Ok(TopicState::Exists)], codes::NONE, (Ok(()), 0)),
+            (vec![Ok(TopicState::Missing)], codes::NONE, (Ok(()), 1)),
+            (
+                vec![Ok(TopicState::Missing), Ok(TopicState::Exists)],
+                codes::TOPIC_ALREADY_EXISTS,
+                (Ok(()), 1),
+            ),
+            (
+                vec![
+                    Ok(TopicState::Missing),
+                    Ok(TopicState::Missing),
+                    Ok(TopicState::Exists),
+                ],
+                codes::THROTTLING_QUOTA_EXCEEDED,
+                (Ok(()), 2),
+            ),
+            (
+                vec![Ok(TopicState::Missing)],
+                codes::TOPIC_ALREADY_EXISTS,
+                (
+                    Err(DlqError::Write(format!(
+                        "Exhausted max retries to create the DLQ topic dlq.g: \
+                         creating dlq.g: error {}.",
+                        codes::TOPIC_ALREADY_EXISTS
+                    ))),
+                    5,
+                ),
+            ),
+            (
+                vec![Ok(TopicState::Missing), Err(not_enabled.clone())],
+                codes::TOPIC_ALREADY_EXISTS,
+                (Err(not_enabled), 1),
+            ),
+            (
+                vec![Ok(TopicState::Missing)],
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                (
+                    Err(DlqError::Write(format!(
+                        "Unable to create the DLQ topic dlq.g: error {}.",
+                        codes::TOPIC_AUTHORIZATION_FAILED
+                    ))),
+                    1,
+                ),
+            ),
+        ];
+        let expected: Vec<_> = cases.iter().map(|(_, _, want)| want.clone()).collect();
+
+        let mut actual = Vec::new();
+        for (states, answer, _) in &cases {
+            actual.push(ensure(states, *answer).await);
+        }
 
         assert!(actual == expected);
     }
