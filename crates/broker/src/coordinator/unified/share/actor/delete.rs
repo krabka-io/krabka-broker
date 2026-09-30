@@ -379,4 +379,56 @@ mod tests {
         check!(coordinator.cached_share_seed("sg") == None);
         check!(coordinator.group_type("sg") == None);
     }
+
+    /// A deleted share group takes its dead-letter counters with it. A delete
+    /// that the group's members refuse does not, and another group's counters
+    /// stay either way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deleting_a_share_group_releases_its_dead_letter_counters() {
+        let series = |metrics: &crate::metrics::BrokerMetrics, group: &str| {
+            let label = crate::metrics::ShareGroupIdLabel {
+                group_id: group.to_owned(),
+            };
+            [
+                metrics.share_group_dlq_records.get(&label).is_some(),
+                metrics
+                    .share_group_dlq_produce_requests
+                    .get(&label)
+                    .is_some(),
+                metrics
+                    .share_group_dlq_failed_produce_requests
+                    .get(&label)
+                    .is_some(),
+            ]
+        };
+        // (members, result, whether the group's series stay)
+        let rows = [
+            (1, Err(DeleteGroupError::NonEmpty), true),
+            (0, Ok(()), false),
+        ];
+
+        for (members, expected, kept) in rows {
+            let (coordinator, _log) = make_coord_with_log();
+            let metrics = crate::metrics::BrokerMetrics::new();
+            coordinator.set_metrics(metrics.clone());
+            for group in ["sg", "other"] {
+                metrics.record_share_dlq_produce(group);
+                metrics.record_share_dlq_records(group, 2);
+                metrics.record_share_dlq_produce_failed(group);
+            }
+            coordinator.mark_share("sg");
+            coordinator
+                .get_or_create_share("sg")
+                .tx
+                .send(ShareGroupActorMessage::Seed(seed(members, &[])))
+                .await
+                .expect("seed the share group");
+
+            let result = coordinator.delete_group("sg").await;
+
+            check!(result == expected, "{members} members");
+            check!(series(&metrics, "sg") == [kept; 3], "{members} members");
+            check!(series(&metrics, "other") == [true; 3], "{members} members");
+        }
+    }
 }

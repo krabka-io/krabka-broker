@@ -18,6 +18,17 @@
 //! one `NetworkClient` for every dead-letter produce. A write that pays for a
 //! TCP, TLS and SASL setup each time would turn a consumer that rejects at a
 //! high rate into a storm of connections.
+//!
+//! The rounds of every write for one leader are coalesced, as Kafka's send
+//! thread coalesces its handlers ([`super::coalesce`]): while a request is in
+//! flight to a leader, the rounds that arrive for it wait, and go out in as
+//! few requests as `max.message.bytes` allows. A round is answered with the
+//! response to the request that carried it, so a write ends when its own
+//! records are written, and it retries on its own.
+//!
+//! Each round counts on the `DeadLetterQueue*` meters of Kafka's
+//! `ShareGroupMetrics`: an attempt to produce it, the records of a round that
+//! is written, and a write that fails.
 
 use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
@@ -29,8 +40,7 @@ use krabka_log::LogConfig;
 use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::{
     owned::{
-        create_topics_response::CreateTopicsResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        create_topics_response::CreateTopicsResponse, produce_request::ProduceRequest,
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -41,6 +51,7 @@ use krabka_units::convert::ByteSizeExt as _;
 
 use super::{
     DlqError, DlqRequest, DlqSink,
+    coalesce::{Admitted, Coalescer, Produce, ProduceTransport},
     record::{RangeContext, RoundBounds, build_round, destination_partition},
     source::{Fetched, fetch},
     validate::{ClusterSettings, GroupSettings, TopicState, validate},
@@ -51,6 +62,7 @@ use crate::{
     config::BrokerConfig,
     config_keys::{BrokerLogDefaults, resolve_max_message_bytes},
     metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
     topic_creator::TopicCreatorError,
@@ -61,10 +73,6 @@ use crate::{
 const MAX_ATTEMPTS: u32 = 5;
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
-
-/// The `timeout.ms` of the produce request: Kafka's
-/// `ServerConfigs.REQUEST_TIMEOUT_MS_DEFAULT`.
-const PRODUCE_TIMEOUT_MS: i32 = 30_000;
 
 /// The result of one attempt of a request.
 enum Attempt<T> {
@@ -126,10 +134,16 @@ fn resolve_target(
 }
 
 /// What one produce answer means: Kafka's `handleProduceResponse`.
+///
+/// The answer to a coalesced request holds a row for every partition of every
+/// topic in it, so the row is the one for the topic of `target` and its
+/// partition, as Kafka finds it by topic id.
 fn classify_produce(response: &ProduceResponse, target: &Target) -> Attempt<()> {
+    let topic_id = WireUuid(*target.topic_id.as_bytes());
     let row = response
         .responses
         .iter()
+        .filter(|topic| topic.topic_id == topic_id || topic.name == target.topic)
         .flat_map(|topic| &topic.partition_responses)
         .find(|row| row.index == target.partition);
     let Some(row) = row else {
@@ -239,9 +253,9 @@ where
 }
 
 /// The inter-broker listener that the requests go over.
-struct Transport {
+struct Listener {
     protocol: ListenerProtocol,
-    listener_name: String,
+    name: String,
     server_name: String,
 }
 
@@ -296,20 +310,76 @@ impl<C: Pooled> LeaderConnections<C> {
     }
 }
 
+/// Sends the produce requests over the inter-broker listener, on one
+/// connection for each leader.
+struct InterBrokerProduce {
+    controller: Arc<dyn MetadataSource>,
+    client: Arc<InterBrokerClient>,
+    listener: Listener,
+    /// The connection to each leader that a produce goes to.
+    connections: LeaderConnections<krabka_client_core::Connection>,
+    client_id: String,
+}
+
+#[async_trait]
+impl ProduceTransport for InterBrokerProduce {
+    /// One produce request, over the connection to `node` that the writes
+    /// share.
+    async fn send(&self, node: NodeId, request: ProduceRequest) -> Result<ProduceResponse, String> {
+        let image = self.controller.current_image();
+        let broker = image
+            .broker(node)
+            .ok_or_else(|| format!("node {node} is not in the metadata image"))?;
+        let (host, port) = broker
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == self.listener.name)
+            .map_or_else(
+                || (broker.host.clone(), broker.port),
+                |endpoint| (endpoint.host.clone(), endpoint.port),
+            );
+        let connection = self
+            .connections
+            .get(node, || async {
+                let options = krabka_client_core::ConnectionOptions {
+                    client_id: self.client_id.clone(),
+                    ..krabka_client_core::ConnectionOptions::default()
+                };
+                self.client
+                    .connect_as_connection(
+                        &host,
+                        port,
+                        self.listener.protocol,
+                        &self.listener.server_name,
+                        options,
+                    )
+                    .await
+                    .map_err(|error| format!("connect to {host}:{port}: {error}"))
+            })
+            .await?;
+        connection.send(request).await.map_err(|error| {
+            // A connection that failed a request may be half dead: closing it
+            // makes the next attempt dial afresh.
+            connection.clone().close();
+            format!("produce to {host}:{port}: {error}")
+        })
+    }
+}
+
 /// Writes dead-letter records: the [`DlqSink`] of a running broker.
 pub struct DlqWriter {
     node_id: NodeId,
     controller: Arc<dyn MetadataSource>,
     partitions: Arc<PartitionRegistry>,
     topics: Arc<AutoTopicCreation>,
-    client: Arc<InterBrokerClient>,
-    transport: Transport,
-    /// The connection to each leader that a produce goes to.
-    connections: LeaderConnections<krabka_client_core::Connection>,
+    /// The produce requests, coalesced for each destination leader.
+    sender: Coalescer<InterBrokerProduce>,
     /// The static log settings, under the dynamic broker defaults: the
     /// `message.max.bytes` of a topic that sets no `max.message.bytes`.
     base_log: LogConfig,
     decompression: RecordDecompressionPolicy,
+    /// Where the `DeadLetterQueue*` meters are counted.
+    metrics: BrokerMetrics,
 }
 
 impl DlqWriter {
@@ -320,21 +390,28 @@ impl DlqWriter {
         topics: Arc<AutoTopicCreation>,
         client: Arc<InterBrokerClient>,
         listener_protocol: ListenerProtocol,
+        metrics: BrokerMetrics,
     ) -> Self {
+        let node_id = NodeId(config.node_id.0);
         Self {
-            node_id: NodeId(config.node_id.0),
-            controller,
+            node_id,
+            controller: Arc::clone(&controller),
             partitions,
             topics,
-            client,
-            transport: Transport {
-                protocol: listener_protocol,
-                listener_name: config.inter_broker_listener_name.clone(),
-                server_name: config.inter_broker_server_name.clone(),
-            },
-            connections: LeaderConnections::default(),
+            sender: Coalescer::new(InterBrokerProduce {
+                controller,
+                client,
+                listener: Listener {
+                    protocol: listener_protocol,
+                    name: config.inter_broker_listener_name.clone(),
+                    server_name: config.inter_broker_server_name.clone(),
+                },
+                connections: LeaderConnections::default(),
+                client_id: format!("krabka-broker-dlq-{node_id}"),
+            }),
             base_log: config.log_config.clone(),
             decompression: config.record_decompression_policy().unwrap_or_default(),
+            metrics,
         }
     }
 
@@ -378,89 +455,81 @@ impl DlqWriter {
     }
 
     /// Produces `batch` to the leader of `target`, with all replicas
-    /// acknowledging.
-    async fn produce(&self, target: &Target, batch: &RecordBatch) -> Result<(), DlqError> {
-        with_backoff(
-            &format!(
-                "produce to the DLQ topic {}-{}",
-                target.topic, target.partition
-            ),
-            || async {
-                let response = match self.send_produce(target, batch).await {
-                    Ok(response) => response,
-                    Err(reason) => return Attempt::Retry(reason),
-                };
-                classify_produce(&response, target)
+    /// acknowledging, in a request that the rounds of other writes to the
+    /// same leader share.
+    async fn produce(
+        &self,
+        group: &str,
+        target: &Target,
+        batch: &RecordBatch,
+    ) -> Result<(), DlqError> {
+        produce_round(
+            &self.sender,
+            &self.metrics,
+            group,
+            target,
+            // The leader can move between attempts, so it is read afresh.
+            || {
+                self.controller
+                    .current_image()
+                    .partition(&target.topic, target.partition)
+                    .map_or(target.leader, |partition| partition.leader)
             },
+            batch,
         )
         .await
     }
+}
 
-    /// One produce request, over the connection to the leader that the writes
-    /// share.
-    async fn send_produce(
-        &self,
-        target: &Target,
-        batch: &RecordBatch,
-    ) -> Result<ProduceResponse, String> {
-        // The leader can move between attempts, so it is read afresh.
-        let image = self.controller.current_image();
-        let leader = image
-            .partition(&target.topic, target.partition)
-            .map_or(target.leader, |partition| partition.leader);
-        let broker = image
-            .broker(leader)
-            .ok_or_else(|| format!("node {leader} is not in the metadata image"))?;
-        let (host, port) = broker
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == self.transport.listener_name)
-            .map_or_else(
-                || (broker.host.clone(), broker.port),
-                |endpoint| (endpoint.host.clone(), endpoint.port),
-            );
-        let connection = self
-            .connections
-            .get(leader, || async {
-                let options = krabka_client_core::ConnectionOptions {
-                    client_id: format!("krabka-broker-dlq-{}", self.node_id),
-                    ..krabka_client_core::ConnectionOptions::default()
-                };
-                self.client
-                    .connect_as_connection(
-                        &host,
-                        port,
-                        self.transport.protocol,
-                        &self.transport.server_name,
-                        options,
-                    )
-                    .await
-                    .map_err(|error| format!("connect to {host}:{port}: {error}"))
-            })
-            .await?;
-        let request = ProduceRequest {
-            transactional_id: None,
-            acks: -1,
-            timeout_ms: PRODUCE_TIMEOUT_MS,
-            topic_data: vec![TopicProduceData {
-                name: target.topic.clone(),
-                topic_id: WireUuid(*target.topic_id.as_bytes()),
-                partition_data: vec![PartitionProduceData {
-                    index: target.partition,
-                    records: Some(batch.clone().into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        connection.send(request).await.map_err(|error| {
-            // A connection that failed a request may be half dead: closing it
-            // makes the next attempt dial afresh.
-            connection.clone().close();
-            format!("produce to {host}:{port}: {error}")
-        })
+/// Produces one round, `batch` for `target`, to the node that `leader` names,
+/// and counts it on the group's meters: Kafka's `ProduceRequestHandler`, which
+/// retries a round on its own, and marks `recordDLQProduce` when a request
+/// takes it, `recordDLQRecordWrite` when its records are written, and
+/// `recordDLQProduceFailed` when the write is given up.
+///
+/// A produce answer that has no row for the round's partition is a failed
+/// write here. Kafka's `handleProduceResponse` fails the write without marking
+/// `recordDLQProduceFailed` in that case, which only a broker that breaks the
+/// protocol can bring about, so the meter here says what happened to the
+/// records.
+async fn produce_round<T: ProduceTransport>(
+    sender: &Coalescer<T>,
+    metrics: &BrokerMetrics,
+    group: &str,
+    target: &Target,
+    leader: impl Fn() -> NodeId,
+    batch: &RecordBatch,
+) -> Result<(), DlqError> {
+    let admitted: Admitted = {
+        let (metrics, group) = (metrics.clone(), group.to_owned());
+        Arc::new(move || metrics.record_share_dlq_produce(&group))
+    };
+    let written = with_backoff(
+        &format!(
+            "produce to the DLQ topic {}-{}",
+            target.topic, target.partition
+        ),
+        || async {
+            let produce = Produce {
+                topic: target.topic.clone(),
+                topic_id: target.topic_id,
+                partition: target.partition,
+                max_message_bytes: target.max_message_bytes,
+                batch: batch.clone(),
+                admitted: Arc::clone(&admitted),
+            };
+            match sender.produce(leader(), produce).await {
+                Ok(response) => classify_produce(&response, target),
+                Err(reason) => Attempt::Retry(reason),
+            }
+        },
+    )
+    .await;
+    match &written {
+        Ok(()) => metrics.record_share_dlq_records(group, batch.records.len()),
+        Err(_) => metrics.record_share_dlq_produce_failed(group),
     }
+    written
 }
 
 #[async_trait]
@@ -517,7 +586,7 @@ impl DlqSink for DlqWriter {
                 },
                 crate::time_util::now_ms(),
             );
-            self.produce(&target, &round.batch).await?;
+            self.produce(&request.group, &target, &round.batch).await?;
             next = round.last_offset + 1;
         }
         Ok(())
@@ -533,7 +602,7 @@ mod tests {
         produce_response::{PartitionProduceResponse, TopicProduceResponse},
     };
 
-    use super::*;
+    use super::{super::coalesce::test_support::FakeBroker, *};
 
     /// An image with the topic `dlq.g`, one partition for each of `leaders`,
     /// as `(leader, whether that broker is registered)`.
@@ -616,6 +685,7 @@ mod tests {
     fn produce_response(index: i32, error_code: i16) -> ProduceResponse {
         ProduceResponse {
             responses: vec![TopicProduceResponse {
+                topic_id: WireUuid([7; 16]),
                 partition_responses: vec![PartitionProduceResponse {
                     index,
                     error_code,
@@ -659,6 +729,312 @@ mod tests {
                 .map(|(response, _)| outcome(&classify_produce(response, &target)))
                 .collect::<Vec<_>>()
                 == cases.iter().map(|(_, want)| *want).collect::<Vec<_>>()
+        );
+    }
+
+    /// The answer to a coalesced request has a row for each partition of each
+    /// topic in it, and a round reads the row of its own topic: the row of
+    /// another topic's partition of the same index is not its answer.
+    #[test]
+    fn a_produce_answer_is_read_from_the_row_of_the_topic() {
+        let other_topic = ProduceResponse {
+            responses: vec![TopicProduceResponse {
+                topic_id: WireUuid([8; 16]),
+                partition_responses: vec![PartitionProduceResponse {
+                    index: 1,
+                    error_code: codes::NONE,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let both = ProduceResponse {
+            responses: [other_topic.responses.clone(), {
+                produce_response(1, codes::NOT_LEADER_OR_FOLLOWER).responses
+            }]
+            .concat(),
+            ..Default::default()
+        };
+
+        assert!(
+            [
+                outcome(&classify_produce(&other_topic, &target(1, 2))),
+                outcome(&classify_produce(&both, &target(1, 2))),
+            ] == ["fatal", "retry"]
+        );
+    }
+
+    /// A produce round of the tests: `records` records for partition 0 of the
+    /// topic `dlq.<id>`.
+    fn round_of(id: u8, records: usize) -> (Target, RecordBatch) {
+        let target = Target {
+            topic: format!("dlq.{id}"),
+            topic_id: uuid::Uuid::from_bytes([id; 16]),
+            partition: 0,
+            leader: NodeId(1),
+            max_message_bytes: 1_048_588,
+        };
+        let batch = RecordBatch {
+            last_offset_delta: i32::try_from(records).unwrap() - 1,
+            records: (0..records)
+                .map(|delta| krabka_protocol::records::Record {
+                    offset_delta: i32::try_from(delta).unwrap(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        (target, batch)
+    }
+
+    /// The answer of a broker that gives every partition the code that
+    /// `code` says for the request's index, the topic and the partition.
+    fn answer_rows(
+        request: &ProduceRequest,
+        index: usize,
+        code: impl Fn(usize, &str, i32) -> i16,
+    ) -> ProduceResponse {
+        ProduceResponse {
+            responses: request
+                .topic_data
+                .iter()
+                .map(|topic| TopicProduceResponse {
+                    name: topic.name.clone(),
+                    topic_id: topic.topic_id,
+                    partition_responses: topic
+                        .partition_data
+                        .iter()
+                        .map(|partition| PartitionProduceResponse {
+                            index: partition.index,
+                            error_code: code(index, &topic.name, partition.index),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The topics of each request that the broker was sent, and its node.
+    fn topics_sent(broker: &FakeBroker) -> Vec<(NodeId, Vec<String>)> {
+        broker
+            .sent()
+            .into_iter()
+            .map(|(node, request)| {
+                (
+                    node,
+                    request
+                        .topic_data
+                        .into_iter()
+                        .map(|topic| topic.name)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// What the meters of `group` count: the records written, the attempts to
+    /// produce, and the writes that failed.
+    fn meters(metrics: &BrokerMetrics, group: &str) -> (u64, u64, u64) {
+        let label = crate::metrics::ShareGroupIdLabel {
+            group_id: group.to_owned(),
+        };
+        (
+            metrics.share_group_dlq_records.get_or_create(&label).get(),
+            metrics
+                .share_group_dlq_produce_requests
+                .get_or_create(&label)
+                .get(),
+            metrics
+                .share_group_dlq_failed_produce_requests
+                .get_or_create(&label)
+                .get(),
+        )
+    }
+
+    /// Two writes for the same leader go out in one request, and each write
+    /// ends with its own records: the one whose partition the leader accepted
+    /// is done, and the one it refused for good has failed, whichever request
+    /// carried them. Each counts on its own group's meters.
+    #[tokio::test(start_paused = true)]
+    async fn each_write_in_a_coalesced_request_ends_with_its_own_records() {
+        let broker = FakeBroker::answering(|index, request| {
+            Ok(answer_rows(request, index, |_, topic, _| {
+                if topic == "dlq.2" {
+                    codes::MESSAGE_TOO_LARGE
+                } else {
+                    codes::NONE
+                }
+            }))
+        });
+        let sender = Coalescer::new(broker.clone());
+        let metrics = BrokerMetrics::new();
+        let ((first, first_batch), (second, second_batch)) = (round_of(1, 2), round_of(2, 1));
+
+        let (done, refused) = futures_util::future::join(
+            produce_round(&sender, &metrics, "g1", &first, || NodeId(1), &first_batch),
+            produce_round(
+                &sender,
+                &metrics,
+                "g2",
+                &second,
+                || NodeId(1),
+                &second_batch,
+            ),
+        )
+        .await;
+
+        assert!(
+            (
+                done,
+                refused,
+                topics_sent(&broker),
+                meters(&metrics, "g1"),
+                meters(&metrics, "g2"),
+            ) == (
+                Ok(()),
+                Err(DlqError::Write(format!(
+                    "Unable to produce to the DLQ topic dlq.2-0: error {}.",
+                    codes::MESSAGE_TOO_LARGE
+                ))),
+                vec![(NodeId(1), vec!["dlq.1".to_owned(), "dlq.2".to_owned()])],
+                (2, 1, 0),
+                (0, 1, 1),
+            )
+        );
+    }
+
+    /// A write that the leader answers with `NOT_LEADER_OR_FOLLOWER` retries on
+    /// its own, after the backoff, to the leader the image names by then, and
+    /// the write that shared its first request is not sent again. Each attempt
+    /// counts as a produce, and the records count once, when they are written.
+    #[tokio::test(start_paused = true)]
+    async fn a_write_retries_on_its_own_to_the_leader_of_the_moment() {
+        let broker = FakeBroker::answering(|index, request| {
+            Ok(answer_rows(request, index, |index, topic, _| {
+                if index == 0 && topic == "dlq.2" {
+                    codes::NOT_LEADER_OR_FOLLOWER
+                } else {
+                    codes::NONE
+                }
+            }))
+        });
+        let sender = Coalescer::new(broker.clone());
+        let metrics = BrokerMetrics::new();
+        let ((first, first_batch), (second, second_batch)) = (round_of(1, 1), round_of(2, 3));
+        let leaders = std::cell::Cell::new(0_u64);
+
+        let (done, retried) = futures_util::future::join(
+            produce_round(&sender, &metrics, "g1", &first, || NodeId(1), &first_batch),
+            produce_round(
+                &sender,
+                &metrics,
+                "g2",
+                &second,
+                || {
+                    // The leader moves to node 2 after the first attempt.
+                    leaders.set(leaders.get() + 1);
+                    NodeId(leaders.get())
+                },
+                &second_batch,
+            ),
+        )
+        .await;
+
+        assert!(
+            (
+                done,
+                retried,
+                topics_sent(&broker),
+                meters(&metrics, "g1"),
+                meters(&metrics, "g2"),
+            ) == (
+                Ok(()),
+                Ok(()),
+                vec![
+                    (NodeId(1), vec!["dlq.1".to_owned(), "dlq.2".to_owned()]),
+                    (NodeId(2), vec!["dlq.2".to_owned()]),
+                ],
+                (1, 1, 0),
+                (3, 2, 0),
+            )
+        );
+    }
+
+    /// A write that no attempt gets through runs out of attempts: five, as in
+    /// Kafka's `MAX_REQUEST_ATTEMPTS`. Whether the leader keeps answering that
+    /// it is not the leader or the request never gets a response, it counts one
+    /// failed write and an attempt for each try.
+    #[tokio::test(start_paused = true)]
+    async fn a_write_that_runs_out_of_attempts_counts_one_failure() {
+        let not_leader = |index, request: &ProduceRequest| {
+            Ok(answer_rows(request, index, |_, _, _| {
+                codes::NOT_LEADER_OR_FOLLOWER
+            }))
+        };
+        let no_response = |_, _: &ProduceRequest| Err("connection refused".to_owned());
+        let cases: [(FakeBroker, &str); 2] = [
+            (
+                FakeBroker::answering(not_leader),
+                "dlq.1-0 is not led by node 1",
+            ),
+            (FakeBroker::answering(no_response), "connection refused"),
+        ];
+
+        for (broker, reason) in cases {
+            let sender = Coalescer::new(broker.clone());
+            let metrics = BrokerMetrics::new();
+            let (target, batch) = round_of(1, 1);
+
+            let written =
+                produce_round(&sender, &metrics, "g1", &target, || NodeId(1), &batch).await;
+
+            assert!(
+                (written, broker.sent().len(), meters(&metrics, "g1"))
+                    == (
+                        Err(DlqError::Write(format!(
+                            "Exhausted max retries to produce to the DLQ topic dlq.1-0: {reason}."
+                        ))),
+                        5,
+                        (0, 5, 1),
+                    ),
+                "{reason}"
+            );
+        }
+    }
+
+    /// The produce is counted when a request takes the round, as Kafka's
+    /// `coalesceProduceRequests` marks `recordDLQProduce`, and not when the
+    /// response arrives: a request that is still in flight counts, and the
+    /// records do not, until they are written.
+    #[tokio::test(start_paused = true)]
+    async fn a_produce_counts_while_its_request_is_in_flight() {
+        let broker = FakeBroker::held_answering(|index, request| {
+            Ok(answer_rows(request, index, |_, _, _| codes::NONE))
+        });
+        let sender = Coalescer::new(broker.clone());
+        let metrics = BrokerMetrics::new();
+        let (target, batch) = round_of(1, 2);
+        let write = produce_round(&sender, &metrics, "g1", &target, || NodeId(1), &batch);
+        tokio::pin!(write);
+
+        tokio::select! {
+            _ = &mut write => unreachable!("the request is held"),
+            () = async {
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+        let in_flight = (broker.sent().len(), meters(&metrics, "g1"));
+        broker.release();
+        let written = write.await;
+
+        assert!(
+            (in_flight, written, meters(&metrics, "g1")) == ((1, (0, 1, 0)), Ok(()), (2, 1, 0))
         );
     }
 

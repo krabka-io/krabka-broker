@@ -142,6 +142,9 @@ async fn registry_has_broker_prefix_and_all_metrics() {
             partition: 0,
         })
         .set(9);
+    m.record_share_dlq_produce("workers");
+    m.record_share_dlq_records("workers", 2);
+    m.record_share_dlq_produce_failed("workers");
     m.partitions_led.set(7);
     m.partitions_total.set(42);
     m.under_replicated_partitions.set(3);
@@ -186,6 +189,9 @@ async fn registry_has_broker_prefix_and_all_metrics() {
         "krabka_broker_partition_bytes_out_total",
         "krabka_broker_partition_disk_bytes",
         "krabka_broker_share_group_backlog",
+        "krabka_broker_share_group_dlq_records_total",
+        "krabka_broker_share_group_dlq_produce_requests_total",
+        "krabka_broker_share_group_dlq_failed_produce_requests_total",
         "krabka_broker_partition_cpu_micros_total",
         "krabka_broker_incremental_fetch_sessions",
         "krabka_broker_incremental_fetch_session_evictions_total",

@@ -39,6 +39,7 @@ mod remote_tier;
 mod replication;
 mod request;
 mod schema_validation;
+mod share_dlq;
 mod traffic;
 
 pub use self::{
@@ -49,8 +50,8 @@ pub use self::{
         CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
         ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, FetchDrainPath,
         FetchDrainPathLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel,
-        RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel,
-        TopicLabel, WalShardLabel, WalVoterLabel,
+        RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
+        ShareGroupIdLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
     remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
@@ -141,6 +142,19 @@ pub struct BrokerMetrics {
     pub consumer_group_lag: Family<ConsumerGroupLabel, Gauge>,
     /// Records waiting for acquisition in each share-group partition.
     pub share_group_backlog: Family<ShareGroupLabel, Gauge>,
+    /// Dead-letter records a share group has had written to its queue
+    /// (KIP-1191): the records of the produce rounds that succeeded. Mirrors
+    /// Kafka's `ShareGroupMetrics.DeadLetterQueueRecordCount`.
+    pub share_group_dlq_records: Family<ShareGroupIdLabel, Counter>,
+    /// Attempts to produce a share group's dead-letter records: one for each
+    /// round of each range for each attempt, not one for each coalesced
+    /// produce request, as in Kafka. Mirrors Kafka's
+    /// `ShareGroupMetrics.DeadLetterQueueTotalProduceRequestsPerSec`.
+    pub share_group_dlq_produce_requests: Family<ShareGroupIdLabel, Counter>,
+    /// Dead-letter writes of a share group that ended in a failure: a produce
+    /// that a broker refused, or that ran out of attempts. Mirrors Kafka's
+    /// `ShareGroupMetrics.DeadLetterQueueFailedProduceRequestsPerSec`.
+    pub share_group_dlq_failed_produce_requests: Family<ShareGroupIdLabel, Counter>,
     /// Cumulative handler-thread microseconds spent processing each
     /// (topic, partition). Exported as
     /// `krabka_broker_partition_cpu_micros_total`. Rebalancer takes
