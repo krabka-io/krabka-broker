@@ -648,6 +648,10 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         // fault: the produce row carries the same code the produce-side
         // `delivery.max.delay.ms` bound answers with.
         BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards { .. }) => INVALID_TIMESTAMP,
+        // Kafka trunk's `max.decompressed.message.bytes`: the
+        // `InvalidRecordException` a decompressing read throws for a record
+        // above the limit is `INVALID_RECORD` under `Errors.forException`.
+        BrokerError::Log(krabka_log::LogError::RecordTooLarge { .. }) => INVALID_RECORD,
         // Kafka's `LocalLog.maybeHandleIOException` turns every `IOException`
         // of an append or a read into `KafkaStorageException`, which
         // `Errors.forException` answers with `KAFKA_STORAGE_ERROR`: retriable,

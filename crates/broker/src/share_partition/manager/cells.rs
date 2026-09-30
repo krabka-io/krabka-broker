@@ -158,7 +158,9 @@ impl SharePartitionLeaderManager {
     /// the target time, as Kafka's `ShareFetchUtils.offsetForTimestamp` throws
     /// `OffsetNotAvailableException` for a log with no such record. The load
     /// then fails and caches nothing, so the next request resolves again once
-    /// a record in the window exists.
+    /// a record in the window exists. `INVALID_RECORD` when the lookup reads a
+    /// compressed record above the topic's Kafka trunk
+    /// `max.decompressed.message.bytes`.
     ///
     /// A partition this broker does not hold, or a topic id the image does not
     /// know, yields offset 0: there is no log to resolve against, and the next
@@ -191,13 +193,22 @@ impl SharePartitionLeaderManager {
                     .saturating_sub(i64::try_from(duration.as_millis()).unwrap_or(i64::MAX));
                 let found = {
                     let log = local.log.lock().expect("log mutex poisoned");
-                    log.offset_for_timestamp(target).map(|(offset, _)| offset)
+                    log.offset_for_timestamp_checked(target)
                 };
+                // A compressed record above the topic's trunk
+                // `max.decompressed.message.bytes` fails the lookup:
+                // `UnifiedLog.fetchOffsetByTimestamp` throws
+                // `InvalidRecordException` through
+                // `ReplicaManager.fetchOffsetForTimestamp` into the share
+                // partition's initialization.
+                let found = found.map_err(|error| {
+                    crate::codes::from_broker_error(&crate::error::BrokerError::from(error))
+                })?;
                 // Every record predates the window: Kafka's
                 // `ShareFetchUtils.offsetForTimestamp` throws, and the
                 // initialization of the share partition fails.
                 found
-                    .map(|offset| offset.max(log_start))
+                    .map(|(offset, _)| offset.max(log_start))
                     .ok_or(crate::codes::OFFSET_NOT_AVAILABLE)
             }
         }

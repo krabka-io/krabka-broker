@@ -357,7 +357,7 @@ impl Log {
             return Ok(());
         }
 
-        let (index_interval, delete_retention, min_lag, segment_bytes) = {
+        let (index_interval, delete_retention, min_lag, segment_bytes, record_limit) = {
             let cfg_guard = self.config.read().unwrap();
             if !cfg_guard.cleanup_policy.contains_compact() {
                 return Ok(());
@@ -367,6 +367,7 @@ impl Log {
                 cfg_guard.delete_retention,
                 cfg_guard.min_compaction_lag,
                 cfg_guard.segment_size,
+                cfg_guard.max_decompressed_record,
             )
         };
 
@@ -405,6 +406,7 @@ impl Log {
             let offset_map = crate::compact::build_offset_map(
                 &sealed_refs,
                 self.aborted_in_range(sealed_refs[0].base_offset(), consumed_end),
+                record_limit,
             )?;
             let mut txn_meta = crate::compact::CleanedTransactionMetadata::default();
             let sizes: Vec<ByteSize> = sealed_refs.iter().map(|segment| segment.size()).collect();
@@ -437,6 +439,7 @@ impl Log {
                         // The round rewrites the offset map's whole range, so
                         // it ends where the last consumed segment does.
                         upper_bound: consumed_end,
+                        max_decompressed_record: record_limit,
                     },
                 )?;
                 rewrites.push((group_bases, rewrite));
@@ -1072,6 +1075,87 @@ mod tests {
         // while making the complete suffix fail integrity validation.
         encoded[17] ^= 1;
         assert_corrupt_suffix_preserves_originals(&encoded);
+    }
+
+    /// Kafka trunk's cleaner reads every record of a compressed batch it
+    /// indexes, and a record above `max.decompressed.message.bytes` throws
+    /// `InvalidRecordException`, which `LogCleaner` turns into an uncleanable
+    /// partition. The record here is superseded by a later write, and Kafka
+    /// refuses it all the same, because the offset map reads it before it knows
+    /// that. The refused pass leaves the log as it found it.
+    #[test]
+    fn compact_refuses_a_compressed_record_above_the_limit_and_leaves_the_log_alone() {
+        use krabka_compression::CompressionType;
+
+        for (name, codec, limit, refuses) in [
+            (
+                "compressed, oversized",
+                CompressionType::Gzip,
+                Some(bytes(100)),
+                true,
+            ),
+            ("compressed, no limit", CompressionType::Gzip, None, false),
+            (
+                "uncompressed, oversized",
+                CompressionType::None,
+                Some(bytes(100)),
+                false,
+            ),
+        ] {
+            let dir = tempdir().unwrap();
+            let cfg = LogConfig {
+                cleanup_policy: crate::CleanupPolicy::Compact,
+                segment_size: bytes(1), // one batch per segment
+                max_decompressed_record: limit,
+                ..Default::default()
+            };
+            let mut log = Log::open(dir.path(), cfg).unwrap();
+            let large = [b'x'; 1_000];
+            for (key, value) in [
+                (b"k1".as_slice(), large.as_slice()),
+                (b"k1", b"new"),
+                (b"tail", b"t"),
+            ] {
+                let mut batch = keyed_batch(0, &[(0, key, value)]);
+                batch.attributes = batch.attributes.with_compression(codec);
+                log.append(&mut batch).unwrap();
+            }
+            let files = |log: &Log| -> Vec<(i64, Vec<u8>)> {
+                log.segments
+                    .iter()
+                    .map(|segment| {
+                        let base = segment.base_offset().0;
+                        (
+                            base,
+                            std::fs::read(name::log_path(dir.path(), base)).unwrap(),
+                        )
+                    })
+                    .collect()
+            };
+            let before = files(&log);
+
+            let result = log.compact(&compaction_ctx());
+
+            if refuses {
+                let error = result.unwrap_err();
+                assert2::check!(
+                    matches!(error, LogError::RecordTooLarge { limit: 100, .. }),
+                    "{name}: {error}"
+                );
+                assert2::check!(files(&log) == before, "{name}");
+            } else {
+                result.unwrap();
+                let out = log.read(Offset(0), mebibytes(1)).unwrap();
+                let k1: Vec<&[u8]> = out
+                    .batches
+                    .iter()
+                    .flat_map(|batch| batch.records.iter())
+                    .filter(|record| record.key.as_deref() == Some(b"k1".as_slice()))
+                    .filter_map(|record| record.value.as_deref())
+                    .collect();
+                assert2::check!(k1 == [b"new".as_slice()], "{name}");
+            }
+        }
     }
 
     #[test]

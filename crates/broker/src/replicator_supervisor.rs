@@ -110,6 +110,7 @@ pub(crate) struct ReplicatorSupervisor {
     partitions: Arc<PartitionRegistry>,
     log_dirs: Vec<PathBuf>,
     log_config: LogConfig,
+    unstable_api_versions: crate::api_catalog::UnstableApiVersions,
     client_id: String,
     tasks: DashMap<FetcherKey, FetcherTask>,
     wal_tasks: DashMap<crate::wal::quorum::registry::ShardId, WalFollowerTask>,
@@ -179,6 +180,9 @@ pub(crate) struct ReplicatorSupervisorConfig {
     pub partitions: Arc<PartitionRegistry>,
     pub log_dirs: Vec<PathBuf>,
     pub log_config: LogConfig,
+    /// Whether the broker serves Kafka trunk's topic keys, which is what lets
+    /// `max.decompressed.message.bytes` reach the partition logs.
+    pub unstable_api_versions: crate::api_catalog::UnstableApiVersions,
     pub client_id: String,
     pub shutdown: CancellationToken,
     pub txn_coordinator: Option<Arc<TxnCoordinator>>,
@@ -217,6 +221,7 @@ impl ReplicatorSupervisor {
             partitions,
             log_dirs,
             log_config,
+            unstable_api_versions,
             client_id,
             shutdown,
             txn_coordinator,
@@ -262,6 +267,7 @@ impl ReplicatorSupervisor {
             partitions,
             log_dirs,
             log_config,
+            unstable_api_versions,
             client_id,
             tasks: DashMap::new(),
             wal_tasks: DashMap::new(),

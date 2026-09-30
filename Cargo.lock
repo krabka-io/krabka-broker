@@ -3698,6 +3698,7 @@ dependencies = [
  "futures-util",
  "hex",
  "krabka-audit",
+ "krabka-compression",
  "krabka-ids",
  "krabka-log",
  "krabka-object-store",

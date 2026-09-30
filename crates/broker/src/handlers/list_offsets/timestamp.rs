@@ -6,12 +6,24 @@
 
 use std::time::Duration;
 
+use krabka_remote_storage::RemoteStorageError;
+use krabka_units::prelude::ByteSizeExt;
+
 use super::{
     remote::await_remote,
     sentinels::{UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP},
 };
-use crate::broker::Broker;
+use crate::{broker::Broker, codes};
 
+/// Resolve a positive request timestamp to `(offset, record timestamp)`, or to
+/// the error code the partition's row carries.
+///
+/// A compressed record the scan has to decompress that is above the topic's
+/// Kafka trunk `max.decompressed.message.bytes` fails the lookup, on the
+/// remote tier and on the local log alike, with `INVALID_RECORD`: Kafka's
+/// `InvalidRecordException` reaches the response through
+/// `Errors.forException`. Under Kafka 4.3.1 the limit is unset and no lookup
+/// reads it.
 pub(super) async fn resolve_timestamp_offset(
     broker: &Broker,
     partition: &crate::partition::Partition,
@@ -20,33 +32,55 @@ pub(super) async fn resolve_timestamp_offset(
     topic_id: Option<uuid::Uuid>,
     timestamp: i64,
     remote_timeout: Duration,
-) -> Option<(i64, i64)> {
+) -> Result<(i64, i64), i16> {
     if let (Some(reader), Some(id)) = (broker.remote_reader.as_ref(), topic_id) {
         let topic_partition = krabka_remote_storage::TopicIdPartition::new(
             id,
             topic_name.to_string(),
             partition_index,
         );
+        let max_record_body = partition
+            .log
+            .lock()
+            .expect("log mutex poisoned")
+            .config_snapshot()
+            .max_decompressed_record
+            .map(ByteSizeExt::bytes_usize);
         match await_remote(
             remote_timeout,
-            reader.offset_for_timestamp(&topic_partition, timestamp),
+            reader.offset_for_timestamp(&topic_partition, timestamp, max_record_body),
         )
         .await
         {
-            None => return None,
-            Some(Ok(Some(offset_and_timestamp))) => return Some(offset_and_timestamp),
+            None => return Err(codes::REQUEST_TIMED_OUT),
+            Some(Ok(Some(offset_and_timestamp))) => return Ok(offset_and_timestamp),
             Some(Ok(None)) => {}
+            Some(Err(error @ RemoteStorageError::RecordTooLarge { .. })) => {
+                tracing::warn!(topic = topic_name, partition = partition_index,
+                    error = %error, "list_offsets: remote offset_for_timestamp refused a record");
+                return Err(codes::INVALID_RECORD);
+            }
             Some(Err(error)) => tracing::warn!(topic = topic_name, partition = partition_index,
                 error = %error, "list_offsets: remote offset_for_timestamp failed"),
         }
     }
-    let log = partition.log.lock().expect("log mutex poisoned");
-    Some(
-        log.offset_for_timestamp(timestamp)
-            .map_or((UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP), |(offset, matched)| {
+    let found = partition
+        .log
+        .lock()
+        .expect("log mutex poisoned")
+        .offset_for_timestamp_checked(timestamp);
+    match found {
+        Ok(found) => Ok(
+            found.map_or((UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP), |(offset, matched)| {
                 (offset.0, matched)
             }),
-    )
+        ),
+        Err(error) => {
+            tracing::warn!(topic = topic_name, partition = partition_index,
+                error = %error, "list_offsets: offset_for_timestamp refused a record");
+            Err(codes::from_broker_error(&error.into()))
+        }
+    }
 }
 
 #[cfg(test)]

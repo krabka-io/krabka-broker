@@ -7,7 +7,7 @@
 use std::time::SystemTime;
 
 use krabka_ids::Offset;
-use krabka_units::prelude::ByteSizeExt as _;
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
 use super::Log;
 use crate::{error::LogError, name, retention, segment::Segment};
@@ -74,28 +74,74 @@ impl Log {
     /// forward scan. The result is `None` when no local record qualifies,
     /// including the case of an empty log.
     ///
+    /// This is the lookup the log's own bookkeeping uses, and it applies no
+    /// `max.decompressed.message.bytes`. A `ListOffsets` answer goes through
+    /// [`Self::offset_for_timestamp_checked`], which does.
+    ///
     /// # Panics
     ///
     /// Panics when another thread poisoned the log configuration lock.
     #[must_use]
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
         let scan_window = self.config.read().unwrap().timestamp_scan_window;
+        // With no limit the scan has nothing to refuse.
+        self.scan_offset_for_timestamp(target_ts, scan_window, None)
+            .ok()
+            .flatten()
+    }
+
+    /// [`Self::offset_for_timestamp`] under the log's
+    /// [`max_decompressed_record`](crate::LogConfig::max_decompressed_record),
+    /// as Kafka trunk's `UnifiedLog.fetchOffsetByTimestamp` answers it.
+    ///
+    /// Kafka's scan decompresses a compressed batch whose max timestamp reaches
+    /// the target, up to the record it returns, and fails on a record above the
+    /// limit. A lookup that never reads the oversized record is unaffected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogError::RecordTooLarge`] for such a record.
+    ///
+    /// # Panics
+    ///
+    /// Panics when another thread poisoned the log configuration lock.
+    pub fn offset_for_timestamp_checked(
+        &self,
+        target_ts: i64,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
+        let (scan_window, limit) = self.timestamp_scan_settings();
+        self.scan_offset_for_timestamp(target_ts, scan_window, limit)
+    }
+
+    /// The scan window and the record limit of the log's current configuration.
+    fn timestamp_scan_settings(&self) -> (ByteSize, Option<ByteSize>) {
+        let config = self.config.read().unwrap();
+        (config.timestamp_scan_window, config.max_decompressed_record)
+    }
+
+    fn scan_offset_for_timestamp(
+        &self,
+        target_ts: i64,
+        scan_window: ByteSize,
+        limit: Option<ByteSize>,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
         for seg in &self.segments {
             // A sealed segment restores its maximum on open, so the unknown
             // sentinel survives only where the segment holds no readable
             // batch. There is nothing in such a segment to find.
             if seg.max_timestamp() >= target_ts
-                && let Some(hit) = seg.offset_for_timestamp_with_window(target_ts, scan_window)
+                && let Some(hit) =
+                    seg.offset_for_timestamp_with_window(target_ts, scan_window, limit)?
             {
-                return Some(hit);
+                return Ok(Some(hit));
             }
         }
         if let Some(active) = &self.active
             && active.max_timestamp() >= target_ts
         {
-            return active.offset_for_timestamp_with_window(target_ts, scan_window);
+            return active.offset_for_timestamp_with_window(target_ts, scan_window, limit);
         }
-        None
+        Ok(None)
     }
 
     /// Offset and timestamp of the record that carries the partition's
@@ -106,22 +152,63 @@ impl Log {
     /// record within it wins. The result is `None` when the log holds no
     /// records.
     ///
+    /// Like [`Self::offset_for_timestamp`], this applies no
+    /// `max.decompressed.message.bytes`;
+    /// [`Self::max_timestamp_offset_and_ts_checked`] does.
+    ///
     /// # Panics
     ///
     /// Panics when another thread poisoned the log configuration lock.
     #[must_use]
     pub fn max_timestamp_offset_and_ts(&self) -> Option<(Offset, i64)> {
         let scan_window = self.config.read().unwrap().timestamp_scan_window;
-        let mut best: Option<(i64, Offset)> = None; // (timestamp, offset)
+        // With no limit the scan has nothing to refuse.
+        self.scan_max_timestamp(scan_window, None).ok().flatten()
+    }
+
+    /// [`Self::max_timestamp_offset_and_ts`] under the log's
+    /// [`max_decompressed_record`](crate::LogConfig::max_decompressed_record),
+    /// as Kafka trunk's `UnifiedLog.fetchOffsetByTimestamp(MAX_TIMESTAMP)`
+    /// answers it: Kafka decompresses only the batch that holds the log's
+    /// maximum, up to the record it returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogError::RecordTooLarge`] for a record of that batch above the
+    /// limit.
+    ///
+    /// # Panics
+    ///
+    /// Panics when another thread poisoned the log configuration lock.
+    pub fn max_timestamp_offset_and_ts_checked(&self) -> Result<Option<(Offset, i64)>, LogError> {
+        let (scan_window, limit) = self.timestamp_scan_settings();
+        self.scan_max_timestamp(scan_window, limit)
+    }
+
+    fn scan_max_timestamp(
+        &self,
+        scan_window: ByteSize,
+        limit: Option<ByteSize>,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
+        let mut best: Option<(i64, Offset, &Segment)> = None; // (timestamp, offset, segment)
         let candidates = self.segments.iter().chain(self.active.as_ref());
         for seg in candidates {
-            if let Some((offset, ts)) = seg.offset_of_max_timestamp_with_window(scan_window)
-                && best.is_none_or(|(best_ts, _)| ts > best_ts)
+            // Every segment is measured without the limit: Kafka picks the
+            // winner from the segments' max timestamps alone, and reads only
+            // the winner's batch.
+            if let Some((offset, ts)) =
+                seg.offset_of_max_timestamp_with_window(scan_window, None)?
+                && best.is_none_or(|(best_ts, _, _)| ts > best_ts)
             {
-                best = Some((ts, offset));
+                best = Some((ts, offset, seg));
             }
         }
-        best.map(|(ts, offset)| (offset, ts))
+        if let Some((_, _, winner)) = best
+            && limit.is_some()
+        {
+            winner.offset_of_max_timestamp_with_window(scan_window, limit)?;
+        }
+        Ok(best.map(|(ts, offset, _)| (offset, ts)))
     }
 
     /// Offset of the record carrying the partition's largest timestamp,
@@ -353,5 +440,123 @@ mod tests {
         assert2::assert!(all == vec![Offset(1), Offset(0)]);
         let capped = log.legacy_offsets_before(i64::MAX, 1).unwrap();
         assert2::assert!(capped == vec![Offset(1)]);
+    }
+
+    /// A gzip batch of one record stamped `ts` with a `value_len`-byte value.
+    fn gzip_batch(ts: i64, value_len: usize) -> krabka_protocol::records::RecordBatch {
+        let mut batch = ts_batch(ts);
+        batch.attributes = batch
+            .attributes
+            .with_compression(krabka_compression::CompressionType::Gzip);
+        batch.records[0].value = Some(bytes::Bytes::from(vec![7_u8; value_len]));
+        batch
+    }
+
+    /// What a checked lookup answers: the record it found, or `Err` when it
+    /// refused one as too large.
+    fn answer(
+        result: Result<Option<(Offset, i64)>, LogError>,
+    ) -> Result<Option<(Offset, i64)>, ()> {
+        match result {
+            Ok(found) => Ok(found),
+            Err(LogError::RecordTooLarge { limit: 100, .. }) => Err(()),
+            Err(other) => panic!("unexpected error: {other}"),
+        }
+    }
+
+    /// Kafka trunk's `UnifiedLog.fetchOffsetByTimestamp` holds a compressed
+    /// batch it decompresses to `max.decompressed.message.bytes`. Three
+    /// one-record segments, the outer two oversized: timestamps 100 (oversized),
+    /// 300 (small), 200 (oversized).
+    #[test]
+    fn the_checked_lookups_hold_a_decompressed_batch_to_the_record_limit() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(
+            dir.path(),
+            LogConfig {
+                segment_size: bytes(1), // every batch its own segment
+                max_decompressed_record: Some(bytes(100)),
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        for (ts, value_len) in [(100, 1_000), (300, 10), (200, 1_000)] {
+            log.append(&mut gzip_batch(ts, value_len)).unwrap();
+        }
+        check!(log.segments.len() == 2, "the third batch is the active one");
+
+        for (name, target, expected) in [
+            // The first segment holding a timestamp that reaches the target
+            // is the one Kafka reads, and its match is oversized.
+            ("the match is oversized", 50, Err(())),
+            // Segment 0 tops out at 100, so Kafka skips it undecompressed.
+            (
+                "an older oversized segment is skipped",
+                150,
+                Ok(Some((Offset(1), 300))),
+            ),
+            (
+                "a match in the small batch",
+                300,
+                Ok(Some((Offset(1), 300))),
+            ),
+            ("nothing that late", 301, Ok(None)),
+        ] {
+            check!(
+                answer(log.offset_for_timestamp_checked(target)) == expected,
+                "{name}: {target}"
+            );
+        }
+        // The maximum is in the small segment, and Kafka reads only that one,
+        // whatever the other segments hold.
+        check!(answer(log.max_timestamp_offset_and_ts_checked()) == Ok(Some((Offset(1), 300))));
+
+        // The log's own bookkeeping lookups take no limit.
+        check!(log.offset_for_timestamp(50) == Some((Offset(0), 100)));
+
+        // Once the oversized batch holds the maximum, the lookup refuses it.
+        log.append(&mut gzip_batch(400, 1_000)).unwrap();
+        check!(answer(log.max_timestamp_offset_and_ts_checked()) == Err(()));
+
+        // Raising the limit, as the operator does, answers it again; so does
+        // no limit at all.
+        for limit in [Some(bytes(1_008)), None] {
+            let mut config = log.config_snapshot();
+            config.max_decompressed_record = limit;
+            log.set_config(config);
+            check!(
+                answer(log.offset_for_timestamp_checked(50)) == Ok(Some((Offset(0), 100))),
+                "{limit:?}"
+            );
+            check!(
+                answer(log.max_timestamp_offset_and_ts_checked()) == Ok(Some((Offset(3), 400))),
+                "{limit:?}"
+            );
+        }
+        log.close();
+    }
+
+    /// A limit changes nothing for a partition that keeps its records
+    /// uncompressed: Kafka reads them in place.
+    #[test]
+    fn the_checked_lookups_never_hold_an_uncompressed_batch_to_the_limit() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(
+            dir.path(),
+            LogConfig {
+                max_decompressed_record: Some(bytes(100)),
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        let mut batch = gzip_batch(100, 1_000);
+        batch.attributes = batch
+            .attributes
+            .with_compression(krabka_compression::CompressionType::None);
+        log.append(&mut batch).unwrap();
+
+        check!(answer(log.offset_for_timestamp_checked(100)) == Ok(Some((Offset(0), 100))));
+        check!(answer(log.max_timestamp_offset_and_ts_checked()) == Ok(Some((Offset(0), 100))));
+        log.close();
     }
 }

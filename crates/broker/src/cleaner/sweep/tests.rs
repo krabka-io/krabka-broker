@@ -387,6 +387,92 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
     check!(metrics.log_cleaner_uncleanable_partitions.get() == 0);
 }
 
+/// Kafka trunk's `LogCleaner` turns the `InvalidRecordException` that a
+/// compressed record above `max.decompressed.message.bytes` throws into an
+/// uncleanable partition. It is no `IOException`, so the log dir stays online.
+/// The sweep accounts it under the log layer's own refusal and retries, and
+/// once the limit is raised the pass succeeds.
+#[tokio::test]
+async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompressed_limit() {
+    use bytes::Bytes;
+    use krabka_compression::CompressionType;
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+    let dir = tempfile::tempdir().expect("log root");
+    let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+    let registry = PartitionRegistry::new();
+    let partition =
+        compactable_partition_in_registry(&dir, "orders", NodeId(7), status.clone()).await;
+    registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
+
+    // A gzip record with a 1000-byte value under a key the log already holds,
+    // then a plain one that seals its segment.
+    let with_limit = |limit| {
+        let log = partition.log.lock().expect("partition log lock");
+        let config = krabka_log::LogConfig {
+            max_decompressed_record: limit,
+            ..log.config_snapshot()
+        };
+        log.set_config(config);
+    };
+    with_limit(Some(krabka_units::bytes(100)));
+    // Pseudo-random bytes, so the gzip batch stays wider than a segment and the
+    // append after it seals its segment.
+    let mut state = 12_345_u32;
+    let mut noise = |len: usize| -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                u8::try_from((state >> 16) & 0xff).expect("a byte")
+            })
+            .collect()
+    };
+    for (codec, value_len) in [(CompressionType::Gzip, 1_000), (CompressionType::None, 10)] {
+        let mut batch = RecordBatch {
+            attributes: Attributes::default().with_compression(codec),
+            records: vec![Record {
+                key: Some(Bytes::from_static(b"duplicate-key")),
+                value: Some(Bytes::from(noise(value_len))),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        partition
+            .log
+            .lock()
+            .expect("partition log lock")
+            .append(&mut batch)
+            .expect("append");
+    }
+    // The pass is bounded at the high watermark, so let it cover what was added.
+    partition
+        .set_follower_hw(krabka_log::Offset(i64::MAX))
+        .await;
+    let before = record_count(&partition);
+
+    let metrics = BrokerMetrics::new();
+    let mut uncleanable = UncleanablePartitions::default();
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
+
+    check!(record_count(&partition) == before, "nothing was compacted");
+    check!(failures(&metrics, "orders", CleanerFailureReason::Other) == 1);
+    check!(failures(&metrics, "orders", CleanerFailureReason::Io) == 0);
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 1);
+    check!(
+        !status.is_offline(dir.path()),
+        "a refused record is no disk failure"
+    );
+
+    // The operator raises the limit: the next sweep compacts the partition and
+    // clears the mark.
+    with_limit(None);
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
+
+    check!(record_count(&partition) < before, "the retry compacted");
+    check!(metrics.log_cleaner_runs_total.get() == 1);
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 0);
+}
+
 /// A partition this broker stops hosting is not the cleaner's to clean, so it
 /// leaves the uncleanable set rather than holding the gauge above zero for as
 /// long as the process lives.

@@ -108,6 +108,7 @@ impl ReplicatorSupervisor {
             image,
             &self.log_config,
             self.node_id,
+            self.unstable_api_versions,
         )
         .await;
 
