@@ -94,5 +94,6 @@ pub(super) fn round_over<'a>(
             .expect("a round has a segment")
             .last_offset()
             + 1,
+        max_decompressed_record: None,
     }
 }

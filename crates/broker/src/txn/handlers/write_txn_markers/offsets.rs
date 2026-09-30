@@ -247,7 +247,7 @@ mod tests {
 
     fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
         Record {
-            key: Some(OffsetCommitValue::encode_key(group, topic, partition)),
+            key: Some(OffsetCommitValue::encode_key(group, topic, partition).unwrap()),
             value: Some(
                 OffsetCommitValue {
                     offset: Offset(offset),
@@ -265,7 +265,7 @@ mod tests {
 
     fn tombstone(group: &str, topic: &str, partition: i32) -> Record {
         Record {
-            key: Some(OffsetCommitValue::encode_key(group, topic, partition)),
+            key: Some(OffsetCommitValue::encode_key(group, topic, partition).unwrap()),
             value: None,
             ..Default::default()
         }

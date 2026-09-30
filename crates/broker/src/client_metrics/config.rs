@@ -6,9 +6,13 @@
 //! int in `100..=3_600_000` with default 300000. `match` is a CSV of
 //! `selector=regex`, where the regex is a `java.util.regex.Pattern`.
 
-use std::{collections::BTreeMap, fmt::Write as _};
+mod java_fold;
+
+use std::collections::BTreeMap;
 
 use fancy_regex::Regex;
+
+use self::java_fold::Escape;
 
 pub(crate) const KEY_METRICS: &str = "metrics";
 pub(crate) const KEY_INTERVAL_MS: &str = "interval.ms";
@@ -235,18 +239,20 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
-/// for a group opener Java refuses.
+/// for a group opener Java refuses, a `)` that closes no group, a class range
+/// Java refuses (`[a-\w]`), or a `\N{name}`, which the rewrite cannot read.
 ///
 /// `fancy_regex` accepts Python and Oniguruma forms Java refuses, such as
 /// `(?P<name>x)`, `(?P=name)`, `(?'name'x)` and `(?~x)`, so every `(?` outside
 /// a character class must be one of Java's openers: `(?:`, `(?=`, `(?!`,
 /// `(?>`, `(?<=`, `(?<!`, `(?<name>` with an ASCII-letter-then-alphanumeric
 /// name, or inline flags from `idmsuxU-`. Java's `\Q...\E` quoting, which
-/// `fancy_regex` lacks, becomes escaped literals.
+/// `fancy_regex` lacks, becomes escaped literals before anything else is read,
+/// as Java does it.
 ///
-/// Three things read differently by default, and the rewrite gives the Java
-/// reading, following the flags in force at each place (`(?s)`, `(?d)` and
-/// `(?U)`, alone or scoped to a group):
+/// Four things read differently by default, and the rewrite gives the Java
+/// reading, following the flags in force at each place (`(?s)`, `(?d)`,
+/// `(?U)`, `(?i)`, `(?u)` and `(?x)`, alone or scoped to a group):
 ///
 /// - `\w`, `\d`, `\s`, `\b` and their negations are ASCII, where
 ///   `fancy_regex`'s are Unicode, until `(?U)` (`UNICODE_CHARACTER_CLASS`)
@@ -254,126 +260,355 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 /// - `.` does not match `\n`, `\r`, U+0085, U+2028 or U+2029, where
 ///   `fancy_regex`'s stops at `\n` only, until `(?s)` (`DOTALL`) lets it match
 ///   any, or `(?d)` (`UNIX_LINES`) leaves `\n` the only line terminator.
-///
-/// Case folding is not one of them: see [`java_flag_group`].
+/// - `(?i)` (`CASE_INSENSITIVE`) folds ASCII case only, where `fancy_regex`'s
+///   `i` folds Unicode case, until `(?u)` (`UNICODE_CASE`) or `(?U)` asks for
+///   Unicode folding. While an ASCII fold is in force the rewrite writes both
+///   cases of each ASCII letter itself, and a backreference as `(?i:\1)`. Two
+///   differences are left, which [`java_fold`] describes: `\w`, `\W`,
+///   `\p{Lower}` and `\p{Upper}` inside a class under `(?iu)`, and a non-ASCII
+///   letter that a backreference matches in the other case under `(?i)`.
+/// - Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
+///   comments Java ignores, so that the text of a comment is never read as
+///   pattern.
 pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut out = String::with_capacity(pattern.len());
-    let mut class_depth = 0usize;
-    let mut quoted = false;
-    // The Java flags in force here, and those of the groups around it.
-    let mut scope = Scope::default();
-    let mut outer = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if quoted {
-            if c == '\\' && chars.get(i + 1) == Some(&'E') {
-                quoted = false;
-                i += 1;
-            } else if c.is_whitespace() || c == '#' {
-                // A quoted space or `#` stays literal under Java's `(?x)`;
-                // `regex::escape` leaves them bare, and `fancy_regex`'s
-                // `x` would drop them.
-                let _ = write!(out, "\\x{{{:X}}}", u32::from(c));
-            } else {
-                out.push_str(&regex::escape(c.encode_utf8(&mut [0; 4])));
+    let chars = java_fold::remove_qe_quoting(&pattern.chars().collect::<Vec<char>>());
+    let mut translator = Translator {
+        chars: &chars,
+        out: String::with_capacity(pattern.len()),
+        scope: Scope::default(),
+        outer: Vec::new(),
+        class_depth: 0,
+        class_start: false,
+        at: 0,
+    };
+    while translator.at < chars.len() {
+        translator.step()?;
+    }
+    Some(translator.out)
+}
+
+/// The state of one [`java_to_fancy`] pass over a pattern.
+struct Translator<'a> {
+    chars: &'a [char],
+    out: String,
+    /// The Java flags in force here.
+    scope: Scope,
+    /// The flags of the groups around here, the innermost last.
+    outer: Vec<Scope>,
+    /// How many character classes are open here.
+    class_depth: usize,
+    /// The next char is the first in a class, where a `]` is a member.
+    class_start: bool,
+    /// The index of the next char to read.
+    at: usize,
+}
+
+impl Translator<'_> {
+    fn in_class(&self) -> bool {
+        self.class_depth > 0
+    }
+
+    /// Copies `len` chars as they are.
+    fn copy(&mut self, len: usize) {
+        self.out.extend(&self.chars[self.at..self.at + len]);
+        self.at += len;
+    }
+
+    /// Reads and writes the next token: a char, an escape, a group opener, or a
+    /// run of `(?x)` whitespace and comment.
+    fn step(&mut self) -> Option<()> {
+        let c = self.chars[self.at];
+        let first_in_class = std::mem::take(&mut self.class_start);
+        let ignored = self.ignored_len(self.at);
+        if ignored > 0 {
+            self.class_start = first_in_class;
+            self.at += ignored;
+            return Some(());
+        }
+        match c {
+            '\\' => self.escape()?,
+            '(' if !self.in_class() => self.group()?,
+            // Every `(` that opens a group pushed its flags, so an empty stack
+            // is a `)` with no group: `Unmatched closing ')'` in Java.
+            ')' if !self.in_class() => {
+                self.scope = self.outer.pop()?;
+                self.copy(1);
             }
-        } else if c == '\\' {
-            match chars.get(i + 1) {
-                Some('Q') => quoted = true,
-                Some(&next) => match ascii_shorthand(next, class_depth > 0) {
-                    Some(ascii) if !scope.unicode_classes => out.push_str(ascii),
-                    _ => {
-                        out.push(c);
-                        out.push(next);
-                    }
-                },
-                None => out.push(c),
+            '[' => self.open_class(),
+            // First in a class, a `]` is a member, and may start a range.
+            ']' if self.in_class() && !first_in_class => {
+                self.class_depth -= 1;
+                self.out.push(']');
+                self.at += 1;
             }
-            i += 1;
+            '.' if !self.in_class() && !self.scope.dot.dotall && !self.scope.dot.unix_lines => {
+                self.out.push_str(JAVA_DOT);
+                self.at += 1;
+            }
+            _ => self.atom(u32::from(c), 1)?,
+        }
+        Some(())
+    }
+
+    /// The chars of `(?x)` whitespace and comment at `at`: none unless the
+    /// `x` flag is on.
+    fn ignored_len(&self, at: usize) -> usize {
+        if self.scope.comments {
+            java_fold::ignorable_len(&self.chars[at..], self.scope.dot.unix_lines)
         } else {
-            if c == '[' {
-                class_depth += 1;
-            } else if c == ']' && class_depth > 0 {
-                class_depth -= 1;
-            } else if c == '(' && class_depth == 0 && chars.get(i + 1) == Some(&'?') {
-                let rest = &chars[i + 2..];
-                let ok = match rest.first() {
-                    Some(':' | '=' | '!' | '>') => true,
-                    Some('<') => match rest.get(1) {
-                        Some('=' | '!') => true,
-                        Some(first) if first.is_ascii_alphabetic() => rest[2..]
-                            .iter()
-                            .find(|c| !c.is_ascii_alphanumeric())
-                            .is_some_and(|&end| end == '>'),
-                        _ => false,
-                    },
-                    Some(_) => {
-                        let group = java_flag_group(rest)?;
-                        let len = group.len;
-                        // Java refuses `(?i)*` as a dangling quantifier;
-                        // an emptied group must not hand it to the atom
-                        // before it.
-                        if group.translation.is_empty()
-                            && matches!(rest.get(len), Some('*' | '+' | '?'))
-                        {
-                            return None;
-                        }
-                        // `(?flags:x)` is a group the flags last to the end
-                        // of, `(?flags)` lasts to the end of the group it is
-                        // in.
-                        if rest[len - 1] == ':' {
-                            outer.push(scope);
-                        }
-                        for (flag, on) in group.changes {
-                            scope.set(flag, on);
-                        }
-                        out.push_str(&group.translation);
-                        i += 2 + len;
-                        continue;
-                    }
-                    None => false,
-                };
-                if !ok {
-                    return None;
-                }
-                outer.push(scope);
-            } else if c == '(' && class_depth == 0 {
-                outer.push(scope);
-            } else if c == ')' && class_depth == 0 {
-                scope = outer.pop().unwrap_or(scope);
+            0
+        }
+    }
+
+    /// The escape at `at`.
+    fn escape(&mut self) -> Option<()> {
+        let in_class = self.in_class();
+        let (escape, len) = java_fold::read_escape(self.chars, self.at, in_class);
+        match escape {
+            // `fancy_regex` reads `\N{name}` as `\N` and the text of the name,
+            // and the rewrite has no table of Unicode names to write the char.
+            Escape::Named => return None,
+            // Java compares the text of the group ASCII-insensitively, which
+            // `fancy_regex` can do only for a whole reference. See
+            // [`java_fold`] for what that leaves different.
+            Escape::BackRef if self.scope.ascii_fold() => {
+                self.out.push_str("(?i:");
+                self.copy(len);
+                self.out.push(')');
             }
-            if c == '.' && class_depth == 0 && !scope.dotall && !scope.unix_lines {
-                out.push_str(JAVA_DOT);
-            } else {
-                out.push(c);
+            Escape::Char(code) => self.atom(code, len)?,
+            Escape::Property { name, negated } => {
+                match java_fold::property_class(&name, negated, in_class, self.scope) {
+                    Some(class) => {
+                        self.out.push_str(&class);
+                        self.at += len;
+                    }
+                    None => self.copy(len),
+                }
+            }
+            Escape::BackRef | Escape::Other => {
+                let ascii = self
+                    .chars
+                    .get(self.at + 1)
+                    .and_then(|&next| ascii_shorthand(next, in_class));
+                match ascii {
+                    Some(ascii) if !self.scope.unicode_classes => {
+                        let class = java_fold::unfolded(ascii, in_class, self.scope);
+                        self.out.push_str(&class);
+                        self.at += len;
+                    }
+                    _ => self.copy(len),
+                }
             }
         }
-        i += 1;
+        Some(())
     }
-    Some(out)
+
+    /// One char, `len` chars long in the pattern and standing for `code`, and
+    /// in a class the range it starts. Under an ASCII fold a letter is both of
+    /// its cases, and a range takes the other case of the letters in it. `None`
+    /// for a range that Java refuses.
+    fn atom(&mut self, code: u32, len: usize) -> Option<()> {
+        let (chars, start, in_class) = (self.chars, self.at, self.in_class());
+        let fold = self.scope.ascii_fold();
+        let after = start + len;
+        let range = if in_class {
+            self.range_end(after)
+        } else {
+            RangeEnd::Single
+        };
+        match range {
+            RangeEnd::Illegal => return None,
+            RangeEnd::To {
+                end,
+                code: end_code,
+                len: end_len,
+            } => {
+                let (first, last) = (&chars[start..after], &chars[end..end + end_len]);
+                java_fold::push_member(&mut self.out, first, code, true);
+                self.out.push('-');
+                java_fold::push_member(&mut self.out, last, end_code, true);
+                if fold {
+                    java_fold::push_other_case_ranges(&mut self.out, code, end_code);
+                }
+                self.at = end + end_len;
+            }
+            RangeEnd::Single => {
+                let source = &chars[start..after];
+                if fold {
+                    java_fold::push_folded(&mut self.out, source, code, in_class);
+                } else {
+                    java_fold::push_member(&mut self.out, source, code, in_class);
+                }
+                self.at = after;
+            }
+        }
+        Some(())
+    }
+
+    /// How the class member that ends before `after` goes on. Java reads a `-`
+    /// after a member and before a char that is not `]` or `[` as the range of
+    /// the two. It looks at the char right after the `-`, without skipping
+    /// `(?x)` white space, so `(?x)[a- ]` is a range from `a` to the `]` past
+    /// the space, and an illegal one.
+    fn range_end(&self, after: usize) -> RangeEnd {
+        let dash = after + self.ignored_len(after);
+        if self.chars.get(dash) != Some(&'-') {
+            return RangeEnd::Single;
+        }
+        if matches!(self.chars.get(dash + 1), None | Some(']' | '[')) {
+            return RangeEnd::Single;
+        }
+        let end = dash + 1 + self.ignored_len(dash + 1);
+        match java_fold::read_member(self.chars, end) {
+            Some((code, len)) => RangeEnd::To { end, code, len },
+            // The end is an escape for more than one char, or none Java
+            // reads: `[a-\w]` is `Illegal character range`, and `[a-\p{L}]`
+            // is `Illegal/unsupported escape sequence`.
+            None => RangeEnd::Illegal,
+        }
+    }
+
+    /// A `[`, which opens a class, or a class in a class.
+    fn open_class(&mut self) {
+        self.class_depth += 1;
+        self.class_start = true;
+        self.copy(1);
+        if self.chars.get(self.at) == Some(&'^') {
+            self.copy(1);
+        }
+    }
+
+    /// A `(`: a group, a lookaround, or inline flags.
+    fn group(&mut self) -> Option<()> {
+        let chars = self.chars;
+        if chars.get(self.at + 1) != Some(&'?') {
+            self.outer.push(self.scope);
+            self.copy(1);
+            return Some(());
+        }
+        let rest = &chars[self.at + 2..];
+        let opener = match rest.first() {
+            Some(':' | '=' | '!' | '>') => 3,
+            Some('<') => match rest.get(1) {
+                Some('=' | '!') => 4,
+                Some(first) if first.is_ascii_alphabetic() => {
+                    let name = rest[2..].iter().position(|c| !c.is_ascii_alphanumeric())?;
+                    if rest[2 + name] != '>' {
+                        return None;
+                    }
+                    name + 5
+                }
+                _ => return None,
+            },
+            Some(_) => return self.flag_group(rest),
+            None => return None,
+        };
+        self.outer.push(self.scope);
+        self.copy(opener);
+        Some(())
+    }
+
+    /// Inline flags, `rest` starting just after their `(?`.
+    fn flag_group(&mut self, rest: &[char]) -> Option<()> {
+        let group = java_flag_group(rest)?;
+        let fancy_ignore_case = self.scope.fancy_ignore_case();
+        // `(?flags:x)` is a group the flags last to the end of, `(?flags)`
+        // lasts to the end of the group it is in.
+        if group.scoped {
+            self.outer.push(self.scope);
+        }
+        for &(flag, on) in &group.changes {
+            self.scope.set(flag, on);
+        }
+        let ignore_case = match (fancy_ignore_case, self.scope.fancy_ignore_case()) {
+            (false, true) => Some(true),
+            (true, false) => Some(false),
+            _ => None,
+        };
+        let translation = group.translation(ignore_case);
+        // Java refuses `(?i)*` as a dangling quantifier; an emptied group must
+        // not hand it to the atom before it.
+        if translation.is_empty() && matches!(rest.get(group.len), Some('*' | '+' | '?')) {
+            return None;
+        }
+        self.out.push_str(&translation);
+        self.at += 2 + group.len;
+        Some(())
+    }
+}
+
+/// What a `-` after a class member makes of the member, as
+/// [`Translator::range_end`] reads it.
+enum RangeEnd {
+    /// No range: there is no `-`, or it is a member of its own.
+    Single,
+    /// A range that ends with the char of `len` chars at `end`, which stands
+    /// for `code`.
+    To { end: usize, code: u32, len: usize },
+    /// A range Java refuses.
+    Illegal,
 }
 
 /// The Java flags that change what [`java_to_fancy`] writes for a construct.
 #[derive(Debug, Clone, Copy, Default)]
 struct Scope {
+    /// `s` and `d`: what `.` matches.
+    dot: Dot,
+    /// `U` (`UNICODE_CHARACTER_CLASS`): `\w`, `\d`, `\s` and `\b` are Unicode.
+    unicode_classes: bool,
+    /// `i` and `u`: how letters match.
+    case: Case,
+    /// `x` (`COMMENTS`): whitespace and `#` comments are ignored.
+    comments: bool,
+}
+
+/// The [`Scope`] flags for `.` and the line terminators.
+#[derive(Debug, Clone, Copy, Default)]
+struct Dot {
     /// `s` (`DOTALL`): `.` matches a line terminator.
     dotall: bool,
     /// `d` (`UNIX_LINES`): `\n` is the only line terminator.
     unix_lines: bool,
-    /// `U` (`UNICODE_CHARACTER_CLASS`): `\w`, `\d`, `\s` and `\b` are Unicode.
-    unicode_classes: bool,
+}
+
+/// The [`Scope`] flags for the case of letters.
+#[derive(Debug, Clone, Copy, Default)]
+struct Case {
+    /// `i` (`CASE_INSENSITIVE`): letters match in both cases.
+    ignore: bool,
+    /// `u` (`UNICODE_CASE`), which `U` turns on too: `i` folds Unicode case,
+    /// and not only ASCII.
+    unicode: bool,
 }
 
 impl Scope {
     fn set(&mut self, flag: char, on: bool) {
         match flag {
-            's' => self.dotall = on,
-            'd' => self.unix_lines = on,
-            'U' => self.unicode_classes = on,
+            's' => self.dot.dotall = on,
+            'd' => self.dot.unix_lines = on,
+            'i' => self.case.ignore = on,
+            'u' => self.case.unicode = on,
+            'x' => self.comments = on,
+            // As in `Pattern.addFlag` and `Pattern.subFlag`, `U` takes
+            // `UNICODE_CASE` with it, in both directions.
+            'U' => {
+                self.unicode_classes = on;
+                self.case.unicode = on;
+            }
             _ => {}
         }
+    }
+
+    /// `i` without `u`: Java folds ASCII case only, which `fancy_regex` cannot
+    /// do, so the rewrite writes both cases and leaves the fancy `i` off.
+    fn ascii_fold(self) -> bool {
+        self.case.ignore && !self.case.unicode
+    }
+
+    /// `i` with `u`: Java folds Unicode case, as the fancy `i` does.
+    fn fancy_ignore_case(self) -> bool {
+        self.case.ignore && self.case.unicode
     }
 }
 
@@ -408,28 +643,26 @@ fn ascii_shorthand(escape: char, in_class: bool) -> Option<&'static str> {
 }
 
 /// Translate a Java inline flag group, `rest` starting just after its `(?`,
-/// into `fancy_regex` syntax. Returns the translation, the chars consumed
-/// through the closing `)` or `:`, and the flags [`Scope`] follows; or `None`
-/// where `Pattern.compile` answers "Unknown inline modifier".
+/// into the flags that `fancy_regex` shares and the flags [`Scope`] follows.
+/// Returns `None` where `Pattern.compile` answers "Unknown inline modifier".
 ///
 /// Java's `Pattern.addFlag` takes `idmsuxcU`, then optionally one `-` and
 /// the same letters to clear, then `)` or `:`; an empty group such as `(?)`
 /// or `(?-:x)` is valid. `fancy_regex` refuses empty groups and gives `U` a
 /// different meaning, so only the flags it shares keep their letter:
 ///
-/// - `i`, `m`, `s` and `x` (`CASE_INSENSITIVE`, `MULTILINE`, `DOTALL`,
-///   `COMMENTS`) pass through. `fancy_regex`'s `i` folds Unicode case, which
-///   is Java's `i` with `u`. Java's `i` alone folds ASCII only, and
-///   `fancy_regex` cannot turn Unicode folding off, so `(?i)` without `u`
-///   still matches `É` for `é`, where Java does not.
+/// - `m`, `s` and `x` (`MULTILINE`, `DOTALL`, `COMMENTS`) pass through, and
+///   [`Scope`] follows `s` and `x`.
+/// - `i` (`CASE_INSENSITIVE`) and `u` (`UNICODE_CASE`) are read by
+///   [`Scope`]: `fancy_regex`'s `i` folds Unicode case, which is Java's `i`
+///   with `u` and not Java's `i` alone, so [`Translator`] turns it on only
+///   where both are on. See [`java_fold`].
 /// - `d` (`UNIX_LINES`) is dropped from the output, and read by
 ///   [`java_to_fancy`] to translate `.`.
-/// - `u` (`UNICODE_CASE`) is dropped: its effect, Unicode folding under `i`,
-///   is how `fancy_regex`'s `i` always folds.
 /// - `U` (`UNICODE_CHARACTER_CLASS`) is dropped from the output, and read by
 ///   [`java_to_fancy`] to keep `\w`, `\d`, `\s` and `\b` Unicode where it
-///   otherwise makes them ASCII. Passing it through would swap greediness in
-///   `fancy_regex`.
+///   otherwise makes them ASCII, and to fold Unicode case, which Java's `U`
+///   turns on. Passing it through would swap greediness in `fancy_regex`.
 /// - `c` (`CANON_EQ`) is dropped: canonical-equivalence matching has no
 ///   `fancy_regex` form, and it changes nothing for text already in one
 ///   normalization form.
@@ -440,30 +673,23 @@ fn java_flag_group(rest: &[char]) -> Option<FlagGroup> {
     let mut clearing = false;
     for (n, &c) in rest.iter().enumerate() {
         match c {
-            'i' | 'm' | 's' | 'x' => {
+            'm' | 's' | 'x' => {
                 if clearing {
                     off.push(c);
                 } else {
                     on.push(c);
                 }
-                if c == 's' {
-                    changes.push((c, !clearing));
-                }
+                changes.push((c, !clearing));
             }
-            'd' | 'U' => changes.push((c, !clearing)),
-            'u' | 'c' => {}
+            'i' | 'u' | 'd' | 'U' => changes.push((c, !clearing)),
+            'c' => {}
             '-' if !clearing => clearing = true,
             ')' | ':' => {
-                let scoped = c == ':';
-                let flags = match (on.is_empty() && off.is_empty(), scoped) {
-                    (true, false) => String::new(),
-                    (true, true) => "(?:".to_string(),
-                    (false, _) if off.is_empty() => format!("(?{on}{c}"),
-                    (false, _) => format!("(?{on}-{off}{c}"),
-                };
                 return Some(FlagGroup {
-                    translation: flags,
+                    on,
+                    off,
                     len: n + 1,
+                    scoped: c == ':',
                     changes,
                 });
             }
@@ -475,13 +701,40 @@ fn java_flag_group(rest: &[char]) -> Option<FlagGroup> {
 
 /// A Java inline flag group, as [`java_flag_group`] reads it.
 struct FlagGroup {
-    /// The `fancy_regex` text for it, empty for a `(?flags)` group whose flags
-    /// `fancy_regex` has no letter for.
-    translation: String,
+    /// The flags `fancy_regex` shares that it turns on.
+    on: String,
+    /// The flags `fancy_regex` shares that it turns off.
+    off: String,
     /// The chars of the group after its `(?`, through the closing `)` or `:`.
     len: usize,
-    /// The `s`, `d` and `U` flags it sets (`true`) or clears (`false`).
+    /// Whether it ends in `:`, a group that the flags last to the end of.
+    scoped: bool,
+    /// The flags [`Scope`] follows that it sets (`true`) or clears (`false`),
+    /// in the order Java applies them.
     changes: Vec<(char, bool)>,
+}
+
+impl FlagGroup {
+    /// The `fancy_regex` text for the group. `ignore_case` turns the fancy `i`
+    /// on (`Some(true)`) or off (`Some(false)`) as well, when the flags that
+    /// [`Scope`] follows changed what it must be. It is empty for a `(?flags)`
+    /// group that has no flag of `fancy_regex`'s to write, which
+    /// `fancy_regex` refuses.
+    fn translation(&self, ignore_case: Option<bool>) -> String {
+        let (mut on, mut off) = (self.on.clone(), self.off.clone());
+        match ignore_case {
+            Some(true) => on.push('i'),
+            Some(false) => off.push('i'),
+            None => {}
+        }
+        let end = if self.scoped { ':' } else { ')' };
+        match (on.is_empty() && off.is_empty(), self.scoped) {
+            (true, false) => String::new(),
+            (true, true) => "(?:".to_string(),
+            (false, _) if off.is_empty() => format!("(?{on}{end}"),
+            (false, _) => format!("(?{on}-{off}{end}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -555,6 +808,8 @@ mod tests {
             // Kafka splits on every `=`, so a lookahead `(?=` can never pass.
             ("match", "client_id=a(?=b)", illegal("client_id=a(?=b)")),
             ("match", "client_id=(a)\\1", Ok(())),
+            ("match", "client_id=(?i)(a)\\1", Ok(())),
+            ("match", "client_id=(?iu)(a)\\1", Ok(())),
             ("match", "client_id=a==", Ok(())),
             ("match", "client_foo=x", illegal("client_foo=x")),
             ("match", "client_id", illegal("client_id")),
@@ -571,6 +826,15 @@ mod tests {
             ("match", "client_id=(?<1n>x)", illegal("client_id=(?<1n>x)")),
             ("match", "client_id=[(?P<n>]", Ok(())),
             ("match", "client_id=\\Q(?P<\\E", Ok(())),
+            // A `)` that closes no group is Java's `Unmatched closing ')'`, and
+            // a range that ends in a shorthand class is `Illegal character
+            // range`; a `)` in a class or an escape is a character.
+            ("match", "client_id=a)|(b", illegal("client_id=a)|(b")),
+            ("match", "client_id=(a))", illegal("client_id=(a))")),
+            ("match", "client_id=[a-\\w]", illegal("client_id=[a-\\w]")),
+            ("match", "client_id=[)]", Ok(())),
+            ("match", "client_id=\\)", Ok(())),
+            ("match", "client_id=[\\w-.]", Ok(())),
         ];
         for (key, value, expected) in cases {
             check!(validate_one(key, value) == expected, "{key}={value:?}");
@@ -654,6 +918,49 @@ mod tests {
             ("(?s)app.1", "app\r1", true),
             ("(?d)app.1", "app\r1", true),
             ("[.]", "\r", false),
+        ];
+        for (pattern, input, expected) in cases {
+            let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();
+            check!(
+                rules[0].pattern.is_match(input).unwrap() == expected,
+                "{pattern:?} on {input:?}"
+            );
+        }
+    }
+
+    /// `(?i)` in a selector folds ASCII case only, as `Pattern.CASE_INSENSITIVE`
+    /// does. Long s (U+017F) and the Kelvin sign (U+212A) match `s` and `k`
+    /// only under `(?u)`, which `Pattern.UNICODE_CASE` sets. Each row is
+    /// `Matcher.matches` on JDK 17.
+    #[test]
+    fn match_patterns_fold_ascii_case_unless_unicode_case_is_on() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("(?i)app-", "APP-", true),
+            ("(?i)service-.*", "SERVICE-1", true),
+            ("(?i)service-.*", "\u{17f}ervice-1", false),
+            ("(?iu)service-.*", "\u{17f}ervice-1", true),
+            ("(?i)k", "\u{212a}", false),
+            ("(?i)[a-c]+", "AbC", true),
+            ("(?i)[^a]", "A", false),
+            ("(?i)\\p{Lower}+", "aBc", true),
+            ("(?i)(?<Id>app)-\\d", "APP-1", true),
+            ("app(?i)-x", "app-X", true),
+            ("app(?i)-x", "APP-X", false),
+            // A quoted member takes part in a range, a `]` first in a class may
+            // start one, `\p{Lower}` and `\w` stay ASCII under `(?iu)`, and a
+            // backreference folds ASCII case.
+            ("(?i)[\\Qa\\E-c]", "B", true),
+            ("(?i)[\\Qa\\E-c]", "X", false),
+            ("(?i)[]-c]", "A", true),
+            ("(?i)[]-c]", "X", false),
+            ("(?iu)\\p{Lower}", "\u{17f}", false),
+            ("(?iu)\\p{Lower}", "A", true),
+            ("(?iu)\\w", "\u{17f}", false),
+            ("(?i)(a)\\1", "aA", true),
+            ("(?i)(a)\\1", "ab", false),
+            ("(?i)(\\d+)-\\1", "12-12", true),
+            ("(?i)(\\d+)-\\1", "12-13", false),
         ];
         for (pattern, input, expected) in cases {
             let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();

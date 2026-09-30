@@ -406,4 +406,64 @@ mod tests {
 
         assert!(p.log_start_offset() == 5);
     }
+
+    /// Kafka trunk's `UnifiedLog.appendAsFollower` skips `LogValidator`, the one
+    /// place an append reads `max.decompressed.message.bytes`, so a follower
+    /// takes the compressed record above the limit that its leader admitted.
+    /// Both writes of a follower's Fetch loop are pinned: an owned batch, which
+    /// is how a control batch arrives, and the verbatim bytes a data batch
+    /// arrives as.
+    #[tokio::test]
+    async fn a_follower_takes_a_compressed_record_above_the_decompressed_limit() {
+        use krabka_ids::{LeaderEpoch, ProducerId};
+        use krabka_protocol::records::{Attributes, Record};
+
+        let (p, _td) = test_partition_with_writer();
+        {
+            let log = p.log.lock().expect("partition log lock");
+            let config = krabka_log::LogConfig {
+                max_decompressed_record: Some(krabka_units::bytes(100)),
+                ..log.config_snapshot()
+            };
+            log.set_config(config);
+        }
+        let oversized = |base_offset| RecordBatch {
+            base_offset,
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            attributes: Attributes::default()
+                .with_compression(krabka_compression::CompressionType::Gzip),
+            records: vec![Record {
+                value: Some(bytes::Bytes::from(vec![7_u8; 1_000])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        p.replicate_batch(oversized(0))
+            .await
+            .expect("the owned batch is taken");
+        assert!(p.log.lock().expect("partition log lock").log_end_offset() == 1);
+
+        let producer = oversized(1);
+        let mut wire = bytes::BytesMut::new();
+        producer.encode(&mut wire).expect("encode the batch");
+        p.replicate_verbatim(
+            krabka_log::VerbatimBatch {
+                bytes: wire.freeze(),
+                last_offset_delta: producer.last_offset_delta,
+                max_timestamp: producer.max_timestamp,
+                leader_epoch: LeaderEpoch(0),
+                producer_id: ProducerId(-1),
+                producer_epoch: -1,
+                base_sequence: -1,
+                is_transactional: false,
+            },
+            Offset(1),
+        )
+        .await
+        .expect("the verbatim batch is taken");
+        assert!(p.log.lock().expect("partition log lock").log_end_offset() == 2);
+    }
 }

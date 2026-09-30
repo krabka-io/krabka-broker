@@ -11,7 +11,7 @@ use krabka_protocol::{
     primitives::{
         array::put_array_len,
         fixed::{get_i8, get_i32, get_i64, put_i8, put_i16, put_i32, put_i64},
-        string_bytes::{get_string_owned, put_string},
+        string_bytes::get_string_owned,
     },
 };
 
@@ -19,6 +19,7 @@ use super::{
     RECORD_VERSION,
     primitives::{decode_vec, expect_end, expect_version},
 };
+use crate::{coordinator::unified::persistence::put_string, error::BrokerError};
 
 /// Whether an injection reached every partition of its frozen target set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,8 +87,11 @@ pub(crate) struct CutValue {
 }
 
 /// Encode a cut.
-#[must_use]
-pub(crate) fn encode_cut(value: &CutValue) -> Vec<u8> {
+///
+/// # Errors
+/// Returns [`BrokerError::Protocol`] when a topic name is longer than 32767
+/// bytes, which the `i16` length cannot carry.
+pub(crate) fn encode_cut(value: &CutValue) -> Result<Vec<u8>, BrokerError> {
     let mut out = Vec::new();
     put_i16(&mut out, RECORD_VERSION);
     put_i64(&mut out, value.triggered_at);
@@ -95,7 +99,7 @@ pub(crate) fn encode_cut(value: &CutValue) -> Vec<u8> {
     put_i8(&mut out, value.status.code());
     put_array_len(&mut out, value.topics.len(), false);
     for topic in &value.topics {
-        put_string(&mut out, &topic.topic);
+        put_string(&mut out, &topic.topic)?;
         put_array_len(&mut out, topic.partitions.len(), false);
         for entry in &topic.partitions {
             put_i32(&mut out, entry.partition.get());
@@ -104,10 +108,10 @@ pub(crate) fn encode_cut(value: &CutValue) -> Vec<u8> {
     }
     put_array_len(&mut out, value.missing.len(), false);
     for entry in &value.missing {
-        put_string(&mut out, &entry.topic);
+        put_string(&mut out, &entry.topic)?;
         put_i32(&mut out, entry.partition.get());
     }
-    out
+    Ok(out)
 }
 
 /// Decode a cut.
@@ -151,14 +155,15 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::barrier::persistence::{
-        RecordKey, decode_key, encode_key, test_support::sample_cut,
+    use crate::{
+        barrier::persistence::{RecordKey, decode_key, encode_key, test_support::sample_cut},
+        coordinator::unified::persistence::MAX_STRING_BYTES,
     };
 
     #[test]
     fn a_cut_round_trips() {
         let value = sample_cut();
-        assert!(decode_cut(&encode_cut(&value)).ok() == Some(value));
+        assert!(decode_cut(&encode_cut(&value).expect("encodes")).ok() == Some(value));
     }
 
     #[test]
@@ -168,7 +173,7 @@ mod tests {
             missing: Vec::new(),
             ..sample_cut()
         };
-        let decoded = decode_cut(&encode_cut(&value)).expect("decodes");
+        let decoded = decode_cut(&encode_cut(&value).expect("encodes")).expect("decodes");
         assert!(decoded == value);
         assert!(decoded.missing.is_empty());
     }
@@ -181,12 +186,12 @@ mod tests {
             status: CutStatus::Complete,
             ..sample_cut()
         };
-        assert!(decode_cut(&encode_cut(&value)).ok() == Some(value));
+        assert!(decode_cut(&encode_cut(&value).expect("encodes")).ok() == Some(value));
     }
 
     #[test]
     fn a_cut_rejects_an_unknown_status() {
-        let mut bytes = encode_cut(&sample_cut());
+        let mut bytes = encode_cut(&sample_cut()).expect("encodes");
         // version i16, triggered_at i64, completed_at i64, then the status i8.
         bytes[18] = 9;
         assert!(decode_cut(&bytes).is_err());
@@ -194,7 +199,7 @@ mod tests {
 
     #[test]
     fn every_decoder_rejects_a_truncated_record() {
-        let cut = encode_cut(&sample_cut());
+        let cut = encode_cut(&sample_cut()).expect("encodes");
         for len in 0..cut.len() {
             assert!(decode_cut(&cut[..len]).is_err(), "length {len}");
         }
@@ -249,14 +254,50 @@ mod tests {
     fn the_golden_cut_key_decodes_and_re_encodes_byte_for_byte() {
         let expected = RecordKey::cut("orders-cut", 7);
         assert!(decode_key(GOLDEN_CUT_KEY).ok() == Some(expected.clone()));
-        assert!(encode_key(&expected) == GOLDEN_CUT_KEY);
+        assert!(encode_key(&expected).ok().as_deref() == Some(GOLDEN_CUT_KEY));
     }
 
     #[test]
     fn the_golden_cut_value_decodes_and_re_encodes_byte_for_byte() {
         let expected = golden_cut();
         assert!(decode_cut(GOLDEN_CUT_VALUE).ok() == Some(expected.clone()));
-        assert!(encode_cut(&expected) == GOLDEN_CUT_VALUE);
+        assert!(encode_cut(&expected).ok().as_deref() == Some(GOLDEN_CUT_VALUE));
+    }
+
+    /// A topic name of a cut is a string with an `i16` length, both where the
+    /// cut offsets it and where it lists it as missing. The encoder writes one
+    /// of 32767 bytes and refuses a longer one with an error.
+    #[test]
+    fn a_topic_name_of_32767_bytes_encodes_and_one_of_32768_is_refused() {
+        for (length, encodes) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let topic = "t".repeat(length);
+            let offset_row = CutValue {
+                topics: vec![TopicOffsets {
+                    topic: topic.clone(),
+                    partitions: Vec::new(),
+                }],
+                missing: Vec::new(),
+                ..sample_cut()
+            };
+            let missing_row = CutValue {
+                topics: Vec::new(),
+                missing: vec![MissingPartition {
+                    topic,
+                    partition: PartitionIndex(2),
+                }],
+                ..sample_cut()
+            };
+            for (place, value) in [("offsets", offset_row), ("missing", missing_row)] {
+                let encoded = encode_cut(&value);
+                assert!(encoded.is_ok() == encodes, "{place}, {length} bytes");
+                if let Ok(bytes) = encoded {
+                    assert!(
+                        decode_cut(&bytes).ok() == Some(value),
+                        "{place}, {length} bytes"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

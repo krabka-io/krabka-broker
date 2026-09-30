@@ -286,6 +286,8 @@ pub struct RuntimeArgs {
     pub transaction_state_min_isr: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub transaction_max_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_TRANSACTION_PARTITION_VERIFICATION_ENABLE", action = clap::ArgAction::Set)]
+    pub transaction_partition_verification_enable: Option<bool>,
 
     #[arg(long, env = "KRABKA_SHARE_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_group_session_timeout: Option<Time>,

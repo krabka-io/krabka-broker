@@ -80,6 +80,21 @@ pub enum RemoteStorageError {
         reason: String,
     },
 
+    /// A scan of a remote segment's records met a compressed batch with a record
+    /// whose body is larger than the caller's limit. This is Kafka trunk's
+    /// `max.decompressed.message.bytes`, which `DefaultRecord.readFrom` enforces
+    /// with an `InvalidRecordException`.
+    ///
+    /// The segment is fine and the answer is known: the lookup fails, and it
+    /// fails the same way on every retry until the limit is raised.
+    #[error("Invalid record size: {size} exceeds the configured maximum record size of {limit}.")]
+    RecordTooLarge {
+        /// The record's body size in bytes, Kafka's `sizeOfBodyInBytes`.
+        size: usize,
+        /// The configured maximum.
+        limit: usize,
+    },
+
     /// The write-once (WORM) archive layer refused or could not complete the
     /// operation.
     #[error("write-once archive: {0}")]

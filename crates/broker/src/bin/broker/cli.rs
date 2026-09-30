@@ -26,6 +26,13 @@ pub struct Args {
     #[arg(long, default_value = "127.0.0.1:9092", conflicts_with = "config_file")]
     pub listen_addr: SocketAddr,
 
+    /// TCP address of the controller listener, which serves the raft quorum
+    /// and the controller API. It must equal the endpoint that `krabka format`
+    /// recorded for this node in the voter set. Default: `--listen-addr` with
+    /// port 9093, or `0.0.0.0:9093` under `--config-file`.
+    #[arg(long, env = "KRABKA_CONTROLLER_LISTEN_ADDR")]
+    pub controller_listen_addr: Option<SocketAddr>,
+
     /// `host:port` to advertise to clients. Default: `listen_addr`.
     /// The operator sets it with the env var `KRABKA_ADVERTISED_LISTENER`.
     /// Mutually exclusive with `--config-file`.

@@ -131,6 +131,7 @@ impl RuntimeArgs {
             producer_id_expiration,
             producer_id_expiration_scan_interval,
             transaction_max_timeout,
+            transaction_partition_verification_enable,
             offsets_retention,
             offsets_retention_check_interval,
             audit_tail_read_max,

@@ -5,10 +5,13 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use krabka_ids::Offset;
+use krabka_units::prelude::ByteSize;
 use tracing::instrument;
 
 use super::{CleanedTransactionMetadata, batch_reader::read_all_batches, should_index_key};
-use crate::{error::LogError, segment::Segment, txn_index::AbortedTxn};
+use crate::{
+    error::LogError, record_limit::check_records_read, segment::Segment, txn_index::AbortedTxn,
+};
 
 /// Build a map of `key → latest absolute offset` across the given sealed
 /// segments in input order.
@@ -22,6 +25,12 @@ use crate::{error::LogError, segment::Segment, txn_index::AbortedTxn};
 /// must not shadow the committed record that came before it. `aborted` lists
 /// the aborted transactions that overlap the segments, whether their abort
 /// marker sits inside the segments or after them.
+///
+/// `limit` is Kafka trunk's `max.decompressed.message.bytes`. The map reads
+/// every record of every batch it indexes, as `buildOffsetMapForSegment`
+/// iterates each one, so a compressed batch with a record above the limit fails
+/// the pass with [`LogError::RecordTooLarge`]. The batch of an aborted
+/// transaction is not iterated, and is not checked.
 #[instrument(
     level = "debug",
     skip_all,
@@ -31,6 +40,7 @@ use crate::{error::LogError, segment::Segment, txn_index::AbortedTxn};
 pub fn build_offset_map(
     segments: &[&Segment],
     aborted: Vec<AbortedTxn>,
+    limit: Option<ByteSize>,
 ) -> Result<HashMap<Bytes, Offset>, LogError> {
     // Keyed by `Bytes` (cheap refcounted clone of the record key) rather
     // than `Vec<u8>` to avoid a heap copy of every key. Zero-length keys
@@ -51,6 +61,7 @@ pub fn build_offset_map(
             if txn_meta.on_batch_read(&batch) {
                 continue;
             }
+            check_records_read(&batch, batch.records.len(), limit)?;
             for record in &batch.records {
                 if !should_index_key(record.key.as_deref(), false) {
                     continue;
@@ -93,7 +104,7 @@ mod tests {
         data.records[0].offset_delta = 0;
         let seg = write_sealed_batches(dir.path(), &[control_batch(0, 1000, 1 /* COMMIT */), data]);
         let segment_refs: Vec<&Segment> = vec![&seg];
-        let map = build_offset_map(&segment_refs, vec![]).unwrap();
+        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
@@ -110,7 +121,7 @@ mod tests {
             ],
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment];
-        let map = build_offset_map(&segment_refs, vec![]).unwrap();
+        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
         assert2::assert!(
             map == maplit::hashmap! {
             Bytes::from_static(b"k1") => Offset(2),
@@ -131,7 +142,7 @@ mod tests {
             ],
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment];
-        let map = build_offset_map(&segment_refs, vec![]).unwrap();
+        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
@@ -149,7 +160,7 @@ mod tests {
             vec![make_record(0, Some(b"k1"), Some(b"v2"))],
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment, &second_segment];
-        let map = build_offset_map(&segment_refs, vec![]).unwrap();
+        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(10)});
     }
 
@@ -187,7 +198,7 @@ mod tests {
             last_stable_offset: Offset(13),
         }];
         let segment_refs: Vec<&Segment> = vec![&seg];
-        let map = build_offset_map(&segment_refs, aborted).unwrap();
+        let map = build_offset_map(&segment_refs, aborted, None).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k") => Offset(5)});
     }
 }

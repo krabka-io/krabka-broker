@@ -6,13 +6,16 @@
 
 use krabka_protocol::records::RecordBatch;
 
-use crate::coordinator::unified::{
-    GroupCoordinator, OffsetRecordBatchBuilder,
-    persistence_next_gen::{
-        CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
-        RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-        encode_key,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, OffsetRecordBatchBuilder,
+        persistence_next_gen::{
+            CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
+            RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+            encode_key,
+        },
     },
+    error::BrokerError,
 };
 
 #[derive(Debug, Default)]
@@ -53,14 +56,21 @@ impl PendingRecords {
             && self.classic_group_metadata.is_none()
     }
 
-    pub fn to_batch(&self, group_id: &str, now_ms: i64) -> RecordBatch {
+    /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when a string of a record key or of the
+    /// classic group value is longer than 32767 bytes, which a non-flexible
+    /// field cannot carry.
+    pub fn to_batch(&self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
         let mut batch = OffsetRecordBatchBuilder::default();
 
         if let Some(v) = self.group_metadata {
             batch.push(
                 encode_key(&NextGenKey::GroupMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 Some(v.encode()),
             );
         }
@@ -69,7 +79,7 @@ impl PendingRecords {
                 encode_key(&NextGenKey::RegularExpression {
                     group_id: group_id.into(),
                     regex: regex.clone(),
-                }),
+                })?,
                 v.as_ref().map(RegularExpressionValue::encode),
             );
         }
@@ -78,7 +88,7 @@ impl PendingRecords {
                 encode_key(&NextGenKey::MemberMetadata {
                     group_id: group_id.into(),
                     member_id: member_id.clone(),
-                }),
+                })?,
                 v.as_ref().map(MemberMetadataValue::encode),
             );
         }
@@ -86,7 +96,7 @@ impl PendingRecords {
             batch.push(
                 encode_key(&NextGenKey::TargetAssignmentMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 Some(v.encode()),
             );
         }
@@ -95,7 +105,7 @@ impl PendingRecords {
                 encode_key(&NextGenKey::TargetAssignmentMember {
                     group_id: group_id.into(),
                     member_id: member_id.clone(),
-                }),
+                })?,
                 v.as_ref().map(TargetAssignmentMemberValue::encode),
             );
         }
@@ -104,7 +114,7 @@ impl PendingRecords {
                 encode_key(&NextGenKey::CurrentMemberAssignment {
                     group_id: group_id.into(),
                     member_id: member_id.clone(),
-                }),
+                })?,
                 v.as_ref().map(CurrentMemberAssignmentValue::encode),
             );
         }
@@ -114,7 +124,7 @@ impl PendingRecords {
                     &crate::coordinator::unified::persistence::Key::GroupMetadata {
                         group_id: group_id.into(),
                     },
-                ),
+                )?,
                 None,
             );
         }
@@ -122,7 +132,7 @@ impl PendingRecords {
             batch.push(
                 encode_key(&NextGenKey::GroupMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 None,
             );
         }
@@ -130,7 +140,7 @@ impl PendingRecords {
             batch.push(
                 encode_key(&NextGenKey::TargetAssignmentMetadata {
                     group_id: group_id.into(),
-                }),
+                })?,
                 None,
             );
         }
@@ -140,12 +150,12 @@ impl PendingRecords {
                     &crate::coordinator::unified::persistence::Key::GroupMetadata {
                         group_id: group_id.into(),
                     },
-                ),
-                Some(v.encode_value()),
+                )?,
+                Some(v.encode_value()?),
             );
         }
 
-        batch.finish(now_ms)
+        Ok(batch.finish(now_ms))
     }
 
     /// Apply exactly this durable next-gen record delta to the respawn cache.
@@ -216,7 +226,7 @@ mod tests {
     #[test]
     fn pending_records_empty_yields_empty_batch() {
         let p = PendingRecords::default();
-        let batch = p.to_batch("g", 0);
+        let batch = p.to_batch("g", 0).unwrap();
         assert!(batch.records.is_empty());
     }
 
@@ -243,7 +253,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let batch = p.to_batch("g", 0);
+        let batch = p.to_batch("g", 0).unwrap();
         assert!(batch.records.len() == 3);
         let deltas: Vec<i32> = batch.records.iter().map(|r| r.offset_delta).collect();
         assert!(deltas == vec![0, 1, 2]);
@@ -256,9 +266,111 @@ mod tests {
             member_metadata: vec![("m1".into(), None)],
             ..Default::default()
         };
-        let batch = p.to_batch("g", 0);
+        let batch = p.to_batch("g", 0).unwrap();
         assert!(batch.records.len() == 1);
         assert!(batch.records[0].value.is_none());
+    }
+
+    /// A delta with one record of every kind that writes a string with an
+    /// `INT16` length: the keys of the next-gen records, the classic group
+    /// value, and the classic group tombstone.
+    fn every_record() -> PendingRecords {
+        use crate::coordinator::unified::persistence::{
+            GroupMetadataValue as ClassicGroupValue, MemberMetadata,
+        };
+
+        PendingRecords {
+            group_metadata: Some(GroupMetadataValue { epoch: 1 }),
+            resolved_regexes: vec![("r".into(), None)],
+            member_metadata: vec![("m".into(), None)],
+            target_metadata: Some(TargetAssignmentMetadataValue {
+                assignment_epoch: 1,
+            }),
+            target_per_member: vec![("m".into(), None)],
+            current_per_member: vec![("m".into(), None)],
+            classic_group_metadata_tombstone: true,
+            next_gen_group_metadata_tombstone: true,
+            next_gen_target_metadata_tombstone: true,
+            classic_group_metadata: Some(ClassicGroupValue {
+                protocol_type: "consumer".into(),
+                generation: 1,
+                protocol_name: Some("range".into()),
+                leader: Some("m".into()),
+                current_state_timestamp_ms: 0,
+                members: vec![MemberMetadata {
+                    member_id: "m".into(),
+                    group_instance_id: Some("i".into()),
+                    client_id: "c".into(),
+                    client_host: "h".into(),
+                    rebalance_timeout_ms: 1,
+                    session_timeout_ms: 1,
+                    subscription: bytes::Bytes::new(),
+                    assignment: bytes::Bytes::new(),
+                }],
+            }),
+        }
+    }
+
+    /// Every string that a group request or the broker supplies to these
+    /// records is written with an `INT16` length. A string of 32767 bytes
+    /// encodes, and one of 32768 bytes makes the whole batch an error, not a
+    /// panic in the actor that writes it.
+    #[test]
+    fn a_record_string_over_32767_bytes_does_not_encode() {
+        type Field = (&'static str, fn(&mut PendingRecords, String));
+        let fields: [Field; 11] = [
+            ("member id of a member record", |p, s| {
+                p.member_metadata[0].0 = s;
+            }),
+            ("member id of a target assignment", |p, s| {
+                p.target_per_member[0].0 = s;
+            }),
+            ("member id of a current assignment", |p, s| {
+                p.current_per_member[0].0 = s;
+            }),
+            ("regular expression", |p, s| p.resolved_regexes[0].0 = s),
+            ("classic protocol type", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().protocol_type = s;
+            }),
+            ("classic protocol name", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().protocol_name = Some(s);
+            }),
+            ("classic leader", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().leader = Some(s);
+            }),
+            ("classic member id", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().members[0].member_id = s;
+            }),
+            ("classic instance id", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().members[0].group_instance_id = Some(s);
+            }),
+            ("classic client id", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().members[0].client_id = s;
+            }),
+            ("classic client host", |p, s| {
+                p.classic_group_metadata.as_mut().unwrap().members[0].client_host = s;
+            }),
+        ];
+        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+        for (name, set) in fields {
+            for (length, encodes) in [(limit, true), (limit + 1, false)] {
+                let mut pending = every_record();
+                set(&mut pending, "a".repeat(length));
+
+                let outcome = pending.to_batch("g", 0);
+
+                assert!(outcome.is_ok() == encodes, "{name} of {length} bytes");
+                assert!(
+                    encodes || matches!(outcome, Err(BrokerError::Protocol(_))),
+                    "{name} of {length} bytes is a protocol error"
+                );
+            }
+        }
+        for (length, encodes) in [(limit, true), (limit + 1, false)] {
+            let outcome = every_record().to_batch(&"g".repeat(length), 0);
+
+            assert!(outcome.is_ok() == encodes, "group id of {length} bytes");
+        }
     }
 
     #[test]
@@ -378,7 +490,7 @@ mod tests {
             resolved_regexes: vec![("t.*".to_string(), Some(value.clone()))],
             ..Default::default()
         };
-        let batch = write.to_batch("g", 0);
+        let batch = write.to_batch("g", 0).unwrap();
         assert!(batch.records.len() == 1);
         assert!(
             batch.records[0].key.as_deref()
@@ -386,7 +498,8 @@ mod tests {
                     &p::encode_key(&p::NextGenKey::RegularExpression {
                         group_id: "g".into(),
                         regex: "t.*".into(),
-                    })[..]
+                    })
+                    .unwrap()[..]
                 )
         );
         assert!(batch.records[0].value.as_deref() == Some(&value.encode()[..]));
@@ -399,7 +512,11 @@ mod tests {
             resolved_regexes: vec![("t.*".to_string(), None)],
             ..Default::default()
         };
-        assert!(tombstone.to_batch("g", 0).records[0].value.is_none());
+        assert!(
+            tombstone.to_batch("g", 0).unwrap().records[0]
+                .value
+                .is_none()
+        );
         tombstone.apply_to_cache(&coordinator, "g");
         assert!(
             coordinator

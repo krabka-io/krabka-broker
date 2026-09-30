@@ -18,7 +18,10 @@ use super::persistence::{
     encode_partition_metadata_key, encode_target_assignment_member_key,
     encode_target_assignment_metadata_key, encode_topology_key,
 };
-use crate::coordinator::unified::{OffsetRecordBatchBuilder, actor::PendingRecords};
+use crate::{
+    coordinator::unified::{OffsetRecordBatchBuilder, actor::PendingRecords},
+    error::BrokerError,
+};
 
 /// Result of inspecting a `group_id` for classic→streams conversion.
 #[derive(Debug, PartialEq, Eq)]
@@ -46,7 +49,15 @@ pub(crate) enum DowngradeOutcome {
 /// Build the single-record batch that tombstones the classic k2 `GroupMetadata`
 /// for `group_id`. Reuses the consumer-migration `PendingRecords` encoder so the
 /// tombstone key bytes are identical to the upgrade flip's.
-pub(crate) fn classic_group_metadata_tombstone_batch(group_id: &str, now_ms: i64) -> RecordBatch {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `group_id` is longer than 32767
+/// bytes.
+pub(crate) fn classic_group_metadata_tombstone_batch(
+    group_id: &str,
+    now_ms: i64,
+) -> Result<RecordBatch, BrokerError> {
     PendingRecords {
         classic_group_metadata_tombstone: true,
         ..Default::default()
@@ -68,28 +79,33 @@ pub(crate) fn classic_group_metadata_tombstone_batch(group_id: &str, now_ms: i64
 /// through `PendingStreamsRecords`. That type's group-level fields are
 /// `Option<Value>`, present or absent, with no way to express a group-level
 /// null-value tombstone.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `group_id` or a member id is longer
+/// than 32767 bytes.
 pub(crate) fn streams_records_tombstone_batch(
     group_id: &str,
     member_ids: &[String],
     now_ms: i64,
-) -> RecordBatch {
+) -> Result<RecordBatch, BrokerError> {
     let mut keys = vec![
-        encode_group_metadata_key(group_id),
-        encode_topology_key(group_id),
-        encode_partition_metadata_key(group_id),
-        encode_target_assignment_metadata_key(group_id),
+        encode_group_metadata_key(group_id)?,
+        encode_topology_key(group_id)?,
+        encode_partition_metadata_key(group_id)?,
+        encode_target_assignment_metadata_key(group_id)?,
     ];
     for mid in member_ids {
-        keys.push(encode_member_metadata_key(group_id, mid));
-        keys.push(encode_target_assignment_member_key(group_id, mid));
-        keys.push(encode_current_member_assignment_key(group_id, mid));
+        keys.push(encode_member_metadata_key(group_id, mid)?);
+        keys.push(encode_target_assignment_member_key(group_id, mid)?);
+        keys.push(encode_current_member_assignment_key(group_id, mid)?);
     }
 
     let mut batch = OffsetRecordBatchBuilder::default();
     for key in keys {
         batch.push(key, None);
     }
-    batch.finish(now_ms)
+    Ok(batch.finish(now_ms))
 }
 
 #[cfg(test)]
@@ -98,7 +114,7 @@ mod tests {
 
     #[test]
     fn tombstone_batch_has_one_null_value_k2_record() {
-        let batch = classic_group_metadata_tombstone_batch("g", 123);
+        let batch = classic_group_metadata_tombstone_batch("g", 123).unwrap();
         assert2::assert!((batch.records.len()) == (1), "exactly one record");
         let r = &batch.records[0];
         assert2::assert!(r.key.is_some(), "k2 GroupMetadata key present");
@@ -112,7 +128,7 @@ mod tests {
 
     #[test]
     fn streams_tombstone_batch_group_level_only() {
-        let batch = streams_records_tombstone_batch("g", &[], 123);
+        let batch = streams_records_tombstone_batch("g", &[], 123).unwrap();
         // k17 GroupMetadata, k23 Topology, k18 PartitionMetadata, k20
         // TargetAssignmentMetadata.
         assert2::assert!((batch.records.len()) == (4), "four group-level tombstones");
@@ -135,7 +151,7 @@ mod tests {
 
     #[test]
     fn streams_tombstone_batch_includes_per_member_records() {
-        let batch = streams_records_tombstone_batch("g", &["m1".to_string()], 1);
+        let batch = streams_records_tombstone_batch("g", &["m1".to_string()], 1).unwrap();
         // 4 group-level + k19/k21/k22 for m1 = 7.
         assert2::assert!(
             (batch.records.len()) == (7),

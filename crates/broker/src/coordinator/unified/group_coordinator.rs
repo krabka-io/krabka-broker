@@ -228,6 +228,20 @@ impl GroupCoordinator {
         }
     }
 
+    /// Release the `share_group_dlq_*` counters of the share group `group_id`
+    /// that `DeleteGroups` deleted.
+    ///
+    /// Only the delete calls this. A broker that loses the group's offsets
+    /// partition, and so stops coordinating it, still leads share partitions of
+    /// the group and keeps writing their dead-letter records, so the unload
+    /// leaves the counters alone: they would restart from zero on its next
+    /// write.
+    pub(crate) fn forget_share_group_dlq_metrics(&self, group_id: &str) {
+        if let Some(metrics) = self.metrics.get() {
+            metrics.evict_share_group_dlq_series(group_id);
+        }
+    }
+
     /// The metadata offset of the latest image that can change what a
     /// consumer group's regular expressions resolve to, or `-1` before the
     /// image watcher has read one: Kafka's `lastMetadataImageWithNewTopics`.

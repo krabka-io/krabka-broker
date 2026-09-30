@@ -167,13 +167,19 @@ pub(crate) async fn handle(
         topics,
         tombstones,
         to_remove,
-    } = build_response_rows(
+    } = match build_response_rows(
         &req.group_id,
         &req.topics,
         &topic_decisions,
         &subscribed_topics,
         &topic_partition_counts,
-    );
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(group_id = %req.group_id, %error, "offset tombstones are not encodable");
+            return encode(version, &whole_error(codes::UNKNOWN_SERVER_ERROR));
+        }
+    };
 
     if !tombstones.is_empty() {
         let last_offset_delta =

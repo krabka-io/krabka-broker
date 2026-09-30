@@ -50,14 +50,19 @@ pub struct ShareStateKey {
     pub partition: i32,
 }
 
-#[must_use]
-pub fn encode_state_key(k: &ShareStateKey) -> Bytes {
+/// Encodes a [`ShareStateKey`].
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the group id is longer than 32767
+/// bytes, which a non-flexible key string cannot carry.
+pub fn encode_state_key(k: &ShareStateKey) -> Result<Bytes, BrokerError> {
     let mut b = BytesMut::new();
     b.put_i16(k.record_type);
-    put_string(&mut b, &k.group_id);
+    put_string(&mut b, &k.group_id)?;
     b.put_slice(k.topic_id.as_bytes());
     b.put_i32(k.partition);
-    b.freeze()
+    Ok(b.freeze())
 }
 
 /// # Errors
@@ -322,9 +327,32 @@ mod tests {
                 topic_id: Uuid::from_bytes(topic_id),
                 partition,
             };
-            let bytes = encode_state_key(&key);
+            let bytes = encode_state_key(&key).unwrap();
             check!(peek_type(&bytes) == record_type);
             check!(parse_state_key(&bytes).unwrap() == key);
+        }
+    }
+
+    /// The key writes its group id with an `INT16` length: a group id of 32767
+    /// bytes encodes, and one of 32768 bytes is an error, not a panic.
+    #[test]
+    fn a_group_id_over_32767_bytes_does_not_encode() {
+        for (length, encodes) in [(32_767, true), (32_768, false)] {
+            let key = ShareStateKey {
+                record_type: KEY_SHARE_UPDATE,
+                group_id: "g".repeat(length),
+                topic_id: Uuid::from_bytes([7; 16]),
+                partition: 0,
+            };
+
+            let encoded = encode_state_key(&key);
+
+            check!(encoded.is_ok() == encodes, "{length} bytes");
+            if let Ok(bytes) = &encoded {
+                check!(parse_state_key(bytes).unwrap() == key);
+            } else {
+                check!(matches!(encoded, Err(BrokerError::Protocol(_))));
+            }
         }
     }
 
@@ -332,7 +360,7 @@ mod tests {
     fn unknown_key_type_rejected() {
         let mut b = BytesMut::new();
         b.put_i16(99);
-        put_string(&mut b, "g");
+        put_string(&mut b, "g").unwrap();
         b.put_slice(&[0u8; 16]);
         b.put_i32(0);
         assert!(parse_state_key(&b.freeze()).is_err());

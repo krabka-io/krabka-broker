@@ -214,6 +214,45 @@ It matches Kafka 4.3.1 by default and Kafka trunk under the unstable flags.
   (#1223). SASL_SSL listeners no longer map the client certificate, CreateAcls
   and DeleteAcls have Kafka's 10000-ACL bound and message, and hosts are stored
   as text below `metadata.version` 4.4-IV1 (#1240).
+- `(?i)` in a `java.util.regex` pattern folds ASCII case only, as Java's
+  `CASE_INSENSITIVE` does, until `(?u)` or `(?U)` asks for Unicode case. That
+  covers `ssl.principal.mapping.rules`, GSSAPI `auth_to_local` rules and the
+  `match` of a client-metrics subscription, so `(?i)service-` no longer
+  matches `ſervice-` (long s), and `\w` and `\p{Lower}` under `(?iu)` do not
+  match it or the Kelvin sign outside a character class. The translation reads
+  `\Q...\E` before the rest as Java does, so a quoted member can begin or end
+  a class range, a `]` first in a class may start one, and a backslash before
+  `<` or `>` is that character. A backreference under `(?i)` is accepted and
+  folds ASCII case, but it also folds non-ASCII letters, which Java's does not.
+  `\N{name}` is refused (#1248).
+- Under `share.version` 2 the dead-letter records of every pending write to a
+  destination leader go out in as few Produce requests as `max.message.bytes`
+  allows, with one request in flight per leader, as Kafka's
+  `ShareGroupDLQStateManager` sends them. The broker exports
+  `krabka_broker_share_group_dlq_records_total`,
+  `krabka_broker_share_group_dlq_produce_requests_total` and
+  `krabka_broker_share_group_dlq_failed_produce_requests_total` per group. A
+  write that races another creation of the topic goes on once the topic exists,
+  and a copied record that the six headers push over `max.message.bytes` is
+  written with its headers alone (#1227).
+- With `unstable.api.versions.enable`, `max.decompressed.message.bytes` also
+  applies to log compaction (a partition with a batch over the limit stays
+  uncleaned until the limit changes), to by-timestamp ListOffsets (answered
+  `INVALID_RECORD`) and to a share group's by-duration start offset (#1236).
+- A combined broker whose controller refuses a feature level above its range
+  now exits non-zero with the reason, at startup or when the record is applied
+  later, as Kafka halts. The binary has a `--controller-listen-addr` flag (#1243).
+- `transaction.partition.verification.enable` is read from the static
+  configuration too: the `[runtime]` key
+  `transaction_partition_verification_enable`, the flag
+  `--transaction-partition-verification-enable` or the `server.properties`
+  entry. A dynamic per-broker or cluster value wins over it (#1239).
+- A group, member, instance or topic string over 32767 bytes no longer panics a
+  task. A group request that carries one closes the connection, as Kafka's
+  reader does, a broker-generated classic member id over that length answers
+  `UNKNOWN_SERVER_ERROR`, `AlterBarrierGroups` and `WriteBarrierMarkers`
+  answer `INVALID_REQUEST`, and a Fetch topic name that long is a protocol
+  error below v12 (#1248).
 - Quota buckets go into debt, so the throttled overage is not credited back
   (#1212). A shared bucket is re-rated from its own entity (#1213), `ip`
   entities match host names and non-canonical spellings (#1214), a null client

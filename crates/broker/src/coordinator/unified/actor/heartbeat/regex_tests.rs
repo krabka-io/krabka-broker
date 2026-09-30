@@ -370,93 +370,32 @@ fn a_leaving_member_tombstones_the_resolution_only_it_used() {
 
 /// `ConsumerGroupRegularExpressionKey` carries the pattern as a string with an
 /// `i16` length prefix. A pattern of 32767 bytes still fits and its record
-/// encodes, and a longer one is refused with `INVALID_REGULAR_EXPRESSION`
-/// before the heartbeat changes anything, whichever way it arrives: a member
-/// that joins, a member that changes its pattern, and a static member that
-/// takes the place of a released one. The refusal writes no record, not even
-/// the tombstone of the pattern the member drops.
+/// encodes, and a longer one does not: the encoder refuses it rather than
+/// panic. Kafka's request reader closes the connection on such a pattern
+/// before the coordinator sees it, and `decode_group_request` does the same,
+/// so this is the backstop for a pattern that reaches the actor another way.
 #[test]
-fn a_regex_too_long_for_its_record_key_is_refused_before_any_state_change() {
+fn a_regex_over_the_record_key_bound_does_not_encode() {
     let longest = "a".repeat(usize::from(i16::MAX.unsigned_abs()));
     let too_long = format!("{longest}a");
-    let resolver = FixedRegexResolver::new(&[("a.*", &["a1"]), (&longest, &["a1"])]);
+    let resolver = FixedRegexResolver::new(&[(&longest, &["a1"]), (&too_long, &["a1"])]);
     let metadata = metadata(false);
     let regexes = RegexResolution::with(&resolver);
-    let static_request =
-        |member_id: &str, member_epoch: i32, regex: &str| ConsumerGroupHeartbeatRequest {
-            instance_id: Some("i1".into()),
-            ..request(member_id, member_epoch, Some(regex))
-        };
 
-    // The longest pattern joins, and its records encode.
-    let mut state = GroupState::new("g");
-    let joined = heartbeat(
-        &mut state,
-        &metadata,
-        &request("m1", 0, Some(&longest)),
-        &regexes,
-    );
-    check!(joined.response.error_code == codes::NONE);
-    check!(joined.pending.resolved_regexes.len() == 1);
-    check!(!joined.pending.to_batch("g", 0).records.is_empty());
-
-    // A joining member with a longer one is not admitted.
-    let mut state = GroupState::new("g");
-    let refused = heartbeat(
-        &mut state,
-        &metadata,
-        &request("m1", 0, Some(&too_long)),
-        &regexes,
-    );
-    check!(refused.response.error_code == codes::INVALID_REGULAR_EXPRESSION);
-    check!(refused.pending.is_empty());
-    check!(state.members.is_empty());
-
-    // A member that changes its pattern to one keeps the old pattern, and the
-    // group keeps the resolution of the old one.
-    let mut state = GroupState::new("g");
-    heartbeat(
-        &mut state,
-        &metadata,
-        &request("m1", 0, Some("a.*")),
-        &regexes,
-    );
-    let epoch = state.members["m1"].member_epoch;
-    let refused = heartbeat(
-        &mut state,
-        &metadata,
-        &request("m1", epoch, Some(&too_long)),
-        &regexes,
-    );
-    check!(refused.response.error_code == codes::INVALID_REGULAR_EXPRESSION);
-    check!(refused.pending.is_empty());
-    check!(state.members["m1"].subscribed_topic_regex.as_deref() == Some("a.*"));
-    check!(state.resolved_regex("a.*").is_some());
-
-    // A static member that takes the place of the released one leaves the
-    // released member in place.
-    let mut state = GroupState::new("g");
-    heartbeat(
-        &mut state,
-        &metadata,
-        &static_request("s1", 0, "a.*"),
-        &regexes,
-    );
-    heartbeat(
-        &mut state,
-        &metadata,
-        &static_request("s1", -2, "a.*"),
-        &regexes,
-    );
-    let refused = heartbeat(
-        &mut state,
-        &metadata,
-        &static_request("s2", 0, &too_long),
-        &regexes,
-    );
-    check!(refused.response.error_code == codes::INVALID_REGULAR_EXPRESSION);
-    check!(refused.pending.is_empty());
-    check!(state.members.keys().map(String::as_str).collect::<Vec<_>>() == vec!["s1"]);
-    check!(state.members["s1"].member_epoch == -2);
-    check!(state.current_member_for_instance("i1") == Some("s1"));
+    for (pattern, encodes) in [(&longest, true), (&too_long, false)] {
+        let mut state = GroupState::new("g");
+        let joined = heartbeat(
+            &mut state,
+            &metadata,
+            &request("m1", 0, Some(pattern)),
+            &regexes,
+        );
+        check!(joined.response.error_code == codes::NONE);
+        check!(joined.pending.resolved_regexes.len() == 1);
+        check!(
+            joined.pending.to_batch("g", 0).is_ok() == encodes,
+            "{} bytes",
+            pattern.len()
+        );
+    }
 }

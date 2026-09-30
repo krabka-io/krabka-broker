@@ -19,10 +19,17 @@ impl RemoteReader {
     /// timestamp is `>= target_timestamp`, across the finished remote segments.
     /// The sparse time index supplies a scan floor; the exact answer comes from
     /// decoding records from the corresponding offset-index position.
+    ///
+    /// `max_record_body` is the topic's Kafka trunk `max.decompressed.message.bytes`,
+    /// or `None` for no limit. A compressed record the scan has to read that is
+    /// above it fails the lookup with [`RemoteStorageError::RecordTooLarge`],
+    /// as `RemoteLogManager.findOffsetByTimestamp` fails with
+    /// `InvalidRecordException` and does not go on to the next segment.
     pub(crate) async fn offset_for_timestamp(
         &self,
         tp: &TopicIdPartition,
         target_timestamp: TimestampMs,
+        max_record_body: Option<usize>,
     ) -> Result<Option<(LogOffset, TimestampMs)>, RemoteStorageError> {
         let mut listed = self.list_remote_log_segments_blocking(tp).await?;
         listed.retain(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished);
@@ -61,6 +68,7 @@ impl RemoteReader {
                 &data,
                 metadata.start_offset(),
                 target_timestamp,
+                max_record_body,
             )? {
                 return Ok(Some(found));
             }
@@ -74,7 +82,7 @@ mod tests {
     use assert2::assert;
 
     use crate::remote_reader::test_support::{
-        populated_reader, sparse_remote_segment_reader,
+        compressed_remote_segment_reader, populated_reader, sparse_remote_segment_reader,
         sparse_remote_segment_reader_with_max_timestamp, tp,
         unordered_timestamps_remote_segment_reader,
     };
@@ -91,7 +99,7 @@ mod tests {
         // all 0. Target a timestamp <= 0 to match the first segment.
         let target_ts = 0_i64;
         let got = reader
-            .offset_for_timestamp(&tp(), target_ts)
+            .offset_for_timestamp(&tp(), target_ts, None)
             .await
             .unwrap()
             .expect("first segment matches ts=0");
@@ -106,7 +114,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 1_500)
+            .offset_for_timestamp(&tp(), 1_500, None)
             .await
             .unwrap()
             .expect("timestamp 1500 has a remote match");
@@ -119,7 +127,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000)
+            .offset_for_timestamp(&tp(), 2_000, None)
             .await
             .unwrap()
             .expect("timestamp 2000 has an exact record match");
@@ -132,7 +140,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader_with_max_timestamp(-1);
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000)
+            .offset_for_timestamp(&tp(), 2_000, None)
             .await
             .unwrap()
             .expect("the unknown max sentinel must not suppress an exact remote scan");
@@ -149,7 +157,7 @@ mod tests {
         let (reader, _remote_dir) = unordered_timestamps_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_400)
+            .offset_for_timestamp(&tp(), 2_400, None)
             .await
             .unwrap()
             .expect("the newest record is the first of the second batch");
@@ -164,7 +172,48 @@ mod tests {
         let (reader, _log) = populated_reader(log_dir.path(), remote_dir.path());
         // All segments have max_ts=0 by construction (see test above); any
         // strictly-positive target is past every remote segment.
-        let got = reader.offset_for_timestamp(&tp(), 1).await.unwrap();
+        let got = reader.offset_for_timestamp(&tp(), 1, None).await.unwrap();
         assert!(got == None);
+    }
+
+    /// Kafka trunk's `max.decompressed.message.bytes` on the remote scan:
+    /// `RemoteLogManager.lookupTimestamp` decompresses a batch only when its max
+    /// timestamp reaches the target, and fails on a record above the limit
+    /// rather than moving on to another segment. A record of the second batch
+    /// is a `1_007`-byte body, and one of the first is a few dozen.
+    #[tokio::test]
+    async fn offset_for_timestamp_refuses_a_record_above_the_limit_that_it_reads() {
+        use krabka_remote_storage::RemoteStorageError;
+
+        let (reader, _remote_dir) = compressed_remote_segment_reader(1_000);
+        for (name, target, limit, want) in [
+            // The match is in the first batch, so the second is never read.
+            (
+                "found before the oversized batch",
+                1_500,
+                Some(100),
+                Ok(Some((12, 1_600))),
+            ),
+            // The first batch tops out at 1_700, so it is skipped undecompressed
+            // and the second batch's first record is the oversized match.
+            ("the match is oversized", 1_800, Some(100), Err(1_007)),
+            ("no limit", 1_800, None, Ok(Some((14, 2_000)))),
+            (
+                "a limit above the record",
+                1_800,
+                Some(1_007),
+                Ok(Some((14, 2_000))),
+            ),
+        ] {
+            let got = match reader.offset_for_timestamp(&tp(), target, limit).await {
+                Ok(found) => Ok(found),
+                Err(RemoteStorageError::RecordTooLarge { size, limit: seen }) => {
+                    assert!(Some(seen) == limit, "{name}");
+                    Err(size)
+                }
+                Err(other) => panic!("{name}: unexpected error: {other}"),
+            };
+            assert!(got == want, "{name}");
+        }
     }
 }

@@ -6,27 +6,69 @@
 //! scans decode the batches in that range and pick the first one, or the first
 //! record, that satisfies the request.
 
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::{
+    primitives::varint::varlong_len,
+    records::{Attributes, Record, RecordBatch},
+};
 
 use super::{LogOffset, TimestampMs, corrupt_log};
 use crate::error::RemoteStorageError;
 
+/// The size of `record`'s body as Kafka's `DefaultRecord` writes it, which is
+/// what `DefaultRecord.readFrom` compares to `max.decompressed.message.bytes`.
+///
+/// `Record::encoded_len` is the body behind its varlong length prefix, and the
+/// prefix's width grows with the body, so the body is the one length whose
+/// prefix accounts for the rest.
+fn record_body_len(record: &Record) -> usize {
+    let total = record.encoded_len();
+    (1..=10)
+        .find_map(|prefix| {
+            let body = total.checked_sub(prefix)?;
+            (varlong_len(i64::try_from(body).ok()?) == prefix).then_some(body)
+        })
+        .unwrap_or(total)
+}
+
 /// Decodes remote log batches and returns the earliest record at or after both
 /// `floor_offset` and `target_timestamp`.
+///
+/// `max_record_body` is Kafka trunk's `max.decompressed.message.bytes`, or
+/// `None` for no limit. Kafka's `RemoteLogManager.lookupTimestamp` decompresses
+/// a batch only when its max timestamp reaches `target_timestamp` and its last
+/// offset reaches `floor_offset`, and it reads that batch a record at a time up
+/// to the record it returns, so only those records are held to the limit. A
+/// batch the producer did not compress never is.
 ///
 /// # Errors
 ///
 /// Returns [`RemoteStorageError::Io`] when a batch does not decode, or when a
-/// record's offset or timestamp delta overflows its base.
+/// record's offset or timestamp delta overflows its base, and
+/// [`RemoteStorageError::RecordTooLarge`] for a record above `max_record_body`.
 pub fn first_record_at_or_after_timestamp(
     data: &[u8],
     floor_offset: LogOffset,
     target_timestamp: TimestampMs,
+    max_record_body: Option<usize>,
 ) -> Result<Option<(LogOffset, TimestampMs)>, RemoteStorageError> {
     let mut cur = data;
     while !cur.is_empty() {
         let batch = RecordBatch::decode(&mut cur).map_err(corrupt_log)?;
+        let limit = max_record_body.filter(|_| {
+            batch.attributes.compression() != Attributes::default().compression()
+                && batch.max_timestamp >= target_timestamp
+                && batch
+                    .base_offset
+                    .checked_add(i64::from(batch.last_offset_delta))
+                    .is_some_and(|last_offset| last_offset >= floor_offset)
+        });
         for record in &batch.records {
+            if let Some(limit) = limit {
+                let size = record_body_len(record);
+                if size > limit {
+                    return Err(RemoteStorageError::RecordTooLarge { size, limit });
+                }
+            }
             let offset = batch
                 .base_offset
                 .checked_add(i64::from(record.offset_delta))
@@ -178,7 +220,8 @@ mod tests {
         ];
         for (floor_offset, target, want) in cases {
             assert!(
-                first_record_at_or_after_timestamp(&bytes, floor_offset, target).unwrap() == want,
+                first_record_at_or_after_timestamp(&bytes, floor_offset, target, None).unwrap()
+                    == want,
                 "floor_offset {floor_offset} target {target}"
             );
         }
@@ -188,7 +231,102 @@ mod tests {
     fn first_record_at_or_after_timestamp_reports_corrupt_bytes() {
         // A truncated batch header decodes to an error, never a panic.
         let bytes = encoded(&[test_batch_at(0, 2, b'a')]);
-        let error = first_record_at_or_after_timestamp(&bytes[..12], 0, 0).unwrap_err();
+        let error = first_record_at_or_after_timestamp(&bytes[..12], 0, 0, None).unwrap_err();
         assert!(matches!(error, RemoteStorageError::Io(_)));
+    }
+
+    /// A batch at `base_offset` with one record per `(timestamp, value length)`
+    /// pair, compressed with `codec`.
+    fn sized_batch_at(
+        base_offset: i64,
+        records: &[(i64, usize)],
+        codec: krabka_compression::CompressionType,
+    ) -> RecordBatch {
+        let timestamps: Vec<i64> = records.iter().map(|(timestamp, _)| *timestamp).collect();
+        let mut batch = timestamped_batch_at(base_offset, &timestamps, b'z');
+        batch.attributes = batch.attributes.with_compression(codec);
+        for (record, (_, value_len)) in batch.records.iter_mut().zip(records) {
+            record.value = Some(Bytes::from(vec![b'z'; *value_len]));
+        }
+        batch
+    }
+
+    /// The size of a record with a `1000`-byte value and nothing else: its
+    /// attributes byte, a one-byte timestamp and offset delta, a null key, the
+    /// value behind its two-byte length, and no headers.
+    const LARGE: usize = 1_007;
+
+    /// Kafka's `RemoteLogManager.lookupTimestamp` decompresses a batch only when
+    /// its max timestamp and its last offset reach the lookup's, and holds each
+    /// record it reads to the limit. A batch the producer did not compress is
+    /// never held to it.
+    #[test]
+    fn first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads() {
+        use krabka_compression::CompressionType::{Gzip, None as Uncompressed};
+
+        let layout = |codec| {
+            encoded(&[
+                sized_batch_at(10, &[(1_000, 10)], codec),
+                sized_batch_at(11, &[(1_100, 1_000), (1_200, 10)], codec),
+            ])
+        };
+        for (name, codec, floor_offset, target, limit, want) in [
+            (
+                "found before the oversized batch",
+                Gzip,
+                10,
+                1_000,
+                Some(100),
+                Ok(Some((10, 1_000))),
+            ),
+            (
+                "the oversized record is the match",
+                Gzip,
+                10,
+                1_100,
+                Some(100),
+                Err(LARGE),
+            ),
+            (
+                "an oversized record before the match is read too",
+                Gzip,
+                10,
+                1_200,
+                Some(100),
+                Err(LARGE),
+            ),
+            (
+                "the batch ends below the offset floor",
+                Gzip,
+                13,
+                1_100,
+                Some(100),
+                Ok(None),
+            ),
+            ("no limit", Gzip, 10, 1_100, None, Ok(Some((11, 1_100)))),
+            (
+                "an uncompressed batch is never held to it",
+                Uncompressed,
+                10,
+                1_100,
+                Some(100),
+                Ok(Some((11, 1_100))),
+            ),
+        ] {
+            let got = match first_record_at_or_after_timestamp(
+                &layout(codec),
+                floor_offset,
+                target,
+                limit,
+            ) {
+                Ok(found) => Ok(found),
+                Err(RemoteStorageError::RecordTooLarge { size, limit }) => {
+                    assert!(limit == 100);
+                    Err(size)
+                }
+                Err(other) => panic!("unexpected error: {other}"),
+            };
+            assert!(got == want, "{name}");
+        }
     }
 }

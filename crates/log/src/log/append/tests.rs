@@ -273,6 +273,32 @@ fn append_at_uses_reconciled_frontier_floor() {
     drop(dir);
 }
 
+/// Kafka trunk's `UnifiedLog.appendAsFollower` skips `LogValidator`, the one
+/// place an append reads `max.decompressed.message.bytes`, so a replicated
+/// record that got past the leader's limit lands as it is. The limit governs the
+/// log's later reads, not the write.
+#[test]
+fn a_replicated_batch_is_not_held_to_the_decompressed_record_limit() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(
+        dir.path(),
+        LogConfig {
+            max_decompressed_record: Some(bytes(100)),
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    let mut batch = test_batch_at(0);
+    batch.attributes = batch
+        .attributes
+        .with_compression(krabka_compression::CompressionType::Gzip);
+    batch.records[0].value = Some(bytes::Bytes::from(vec![7_u8; 1_000]));
+
+    log.append_at(&mut batch, Offset(0)).unwrap();
+
+    assert!(log.log_end_offset() == Offset(1));
+}
+
 #[test]
 fn assigned_append_uses_reconciled_frontier_floor() {
     let (_dir, mut log) = test_log();

@@ -657,6 +657,78 @@ fn checkpoint_truncation_bounds_fetch(
     Some((kept, fetch_visibility(false, true, w, start).limit_offset))
 }
 
+/// Recovery after each completed publication step uses the old durable prefix
+/// until sync and WAL publication finish, then the newly synced full prefix.
+/// Phase 2 permits any partially applied native floor below the published one.
+/// The rows describe the complete batches still physically present at reopen;
+/// bytes, atomic checkpoint publication, and prefix-only unlinking are host facts.
+#[requires(w.log_start@ >= 0 && w.log_start@ <= w.log_end@ && requested@ > w.log_start@)]
+#[requires(phase.0@ <= 3 && w.log_start@ <= phase.1@)]
+#[requires(if phase.0@ < 2 { phase.1 == w.log_start }
+    else { phase.1@ <= w.log_end@.min(requested@) })]
+#[requires(phase.0@ == 3 ==> phase.1@ == w.log_end@.min(requested@))]
+#[requires(0 <= physical_start@ && physical_start@ <= phase.1@)]
+#[requires(forall<i: Int> 0 <= i && i < ends@.len() ==> physical_start@ < ends@[i]@)]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends@.len() ==> ends@[i]@ < ends@[j]@)]
+#[requires(w.log_end@ == if ends@.len() == 0 { physical_start@ }
+    else { ends@[ends@.len() - 1]@ })]
+#[requires(w.log_start@ <= prior_end@ && prior_end@ <= w.log_end@)]
+#[requires(phase.0@ < 2 ==> prior_end == w.log_start
+    || exists<i: Int> 0 <= i && i < ends@.len() && ends@[i] == prior_end)]
+#[ensures(match result { Some(_) => true, None => false })]
+#[ensures(match result {
+    None => true,
+    Some((floor, end, kept, limit, visible)) =>
+        floor@ == (if phase.0@ < 2 { w.log_start@ } else { w.log_end@.min(requested@) })
+        && end@ == (if phase.0@ < 2 { prior_end@ } else { w.log_end@ })
+        && phase.1@ <= floor@ && floor@ <= end@ && end@ <= w.log_end@
+        && kept@ <= ends@.len()
+        && (floor == end ==> kept@ == 0)
+        && (floor != end ==> kept@ > 0 && ends@[kept@ - 1] == end
+            && forall<i: Int> 0 <= i && i < ends@.len() ==> (i < kept@) == (ends@[i]@ <= end@))
+        && limit@ == end@.min(w.hw@).min(w.lso@).min(w.deliverable@)
+        && visible == (floor@ <= probe@ && probe@ < limit@),
+})]
+fn published_trim_bounds_recovery(
+    ends: &[i64],
+    physical_start: i64,
+    w: FetchWatermarks,
+    prior_end: i64,
+    requested: i64,
+    phase: (u8, i64), // completed steps: sync, WAL publication, native trim; observed native floor
+    probe: i64,
+) -> Option<(i64, i64, usize, i64, bool)> {
+    let capped = truncation_frontier(w.log_end, requested);
+    let floor = match delete_records_trim_application(capped, w.log_start, w.log_start) {
+        DeleteRecordsTrimApplication::RejectMalformed => return None,
+        DeleteRecordsTrimApplication::TrimWal { frontier }
+        | DeleteRecordsTrimApplication::TrimLocal { frontier }
+        | DeleteRecordsTrimApplication::Complete { frontier } => frontier,
+    };
+    let (checkpoint_floor, checkpoint_end) = if phase.0 >= 2 {
+        (floor, w.log_end)
+    } else {
+        (w.log_start, prior_end)
+    };
+    let (kept, limit) = checkpoint_truncation_bounds_fetch(
+        ends,
+        physical_start,
+        FetchWatermarks {
+            log_start: phase.1,
+            ..w
+        },
+        checkpoint_floor,
+        checkpoint_end,
+    )?;
+    Some((
+        checkpoint_floor,
+        checkpoint_end,
+        kept,
+        limit,
+        in_half_open_window(probe, checkpoint_floor, limit),
+    ))
+}
+
 /// The actual per-row archive validator establishes both binary-search
 /// ordering and byte bounds. The floor cannot lie after a present ceiling.
 #[ensures(result)]
@@ -1445,6 +1517,91 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    proptest! {
+        #[test]
+        fn published_trim_matches_checkpoint_prefix_and_fetch_oracles(
+            ends in proptest::collection::btree_set(1i64..=64, 0..16),
+            prior_slot in any::<u8>(),
+            requested in 1i64..128,
+            stage in 0u8..=3,
+            partial_floor in any::<u8>(),
+            hw in any::<i64>(), lso in any::<i64>(), deliverable in any::<i64>(), probe in any::<i64>(),
+        ) {
+            let ends: Vec<_> = ends.into_iter().collect();
+            let end = ends.last().copied().unwrap_or(0);
+            let prior_end = ends.get(usize::from(prior_slot) % (ends.len() + 1)).copied().unwrap_or(0);
+            let desired = requested.min(end);
+            let observed_floor = match stage { 0 | 1 => 0, 2 => i64::from(partial_floor) % (desired + 1), _ => desired };
+            let checkpoint_floor = if stage < 2 { 0 } else { desired };
+            let checkpoint_end = if stage < 2 { prior_end } else { end };
+            let kept = if checkpoint_floor == checkpoint_end { 0 }
+                else { ends.iter().filter(|end| **end <= checkpoint_end).count() };
+            let limit = [checkpoint_end, hw, lso, deliverable].into_iter().min().unwrap();
+            let w = FetchWatermarks { log_start: 0, log_end: end, hw, lso, deliverable };
+            assert!(published_trim_bounds_recovery(&ends, 0, w, prior_end, requested,
+                (stage, observed_floor), probe) == Some((checkpoint_floor, checkpoint_end, kept,
+                limit, checkpoint_floor <= probe && probe < limit)));
+        }
+    }
+
+    #[test]
+    fn published_trim_recovers_interior_floors_deleted_prefixes_and_empty_ranges() {
+        let w = FetchWatermarks {
+            log_start: 1,
+            log_end: 9,
+            hw: 9,
+            lso: 9,
+            deliverable: 9,
+        };
+        for stage in 0..=3 {
+            let observed = if stage == 3 { 4 } else { 1 };
+            let (floor, end, kept) = if stage < 2 { (1, 5, 2) } else { (4, 9, 3) };
+            for probe in 0..=10 {
+                assert!(
+                    published_trim_bounds_recovery(
+                        &[2, 5, 9],
+                        0,
+                        w,
+                        5,
+                        4,
+                        (stage, observed),
+                        probe
+                    ) == Some((floor, end, kept, end, floor <= probe && probe < end))
+                );
+            }
+        }
+        assert!(
+            published_trim_bounds_recovery(&[5, 9], 2, w, 5, 4, (2, 3), 4)
+                == Some((4, 9, 2, 9, true))
+        );
+        assert!(
+            published_trim_bounds_recovery(&[], 9, w, 5, 10, (2, 9), 9)
+                == Some((9, 9, 0, 9, false))
+        );
+        assert!(
+            published_trim_bounds_recovery(&[2, 5, 9], 0, w, 1, 4, (1, 1), 1)
+                == Some((1, 1, 0, 1, false))
+        );
+        let w = FetchWatermarks {
+            log_start: i64::MAX - 5,
+            log_end: i64::MAX,
+            hw: i64::MAX,
+            lso: i64::MAX,
+            deliverable: i64::MAX,
+        };
+        assert!(
+            published_trim_bounds_recovery(
+                &[i64::MAX - 3, i64::MAX],
+                i64::MAX - 5,
+                w,
+                i64::MAX - 3,
+                i64::MAX - 1,
+                (2, i64::MAX - 2),
+                i64::MAX - 1
+            ) == Some((i64::MAX - 1, i64::MAX, 2, i64::MAX, true))
+        );
+    }
 
     proptest! {
         #[test]

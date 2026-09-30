@@ -5,7 +5,7 @@
 
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
@@ -155,7 +155,7 @@ impl Controller {
             unsupported_feature_level(&engine.current_image(), config.unstable_feature_versions)
         {
             engine.shutdown().await;
-            return Err(RaftError::Startup(refusal));
+            return Err(RaftError::FatalFault(refusal));
         }
 
         // Controller listener.
@@ -183,9 +183,11 @@ impl Controller {
                 config.listener_limits,
             ),
         ));
+        let (fatal_tx, fatal) = watch::channel(None);
         tokio::spawn(stop_on_unsupported_feature_level(
             engine.clone(),
             shutdown.clone(),
+            fatal_tx,
             config.unstable_feature_versions,
         ));
         info!(
@@ -198,6 +200,7 @@ impl Controller {
             engine,
             leader: leader_rx,
             shutdown,
+            fatal,
             listener_task: Mutex::new(Some(listener_task)),
             data_dir,
             client_id: config.client_id.clone(),
@@ -217,9 +220,15 @@ impl Controller {
 /// exception does. The engine publishes each image it applies, so a node that
 /// follows a leader which finalized a level above its own range sees it here
 /// and stops serving, and never runs at a level it did not advertise.
+///
+/// The refusal goes out on `fatal` first, as [`ControllerHandle::watch_fatal`]
+/// documents, so that a process hosting the controller can halt over it, as
+/// Kafka's `ProcessTerminatingFaultHandler` does. It is in place before any
+/// later submit can fail with [`RaftError::Shutdown`].
 async fn stop_on_unsupported_feature_level(
     engine: KraftController,
     shutdown: CancellationToken,
+    fatal: watch::Sender<Option<String>>,
     unstable: UnstableFeatureVersions,
 ) {
     let mut images = engine.watch_image();
@@ -235,6 +244,7 @@ async fn stop_on_unsupported_feature_level(
         let refusal = unsupported_feature_level(&images.borrow_and_update(), unstable);
         if let Some(refusal) = refusal {
             tracing::error!(%refusal, "controller stopping: it replayed an unsupported feature level");
+            fatal.send_replace(Some(refusal));
             shutdown.cancel();
             engine.shutdown().await;
             return;

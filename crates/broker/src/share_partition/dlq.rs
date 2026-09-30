@@ -15,7 +15,10 @@
 //! - `validate` checks the group's topic against the cluster's rules;
 //! - `record` builds the dead-letter records;
 //! - `source` reads the source records for a group that copies them;
-//! - `writer` sends the topic creation and the produce request, and retries.
+//! - `coalesce` puts the rounds of every write for one destination into as few
+//!   produce requests as `max.message.bytes` allows;
+//! - `writer` sends the topic creation and the produce request, retries, and
+//!   counts the `DeadLetterQueue*` meters.
 //!
 //! Whether a write succeeds does not decide the record's fate. Kafka archives
 //! the record whatever [`DlqSink::write`] answers, and logs a failure.
@@ -27,6 +30,7 @@ use krabka_log::Offset;
 
 use crate::share_partition::state::DlqCause;
 
+mod coalesce;
 mod record;
 mod source;
 mod validate;

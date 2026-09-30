@@ -4,9 +4,8 @@
 //! member's `last_heartbeat` clock inside the group's actor.
 
 use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse},
+use krabka_protocol::owned::{
+    heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse,
 };
 use tokio::sync::oneshot;
 
@@ -34,7 +33,7 @@ pub(crate) async fn handle(
     let coordinator = broker.group_coordinator.clone();
     {
         let mut cur: &[u8] = req_bytes;
-        let req = HeartbeatRequest::decode(&mut cur, version)?;
+        let req: HeartbeatRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
         // ── ACL preamble ────────────────────────────────────────────
         // `Read` on `Group(group_id)`. On Deny → whole-response
@@ -117,6 +116,7 @@ fn encode_denied(version: i16) -> Result<Bytes, BrokerError> {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_protocol::Decode;
 
     use super::*;
 

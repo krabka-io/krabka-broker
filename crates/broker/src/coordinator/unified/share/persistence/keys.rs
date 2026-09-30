@@ -45,48 +45,53 @@ pub enum ShareGroupKey {
     StatePartitionMetadata { group_id: String },
 }
 
-#[must_use]
-pub fn encode_share_key(key: &ShareGroupKey) -> Bytes {
+/// Encodes a [`ShareGroupKey`] with its leading `i16` key version.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
+/// 32767 bytes, which a non-flexible key string cannot carry.
+pub fn encode_share_key(key: &ShareGroupKey) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     match key {
         ShareGroupKey::GroupMetadata { group_id } => {
             buf.put_i16(KEY_SHARE_GROUP_METADATA);
-            put_string(&mut buf, group_id);
+            put_string(&mut buf, group_id)?;
         }
         ShareGroupKey::MemberMetadata {
             group_id,
             member_id,
         } => {
             buf.put_i16(KEY_SHARE_MEMBER_METADATA);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, member_id);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, member_id)?;
         }
         ShareGroupKey::TargetAssignmentMetadata { group_id } => {
             buf.put_i16(KEY_SHARE_TARGET_ASSIGNMENT_METADATA);
-            put_string(&mut buf, group_id);
+            put_string(&mut buf, group_id)?;
         }
         ShareGroupKey::TargetAssignmentMember {
             group_id,
             member_id,
         } => {
             buf.put_i16(KEY_SHARE_TARGET_ASSIGNMENT_MEMBER);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, member_id);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, member_id)?;
         }
         ShareGroupKey::CurrentMemberAssignment {
             group_id,
             member_id,
         } => {
             buf.put_i16(KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT);
-            put_string(&mut buf, group_id);
-            put_string(&mut buf, member_id);
+            put_string(&mut buf, group_id)?;
+            put_string(&mut buf, member_id)?;
         }
         ShareGroupKey::StatePartitionMetadata { group_id } => {
             buf.put_i16(KEY_SHARE_GROUP_STATE_PARTITION_METADATA);
-            put_string(&mut buf, group_id);
+            put_string(&mut buf, group_id)?;
         }
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// # Errors
@@ -150,7 +155,8 @@ mod tests {
         // i16 apiKey 11, then a non-flexible i16-length group id.
         let bytes = encode_share_key(&ShareGroupKey::GroupMetadata {
             group_id: "g1".into(),
-        });
+        })
+        .unwrap();
         assert!(&bytes[..] == b"\x00\x0b\x00\x02g1");
     }
 
@@ -159,7 +165,8 @@ mod tests {
         let bytes = encode_share_key(&ShareGroupKey::MemberMetadata {
             group_id: "g1".into(),
             member_id: "m1".into(),
-        });
+        })
+        .unwrap();
         assert!(&bytes[..] == b"\x00\x0a\x00\x02g1\x00\x02m1");
     }
 }
