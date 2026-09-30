@@ -175,6 +175,7 @@ mod tests {
                         &log_bytes[usize::try_from(position).unwrap()..],
                         100 + i64::from(relative),
                         target,
+                        None,
                     )
                     .unwrap();
                     let expected = records
