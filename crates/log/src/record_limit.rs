@@ -120,19 +120,15 @@ mod tests {
                 )
             };
             assert2::check!(held(body).is_ok(), "{value_len}");
-            match held(body - 1) {
-                Err(LogError::RecordTooLarge { size, limit }) => {
-                    assert2::check!(
-                        (size, limit)
-                            == (
-                                usize::try_from(body).unwrap(),
-                                usize::try_from(body - 1).unwrap()
-                            ),
-                        "{value_len}"
-                    );
-                }
-                other => panic!("{value_len}: expected RecordTooLarge, got {other:?}"),
-            }
+            assert2::assert!(let Err(LogError::RecordTooLarge { size, limit }) = held(body - 1));
+            assert2::check!(
+                (size, limit)
+                    == (
+                        usize::try_from(body).unwrap(),
+                        usize::try_from(body - 1).unwrap()
+                    ),
+                "{value_len}"
+            );
         }
     }
 
