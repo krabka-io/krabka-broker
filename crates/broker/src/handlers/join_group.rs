@@ -8,12 +8,9 @@
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        join_group_request::JoinGroupRequest,
-        join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
-    },
+use krabka_protocol::owned::{
+    join_group_request::JoinGroupRequest,
+    join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
 };
 use tokio::sync::oneshot;
 
@@ -46,7 +43,7 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
-    let req = JoinGroupRequest::decode(&mut cur, version)?;
+    let req: JoinGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────
     // `Read` on `Group(group_id)`. On Deny → whole-response
@@ -222,7 +219,7 @@ fn encode(version: i16, mut resp: JoinGroupResponse) -> Result<Bytes, BrokerErro
 
 #[cfg(test)]
 mod tests {
-    use krabka_protocol::{UnknownTaggedFields, owned::join_group_response};
+    use krabka_protocol::{Decode, UnknownTaggedFields, owned::join_group_response};
 
     use super::*;
 

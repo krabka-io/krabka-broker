@@ -95,17 +95,15 @@ pub(super) async fn handle_actor_heartbeat(
         // that only holds committed offsets, is deleted whatever the policy
         // and protocol type, and a new consumer group takes its id. The
         // committed offsets stay with the group id.
-        let batch = super::retention::tombstone_batch(
+        if super::retention::append_tombstones(
+            services.offsets_log,
             &group.group_id,
             &[],
             Some(&group.kind),
             chrono_now_ms(),
-        );
-        if services
-            .offsets_log
-            .append(&group.group_id, batch)
-            .await
-            .is_err()
+        )
+        .await
+        .is_err()
         {
             let _ = reply.send(ConsumerGroupHeartbeatResponse {
                 error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,

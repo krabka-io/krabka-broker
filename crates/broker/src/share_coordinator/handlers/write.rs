@@ -11,7 +11,7 @@ use futures_util::future::BoxFuture;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::{
-    Decode, Encode,
+    Encode,
     owned::{
         write_share_group_state_request::WriteShareGroupStateRequest,
         write_share_group_state_response::{
@@ -44,7 +44,8 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     if super::cluster_action_denied(broker, ctx) {
         let mut cur: &[u8] = req_bytes;
-        let req = WriteShareGroupStateRequest::decode(&mut cur, version)?;
+        let req: WriteShareGroupStateRequest =
+            crate::handlers::decode_group_request(&mut cur, version)?;
         let resp = super::cluster_authorization_failed!(
             req,
             WriteShareGroupStateResponse,
@@ -69,7 +70,8 @@ fn serve(
     let controller = Arc::clone(&broker.controller);
     Box::pin(async move {
         let mut cur: &[u8] = &req_bytes;
-        let req = WriteShareGroupStateRequest::decode(&mut cur, version)?;
+        let req: WriteShareGroupStateRequest =
+            crate::handlers::decode_group_request(&mut cur, version)?;
         let resp = write_state(&coordinator, &controller.current_image(), req).await;
         let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
         resp.encode(&mut buf, version)?;

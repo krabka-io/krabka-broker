@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn partition_metadata_round_trip() {
-        let kb = encode_partition_metadata_key("g1");
+        let kb = encode_partition_metadata_key("g1").unwrap();
         let (ver, body) = peek_version(&kb);
         assert!(ver == KEY_STREAMS_PARTITION_METADATA);
         assert!(

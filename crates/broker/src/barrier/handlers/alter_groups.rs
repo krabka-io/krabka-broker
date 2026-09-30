@@ -15,6 +15,11 @@
 //!
 //! Authorization: `Alter` on `Cluster("kafka-cluster")`. On a deny every entry
 //! of the response carries `CLUSTER_AUTHORIZATION_FAILED` (31).
+//!
+//! A group name or a topic name of more than 32767 bytes cannot go into a
+//! `__barrier_state` record, whose strings carry an `i16` length, and a compact
+//! string on the wire can carry one. The entry that names it answers
+//! `INVALID_REQUEST` (42), and nothing reaches the coordinator.
 
 use std::slice;
 
@@ -35,6 +40,7 @@ use crate::{
     },
     broker::Broker,
     codes,
+    coordinator::unified::persistence::MAX_STRING_BYTES,
     error::BrokerError,
     handlers::{RequestContext, cluster_alter_denied, encode_response},
 };
@@ -87,6 +93,16 @@ async fn apply(
     coordinator: &BarrierCoordinator,
     entry: &AlterableBarrierGroup,
 ) -> AlterBarrierGroupResult {
+    if entry.group.len() > MAX_STRING_BYTES {
+        return row(
+            &entry.group,
+            codes::INVALID_REQUEST,
+            Some(format!(
+                "a barrier group name is {} bytes, and the limit is {MAX_STRING_BYTES}",
+                entry.group.len()
+            )),
+        );
+    }
     if entry.delete {
         return match coordinator.delete_group(&entry.group).await {
             Ok(()) => row(&entry.group, codes::NONE, None),
@@ -136,6 +152,12 @@ fn topic_list_fault(topics: &[String]) -> Option<String> {
     if topics.iter().any(String::is_empty) {
         return Some("a barrier group topic name is empty".to_owned());
     }
+    if let Some(topic) = topics.iter().find(|topic| topic.len() > MAX_STRING_BYTES) {
+        return Some(format!(
+            "a barrier group topic name is {} bytes, and the limit is {MAX_STRING_BYTES}",
+            topic.len()
+        ));
+    }
     for (index, topic) in topics.iter().enumerate() {
         if topics[index + 1..].contains(topic) {
             return Some(format!("a barrier group names topic {topic} twice"));
@@ -160,7 +182,7 @@ mod tests {
     use krabka_units::millis;
 
     use super::*;
-    use crate::barrier::error::BarrierError;
+    use crate::barrier::{coordinator::test_support::Fixture, error::BarrierError};
 
     fn entry(topics: &[&str], interval_ms: i64, retained_cuts: i32) -> AlterableBarrierGroup {
         AlterableBarrierGroup {
@@ -194,6 +216,23 @@ mod tests {
     }
 
     #[test]
+    fn a_topic_name_is_usable_up_to_32767_bytes() {
+        for (length, fault) in [
+            (MAX_STRING_BYTES, None),
+            (
+                MAX_STRING_BYTES + 1,
+                Some("a barrier group topic name is 32768 bytes, and the limit is 32767"),
+            ),
+        ] {
+            let list = vec!["orders".to_owned(), "t".repeat(length)];
+            check!(
+                topic_list_fault(&list) == fault.map(ToOwned::to_owned),
+                "{length} bytes"
+            );
+        }
+    }
+
+    #[test]
     fn a_malformed_topic_list_names_its_own_fault() {
         let cases: &[(&[&str], Option<&str>)] = &[
             (&["orders", "payments"], None),
@@ -211,6 +250,63 @@ mod tests {
                 "{topics:?}"
             );
         }
+    }
+
+    /// A compact string on the wire can carry a name that a state record
+    /// cannot, so the entry that names one is refused as a bad request and
+    /// nothing reaches the coordinator.
+    #[tokio::test]
+    async fn an_entry_with_a_name_of_32768_bytes_is_an_invalid_request_and_creates_nothing() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        let long = "n".repeat(MAX_STRING_BYTES + 1);
+        let cases = [
+            (
+                "a group name to create",
+                AlterableBarrierGroup {
+                    group: long.clone(),
+                    ..entry(&["orders"], 30_000, 5)
+                },
+            ),
+            (
+                "a group name to delete",
+                AlterableBarrierGroup {
+                    group: long.clone(),
+                    delete: true,
+                    ..entry(&["orders"], 30_000, 5)
+                },
+            ),
+            ("a topic name", entry(&["orders", &long], 30_000, 5)),
+        ];
+        for (case, entry) in cases {
+            let answered = apply(&coordinator, &entry).await;
+            check!(answered.error_code == codes::INVALID_REQUEST, "{case}");
+        }
+        check!(coordinator.describe_groups(&[]).await.is_empty());
+    }
+
+    /// The longest name that a state record can carry is taken.
+    #[tokio::test]
+    async fn an_entry_with_a_group_and_a_topic_of_32767_bytes_creates_the_group() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        let group = "g".repeat(MAX_STRING_BYTES);
+        let topic = "t".repeat(MAX_STRING_BYTES);
+        let created = AlterableBarrierGroup {
+            group: group.clone(),
+            ..entry(&["orders", &topic], 30_000, 5)
+        };
+
+        let answered = apply(&coordinator, &created).await;
+
+        check!(answered.error_code == codes::NONE);
+        let names: Vec<String> = coordinator
+            .describe_groups(&[])
+            .await
+            .into_iter()
+            .map(|description| description.group)
+            .collect();
+        check!(names == vec![group]);
     }
 
     #[test]

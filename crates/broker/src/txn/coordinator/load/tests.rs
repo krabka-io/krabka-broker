@@ -304,7 +304,11 @@ async fn a_failed_load_answers_not_coordinator() {
     let entry = TxnEntry::new_empty(misplaced.clone(), ProducerId(7), 0, 60_000, 0);
     let mut batch = krabka_protocol::records::RecordBatch::default();
     batch.records.push(krabka_protocol::records::Record {
-        key: Some(crate::txn::log_record::encode_key(&misplaced).into()),
+        key: Some(
+            crate::txn::log_record::encode_key(&misplaced)
+                .unwrap()
+                .into(),
+        ),
         value: Some(
             crate::txn::log_record::encode_value(&entry, TxnVersion::Verified, false).into(),
         ),

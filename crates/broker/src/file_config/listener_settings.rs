@@ -77,7 +77,8 @@ const UNSTABLE_FEATURE_VERSIONS_ENABLE: &str = "unstable.feature.versions.enable
 
 /// The static boolean broker keys Kafka reads at startup:
 /// `delete.topic.enable` and `auto.create.topics.enable`, each recorded as
-/// operator-supplied when named, and the internal
+/// operator-supplied when named, `transaction.partition.verification.enable`,
+/// the static layer of a dynamic config, and the internal
 /// `unstable.api.versions.enable` and `unstable.feature.versions.enable`.
 fn apply_boolean_properties(
     properties: &std::collections::BTreeMap<String, String>,
@@ -100,6 +101,20 @@ fn apply_boolean_properties(
         cfg.static_config_origins
             .topic_admin
             .auto_create_topics_enable = true;
+    }
+    // A dedicated `[runtime]` key or CLI flag wins, and its presence is
+    // already recorded as the provenance of the key.
+    let verification = crate::txn::coordinator::produce_verification::PARTITION_VERIFICATION_ENABLE;
+    if !cfg
+        .static_config_origins
+        .supplied_kafka_keys
+        .contains(verification)
+        && let Some(enabled) = boolean_property(properties, verification)?
+    {
+        cfg.transaction_partition_verification_enable = enabled;
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .insert(verification);
     }
     Ok(())
 }
@@ -512,6 +527,65 @@ connections_max_idle = "5s"
             let result = file
                 .apply_to(&mut cfg)
                 .map(|()| read(&cfg))
+                .map_err(|error| error.to_string());
+            actual.push((label, result));
+            expected.push((label, want));
+        }
+        assert!(actual == expected);
+    }
+
+    /// `transaction.partition.verification.enable`, the static layer of a
+    /// dynamic config, comes from the `[runtime]` table or from
+    /// `server_properties`. The dedicated `[runtime]` key wins over the
+    /// property, and either source records that the operator named the key.
+    #[test]
+    fn partition_verification_is_read_from_the_runtime_table_and_server_properties() {
+        /// The value and the operator-supplied flag, or the error.
+        type Outcome = Result<(bool, bool), String>;
+        const KEY: &str = "transaction.partition.verification.enable";
+        let property = |value: &str| format!("[server_properties]\n\"{KEY}\" = \"{value}\"\n");
+        let runtime = |value: &str| {
+            format!("[runtime]\ntransaction_partition_verification_enable = {value}\n")
+        };
+        // A label, the file, and the outcome it loads to.
+        let cases: [(&str, String, Outcome); 8] = [
+            ("not named", "broker_id = 0\n".to_owned(), Ok((true, false))),
+            ("property false", property("false"), Ok((false, true))),
+            ("property upper case", property("TRUE"), Ok((true, true))),
+            (
+                "property a word",
+                property("maybe"),
+                Err(format!(
+                    "invalid config: server_properties `{KEY}` must be `true` or `false`, got \
+                     `maybe`"
+                )),
+            ),
+            ("runtime false", runtime("false"), Ok((false, true))),
+            ("runtime at the default", runtime("true"), Ok((true, true))),
+            (
+                "runtime true over a false property",
+                format!("{}{}", runtime("true"), property("false")),
+                Ok((true, true)),
+            ),
+            (
+                "runtime false over a true property",
+                format!("{}{}", runtime("false"), property("true")),
+                Ok((false, true)),
+            ),
+        ];
+        let mut actual = Vec::with_capacity(cases.len());
+        let mut expected = Vec::with_capacity(cases.len());
+        for (label, src, want) in cases {
+            let file: FileConfig = toml::from_str(&src).expect("parse");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file
+                .apply_to(&mut cfg)
+                .map(|()| {
+                    (
+                        cfg.transaction_partition_verification_enable,
+                        cfg.static_config_origins.supplied_kafka_keys.contains(KEY),
+                    )
+                })
                 .map_err(|error| error.to_string());
             actual.push((label, result));
             expected.push((label, want));

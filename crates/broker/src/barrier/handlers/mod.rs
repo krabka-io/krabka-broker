@@ -31,6 +31,8 @@
 pub(crate) mod alter_groups;
 pub(crate) mod describe_groups;
 pub(crate) mod list_cuts;
+#[cfg(test)]
+mod string_bounds_tests;
 pub(crate) mod transport;
 pub(crate) mod trigger;
 pub(crate) mod write_markers;
@@ -75,7 +77,8 @@ pub(crate) const NO_EPOCH: i64 = -1;
 ///
 /// `InvalidDefinition` reaches this function only for a retention or an
 /// interval that is out of range, because [`alter_groups`] rejects a malformed
-/// topic list with `INVALID_REQUEST` before the coordinator sees the entry.
+/// topic list, and a group or topic name over 32767 bytes, with
+/// `INVALID_REQUEST` before the coordinator sees the entry.
 pub(crate) fn error_code(error: &BarrierError) -> i16 {
     match error {
         BarrierError::InjectionInProgress { .. } => codes::BARRIER_INJECTION_IN_PROGRESS,

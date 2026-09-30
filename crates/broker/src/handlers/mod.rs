@@ -22,6 +22,7 @@ mod acl_gates;
 mod admin_audit;
 mod coordinator_routing;
 mod private_api_keys;
+mod record_strings;
 mod response_encoding;
 mod submit_failure;
 mod wire_types;
@@ -41,6 +42,7 @@ pub(crate) use self::{
         LIST_BARRIER_CUTS_API_KEY, PROPOSE_BREAK_GLASS_API_KEY, SET_TOPIC_FREEZE_API_KEY,
         TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
     },
+    record_strings::decode_group_request,
     response_encoding::{encode_response, encode_response_with_context},
     submit_failure::submit_failure_code,
     wire_types::{ApiKeyCode, ApiVersion, CorrelationId, ErrorCode},

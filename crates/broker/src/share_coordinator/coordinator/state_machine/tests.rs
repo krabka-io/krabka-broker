@@ -93,6 +93,42 @@ async fn initialize_then_summary() {
     assert!(summary == Ok(Some((5, 0, Offset(100), 0))));
 }
 
+/// `InitializeShareGroupState` creates the state key, which writes its group id
+/// with an `INT16` length. A group id of 32767 bytes is initialized and deleted.
+/// A longer one is refused with the internal error, as Kafka answers a record
+/// that its writer cannot serialize, and the coordinator keeps no state for it.
+#[tokio::test]
+async fn a_group_id_over_32767_bytes_is_not_initialized() {
+    let dir = tempdir().unwrap();
+    let (coord, _reg) = coordinator(dir.path());
+    lead_all(&coord).await;
+    let image = image_with_topic(TOPIC, 1);
+    let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+    let longest = "g".repeat(limit);
+    let too_long = "g".repeat(limit + 1);
+
+    check!(
+        coord
+            .initialize(&image, &longest, TOPIC, 0, 5, Offset(100))
+            .await
+            == Ok(())
+    );
+    check!(coord.read_summary(&longest, TOPIC, 0).await == Ok(Some((5, 0, Offset(100), 0))));
+    check!(coord.delete(&image, &longest, TOPIC, 0).await == Ok(()));
+
+    let refused = coord
+        .initialize(&image, &too_long, TOPIC, 0, 5, Offset(100))
+        .await;
+    check!(
+        refused
+            == Err(ShareStateError::Operation {
+                code: codes::UNKNOWN_SERVER_ERROR,
+                message: message::UNKNOWN_SERVER_ERROR,
+            })
+    );
+    check!(coord.read_summary(&too_long, TOPIC, 0).await == Ok(None));
+}
+
 /// What a second initialize leaves behind, for one Kafka release: its
 /// answer, the snapshots logged, and the stored summary.
 type InitializeResult = (WriteOutcome, usize, Option<ShareStateSummary>);

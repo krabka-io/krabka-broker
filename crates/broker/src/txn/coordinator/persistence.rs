@@ -47,7 +47,8 @@ impl TxnCoordinator {
     /// # Errors
     ///
     /// Returns [`BrokerError::Txn`] if the partition is not locally held
-    /// or the append fails.
+    /// or the append fails, and [`BrokerError::Protocol`] if the transactional
+    /// id is longer than 32767 bytes, which the log key cannot carry.
     #[tracing::instrument(
         name = "txn_coordinator_put",
         level = "debug",
@@ -83,7 +84,8 @@ impl TxnCoordinator {
     /// # Errors
     ///
     /// Returns [`BrokerError::Txn`] if the partition is not locally held
-    /// or the append fails.
+    /// or the append fails, and [`BrokerError::Protocol`] if the transactional
+    /// id is longer than 32767 bytes, which the log key cannot carry.
     pub(crate) async fn put_under_state_partition_lock(
         &self,
         entry: TxnEntry,
@@ -99,7 +101,7 @@ impl TxnCoordinator {
         self.validate_pid_install(&entry)?;
 
         // Byte-exact Kafka TransactionLogKey(v0) + TransactionLogValue(v0/v1).
-        let key = crate::txn::log_record::encode_key(&tid);
+        let key = crate::txn::log_record::encode_key(&tid)?;
         let value = crate::txn::log_record::encode_value(
             &entry,
             format_txnv,
@@ -162,8 +164,10 @@ impl TxnCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Txn`] if the partition is not locally held, or
-    /// the append error if the append fails.
+    /// Returns [`BrokerError::Txn`] if the partition is not locally held, the
+    /// append error if the append fails, and [`BrokerError::Protocol`] if the
+    /// transactional id is longer than 32767 bytes, which the log key cannot
+    /// carry.
     // cargo-mutants: append to a live partition log + live DashMap state
     #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(
@@ -185,7 +189,7 @@ impl TxnCoordinator {
         let mut batch = RecordBatch::default();
         batch.records.push(Record {
             offset_delta: 0,
-            key: Some(Bytes::from(crate::txn::log_record::encode_key(tid))),
+            key: Some(Bytes::from(crate::txn::log_record::encode_key(tid)?)),
             value: None,
             ..Default::default()
         });
@@ -274,13 +278,51 @@ fn recovery_next_offset(base: i64, last_delta: i32) -> Result<Offset, BrokerErro
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_ids::PartitionIndex;
+    use krabka_log::ProducerId;
 
-    use super::{Offset, recovery_next_offset};
+    use super::{Offset, bootstrap, recovery_next_offset};
+    use crate::{
+        error::BrokerError,
+        txn::{coordinator::test_support::live_coordinator, state::TxnEntry, version::TxnVersion},
+    };
 
     #[test]
     fn recovery_offset_advance_is_checked_and_monotonic() {
         assert!(recovery_next_offset(7, 2).unwrap() == Offset(10));
         assert!(recovery_next_offset(7, -1).is_err());
         assert!(recovery_next_offset(i64::MAX, 0).is_err());
+    }
+
+    /// The `TransactionLogKey` writes the transactional id with an `int16`
+    /// length. An id of 32767 bytes is persisted, and one of 32768 bytes is an
+    /// error that appends nothing and keeps no entry, not a panic.
+    #[tokio::test]
+    async fn a_transactional_id_over_32767_bytes_is_not_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, _data) = live_coordinator(dir.path()).await;
+        let log = coordinator
+            .partitions
+            .get(bootstrap::TOPIC, PartitionIndex(0))
+            .expect("the state partition");
+        for (producer_id, (length, persisted)) in
+            [(32_767, true), (32_768, false)].into_iter().enumerate()
+        {
+            let tid = "t".repeat(length);
+            let producer_id = ProducerId(i64::try_from(producer_id).unwrap() + 7);
+            let entry = TxnEntry::new_empty(tid.clone(), producer_id, 0, 60_000, 0);
+
+            let outcome = coordinator
+                .put_under_state_partition_lock(entry, TxnVersion::Classic)
+                .await;
+
+            assert!(outcome.is_ok() == persisted, "{length} bytes");
+            assert!(
+                persisted || matches!(outcome, Err(BrokerError::Protocol(_))),
+                "{length} bytes is a protocol error"
+            );
+            assert!(coordinator.state.contains_key(&tid) == persisted);
+        }
+        assert!(log.log_end_offset().0 == 1);
     }
 }

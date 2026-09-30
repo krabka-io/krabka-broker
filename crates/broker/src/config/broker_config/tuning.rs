@@ -265,6 +265,14 @@ macro_rules! tuning_fields {
             pub transaction_state_min_isr: i32,
             /// Maximum accepted transaction timeout.
             pub transaction_max_timeout: Time,
+            /// The static layer of Kafka's dynamic
+            /// `transaction.partition.verification.enable`
+            /// (`KafkaConfig.transactionPartitionVerificationEnable`): whether a
+            /// partition leader checks with the transaction coordinator that a
+            /// transaction contains a partition before it appends transactional
+            /// records to it. A dynamic broker config, per-broker or cluster-wide,
+            /// overrides it.
+            pub transaction_partition_verification_enable: bool,
             /// Partition count for the `__barrier_state` internal topic.
             pub barrier_state_num_partitions: i32,
             /// Desired replication factor for the `__barrier_state` internal topic.

@@ -33,10 +33,12 @@ use krabka_protocol::{
     ProtocolError,
     primitives::{
         fixed::{get_i16, get_i64, put_i16, put_i64},
-        string_bytes::{get_string_owned, put_string},
+        string_bytes::get_string_owned,
     },
     records::{Attributes, Record, RecordBatch},
 };
+
+use crate::{coordinator::unified::persistence::put_string, error::BrokerError};
 
 /// The control-record key version. Kafka writes 0.
 const CONTROL_KEY_VERSION: i16 = 0;
@@ -62,23 +64,26 @@ pub struct BarrierMarker {
 /// overwrites with the offset it assigns. `leader_epoch` is the partition's
 /// current leader epoch: the writer does not stamp it, and a batch that keeps
 /// the default of zero carries a false leader epoch in its header.
-#[must_use]
+///
+/// # Errors
+/// Returns [`BrokerError::Protocol`] when the group name is longer than 32767
+/// bytes, which the `i16` length cannot carry.
 pub(crate) fn build_barrier_batch(
     marker: &BarrierMarker,
     base_offset: Offset,
     leader_epoch: i32,
-) -> RecordBatch {
+) -> Result<RecordBatch, BrokerError> {
     let mut key = Vec::with_capacity(4);
     put_i16(&mut key, CONTROL_KEY_VERSION);
     put_i16(&mut key, BARRIER_CONTROL_TYPE);
 
     let mut value = Vec::with_capacity(20 + marker.group.len());
     put_i16(&mut value, VALUE_VERSION);
-    put_string(&mut value, &marker.group);
+    put_string(&mut value, &marker.group)?;
     put_i64(&mut value, marker.epoch);
     put_i64(&mut value, marker.triggered_at);
 
-    RecordBatch {
+    Ok(RecordBatch {
         // `RecordBatch::default` already carries producer_id -1,
         // producer_epoch -1 and base_sequence -1, which is what a
         // non-transactional control batch needs.
@@ -97,7 +102,7 @@ pub(crate) fn build_barrier_batch(
             ..Record::default()
         }],
         ..RecordBatch::default()
-    }
+    })
 }
 
 /// Read the contents of a barrier marker back out of its record.
@@ -157,6 +162,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::persistence::MAX_STRING_BYTES;
 
     fn sample() -> BarrierMarker {
         BarrierMarker {
@@ -167,13 +173,34 @@ mod tests {
     }
 
     fn batch() -> RecordBatch {
-        build_barrier_batch(&sample(), Offset(42), 3)
+        build_barrier_batch(&sample(), Offset(42), 3).expect("builds")
     }
 
     #[test]
     fn a_marker_round_trips_through_its_record() {
         let built = batch();
         assert!(parse_barrier_marker(&built.records[0]).ok() == Some(sample()));
+    }
+
+    /// The group name is a string with an `i16` length. The builder writes one
+    /// of 32767 bytes and refuses a longer one with an error, because a panic
+    /// here would take down the connection of the request that named the group.
+    #[test]
+    fn a_group_name_of_32767_bytes_builds_and_one_of_32768_is_refused() {
+        for (length, builds) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
+            let marker = BarrierMarker {
+                group: "g".repeat(length),
+                ..sample()
+            };
+            let built = build_barrier_batch(&marker, Offset(0), 0);
+            assert!(built.is_ok() == builds, "{length} bytes");
+            if let Ok(batch) = built {
+                assert!(
+                    parse_barrier_marker(&batch.records[0]).ok() == Some(marker),
+                    "{length} bytes"
+                );
+            }
+        }
     }
 
     #[test]
@@ -251,7 +278,7 @@ mod tests {
         log.append(&mut txn).expect("append transactional data");
         let lso_before = log.lso();
 
-        let mut built = build_barrier_batch(&sample(), log.log_end_offset(), 0);
+        let mut built = build_barrier_batch(&sample(), log.log_end_offset(), 0).expect("builds");
         let (assigned, _) = log.append(&mut built).expect("append barrier marker");
 
         assert!(log.lso() == lso_before);

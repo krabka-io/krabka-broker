@@ -54,7 +54,7 @@ async fn recover_honors_nondefault_read_bound() {
     };
     let mut batch = RecordBatch::default();
     batch.records.push(Record {
-        key: Some(encode_state_key(&key)),
+        key: Some(encode_state_key(&key).unwrap()),
         value: Some(snapshot.encode()),
         ..Record::default()
     });
@@ -224,13 +224,15 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
         group_id: "g".to_string(),
         topic_id: tid,
         partition: 0,
-    });
+    })
+    .unwrap();
     let upd_key = encode_state_key(&ShareStateKey {
         record_type: KEY_SHARE_UPDATE,
         group_id: "g".to_string(),
         topic_id: tid,
         partition: 0,
-    });
+    })
+    .unwrap();
 
     // Batch A (base_offset 0): an UPDATE at delta 0, then a SNAPSHOT at
     // delta 1 (last_offset_delta = 1). The snapshot's rec_offset is
@@ -330,13 +332,15 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
         group_id: "g".to_string(),
         topic_id: tid,
         partition: 0,
-    });
+    })
+    .unwrap();
     let upd_key = encode_state_key(&ShareStateKey {
         record_type: KEY_SHARE_UPDATE,
         group_id: "g".to_string(),
         topic_id: tid,
         partition: 0,
-    });
+    })
+    .unwrap();
 
     // Single batch, base_offset 0: an UPDATE at delta 0 then a SNAPSHOT at
     // delta 1. The snapshot's rec_offset is `0 + 1 == 1`.

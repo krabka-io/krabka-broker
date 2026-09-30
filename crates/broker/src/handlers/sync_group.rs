@@ -10,9 +10,8 @@
 //! earlier `JoinGroup` exchange.
 
 use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{sync_group_request::SyncGroupRequest, sync_group_response::SyncGroupResponse},
+use krabka_protocol::owned::{
+    sync_group_request::SyncGroupRequest, sync_group_response::SyncGroupResponse,
 };
 use krabka_units::convert::TimeExt as _;
 use tokio::sync::oneshot;
@@ -39,7 +38,7 @@ pub(crate) async fn handle(
     let coordinator = broker.group_coordinator.clone();
     {
         let mut cur: &[u8] = req_bytes;
-        let req = SyncGroupRequest::decode(&mut cur, version)?;
+        let req: SyncGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
         // Kafka's `KafkaApis.handleSyncGroupRequest` answers a v5+ request
         // without a protocol type or name before the ACL check
@@ -132,11 +131,14 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use krabka_protocol::owned::{
-        join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-        join_group_response::{self, JoinGroupResponse},
-        sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
-        sync_group_response::{self, SyncGroupResponse},
+    use krabka_protocol::{
+        Decode,
+        owned::{
+            join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+            join_group_response::{self, JoinGroupResponse},
+            sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+            sync_group_response::{self, SyncGroupResponse},
+        },
     };
     use krabka_security::Principal;
 

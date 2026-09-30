@@ -36,12 +36,14 @@ async fn downgraded_group_replays_as_classic() {
         ng::encode_key(&ng::NextGenKey::GroupMetadata {
             group_id: gid.into(),
         })
+        .unwrap()
     };
     let ng_member_key = |gid: &str, mid: &str| {
         ng::encode_key(&ng::NextGenKey::MemberMetadata {
             group_id: gid.into(),
             member_id: mid.into(),
         })
+        .unwrap()
     };
 
     // Record stream in log order.
@@ -51,7 +53,7 @@ async fn downgraded_group_replays_as_classic() {
         // 1. initial classic group
         (k2_key, Some(k2_val)),
         // 2. upgrade drops k2 (tombstone)
-        (GroupMetadataValue::encode_key("g"), None),
+        (GroupMetadataValue::encode_key("g").unwrap(), None),
         // 3. upgrade: next-gen group metadata
         (
             ng_group_key("g"),
@@ -144,7 +146,8 @@ async fn compacted_downgrade_residue_replays_as_classic() {
         (
             ng::encode_key(&ng::NextGenKey::TargetAssignmentMetadata {
                 group_id: "g".into(),
-            }),
+            })
+            .unwrap(),
             None,
         ),
         // The fresh classic k2 written by the downgrade.
@@ -192,7 +195,8 @@ async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
         (
             ng::encode_key(&ng::NextGenKey::TargetAssignmentMetadata {
                 group_id: "g".into(),
-            }),
+            })
+            .unwrap(),
             Some(
                 ng::TargetAssignmentMetadataValue {
                     assignment_epoch: 1,
@@ -240,14 +244,16 @@ async fn upgraded_group_without_tombstone_replays_as_consumer() {
         (
             ng::encode_key(&ng::NextGenKey::GroupMetadata {
                 group_id: "g".into(),
-            }),
+            })
+            .unwrap(),
             persistence_next_gen::GroupMetadataValue { epoch: 1 }.encode(),
         ),
         (
             ng::encode_key(&ng::NextGenKey::MemberMetadata {
                 group_id: "g".into(),
                 member_id: "m1".into(),
-            }),
+            })
+            .unwrap(),
             persistence_next_gen::MemberMetadataValue {
                 instance_id: None,
                 rack_id: None,
@@ -295,14 +301,16 @@ async fn member_with_classic_block_replays_facade() {
         (
             ng::encode_key(&ng::NextGenKey::GroupMetadata {
                 group_id: "g".into(),
-            }),
+            })
+            .unwrap(),
             persistence_next_gen::GroupMetadataValue { epoch: 2 }.encode(),
         ),
         (
             ng::encode_key(&ng::NextGenKey::MemberMetadata {
                 group_id: "g".into(),
                 member_id: "m1".into(),
-            }),
+            })
+            .unwrap(),
             persistence_next_gen::MemberMetadataValue {
                 instance_id: None,
                 rack_id: None,
