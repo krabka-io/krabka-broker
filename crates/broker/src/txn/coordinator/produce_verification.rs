@@ -37,22 +37,26 @@ use crate::{
 pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 4;
 
 /// Kafka's `TransactionLogConfig.TRANSACTION_PARTITION_VERIFICATION_ENABLE_CONFIG`,
-/// a dynamic cluster-wide broker config that defaults to `true`.
-const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.verification.enable";
+/// a dynamic broker config that defaults to `true`.
+pub(crate) const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.verification.enable";
 
-/// Whether `node` verifies that a transaction contains a partition before it
-/// appends transactional records to it, as of `image`: the value of the
-/// dynamic per-broker config, else the cluster-wide one, else Kafka's default
-/// `true`. A value that is not a boolean does not apply, as Kafka refuses to
-/// set it.
+/// Whether the broker `config` describes verifies that a transaction contains
+/// a partition before it appends transactional records to it, as of `image`.
 ///
-/// This is read for each request, so a change takes effect for the next one.
+/// Kafka's `ReplicaManager` reads `KafkaConfig.transactionPartitionVerificationEnable`,
+/// the effective value: the dynamic per-broker config, else the cluster-wide
+/// one, else the static `server.properties` value, which is Kafka's default
+/// `true` when the operator named none. A dynamic value that is not a boolean
+/// does not apply, as Kafka refuses to set it.
+///
+/// This is read for each request, so a dynamic change takes effect for the
+/// next one.
 pub(crate) fn partition_verification_enabled(
     image: &krabka_metadata::MetadataImage,
-    node: krabka_metadata::NodeId,
+    config: &crate::config::BrokerConfig,
 ) -> bool {
     image
-        .broker_config(node)
+        .broker_config(config.node_id)
         .and_then(|configs| configs.get(PARTITION_VERIFICATION_ENABLE))
         .or_else(|| {
             image
@@ -64,7 +68,7 @@ pub(crate) fn partition_verification_enabled(
             "false" => Some(false),
             _ => None,
         })
-        .unwrap_or(true)
+        .unwrap_or(config.transaction_partition_verification_enable)
 }
 
 /// Whether the leader skips the coordinator call of a transactional append.

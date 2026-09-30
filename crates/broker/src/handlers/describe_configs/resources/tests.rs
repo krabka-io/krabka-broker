@@ -2667,3 +2667,129 @@ fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
         );
     }
 }
+
+/// `transaction.partition.verification.enable` is a dynamic broker config with
+/// a static layer. A named broker reports the static value beneath its
+/// dynamic overrides, at `STATIC_BROKER_CONFIG`, when the operator named the
+/// key in the `[runtime]` table or in `server_properties` (even at Kafka's
+/// default) or the node runs another value, and Kafka's default alone
+/// otherwise.
+#[test]
+fn a_named_broker_reports_the_static_layer_of_the_partition_verification_key() {
+    const KEY: &str = "transaction.partition.verification.enable";
+    const RUNTIME_FALSE: &str = "[runtime]\ntransaction_partition_verification_enable = false\n";
+    const PROPERTY_FALSE: &str =
+        "[server_properties]\n\"transaction.partition.verification.enable\" = \"false\"\n";
+    /// The dynamic values by node, then the chain: a value and its source,
+    /// the head first.
+    type Layers = (
+        Vec<(krabka_metadata::NodeId, &'static str)>,
+        Vec<(&'static str, i8)>,
+    );
+    let default = ("true", CONFIG_SOURCE_DEFAULT);
+    let static_false = ("false", CONFIG_SOURCE_STATIC_BROKER);
+    let cases: [(&str, &str, Layers); 8] = [
+        ("nothing named", "broker_id = 0\n", (vec![], vec![default])),
+        (
+            "runtime table at Kafka's default",
+            "[runtime]\ntransaction_partition_verification_enable = true\n",
+            (vec![], vec![("true", CONFIG_SOURCE_STATIC_BROKER), default]),
+        ),
+        (
+            "runtime table off",
+            RUNTIME_FALSE,
+            (vec![], vec![static_false, default]),
+        ),
+        (
+            "server property off",
+            PROPERTY_FALSE,
+            (vec![], vec![static_false, default]),
+        ),
+        (
+            "cluster-wide dynamic over static",
+            RUNTIME_FALSE,
+            (
+                vec![(DEFAULT_BROKER_CONFIG_NODE_ID, "true")],
+                vec![
+                    ("true", CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER),
+                    static_false,
+                    default,
+                ],
+            ),
+        ),
+        (
+            "per-broker dynamic over static",
+            PROPERTY_FALSE,
+            (
+                vec![(SERVING_NODE, "true")],
+                vec![
+                    ("true", CONFIG_SOURCE_DYNAMIC_BROKER),
+                    static_false,
+                    default,
+                ],
+            ),
+        ),
+        (
+            "per-broker dynamic over cluster-wide and static",
+            RUNTIME_FALSE,
+            (
+                vec![
+                    (DEFAULT_BROKER_CONFIG_NODE_ID, "true"),
+                    (SERVING_NODE, "false"),
+                ],
+                vec![
+                    ("false", CONFIG_SOURCE_DYNAMIC_BROKER),
+                    ("true", CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER),
+                    static_false,
+                    default,
+                ],
+            ),
+        ),
+        (
+            "dynamic over the default",
+            "broker_id = 0\n",
+            (
+                vec![(SERVING_NODE, "false")],
+                vec![("false", CONFIG_SOURCE_DYNAMIC_BROKER), default],
+            ),
+        ),
+    ];
+    for (label, source, (dynamic, chain)) in cases {
+        let file: crate::file_config::FileConfig = toml::from_str(source).expect("parse the file");
+        let mut config = crate::config::BrokerConfig::default();
+        file.apply_to(&mut config).expect("apply the file");
+        let settings = static_settings(&config);
+        let mut image = MetadataImage::new(Uuid::nil());
+        for (node_id, value) in dynamic {
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id,
+                config_name: KEY.to_owned(),
+                config_value: Some(value.to_owned()),
+            }));
+        }
+
+        let described = describe_with_static(
+            &image,
+            RESOURCE_TYPE_BROKER,
+            "1",
+            Some(vec![KEY.to_owned()]),
+            EVERYTHING,
+            StaticBrokerConfigs {
+                settings: &settings,
+                ..untuned()
+            },
+        );
+
+        let entry = entry_named(&described, KEY);
+        let (head_value, head_source) = chain[0];
+        let synonyms: Vec<DescribeConfigsSynonym> = chain
+            .iter()
+            .map(|(value, source)| synonym(KEY, value, *source))
+            .collect();
+        check!(
+            (entry.value.as_deref(), entry.config_source, &entry.synonyms)
+                == (Some(head_value), head_source, &synonyms),
+            "{label}"
+        );
+    }
+}

@@ -19,7 +19,6 @@
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode,
     owned::{
         alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
         alter_share_group_offsets_response::{
@@ -54,7 +53,8 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
-    let req = AlterShareGroupOffsetsRequest::decode(&mut cur, version)?;
+    let req: AlterShareGroupOffsetsRequest =
+        crate::handlers::decode_group_request(&mut cur, version)?;
 
     // Feature gate: share groups are on from a finalized `share.version` of 1,
     // and below it the RPC is unsupported.

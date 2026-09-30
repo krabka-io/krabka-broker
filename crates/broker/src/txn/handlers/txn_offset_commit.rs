@@ -64,7 +64,7 @@
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{Decode, owned::txn_offset_commit_request::TxnOffsetCommitRequest};
+use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
 
 mod batch;
 mod existence;
@@ -117,7 +117,7 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let partitions = broker.partitions.clone();
     let mut cur: &[u8] = req_bytes;
-    let mut req = TxnOffsetCommitRequest::decode(&mut cur, version)?;
+    let mut req: TxnOffsetCommitRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble: Write on TransactionalId ────────────────
     {
