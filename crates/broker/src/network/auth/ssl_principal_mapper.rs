@@ -415,7 +415,8 @@ mod tests {
 
     /// `(?i)` in a rule folds ASCII case only, as Java's does, so the long s
     /// (U+017F) in a DN is not the `s` of a rule. A backreference under `(?i)`
-    /// is one the rule cannot follow, and the mapper refuses the rule.
+    /// compares the group's text ASCII-insensitively. Each answer is
+    /// `SslPrincipalMapper.Rule.apply` on JDK 17.
     #[test]
     fn a_rule_folds_ascii_case_only_under_i() {
         let mapper = SslPrincipalMapper::parse(&["RULE:^CN=(.*?),OU=(?i)serviceusers$/$1/"])
@@ -423,8 +424,12 @@ mod tests {
 
         check!(mapper.apply("CN=alice,OU=ServiceUsers") == Some("alice".to_owned()));
         check!(mapper.apply("CN=alice,OU=\u{17f}erviceUsers").is_none());
-        check!(SslPrincipalMapper::parse(&["RULE:^(?i)(a),\\1$/$1/"]).is_err());
-        check!(SslPrincipalMapper::parse(&["RULE:^(?iu)(a),\\1$/$1/"]).is_ok());
+
+        for rule in ["RULE:^(?i)(a),\\1$/$1/", "RULE:^(?iu)(a),\\1$/$1/"] {
+            let mapper = SslPrincipalMapper::parse(&[rule]).expect("the rule parses");
+            check!(mapper.apply("A,a") == Some("A".to_owned()), "{rule}");
+            check!(mapper.apply("A,b").is_none(), "{rule}");
+        }
     }
 
     #[test]

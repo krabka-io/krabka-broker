@@ -19,16 +19,30 @@
 //! of both cases, and `\p{Lu}`, `\p{Ll}` and `\p{Lt}` are all cased letters.
 //! [`property_class`] writes those.
 //!
+//! `\Q...\E` is gone before any of that is read. Java's `RemoveQEQuoting`
+//! rewrites the text of each one into escaped characters before it parses the
+//! pattern, so `[\Qa\E-c]` is the range `[a-c]`, and [`remove_qe_quoting`] does
+//! the same.
+//!
 //! An `i` with `u` stays `fancy_regex`'s own Unicode fold, which is Unicode
 //! simple case folding. Java compares `Character.toUpperCase` and
 //! `toLowerCase` instead, and the two differ for a few letters: `İ` (U+0130)
 //! and `ı` (U+0131) match `i` in Java under `(?iu)`, and not in `fancy_regex`.
+//! Two more differences are left as they are, because `fancy_regex` folds a
+//! whole class or a whole reference and has no switch inside one:
 //!
-//! A backreference is the one thing it cannot write. Java's `CIBackRef` compares
-//! the text of the group ASCII-insensitively, and `fancy_regex` has no
-//! per-reference flag: its `i` compares Unicode-insensitively, and `(?-i)` makes
-//! the comparison exact. The rewrite refuses such a pattern, as it refuses the
-//! Java-incompatible group openers.
+//! - `\w`, `\W`, `\p{Lower}` and `\p{Upper}` inside a character class under
+//!   `(?iu)`, as in `(?iu)[\w]`, are ASCII letters there, and `fancy_regex`'s
+//!   `i` widens the class to U+017F and U+212A, which Java's does not. Outside
+//!   a class [`unfolded`] wraps it in `(?-i:...)`, and there is no such
+//!   difference.
+//! - A backreference under an ASCII fold is written `(?i:\1)`. Java's
+//!   `CIBackRef` compares the text of the group ASCII-insensitively, and
+//!   `fancy_regex`'s `i` compares two texts Unicode-insensitively, unless both
+//!   are ASCII. The two agree on every ASCII text. They differ when the group
+//!   holds a non-ASCII letter, and the reference matches the same letter in the
+//!   other case: `(?i)(é)\1` matches `éÉ` in `fancy_regex`, and not in Java.
+//!   `fancy_regex` has no ASCII fold for a reference.
 
 use std::fmt::Write as _;
 
@@ -37,8 +51,6 @@ use super::Scope;
 /// A backslash escape, as [`read_escape`] reads it.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Escape {
-    /// `\Q`, which quotes the text up to the next `\E`.
-    Quote,
     /// An escape that stands for one character: `\x41`, `\x{41}`,
     /// `\uhhhh`, `\0101`, `\cA`, `\t`, or a backslash before a character that is not a
     /// letter or a digit, such as `\.`.
@@ -51,6 +63,57 @@ pub(super) enum Escape {
     Named,
     /// Any other escape, such as `\w`, `\b` or `\A`.
     Other,
+}
+
+/// Java's `Pattern.RemoveQEQuoting`, which runs over the whole pattern before
+/// it is parsed: the text of each `\Q...\E`, or of a `\Q` with no `\E`, up to
+/// the end, becomes its characters, and each one that is not a letter, a digit
+/// or a non-ASCII character gets a backslash before it. The first digit of the
+/// text is written `\x3d`, so that a `\x4` before the `\Q` cannot take it. A
+/// backslash is written `\\`, and a `\` before a `\Q` or a `\E` is read as a
+/// pair, as it is outside the quote.
+///
+/// What the parser reads after that has no `\Q` in it, and reads the quoted
+/// text as it reads any other characters: `[\Qa\E-c]` is `[a-c]`, a range, and
+/// `[a\Q-\Ec]` is `[a\-c]`, which is not.
+pub(super) fn remove_qe_quoting(chars: &[char]) -> Vec<char> {
+    let mut out = Vec::with_capacity(chars.len());
+    let mut at = 0;
+    while let Some(&c) = chars.get(at) {
+        at += 1;
+        match (c, chars.get(at)) {
+            ('\\', Some('Q')) => at = quote(chars, at + 1, &mut out),
+            ('\\', Some(&escaped)) => {
+                out.extend([c, escaped]);
+                at += 1;
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Writes the quoted text that starts at `chars[at]`, just after a `\Q`, and
+/// returns the index after the `\E` that ends it, or the end of the pattern.
+fn quote(chars: &[char], mut at: usize, out: &mut Vec<char>) -> usize {
+    let mut first = true;
+    while let Some(&c) = chars.get(at) {
+        at += 1;
+        match c {
+            '\\' if chars.get(at) == Some(&'E') => return at + 1,
+            '\\' => out.extend(['\\', '\\']),
+            _ if !c.is_ascii() || c.is_ascii_alphabetic() => out.push(c),
+            _ if c.is_ascii_digit() => {
+                if first {
+                    out.extend(['\\', 'x', '3']);
+                }
+                out.push(c);
+            }
+            _ => out.extend(['\\', c]),
+        }
+        first = false;
+    }
+    at
 }
 
 /// The escape that starts at `chars[at]`, a backslash, and the number of chars
@@ -66,7 +129,6 @@ pub(super) fn read_escape(chars: &[char], at: usize, in_class: bool) -> (Escape,
     };
     let after = &rest[1..];
     let read = match kind {
-        'Q' => Some((Escape::Quote, 2)),
         't' => Some((Escape::Char(0x09), 2)),
         'n' => Some((Escape::Char(0x0A), 2)),
         'r' => Some((Escape::Char(0x0D), 2)),
@@ -194,21 +256,31 @@ fn ascii_letter(code: u32) -> Option<char> {
 }
 
 /// Writes `source`, the chars of one character of the pattern that stands for
-/// `code`, but as the letter itself when it is an ASCII letter. `fancy_regex`
-/// reads `\x41` and `A`, and not the octal `\0101`.
+/// `code`, as `fancy_regex` reads it:
+///
+/// - An ASCII letter is the letter itself. `fancy_regex` reads `\x41` and
+///   `A`, and not the octal `\0101`.
+/// - A bare `]`, which is a member only first in a class, is `\]`.
+/// - `\<` and `\>` are `<` and `>`. Java reads a backslash before either as
+///   the character, and `fancy_regex` as the edge of a word.
+///
+/// Any other character is `source`.
 pub(super) fn push_member(out: &mut String, source: &[char], code: u32) {
-    match ascii_letter(code) {
-        Some(letter) => out.push(letter),
-        None => out.extend(source),
+    match (ascii_letter(code), source) {
+        (Some(letter), _) => out.push(letter),
+        (None, [']']) => out.push_str("\\]"),
+        (None, ['\\', edge @ ('<' | '>')]) => out.push(*edge),
+        _ => out.extend(source),
     }
 }
 
 /// Writes `source`, the chars of one character of the pattern that stands for
 /// `code`, as a set of both its cases when it is an ASCII letter: `[aA]`
-/// outside a class, and `aA` inside one. Any other character is `source`.
+/// outside a class, and `aA` inside one. Any other character is written as
+/// [`push_member`] writes it.
 pub(super) fn push_folded(out: &mut String, source: &[char], code: u32, in_class: bool) {
     let Some(letter) = ascii_letter(code) else {
-        out.extend(source);
+        push_member(out, source, code);
         return;
     };
     let (lower, upper) = (letter.to_ascii_lowercase(), letter.to_ascii_uppercase());
@@ -286,6 +358,21 @@ fn is_cased_property(name: &str) -> bool {
     })
 }
 
+/// `class`, an ASCII class that Java reads the same in every case, such as
+/// `\w` and `\p{Lower}`, written so that `fancy_regex`'s `i` leaves it alone.
+///
+/// Where its `i` is on (`(?iu)`) it widens the ASCII letters of a class to
+/// U+017F and U+212A, and Java's `\w` and `\p{Lower}` do not match those. Outside
+/// a character class the class goes in `(?-i:...)`. Inside one there is no
+/// way to turn `i` off for a member, and the class stays as it is.
+pub(super) fn unfolded(class: &str, in_class: bool, scope: Scope) -> String {
+    if scope.fancy_ignore_case() && !in_class {
+        format!("(?-i:{class})")
+    } else {
+        class.to_owned()
+    }
+}
+
 /// `\p{name}` or `\P{name}`, written for `fancy_regex` as [`property_members`]
 /// says, or `None` where the escape is fine as it stands.
 pub(super) fn property_class(
@@ -295,11 +382,14 @@ pub(super) fn property_class(
     scope: Scope,
 ) -> Option<String> {
     let members = property_members(name, scope)?;
-    Some(match (negated, in_class) {
+    let class = match (negated, in_class) {
         (false, true) => members.to_owned(),
         (false, false) => format!("[{members}]"),
         (true, _) => format!("[^{members}]"),
-    })
+    };
+    // Under `(?iu)` the only members are the ASCII letters of `Lower` and
+    // `Upper`.
+    Some(unfolded(&class, in_class, scope))
 }
 
 #[cfg(test)]
@@ -323,7 +413,6 @@ mod tests {
         };
         // (text, in a class, escape, chars taken)
         let cases = [
-            ("\\Qa\\E", false, Escape::Quote, 2),
             ("\\x41", false, Escape::Char(0x41), 4),
             ("\\x{41}", false, Escape::Char(0x41), 6),
             ("\\x{1F600}", false, Escape::Char(0x1F600), 9),
@@ -376,6 +465,69 @@ mod tests {
             let mut out = String::new();
             push_other_case_ranges(&mut out, u32::from(lo), u32::from(hi));
             check!(out == expected, "{lo:?}-{hi:?}");
+        }
+    }
+
+    /// Each row is the pattern, and what the JDK 17 `Pattern.RemoveQEQuoting`
+    /// leaves of it, read from the private `temp` array it works on.
+    #[test]
+    fn remove_qe_quoting_rewrites_as_java_does() {
+        let cases = [
+            ("abc", "abc"),
+            ("\\Qa.b\\E", "a\\.b"),
+            ("\\Qa.b", "a\\.b"),
+            ("[\\Qa\\E-c]", "[a-c]"),
+            ("[a\\Q-\\Ec]", "[a\\-c]"),
+            ("[\\Q]\\E-c]", "[\\]-c]"),
+            ("\\Q\\E", ""),
+            ("a\\Q\\E+", "a+"),
+            ("\\Q1\\E2", "\\x312"),
+            ("\\Qab1\\E", "ab1"),
+            ("\\Q12\\E", "\\x312"),
+            ("\\Qa\\\\E", "a\\\\"),
+            ("\\Q\\\\E", "\\\\"),
+            ("\\\\Qa\\E", "\\\\Qa\\E"),
+            ("\\\\Q.\\E", "\\\\Q.\\E"),
+            ("\\Q.\\E\\Q*\\E", "\\.\\*"),
+            ("x\\Qa\\Eb\\Qc\\E", "xabc"),
+            ("\\Q\\E\\Q\\E", ""),
+            ("\\Qa\\Eb\\E", "ab\\E"),
+            ("\\Q<>_ #\\E", "\\<\\>\\_\\ \\#"),
+            ("\\Q\\u00e9k\\E", "\\\\u00e9k"),
+            ("\\Q\u{e9}.\\E", "\u{e9}\\."),
+            ("\\Q.", "\\."),
+            ("a\\", "a\\"),
+        ];
+        for (pattern, expected) in cases {
+            let chars: Vec<char> = pattern.chars().collect();
+            let rewritten: String = remove_qe_quoting(&chars).into_iter().collect();
+            check!(rewritten == expected, "{pattern:?}");
+        }
+    }
+
+    /// A member is written as `fancy_regex` reads it: `]` first in a class is
+    /// `\]`, `\<` and `\>` are the bare characters, and an ASCII letter is the
+    /// letter whatever escape named it.
+    #[test]
+    fn push_member_writes_what_fancy_regex_reads() {
+        // (source, code, written)
+        let cases = [
+            ("]", 0x5D, "\\]"),
+            ("\\]", 0x5D, "\\]"),
+            ("\\<", 0x3C, "<"),
+            ("\\>", 0x3E, ">"),
+            ("<", 0x3C, "<"),
+            ("\\.", 0x2E, "\\."),
+            ("\\x41", 0x41, "A"),
+            ("\\0101", 0x41, "A"),
+            ("\\t", 0x09, "\\t"),
+            ("\u{e9}", 0xE9, "\u{e9}"),
+        ];
+        for (source, code, expected) in cases {
+            let chars: Vec<char> = source.chars().collect();
+            let mut out = String::new();
+            push_member(&mut out, &chars, code);
+            check!(out == expected, "{source:?}");
         }
     }
 }

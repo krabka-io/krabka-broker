@@ -214,6 +214,17 @@ It matches Kafka 4.3.1 by default and Kafka trunk under the unstable flags.
   (#1223). SASL_SSL listeners no longer map the client certificate, CreateAcls
   and DeleteAcls have Kafka's 10000-ACL bound and message, and hosts are stored
   as text below `metadata.version` 4.4-IV1 (#1240).
+- `(?i)` in a `java.util.regex` pattern folds ASCII case only, as Java's
+  `CASE_INSENSITIVE` does, until `(?u)` or `(?U)` asks for Unicode case. That
+  covers `ssl.principal.mapping.rules`, GSSAPI `auth_to_local` rules and the
+  `match` of a client-metrics subscription, so `(?i)service-` no longer
+  matches `ſervice-` (long s), and `\w` and `\p{Lower}` under `(?iu)` do not
+  match it or the Kelvin sign outside a character class. The translation reads
+  `\Q...\E` before the rest as Java does, so a quoted member can begin or end
+  a class range, a `]` first in a class may start one, and a backslash before
+  `<` or `>` is that character. A backreference under `(?i)` is accepted and
+  folds ASCII case, but it also folds non-ASCII letters, which Java's does not.
+  `\N{name}` is refused (#1248).
 - Quota buckets go into debt, so the throttled overage is not credited back
   (#1212). A shared bucket is re-rated from its own entity (#1213), `ip`
   entities match host names and non-canonical spellings (#1214), a null client

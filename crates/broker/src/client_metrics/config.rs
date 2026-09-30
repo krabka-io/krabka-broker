@@ -8,7 +8,7 @@
 
 mod java_fold;
 
-use std::{collections::BTreeMap, fmt::Write as _};
+use std::collections::BTreeMap;
 
 use fancy_regex::Regex;
 
@@ -239,17 +239,18 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
-/// for a group opener Java refuses, or a backreference under an ASCII case
-/// fold.
+/// for a group opener Java refuses, or a `\N{name}`, which the rewrite cannot
+/// read.
 ///
 /// `fancy_regex` accepts Python and Oniguruma forms Java refuses, such as
 /// `(?P<name>x)`, `(?P=name)`, `(?'name'x)` and `(?~x)`, so every `(?` outside
 /// a character class must be one of Java's openers: `(?:`, `(?=`, `(?!`,
 /// `(?>`, `(?<=`, `(?<!`, `(?<name>` with an ASCII-letter-then-alphanumeric
 /// name, or inline flags from `idmsuxU-`. Java's `\Q...\E` quoting, which
-/// `fancy_regex` lacks, becomes escaped literals.
+/// `fancy_regex` lacks, becomes escaped literals before anything else is read,
+/// as Java does it.
 ///
-/// Three things read differently by default, and the rewrite gives the Java
+/// Four things read differently by default, and the rewrite gives the Java
 /// reading, following the flags in force at each place (`(?s)`, `(?d)`,
 /// `(?U)`, `(?i)`, `(?u)` and `(?x)`, alone or scoped to a group):
 ///
@@ -262,14 +263,13 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 /// - `(?i)` (`CASE_INSENSITIVE`) folds ASCII case only, where `fancy_regex`'s
 ///   `i` folds Unicode case, until `(?u)` (`UNICODE_CASE`) or `(?U)` asks for
 ///   Unicode folding. While an ASCII fold is in force the rewrite writes both
-///   cases of each ASCII letter itself, and a backreference, which it cannot
-///   write, makes the pattern `None`. See [`java_fold`].
-///
-/// Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
-/// comments Java ignores, so that the text of a comment is never read as
-/// pattern.
+///   cases of each ASCII letter itself, and a backreference as `(?i:\1)`. See
+///   [`java_fold`] for the two places where that differs from Java.
+/// - Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
+///   comments Java ignores, so that the text of a comment is never read as
+///   pattern.
 pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
-    let chars: Vec<char> = pattern.chars().collect();
+    let chars = java_fold::remove_qe_quoting(&pattern.chars().collect::<Vec<char>>());
     let mut translator = Translator {
         chars: &chars,
         out: String::with_capacity(pattern.len()),
@@ -277,7 +277,6 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
         outer: Vec::new(),
         class_depth: 0,
         class_start: false,
-        quoted: false,
         at: 0,
     };
     while translator.at < chars.len() {
@@ -298,8 +297,6 @@ struct Translator<'a> {
     class_depth: usize,
     /// The next char is the first in a class, where a `]` is a member.
     class_start: bool,
-    /// Between `\Q` and `\E`.
-    quoted: bool,
     /// The index of the next char to read.
     at: usize,
 }
@@ -320,10 +317,6 @@ impl Translator<'_> {
     fn step(&mut self) -> Option<()> {
         let c = self.chars[self.at];
         let first_in_class = std::mem::take(&mut self.class_start);
-        if self.quoted {
-            self.quoted_char(c);
-            return Some(());
-        }
         let ignored = self.ignored_len(self.at);
         if ignored > 0 {
             self.class_start = first_in_class;
@@ -338,13 +331,10 @@ impl Translator<'_> {
                 self.copy(1);
             }
             '[' => self.open_class(),
-            ']' if self.in_class() => {
-                if first_in_class {
-                    self.out.push_str("\\]");
-                } else {
-                    self.class_depth -= 1;
-                    self.out.push(']');
-                }
+            // First in a class, a `]` is a member, and may start a range.
+            ']' if self.in_class() && !first_in_class => {
+                self.class_depth -= 1;
+                self.out.push(']');
                 self.at += 1;
             }
             '.' if !self.in_class() && !self.scope.dot.dotall && !self.scope.dot.unix_lines => {
@@ -366,41 +356,22 @@ impl Translator<'_> {
         }
     }
 
-    /// A char between `\Q` and `\E`, which is a literal.
-    fn quoted_char(&mut self, c: char) {
-        if c == '\\' && self.chars.get(self.at + 1) == Some(&'E') {
-            self.quoted = false;
-            self.at += 2;
-            return;
-        }
-        let in_class = self.in_class();
-        if self.scope.ascii_fold() && c.is_ascii_alphabetic() {
-            java_fold::push_folded(&mut self.out, &[c], u32::from(c), in_class);
-        } else if c.is_whitespace() || c == '#' {
-            // A quoted space or `#` stays literal under Java's `(?x)`;
-            // `regex::escape` leaves them bare, and `fancy_regex`'s
-            // `x` would drop them.
-            let _ = write!(self.out, "\\x{{{:X}}}", u32::from(c));
-        } else {
-            self.out
-                .push_str(&regex::escape(c.encode_utf8(&mut [0; 4])));
-        }
-        self.at += 1;
-    }
-
     /// The escape at `at`.
     fn escape(&mut self) -> Option<()> {
         let in_class = self.in_class();
         let (escape, len) = java_fold::read_escape(self.chars, self.at, in_class);
         match escape {
-            Escape::Quote => {
-                self.quoted = true;
-                self.at += len;
+            // `fancy_regex` reads `\N{name}` as `\N` and the text of the name,
+            // and the rewrite has no table of Unicode names to write the char.
+            Escape::Named => return None,
+            // Java compares the text of the group ASCII-insensitively, which
+            // `fancy_regex` can do only for a whole reference. See
+            // [`java_fold`] for what that leaves different.
+            Escape::BackRef if self.scope.ascii_fold() => {
+                self.out.push_str("(?i:");
+                self.copy(len);
+                self.out.push(')');
             }
-            // Java compares the text of the group ASCII-insensitively, and
-            // `fancy_regex` cannot; `\N{name}` names a char the rewrite cannot
-            // tell is a letter.
-            Escape::BackRef | Escape::Named if self.scope.ascii_fold() => return None,
             Escape::Char(code) => self.atom(code, len),
             Escape::Property { name, negated } => {
                 match java_fold::property_class(&name, negated, in_class, self.scope) {
@@ -411,14 +382,15 @@ impl Translator<'_> {
                     None => self.copy(len),
                 }
             }
-            Escape::BackRef | Escape::Named | Escape::Other => {
+            Escape::BackRef | Escape::Other => {
                 let ascii = self
                     .chars
                     .get(self.at + 1)
                     .and_then(|&next| ascii_shorthand(next, in_class));
                 match ascii {
                     Some(ascii) if !self.scope.unicode_classes => {
-                        self.out.push_str(ascii);
+                        let class = java_fold::unfolded(ascii, in_class, self.scope);
+                        self.out.push_str(&class);
                         self.at += len;
                     }
                     _ => self.copy(len),
@@ -442,22 +414,21 @@ impl Translator<'_> {
         };
         if let Some((end, end_code, end_len)) = range {
             let (first, last) = (&chars[start..after], &chars[end..end + end_len]);
+            java_fold::push_member(&mut self.out, first, code);
+            self.out.push('-');
+            java_fold::push_member(&mut self.out, last, end_code);
             if fold {
-                java_fold::push_member(&mut self.out, first, code);
-                self.out.push('-');
-                java_fold::push_member(&mut self.out, last, end_code);
                 java_fold::push_other_case_ranges(&mut self.out, code, end_code);
-            } else {
-                self.out.extend(first);
-                self.out.push('-');
-                self.out.extend(last);
             }
             self.at = end + end_len;
-        } else if fold {
-            java_fold::push_folded(&mut self.out, &chars[start..after], code, in_class);
-            self.at = after;
         } else {
-            self.copy(len);
+            let source = &chars[start..after];
+            if fold {
+                java_fold::push_folded(&mut self.out, source, code, in_class);
+            } else {
+                java_fold::push_member(&mut self.out, source, code);
+            }
+            self.at = after;
         }
     }
 
@@ -804,13 +775,7 @@ mod tests {
             // Kafka splits on every `=`, so a lookahead `(?=` can never pass.
             ("match", "client_id=a(?=b)", illegal("client_id=a(?=b)")),
             ("match", "client_id=(a)\\1", Ok(())),
-            // Java compares a backreference ASCII-insensitively under `(?i)`,
-            // which `fancy_regex` cannot do, so the rewrite refuses it.
-            (
-                "match",
-                "client_id=(?i)(a)\\1",
-                illegal("client_id=(?i)(a)\\1"),
-            ),
+            ("match", "client_id=(?i)(a)\\1", Ok(())),
             ("match", "client_id=(?iu)(a)\\1", Ok(())),
             ("match", "client_id=a==", Ok(())),
             ("match", "client_foo=x", illegal("client_foo=x")),
@@ -940,6 +905,20 @@ mod tests {
             ("(?i)(?<Id>app)-\\d", "APP-1", true),
             ("app(?i)-x", "app-X", true),
             ("app(?i)-x", "APP-X", false),
+            // A quoted member takes part in a range, a `]` first in a class may
+            // start one, `\p{Lower}` and `\w` stay ASCII under `(?iu)`, and a
+            // backreference folds ASCII case.
+            ("(?i)[\\Qa\\E-c]", "B", true),
+            ("(?i)[\\Qa\\E-c]", "X", false),
+            ("(?i)[]-c]", "A", true),
+            ("(?i)[]-c]", "X", false),
+            ("(?iu)\\p{Lower}", "\u{17f}", false),
+            ("(?iu)\\p{Lower}", "A", true),
+            ("(?iu)\\w", "\u{17f}", false),
+            ("(?i)(a)\\1", "aA", true),
+            ("(?i)(a)\\1", "ab", false),
+            ("(?i)(\\d+)-\\1", "12-12", true),
+            ("(?i)(\\d+)-\\1", "12-13", false),
         ];
         for (pattern, input, expected) in cases {
             let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();

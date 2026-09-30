@@ -507,30 +507,166 @@ mod tests {
         }
     }
 
-    /// Java's `CIBackRef` compares the group's text ASCII-insensitively, which
-    /// `fancy_regex` cannot do: its `i` compares Unicode-insensitively, and
-    /// without it the comparison is exact. A backreference read under an ASCII
-    /// fold is refused, and one read with `(?u)`, or with no fold, is not.
+    /// A `\Q...\E` is read out before the pattern is, as Java's `RemoveQEQuoting`
+    /// does, so a quoted member takes part in a range. A `]` first in a class is a
+    /// member that may start a range, a backslash before `<` or `>` is the
+    /// character, `\w`, `\p{Lower}` and `\p{Upper}` are the ASCII letters under
+    /// `(?iu)`, and a backreference compares ASCII case-insensitively under
+    /// `(?i)`. Each row is `Pattern.matches` on JDK 17.
     #[test]
-    fn a_backreference_under_an_ascii_fold_is_refused() {
-        // (pattern, Java's `Pattern.compile` accepts it, this crate does)
-        for (source, compiles) in [
-            ("(?i)(a)\\1", false),
-            ("(?i)(?<x>a)\\k<x>", false),
-            ("(?-i)(?i)(a)\\1", false),
-            ("a(?i:(b)\\1)", false),
-            ("(?i)(a)(?-i)\\1", true),
-            ("(?i)(a)(?-i:\\1)", true),
-            ("(?iu)(a)\\1", true),
-            ("(?iU)(a)\\1", true),
-            ("(a)\\1", true),
-            // `\N{name}` names a char that may be a letter.
-            ("(?i)\\N{LATIN SMALL LETTER A}", false),
+    fn matches_reads_quotes_classes_and_references_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // \Q...\E is expanded before the pattern is read, so a quoted member takes part in a range
+            ("(?i)[\\Qa\\E-c]", "B", true),
+            ("(?i)[\\Qa\\E-c]", "b", true),
+            ("(?i)[\\Qa\\E-c]", "A", true),
+            ("(?i)[\\Qa\\E-c]", "X", false),
+            ("(?i)[a-\\Qc\\E]", "B", true),
+            ("(?i)[a-\\Qc\\E]", "X", false),
+            ("(?i)[\\Qa\\E-\\Qc\\E]", "B", true),
+            ("(?i)[\\Qa\\E-\\Qc\\E]", "X", false),
+            ("(?i)[\\Qa\\Eb-d]", "C", true),
+            ("(?i)[\\Qa\\Eb-d]", "A", true),
+            ("(?i)[\\Qa\\Eb-d]", "X", false),
+            ("(?i)[\\Q\\Ea-c]", "B", true),
+            ("(?i)[a-\\Q\\Ec]", "B", true),
+            ("(?i)[a-\\Q\\Ec]", "X", false),
+            ("[\\Qa\\E-c]", "b", true),
+            ("[\\Qa\\E-c]", "B", false),
+            ("[\\Qa\\E-c]", "X", false),
+            ("(?i)[\\Q]\\E-c]", "A", true),
+            ("(?i)[\\Q]\\E-c]", "X", false),
+            ("(?i)[\\Q1\\E-3]", "2", true),
+            // a quoted dash is not a range
+            ("(?i)[\\Qa-c\\E]", "B", false),
+            ("(?i)[\\Qa-c\\E]", "-", true),
+            ("(?i)[\\Qa-c\\E]", "C", true),
+            ("(?i)[a\\Q-\\Ec]", "B", false),
+            ("(?i)[a\\Q-\\Ec]", "-", true),
+            ("(?i)[a\\Q-\\Ec]", "C", true),
+            // a quote with no \E runs to the end of the pattern
+            ("(?i)x\\Qa", "XA", true),
+            ("(?i)x\\Qa\\E", "XA", true),
+            ("(?i)a\\Q\\E+", "AA", true),
+            ("\\Q1\\E2", "12", true),
+            ("\\Qa\\\\E", "a\\", true),
+            ("\\Q\\\\E", "\\", true),
+            ("\\Qa.b\\E", "a.b", true),
+            ("\\Qa.b\\E", "axb", false),
+            ("(?i)\\Qk\\E", "\u{212a}", false),
+            ("(?iu)\\Qk\\E", "\u{212a}", true),
+            // a backslash before < or > is the character
+            ("\\<", "<", true),
+            ("\\>", ">", true),
+            ("[\\<]", "<", true),
+            ("[\\>]", ">", true),
+            ("\\Q<\\E", "<", true),
+            ("[\\Q<\\E]", "<", true),
+            ("\\Q>\\E", ">", true),
+            // a ] first in a class is a member, and starts a range
+            ("(?i)[]-c]", "A", true),
+            ("(?i)[]-c]", "B", true),
+            ("(?i)[]-c]", "_", true),
+            ("(?i)[]-c]", "]", true),
+            ("(?i)[]-c]", "X", false),
+            ("(?i)[]-c]", "d", false),
+            ("(?i)[]-c]", "D", false),
+            ("(?i)[^]-c]", "A", false),
+            ("(?i)[^]-c]", "X", true),
+            ("(?i)[^]-c]", "d", true),
+            ("(?i)[]-cx]", "X", true),
+            ("(?i)[]-]", "-", true),
+            ("(?i)[]-]", "]", true),
+            ("(?iu)[]-c]", "A", true),
+            ("(?ix)[ ]-c ]", "A", true),
+            ("[]-c]", "a", true),
+            ("[]-c]", "A", false),
+            ("[]-c]", "]", true),
+            // \p{Lower} and \p{Upper} are the ASCII letters under (?iu), whatever fancy_regex's i would fold
+            ("(?iu)\\p{Lower}", "\u{17f}", false),
+            ("(?iu)\\p{Lower}", "\u{212a}", false),
+            ("(?iu)\\p{Lower}", "A", true),
+            ("(?iu)\\p{Lower}", "a", true),
+            ("(?iu)\\p{Upper}", "\u{17f}", false),
+            ("(?iu)\\p{Upper}", "\u{212a}", false),
+            ("(?iu)\\p{Upper}", "a", true),
+            ("(?iu)\\p{Upper}", "\u{e9}", false),
+            ("(?iu)\\P{Lower}", "\u{17f}", true),
+            ("(?iu)\\P{Lower}", "A", false),
+            ("(?iu)\\P{Lower}", "1", true),
+            ("(?iu)\\P{Upper}", "\u{212a}", true),
+            ("(?u)\\p{Lower}", "\u{17f}", false),
+            ("(?u)\\p{Lower}", "A", false),
+            // \w and \W are ASCII under (?iu), whatever fancy_regex's i would fold
+            ("(?iu)\\w", "\u{17f}", false),
+            ("(?iu)\\w", "\u{212a}", false),
+            ("(?iu)\\w", "a", true),
+            ("(?iu)\\w", "_", true),
+            ("(?iu)\\W", "\u{17f}", true),
+            ("(?iu)\\W", "\u{212a}", true),
+            ("(?iu)\\W", "a", false),
+            ("(?iu)\\W", "-", true),
+            ("(?iu)\\w+", "k\u{212a}", false),
+            ("(?iu)k\\w", "k\u{212a}", false),
+            ("(?iu)\\w\\p{Lower}", "k\u{212a}", false),
+            ("(?i)\\w", "\u{17f}", false),
+            ("(?u)\\w", "\u{17f}", false),
+            ("(?iU)\\w", "\u{17f}", true),
+            // a backreference compares ASCII case-insensitively under (?i)
+            ("(?i)(a)\\1", "aA", true),
+            ("(?i)(a)\\1", "aa", true),
+            ("(?i)(a)\\1", "ab", false),
+            ("(?i)(\\d+)-\\1", "12-12", true),
+            ("(?i)(\\d+)-\\1", "12-13", false),
+            ("(?i)(?<x>a)\\k<x>", "aA", true),
+            ("(?i)(?<x>a)\\k<x>", "ab", false),
+            ("(?i)(a+)\\1", "aaAA", true),
+            ("(?i)(a)\\1+", "aAAa", true),
+            ("(?i)(a)(\\1)", "aA", true),
+            ("(?i)(k)\\1", "kK", true),
+            ("(?i)(k)\\1", "k\u{212a}", false),
+            ("(?i:(a)\\1)", "aA", true),
+            ("a(?i:(b)\\1)", "aBb", true),
+            ("a(?i:(b)\\1)", "aBB", true),
+            ("a(?i:(b)\\1)", "AbB", false),
+            ("(?i)(a)((b))\\3\\2\\1", "aBBBA", true),
+            ("(?i)(a)((b))\\3\\2\\1", "aBbBa", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// A backreference under an ASCII fold is written `(?i:\1)`, and
+    /// `fancy_regex`'s `i` compares the text of the group Unicode-insensitively
+    /// when either text is not ASCII. So `(?i)(é)\1` matches `éÉ` here, where
+    /// Java's `CIBackRef` does not, and the two agree on every ASCII text. The
+    /// divergence is documented in `java_fold`; this test pins its extent, so
+    /// that a change to it is noticed.
+    #[test]
+    fn a_backreference_under_an_ascii_fold_is_unicode_insensitive_for_non_ascii_text() {
+        // (pattern, input, whole input matches here)
+        for (source, input, expected) in [
+            ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", true),
+            ("(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true),
         ] {
             check!(
-                JavaPattern::compile(source).is_ok() == compiles,
-                "{source:?}"
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
             );
+        }
+    }
+
+    /// `\N{name}` is a character in Java, which `fancy_regex` reads as `\N` and
+    /// the text of the name, so a rule that has one is refused and not misread.
+    #[test]
+    fn a_named_character_is_refused() {
+        for source in ["\\N{LATIN SMALL LETTER A}", "(?i)\\N{LATIN SMALL LETTER A}"] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
         }
     }
 
