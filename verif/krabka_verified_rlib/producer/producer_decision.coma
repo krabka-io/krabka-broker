@@ -50,8 +50,8 @@ let elim_Some (_x: t_Option_ProducerEntryFacts) (return (f0: t_ProducerEntryFact
       end}
     any) ]
 
-function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer.rs" 45 0 45 45] (sequence: int) : int =
-  [%#sproducer'20] EuclideanDivision.mod sequence 2147483648
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer.rs" 45 0 45 45] (sequence: int) : int
+ = [%#sproducer'20] EuclideanDivision.mod sequence 2147483648
 
 let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
   [ return (result: Int32.t) -> {[@stop_split] [@expl:increment_sequence ensures] [%#sproducer'15] Int32.to_int result
@@ -127,18 +127,19 @@ function sequence_decision [#"/workspace/crates/verified/src/producer.rs" 158 0 
           Append
         else
           OutOfOrder
-      
-    
-    
+
+
+
     end
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let producer_decision [#"/workspace/crates/verified/src/producer.rs" 223 0 231 21] (entry: t_Option_ProducerEntryFacts)
-  (retained: Slice64.slice t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence: Int32.t)
-  (last_offset_delta: Int32.t) (log_empty: bool) (trunk_rules: bool) (return (x: t_ProducerDecision)) = (! bb0
+let producer_decision [#"/workspace/crates/verified/src/producer.rs" 223 0 231 21]
+  (entry: t_Option_ProducerEntryFacts) (retained: Slice64.slice t_Option_RetainedSequenceRange)
+  (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) (log_empty: bool) (trunk_rules: bool)
+  (return (x: t_ProducerDecision)) = (! bb0
   [ bb0 = any [ br0 -> {entry = None} (! bb1) | br1 (x0: t_ProducerEntryFacts) -> {entry = Some x0} (! bb8) ]
   | bb1 = any [ br0 -> {trunk_rules = false} (! bb6) | br1 -> {trunk_rules} (! bb2) ]
   | bb2 = any [ br0 -> {log_empty = false} (! bb6) | br1 -> {log_empty} (! bb3) ]

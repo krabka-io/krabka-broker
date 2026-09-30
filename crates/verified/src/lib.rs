@@ -1,9 +1,8 @@
 //! Formally verified pure kernels shared by Krabka crates.
 //!
-//! Every function here is a total, synchronous, allocation-light kernel, and
-//! Creusot proves its functional contract. See `docs/verification.md`. Host
-//! crates call through to these functions, and there are no duplicate bodies
-//! anywhere.
+//! These synchronous kernels have Creusot contracts proved under their stated
+//! preconditions. Host state, concurrency, and I/O remain outside that boundary.
+//! See `docs/verification.md` and `docs/proof-contract-audit.md`.
 #![doc(html_root_url = "https://docs.rs/krabka-verified/0.6.1")]
 
 pub mod audit;
@@ -15,6 +14,8 @@ pub mod broker;
 pub mod chain;
 pub mod checkpoint;
 pub mod compaction;
+#[cfg(any(creusot, test))]
+mod composition;
 pub mod consensus;
 pub mod delegation_token;
 pub mod delivery;

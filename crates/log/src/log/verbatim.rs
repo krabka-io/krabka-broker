@@ -1,5 +1,6 @@
 //! The zero-copy passthrough append: a producer batch written to the log
-//! byte-for-byte, with no decode and no re-encode.
+//! byte-for-byte, with no re-encode. Replicated controls decode their marker
+//! for transaction bookkeeping; data batches use only the header.
 //!
 //! Only `base_offset` and `partition_leader_epoch` are patched into the
 //! bytes, and both sit outside the CRC region, so the producer's body and
@@ -13,7 +14,9 @@
 
 use bytes::{Bytes, BytesMut};
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
-use krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType};
+use krabka_protocol::records::{
+    Attributes, CRC_COVERAGE_START, HEADER_LEN, RecordBatch, TimestampType,
+};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use tracing::instrument;
 
@@ -35,8 +38,7 @@ const ATTRIBUTES_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START..CRC_COVERAG
 const MAX_TIMESTAMP_RANGE: std::ops::Range<usize> =
     CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
 
-/// A producer batch that the log appends **verbatim**, with no decode and
-/// no re-encode.
+/// A batch that the log appends **verbatim**, with no re-encode.
 ///
 /// The produce zero-copy passthrough path uses this type. It carries the
 /// producer's exact wire bytes plus the header fields the log needs for
@@ -49,10 +51,9 @@ const MAX_TIMESTAMP_RANGE: std::ops::Range<usize> =
 /// The log writes the body and the CRC byte-for-byte as the producer sent
 /// them.
 ///
-/// This type deliberately **cannot** hold a control batch, that is, a
-/// transaction marker. The LSO bookkeeping for a control batch needs the
-/// inner marker record, which the header-only path does not read. Such
-/// batches take the owned [`Log::append`] path instead.
+/// Replicated control batches decode their inner marker for shared transaction
+/// bookkeeping while storing the original bytes. Data batches keep the
+/// header-only path; the producer passthrough caller rejects control batches.
 #[derive(Debug, Clone)]
 pub struct VerbatimBatch {
     /// The producer's verbatim v2 batch bytes (CRC-validated by the caller).
@@ -168,8 +169,8 @@ impl Log {
     /// [`LogError::OffsetMismatch`] and appends nothing. A `base_offset` above
     /// the end is a hole in the offsets, as a compacted leader's log has, and
     /// is appended as it is. On success the log stamps the stored batch with
-    /// `base_offset` and the batch's leader epoch. It does not decode or
-    /// re-encode the CRC-covered bytes.
+    /// `base_offset` and the batch's leader epoch. Control batches decode the
+    /// marker for shared bookkeeping; CRC-covered bytes are never re-encoded.
     ///
     /// # Errors
     /// Returns [`LogError::OffsetMismatch`] when `base_offset` is below the
@@ -193,7 +194,24 @@ impl Log {
         self.admit_append_at(base_offset)?;
 
         let leader_epoch = batch.leader_epoch;
-        self.append_verbatim_preserving_offset(batch, base_offset)?;
+        let attributes = batch
+            .bytes
+            .get(ATTRIBUTES_RANGE)
+            .ok_or_else(|| LogError::Corrupt("verbatim batch is missing its attributes".into()))?;
+        if Attributes(i16::from_be_bytes([attributes[0], attributes[1]])).is_control_batch() {
+            let mut wire = batch.bytes.as_ref();
+            let mut decoded = RecordBatch::decode(&mut wire)?;
+            if !wire.is_empty() {
+                return Err(LogError::Corrupt(
+                    "verbatim control append contains trailing bytes".into(),
+                ));
+            }
+            decoded.base_offset = base_offset.0;
+            decoded.partition_leader_epoch = leader_epoch.0;
+            self.append_preserving_offset_inner(&decoded, None, Some(&batch.bytes))?;
+        } else {
+            self.append_verbatim_preserving_offset(batch, base_offset)?;
+        }
         self.assign_appended_epoch(leader_epoch, base_offset)?;
         Ok(base_offset)
     }

@@ -5,6 +5,44 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+/// Classification of the actual first control-record key, shared by live
+/// append and recovery. Versions are ignored as in Kafka's marker type parser.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum LogBatchKind {
+    Data,
+    Abort,
+    Commit,
+    Barrier,
+    OtherControl,
+}
+
+#[ensures((result == LogBatchKind::Data) == !is_control)]
+#[ensures((result == LogBatchKind::Abort) ==
+    (is_control && key@.len() >= 4 && key@[2]@ == 0 && key@[3]@ == 0))]
+#[ensures((result == LogBatchKind::Commit) ==
+    (is_control && key@.len() >= 4 && key@[2]@ == 0 && key@[3]@ == 1))]
+#[ensures((result == LogBatchKind::Barrier) ==
+    (is_control && key@.len() >= 4 && key@[2]@ == 3 && key@[3]@ == 232))]
+#[ensures((result == LogBatchKind::OtherControl) == (is_control
+    && !(key@.len() >= 4 && ((key@[2]@ == 0 && (key@[3]@ == 0 || key@[3]@ == 1))
+        || (key@[2]@ == 3 && key@[3]@ == 232)))))]
+#[must_use]
+pub fn log_batch_kind(is_control: bool, key: &[u8]) -> LogBatchKind {
+    if !is_control {
+        return LogBatchKind::Data;
+    }
+    if key.len() < 4 {
+        return LogBatchKind::OtherControl;
+    }
+    match (key[2], key[3]) {
+        (0, 0) => LogBatchKind::Abort,
+        (0, 1) => LogBatchKind::Commit,
+        (3, 232) => LogBatchKind::Barrier,
+        _ => LogBatchKind::OtherControl,
+    }
+}
+
 /// Whether one transaction record may install its live producer identities.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]

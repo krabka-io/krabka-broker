@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/broker.rs" 482 0 486 33 *)
+(* #"/workspace/crates/verified/src/broker.rs" 481 0 485 33 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 487 19 487 20
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 487 36 487 37
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 487 55 487 56
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 455 4 461 6
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 486 19 486 20
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 486 36 486 37
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 486 55 486 56
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 454 4 460 6
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let delete_records_trim_application [#"/workspace/crates/verified/src/broker.rs" 482 0 486 33] (requested: Int64.t)
+let delete_records_trim_application [#"/workspace/crates/verified/src/broker.rs" 481 0 485 33] (requested: Int64.t)
   (wal_start: Int64.t) (local_start: Int64.t) (return (x: t_DeleteRecordsTrimApplication)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt requested ([%#sbroker] (0: Int64.t)) ] s1

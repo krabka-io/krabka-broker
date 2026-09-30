@@ -265,7 +265,7 @@ pub fn select_best_recovery_replica(candidates: &[RecoveryCandidate]) -> Option<
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open)]
 pub fn hwm_member_at(log_end: Int, s: Seq<i64>, k: Int) -> Int {
     pearlite! {
         if k == 0 { log_end } else { s[k - 1]@ }
@@ -275,7 +275,7 @@ pub fn hwm_member_at(log_end: Int, s: Seq<i64>, k: Int) -> Int {
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open)]
 #[variant(limit)]
 pub fn count_ge_prefix(log_end: Int, s: Seq<i64>, v: Int, limit: Int, leader_counts: bool) -> Int {
     pearlite! {
@@ -292,10 +292,32 @@ pub fn count_ge_prefix(log_end: Int, s: Seq<i64>, v: Int, limit: Int, leader_cou
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open)]
 #[variant(s.len())]
 pub fn count_ge(log_end: Int, s: Seq<i64>, v: Int, leader_counts: bool) -> Int {
     pearlite! { count_ge_prefix(log_end, s, v, s.len() + 1, leader_counts) }
+}
+
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+#[requires(0 <= limit && limit <= left.len() + 1 && limit <= right.len() + 1)]
+#[requires(forall<i: Int> 0 <= i && i < limit - 1
+    ==> (left[i]@ >= threshold) == (right[i]@ >= threshold))]
+#[ensures(count_ge_prefix(log_end, left, threshold, limit, false)
+    == count_ge_prefix(log_end, right, threshold, limit, false))]
+#[variant(limit)]
+pub fn lemma_explicit_vote_count_equal(
+    log_end: Int,
+    left: Seq<i64>,
+    right: Seq<i64>,
+    threshold: Int,
+    limit: Int,
+) {
+    if limit > 0 {
+        lemma_explicit_vote_count_equal(log_end, left, right, threshold, limit - 1);
+    }
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.

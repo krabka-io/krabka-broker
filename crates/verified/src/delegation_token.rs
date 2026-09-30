@@ -211,7 +211,7 @@ pub struct TokenMutationFacts {
 /// defines as a deadline strictly before `now`, or cross the token's immutable
 /// maximum timestamp. A renewal lands at or after `now` but, as in Kafka's
 /// `renewDelegationToken`, may shorten the current expiry.
-#[ensures(result == TokenMutationDecision::Append ==>
+#[ensures((result == TokenMutationDecision::Append) == (
     !facts.uncommitted_tail
         && facts.state == TokenMutationState::Expected
         && match facts.kind {
@@ -231,15 +231,19 @@ pub struct TokenMutationFacts {
                     && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
                     && facts.incoming_expiry_ms@ >= 0
                     && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
-        })]
-#[ensures(result == TokenMutationDecision::Retry ==>
+        }))]
+#[ensures((result == TokenMutationDecision::Retry) == (
     !facts.uncommitted_tail
         && (facts.state == TokenMutationState::Applied
             || (facts.kind == TokenMutationKind::Delete
                 && facts.state == TokenMutationState::Missing)
             || (facts.kind == TokenMutationKind::Renew
                 && facts.state == TokenMutationState::Expected
-                && facts.incoming_expiry_ms@ == facts.expected_expiry_ms@)))]
+                && facts.incoming_expiry_ms@ == facts.expected_expiry_ms@
+                && facts.now_ms@ >= 0
+                && facts.expected_expiry_ms@ >= facts.now_ms@
+                && facts.max_timestamp_ms@ >= facts.now_ms@
+                && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@))))]
 #[must_use]
 pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecision {
     if facts.uncommitted_tail {

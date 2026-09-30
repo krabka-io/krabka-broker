@@ -1,9 +1,11 @@
-(* #"/workspace/crates/verified/src/delivery.rs" 52 0 57 8 *)
+(* #"/workspace/crates/verified/src/delivery.rs" 55 0 60 8 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sdelivery = "/workspace/crates/verified/src/delivery.rs" 49 11 49 33
 let%span sdelivery'0 = "/workspace/crates/verified/src/delivery.rs" 50 10 50 91
-let%span sdelivery'1 = "/workspace/crates/verified/src/delivery.rs" 39 16 39 83
+let%span sdelivery'1 = "/workspace/crates/verified/src/delivery.rs" 51 10 51 54
+let%span sdelivery'2 = "/workspace/crates/verified/src/delivery.rs" 52 10 53 29
+let%span sdelivery'3 = "/workspace/crates/verified/src/delivery.rs" 39 16 39 83
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -14,32 +16,32 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int =
-  [%#sdelivery'1] if value < low then low else if gt_log_Int value high then high else value
+function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int
+ = [%#sdelivery'3] if value < low then low else if gt_log_Int value high then high else value
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let delivery_watermark_advance [#"/workspace/crates/verified/src/delivery.rs" 52 0 57 8] (log_start: Int64.t)
-  (current': Int64.t) (candidate: Int64.t) (log_end: Int64.t) (return (x: Int64.t)) =
+let delivery_watermark_advance [#"/workspace/crates/verified/src/delivery.rs" 55 0 60 8]
+  (log_start: Int64.t) (current': Int64.t) (candidate: Int64.t) (log_end: Int64.t) (return (x: Int64.t)) =
 {[@stop_split] [@expl:delivery_watermark_advance requires] [%#sdelivery] Int64.to_int log_start <= Int64.to_int log_end}
   (! bb0
   [ bb0 = s0
-    [ s0 = [ &_14 <- Int64.lt current' log_start ] s1
-    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]
+    [ s0 = [ &_22 <- Int64.lt current' log_start ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb2) | br1 -> {_22} (! bb1) ] ]
   | bb1 = s0 [ s0 = [ &bounded_current <- log_start ] s1 | s1 = bb6 ]
   | bb2 = s0
-    [ s0 = [ &_17 <- Int64.gt current' log_end ] s1 | s1 = any [ br0 -> {_17 = false} (! bb4) | br1 -> {_17} (! bb3) ] ]
+    [ s0 = [ &_25 <- Int64.gt current' log_end ] s1 | s1 = any [ br0 -> {_25 = false} (! bb4) | br1 -> {_25} (! bb3) ] ]
   | bb3 = s0 [ s0 = [ &bounded_current <- log_end ] s1 | s1 = bb6 ]
   | bb4 = s0 [ s0 = [ &bounded_current <- current' ] s1 | s1 = bb6 ]
   | bb6 = s0
-    [ s0 = [ &_20 <- Int64.le candidate bounded_current ] s1
-    | s1 = any [ br0 -> {_20 = false} (! bb8) | br1 -> {_20} (! bb7) ] ]
+    [ s0 = [ &_28 <- Int64.le candidate bounded_current ] s1
+    | s1 = any [ br0 -> {_28 = false} (! bb8) | br1 -> {_28} (! bb7) ] ]
   | bb7 = s0 [ s0 = [ &_ret <- bounded_current ] s1 | s1 = return {_ret} ]
   | bb8 = s0
-    [ s0 = [ &_23 <- Int64.ge candidate log_end ] s1
-    | s1 = any [ br0 -> {_23 = false} (! bb10) | br1 -> {_23} (! bb9) ] ]
+    [ s0 = [ &_31 <- Int64.ge candidate log_end ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb10) | br1 -> {_31} (! bb9) ] ]
   | bb9 = s0 [ s0 = [ &_ret <- log_end ] s1 | s1 = return {_ret} ]
   | bb10 = s0 [ s0 = [ &_ret <- candidate ] s1 | s1 = return {_ret} ] ]
   [ & _ret: Int64.t = Any.any_l ()
@@ -48,11 +50,18 @@ let delivery_watermark_advance [#"/workspace/crates/verified/src/delivery.rs" 52
   | & candidate: Int64.t = candidate
   | & log_end: Int64.t = log_end
   | & bounded_current: Int64.t = Any.any_l ()
-  | & _14: bool = Any.any_l ()
-  | & _17: bool = Any.any_l ()
-  | & _20: bool = Any.any_l ()
-  | & _23: bool = Any.any_l () ])
+  | & _22: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _31: bool = Any.any_l () ])
   [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:delivery_watermark_advance ensures] [%#sdelivery'0] Int64.to_int result
-    = MinMax.min (MinMax.max (Int64.to_int candidate) (clamp_to (Int64.to_int current') (Int64.to_int log_start) (Int64.to_int log_end))) (Int64.to_int log_end)}
+  {[@stop_split] [@expl:delivery_watermark_advance ensures] ([@stop_split] [@expl:delivery_watermark_advance ensures #0] [%#sdelivery'0] Int64.to_int result
+      = MinMax.min (MinMax.max (Int64.to_int candidate) (clamp_to (Int64.to_int current') (Int64.to_int log_start) (Int64.to_int log_end))) (Int64.to_int log_end))
+    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #1] [%#sdelivery'1] Int64.to_int log_start
+        <= Int64.to_int result
+      /\ Int64.to_int result <= Int64.to_int log_end)
+    /\ ([@stop_split] [@expl:delivery_watermark_advance ensures #2] [%#sdelivery'2] Int64.to_int current'
+        <= Int64.to_int candidate
+      /\ Int64.to_int log_start <= Int64.to_int candidate /\ Int64.to_int candidate <= Int64.to_int log_end
+    -> Int64.to_int result = Int64.to_int candidate)}
     (! return {result}) ]

@@ -1,0 +1,67 @@
+(* #"/workspace/crates/verified/src/composition.rs" 275 0 275 69 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 274 10 274 15
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 272 11 272 47
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 273 10 273 21
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+
+use creusot.int.Int64
+use creusot.int.Int32
+use seq.Seq
+use creusot.int.UInt8
+use creusot.int.UInt64
+use int.Int
+
+type t_Vec_u8_Global
+
+type tup3_i64_i32_Vec_u8_Global = { f0: Int64.t; f1: Int32.t; f2: t_Vec_u8_Global }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_u8_Global (self: t_Vec_u8_Global) : Seq.seq UInt8.t
+
+axiom view_Vec_u8_Global_spec:
+  forall self: t_Vec_u8_Global [view_Vec_u8_Global self]. [%#svec] Seq.length (view_Vec_u8_Global self)
+    <= UInt64.t'int const_MAX
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant batches : Seq.seq tup3_i64_i32_Vec_u8_Global
+
+constant count : int
+
+function wal_copy_byte_count [#"/workspace/crates/verified/src/composition.rs" 275 0 275 69] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
+
+goal vc_wal_copy_byte_count: ([%#scomposition'0] 0 <= count /\ count <= Seq.length batches)
+  -> (if count = 0 then
+    [@stop_split] [@expl:wal_copy_byte_count ensures] [%#scomposition'1] ge_log_Int 0 0
+  else
+    (([@stop_split] [@expl:wal_copy_byte_count requires] [%#scomposition'0] 0 <= count - 1
+        /\ count - 1 <= Seq.length batches)
+      /\ ([@expl:variant decreases] well_founded_relation_Int ([%#scomposition] count) ([%#scomposition] count - 1)))
+    /\ (([@stop_split] [@expl:wal_copy_byte_count ensures] [%#scomposition'1] ge_log_Int (wal_copy_byte_count batches (count
+      - 1)) 0)
+    -> ([@stop_split] [@expl:view ensures] [%#svec] Seq.length (view_Vec_u8_Global (Seq.get batches (count - 1)).f2)
+      <= UInt64.t'int const_MAX)
+    -> ([@stop_split] [@expl:wal_copy_byte_count ensures] [%#scomposition'1] ge_log_Int (wal_copy_byte_count batches (count
+      - 1)
+    + Seq.length (view_Vec_u8_Global (Seq.get batches (count - 1)).f2)) 0))
+  )

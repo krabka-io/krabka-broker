@@ -1,15 +1,15 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 310 0 317 1 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 286 0 293 1 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 309 10 309 15
-let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 305 11 305 45
-let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 306 11 306 22
-let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 307 10 308 62
-let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 279 10 279 15
-let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 282 8 288 9
-let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 271 8 271 48
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 285 10 285 15
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 281 11 281 45
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 282 11 282 22
+let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 283 10 284 62
+let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 255 10 255 15
+let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 258 8 264 9
+let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 247 8 247 48
 
 use creusot.int.Int64
 use seq.Seq
@@ -23,10 +23,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 269 0 269 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 245 0 245 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sconsensus'5] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 280 0 280 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 256 0 256 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -58,7 +58,7 @@ constant limit : int
 
 constant leader_counts : bool
 
-function lemma_count_ge_prefix_monotone [#"/workspace/crates/verified/src/consensus.rs" 310 0 317 1] (log_end: int) (s: Seq.seq Int64.t) (low: int) (high: int) (limit: int) (leader_counts: bool) : ()
+function lemma_count_ge_prefix_monotone [#"/workspace/crates/verified/src/consensus.rs" 286 0 293 1] (log_end: int) (s: Seq.seq Int64.t) (low: int) (high: int) (limit: int) (leader_counts: bool) : ()
 
 goal vc_lemma_count_ge_prefix_monotone: ([%#sconsensus'0] 0 <= limit /\ limit <= Seq.length s + 1)
   -> ([%#sconsensus'1] low <= high)

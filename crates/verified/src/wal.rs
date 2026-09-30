@@ -37,6 +37,23 @@ fn exact_wal_batch_suffix(
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] mathematical layout; not compiled at runtime.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn wal_batch_layout(bases: Seq<i64>, lasts: Seq<i64>, start: Int, target: Int) -> bool {
+    pearlite! {
+        bases.len() == lasts.len() && if start == target {
+            bases.len() == 0
+        } else {
+            (forall<i: Int> 0 <= i && i < bases.len() ==>
+                bases[i] <= lasts[i] && lasts[i] < i64::MAX
+                && bases[i]@ == if i == 0 { start } else { lasts[i - 1]@ + 1 })
+            && target == if bases.len() == 0 { start } else { lasts[bases.len() - 1]@ + 1 }
+        }
+    }
+}
+
 /// Check that decoded WAL batches cover exactly one contiguous half-open range.
 #[cfg_attr(creusot, ensures(result == (bases@.len() == lasts@.len()
     && if start@ == target@ {
@@ -44,6 +61,9 @@ fn exact_wal_batch_suffix(
     } else {
         exact_wal_batch_suffix(bases@, lasts@, 0, start@, target@)
     })))]
+#[cfg_attr(creusot, ensures(result == wal_batch_layout(bases@, lasts@, start@, target@)))]
+#[cfg_attr(creusot, ensures(result ==> forall<i: Int> 0 <= i && i < bases@.len()
+    ==> start@ <= bases@[i]@ && bases@[i]@ <= lasts@[i]@ && lasts@[i]@ < target@))]
 #[must_use]
 pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i64) -> bool {
     if bases.len() != lasts.len() {
@@ -59,6 +79,12 @@ pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i
     #[cfg_attr(creusot, invariant(bases@.len() == lasts@.len()))]
     #[cfg_attr(creusot, invariant(exact_wal_batch_suffix(bases@, lasts@, 0, start@, target@)
         == exact_wal_batch_suffix(bases@, lasts@, i@, expected@, target@)))]
+    #[cfg_attr(creusot, invariant(expected@ == if i@ == 0 { start@ } else { lasts@[i@ - 1]@ + 1 }))]
+    #[cfg_attr(creusot, invariant(start@ <= expected@))]
+    #[cfg_attr(creusot, invariant(forall<j: Int> 0 <= j && j < i@ ==>
+        start@ <= bases@[j]@ && bases@[j]@ <= lasts@[j]@ && lasts@[j]@ < expected@
+        && lasts@[j] < i64::MAX
+        && bases@[j]@ == if j == 0 { start@ } else { lasts@[j - 1]@ + 1 }))]
     #[cfg_attr(creusot, variant(bases@.len() - i@))]
     while i < bases.len() {
         if bases[i] != expected || bases[i] > lasts[i] {
@@ -71,6 +97,90 @@ pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i
         i += 1;
     }
     expected == target
+}
+
+/// Whole batches may cover an interior logical floor. They must still form
+/// an exact physical prefix ending at `target`; the first batch contains `start`.
+#[cfg_attr(creusot, ensures((match result { None => false, Some(_) => true }) == (
+    0 <= start@ && start@ <= target@ && bases@.len() == lasts@.len()
+    && if start == target { bases@.len() == 0 } else {
+        bases@.len() > 0 && 0 <= bases@[0]@ && bases@[0]@ <= start@ && start@ <= lasts@[0]@
+        && wal_batch_layout(bases@, lasts@, bases@[0]@, target@)
+    }
+)))]
+#[cfg_attr(creusot, ensures(match result {
+    None => true,
+    Some(physical) => physical@ == (if bases@.len() == 0 { start@ } else { bases@[0]@ })
+        && 0 <= physical@ && physical@ <= start@ && start@ <= target@
+        && wal_batch_layout(bases@, lasts@, physical@, target@)
+        && (forall<i: Int> 0 <= i && i < bases@.len() ==>
+            physical@ <= bases@[i]@ && bases@[i]@ <= lasts@[i]@ && lasts@[i]@ < target@),
+}))]
+#[must_use]
+pub fn wal_covering_batch_range(
+    bases: &[i64],
+    lasts: &[i64],
+    start: i64,
+    target: i64,
+) -> Option<i64> {
+    if start < 0 || start > target || bases.len() != lasts.len() {
+        return None;
+    }
+    if start == target {
+        return if matches!(bases.len(), 0) {
+            Some(start)
+        } else {
+            None
+        };
+    }
+    if matches!(bases.len(), 0) || bases[0] < 0 || bases[0] > start || lasts[0] < start {
+        return None;
+    }
+    if !exact_wal_batch_range(bases, lasts, bases[0], target) {
+        return None;
+    }
+    Some(bases[0])
+}
+
+/// A nonempty checkpoint must end at the observed whole batch's successor.
+/// Its logical floor may lie inside a batch; an empty range is reset at that floor.
+#[ensures(result == (0 <= recovered_start@ && recovered_start@ <= start@
+    && start@ <= end@ && end@ <= recovered_end@
+    && (start == end || (match observed_last { Some(last) => last@ == end@ - 1, None => false }))))]
+#[must_use]
+pub fn wal_checkpoint_range_valid(
+    recovered_start: i64,
+    recovered_end: i64,
+    start: i64,
+    end: i64,
+    observed_last: Option<i64>,
+) -> bool {
+    0 <= recovered_start
+        && recovered_start <= start
+        && start <= end
+        && end <= recovered_end
+        && (start == end || observed_last == end.checked_sub(1))
+}
+
+/// Compare actual encoded batch bytes and their inclusive offset coordinates.
+/// Matching lengths or frontiers alone do not establish the same records.
+#[ensures(result == (left.0 == right.0 && left.1 == right.1 && left.2@ == right.2@))]
+#[must_use]
+pub fn wal_batch_equal(left: (i64, i64, &[u8]), right: (i64, i64, &[u8])) -> bool {
+    if left.0 != right.0 || left.1 != right.1 || left.2.len() != right.2.len() {
+        return false;
+    }
+    let mut i = 0usize;
+    #[invariant(i@ <= left.2@.len())]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> left.2@[j] == right.2@[j])]
+    #[variant(left.2@.len() - i@)]
+    while i < left.2.len() {
+        if left.2[i] != right.2[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// Result of authorizing and epoch-fencing one diskless WAL Fetch.
@@ -176,6 +286,81 @@ pub fn select_wal_voter_index(
     None
 }
 
+/// Assemble the existing greedy, local-first placement across distinct nodes
+/// and racks. An incomplete result must be rejected by the quorum installer.
+#[ensures(result@.len() <= requested@)]
+#[ensures((result@.len() == 0) == (requested@ == 0
+    || forall<i: Int> 0 <= i && i < candidates@.len() ==> candidates@[i].0 != local_node))]
+#[ensures(result@.len() > 0 ==> result@[0].0 == local_node)]
+#[ensures(forall<i: Int> 0 <= i && i < result@.len()
+    ==> exists<j: Int> 0 <= j && j < candidates@.len() && result@[i] == candidates@[j])]
+#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result@.len()
+    ==> result@[i].0 != result@[j].0 && result@[i].1 != result@[j].1)]
+#[ensures(0 < result@.len() && result@.len() < requested@ ==>
+    forall<i: Int> 0 <= i && i < candidates@.len() ==>
+        exists<j: Int> 0 <= j && j < result@.len()
+            && (candidates@[i].0 == result@[j].0 || candidates@[i].1 == result@[j].1))]
+#[must_use]
+pub fn select_wal_voters(
+    candidates: &[(u64, u64)],
+    local_node: u64,
+    requested: usize,
+) -> Vec<(u64, u64)> {
+    let mut selected: Vec<(u64, u64)> = Vec::new();
+    let mut nodes: Vec<u64> = Vec::new();
+    let mut racks: Vec<u64> = Vec::new();
+    #[invariant(selected@.len() <= requested@)]
+    #[invariant(nodes@.len() == selected@.len() && racks@.len() == selected@.len())]
+    #[invariant(selected@.len() > 0 ==> selected@[0].0 == local_node)]
+    #[invariant(forall<i: Int> 0 <= i && i < selected@.len()
+        ==> selected@[i].0 == nodes@[i] && selected@[i].1 == racks@[i])]
+    #[invariant(forall<i: Int> 0 <= i && i < selected@.len()
+        ==> exists<j: Int> 0 <= j && j < candidates@.len() && selected@[i] == candidates@[j])]
+    #[invariant(forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len()
+        ==> selected@[i].0 != selected@[j].0 && selected@[i].1 != selected@[j].1)]
+    #[variant(requested@ - selected@.len())]
+    while selected.len() < requested {
+        let Some(index) = select_wal_voter_index(
+            candidates,
+            &nodes,
+            &racks,
+            local_node,
+            matches!(selected.len(), 0),
+        ) else {
+            return selected;
+        };
+        let candidate = candidates[index];
+        selected.push(candidate);
+        nodes.push(candidate.0);
+        racks.push(candidate.1);
+    }
+    selected
+}
+
+/// Admit exactly a complete, nonempty, local-first set of distinct voter IDs.
+/// A repeated ID cannot vote twice through the same durable-offset map entry.
+#[ensures(result == (expected@ > 0 && voters@.len() == expected@
+    && voters@[0] == local_node
+    && forall<i: Int, j: Int> 0 <= i && i < j && j < voters@.len()
+        ==> voters@[i] != voters@[j]))]
+#[must_use]
+pub fn wal_voter_set_valid(voters: &[u64], local_node: u64, expected: usize) -> bool {
+    if expected == 0 || voters.len() != expected || voters[0] != local_node {
+        return false;
+    }
+    let mut i = 0usize;
+    #[invariant(i@ <= voters@.len())]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < i@ ==> voters@[j] != voters@[k])]
+    #[variant(voters@.len() - i@)]
+    while i < voters.len() {
+        if contains(&voters[..i], voters[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Authorize a diskless WAL Fetch and classify its leader epoch.
 ///
 /// Authorization deliberately precedes epoch classification, so an
@@ -219,6 +404,97 @@ pub fn wal_fetch_admission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    proptest::proptest! {
+        #[test]
+        fn batch_equality_matches_independent_tuple_oracle(
+            left_base in proptest::prelude::any::<i64>(),
+            left_last in proptest::prelude::any::<i64>(),
+            left_bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64),
+            right_base in proptest::prelude::any::<i64>(),
+            right_last in proptest::prelude::any::<i64>(),
+            right_bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64),
+        ) {
+            let left = (left_base, left_last, left_bytes.as_slice());
+            let right = (right_base, right_last, right_bytes.as_slice());
+            assert2::assert!(wal_batch_equal(left, right) == (left == right));
+            assert2::assert!(wal_batch_equal(left, left));
+            if !left_bytes.is_empty() {
+                let mut changed = left_bytes.clone();
+                let last = changed.len() - 1;
+                changed[last] ^= 1;
+                assert2::assert!(!wal_batch_equal(left, (left_base, left_last, &changed)));
+            }
+        }
+
+        #[test]
+        fn full_wal_placement_is_distinct_and_exhausts_eligible_candidates(
+            candidates in proptest::collection::vec((0u64..8, 0u64..8), 0..32),
+            local in 0u64..8,
+            requested in 0usize..12,
+        ) {
+            let selected = select_wal_voters(&candidates, local, requested);
+            let nodes: std::collections::HashSet<_> = selected.iter().map(|(node, _)| *node).collect();
+            let racks: std::collections::HashSet<_> = selected.iter().map(|(_, rack)| *rack).collect();
+            assert2::assert!(nodes.len() == selected.len() && racks.len() == selected.len());
+            assert2::assert!(selected.len() <= requested);
+            assert2::assert!(selected.iter().all(|candidate| candidates.contains(candidate)));
+            assert2::assert!(selected.is_empty() == (requested == 0 || !candidates.iter().any(|(node, _)| *node == local)));
+            if let Some((first, _)) = selected.first() { assert2::assert!(*first == local); }
+            if !selected.is_empty() && selected.len() < requested {
+                assert2::assert!(candidates.iter().all(|(node, rack)| nodes.contains(node) || racks.contains(rack)));
+            }
+        }
+
+        #[test]
+        fn voter_installation_matches_set_oracle(
+            voters in proptest::collection::vec(0u64..8, 0..16),
+            local in 0u64..8,
+            expected in 0usize..16,
+        ) {
+            let distinct: std::collections::HashSet<_> = voters.iter().copied().collect();
+            let valid = expected > 0 && voters.len() == expected
+                && voters.first() == Some(&local) && distinct.len() == voters.len();
+            assert2::assert!(wal_voter_set_valid(&voters, local, expected) == valid);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn covering_batch_ranges_match_an_independent_interval_oracle(
+            rows in proptest::collection::vec((-2i64..60, -2i64..60), 0..12),
+            start in -2i64..65, target in -2i64..65,
+        ) {
+            let bases: Vec<_> = rows.iter().map(|row| row.0).collect();
+            let lasts: Vec<_> = rows.iter().map(|row| row.1).collect();
+            let expected = if start < 0 || target < start { None }
+                else if start == target { rows.is_empty().then_some(start) }
+                else if let Some(&(first, last)) = rows.first() {
+                    let mut cursor = i128::from(first);
+                    let mut valid = first >= 0 && first <= start && start <= last;
+                    for &(base, last) in &rows {
+                        valid &= i128::from(base) == cursor && base <= last && last < i64::MAX;
+                        cursor = i128::from(last) + 1;
+                    }
+                    (valid && cursor == i128::from(target)).then_some(first)
+                } else { None };
+            assert2::assert!(wal_covering_batch_range(&bases, &lasts, start, target) == expected);
+        }
+    }
+
+    #[test]
+    fn covering_batch_range_preserves_strict_ends_and_extreme_floors() {
+        assert2::assert!(wal_covering_batch_range(&[0, 3], &[2, 5], 1, 6) == Some(0));
+        assert2::assert!(!exact_wal_batch_range(&[0, 3], &[2, 5], 1, 6));
+        assert2::assert!(wal_covering_batch_range(&[0], &[2], 1, 2).is_none());
+        assert2::assert!(wal_covering_batch_range(&[0, 4], &[2, 5], 1, 6).is_none());
+        assert2::assert!(wal_covering_batch_range(&[0], &[], 1, 3).is_none());
+        assert2::assert!(wal_covering_batch_range(&[], &[], i64::MAX, i64::MAX) == Some(i64::MAX));
+        assert2::assert!(
+            wal_covering_batch_range(&[i64::MAX - 2], &[i64::MAX - 1], i64::MAX - 1, i64::MAX)
+                == Some(i64::MAX - 2)
+        );
+    }
 
     #[test]
     fn exact_wal_range_rejects_every_discontinuity_and_overflow() {

@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FeatureLevels [#"/workspace/crates/verified/src/features.rs" 27 27 27 32] (self: t_FeatureLevels)
-  (return (x: t_FeatureLevels)) = (! bb0
+let clone_FeatureLevels [#"/workspace/crates/verified/src/features.rs" 27 27 27 32]
+  (self: t_FeatureLevels) (return (x: t_FeatureLevels)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FeatureLevels = Any.any_l () | & self: t_FeatureLevels = self ])
   [ return (result: t_FeatureLevels) -> (! return {result}) ]

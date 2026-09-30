@@ -88,18 +88,18 @@ function feature_update_model [#"/workspace/crates/verified/src/features.rs" 100
                 if update_type'0 = UnsafeDowngrade then UnsafeMetadataDowngrade else LossyMetadataDowngrade
               else
                 EmitFeature
-              
+
               | KRaftVersion -> if update_type'0 = Upgrade then
                 UpgradeKRaft
               else
                 if requested'0 <> current''0 then KRaftDowngrade else NoChange
-              
+
               | Other dependencies_met -> if dependencies_met then EmitFeature else DependencyUnmet
               end
-        
-      
-    
-    
+
+
+
+
     end
 
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
@@ -110,8 +110,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let feature_update_decision [#"/workspace/crates/verified/src/features.rs" 163 0 163 82] (facts: t_FeatureUpdateFacts)
-  (return (x: t_FeatureUpdateDecision)) = (! bb0
+let feature_update_decision [#"/workspace/crates/verified/src/features.rs" 163 0 163 82]
+  (facts: t_FeatureUpdateFacts) (return (x: t_FeatureUpdateDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.update_type = None} (! bb1)
     | br1 (x0: t_FeatureUpdateType) -> {facts.update_type = Some x0} (! bb3) ]

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/broker.rs" 546 27 546 32 *)
+(* #"/workspace/crates/verified/src/broker.rs" 545 27 545 32 *)
 
 (* <broker::FindCoordinatorAdmission as std::clone::Clone> *)
 
@@ -17,7 +17,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FindCoordinatorAdmission [#"/workspace/crates/verified/src/broker.rs" 546 27 546 32]
+let clone_FindCoordinatorAdmission [#"/workspace/crates/verified/src/broker.rs" 545 27 545 32]
   (self: t_FindCoordinatorAdmission) (return (x: t_FindCoordinatorAdmission)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FindCoordinatorAdmission = Any.any_l () | & self: t_FindCoordinatorAdmission = self ])

@@ -1,0 +1,278 @@
+(* #"/workspace/crates/verified/src/composition.rs" 997 0 1004 20 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 112 10 120 1
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 277 10 277 63
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 278 10 279 97
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 280 10 280 83
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 281 10 283 58
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 284 10 284 74
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 285 10 289 1
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 290 10 290 36
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 291 10 291 59
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 95 8 97 45
+let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 227 16 227 42
+let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 242 8 248 9
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 1005 26 1005 55
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 1011 18 1011 75
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 1012 42 1012 89
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 1007 22 1007 74
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 1008 18 1008 48
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 1019 8 1019 13
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 1020 8 1020 12
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 1018 21 1027 5
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 987 11 987 30
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 988 10 988 58
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 989 10 991 15
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 992 10 993 53
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 994 10 996 47
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 20 10 33 1
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 119 10 119 30
+let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 120 10 120 29
+let%span sstorage'2 = "/workspace/crates/verified/src/storage.rs" 121 10 121 53
+let%span sraft = "/workspace/crates/verified/src/raft.rs" 161 28 161 48
+let%span sraft'0 = "/workspace/crates/verified/src/raft.rs" 162 28 162 73
+let%span sraft'1 = "/workspace/crates/verified/src/raft.rs" 163 28 166 67
+
+use creusot.int.Int32
+use creusot.int.Int16
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_ReplicaFetchFacts = {
+  request_leader_epoch: Int32.t;
+  current_leader_epoch: Int32.t;
+  target_matches: bool;
+  reported_target_matches: bool;
+  error_code: Int16.t;
+  diverging_epoch: Int32.t }
+
+type t_ReplicaFetchMutation = Reject | Retry | Truncate | Append
+
+predicate replica_fetch_fenced [#"/workspace/crates/verified/src/broker.rs" 93 0 93 61] (facts: t_ReplicaFetchFacts) =
+  [%#sbroker'8] Int32.to_int facts.request_leader_epoch <> Int32.to_int facts.current_leader_epoch
+  \/ not facts.target_matches \/ not facts.reported_target_matches
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let replica_fetch_mutation (facts: t_ReplicaFetchFacts) (return (x: t_ReplicaFetchMutation)) = any
+  [ return (result: t_ReplicaFetchMutation) -> {[@stop_split] [@expl:replica_fetch_mutation ensures] [%#sbroker] result
+    = (if replica_fetch_fenced facts then
+      Reject
+    else
+      if Int16.to_int facts.error_code <> 0 then
+        Retry
+      else
+        if ge_log_Int (Int32.to_int facts.diverging_epoch) 0 then Truncate else Append
+
+    )}
+    (! return {result}) ]
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sstorage] match result with
+      | Some {f0 = last; f1 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ ge_log_Int (Int64.to_int supplied_base) (Int64.to_int expected_base)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base < Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_tup2_i64_i64) (return (f0'0: tup2_i64_i64)) = any
+  [ _k (f0'0: tup2_i64_i64) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let advance_high_watermark (previous: Int64.t) (requested: Int64.t) (log_end'0: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:advance_high_watermark ensures] ([@stop_split] [@expl:advance_high_watermark ensures #0] [%#sraft] ge_log_Int (Int64.to_int result) (Int64.to_int previous))
+    /\ ([@stop_split] [@expl:advance_high_watermark ensures #1] [%#sraft'0] Int64.to_int previous
+        <= Int64.to_int log_end'0 -> Int64.to_int result <= Int64.to_int log_end'0)
+    /\ ([@stop_split] [@expl:advance_high_watermark ensures #2] [%#sraft'1] Int64.to_int result
+    = (if Int64.to_int requested <= Int64.to_int log_end'0 then
+      if ge_log_Int (Int64.to_int previous) (Int64.to_int requested) then
+        Int64.to_int previous
+      else
+        Int64.to_int requested
+
+    else
+      if ge_log_Int (Int64.to_int previous) (Int64.to_int log_end'0) then
+        Int64.to_int previous
+      else
+        Int64.to_int log_end'0
+
+    ))}
+    (! return {result}) ]
+
+let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sstorage'0] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sstorage'1] Int64.to_int result <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sstorage'2] Int64.to_int result = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+function offset_min [#"/workspace/crates/verified/src/broker.rs" 226 0 226 40] (a: int) (b: int) : int
+ = [%#sbroker'9] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker.rs" 240 0 240 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sbroker'10] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sbroker'0] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sbroker'1] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sbroker'2] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sbroker'3] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sbroker'4] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sbroker'5] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sbroker'6] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sbroker'7] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+type tup3_i64_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t; f2'0: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let fenced_replication_bounds_fetch [#"/workspace/crates/verified/src/composition.rs" 997 0 1004 20]
+  (facts: t_ReplicaFetchFacts) (diverging_end_offset: Int64.t) (supplied_base: Int64.t) (delta: Int32.t)
+  (reported_hw: Int64.t) (w: t_FetchWatermarks) (return (x: tup3_i64_i64_i64)) =
+{[@stop_split] [@expl:fenced_replication_bounds_fetch requires] [%#scomposition'7] Int64.to_int w.hw
+  <= Int64.to_int w.log_end}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = replica_fetch_mutation [%#scomposition] {facts} (fun (_x: t_ReplicaFetchMutation) -> [ &_27 <- _x ] s1)
+    | s1 = any
+      [ br0 -> {_27 = Reject} (! bb5)
+      | br1 -> {_27 = Retry} (! bb5)
+      | br2 -> {_27 = Truncate} (! bb7)
+      | br3 -> {_27 = Append} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = local_append_coordinates [%#scomposition'0] {w.log_end} {supplied_base} {delta}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_37 <- _x ] s1)
+    | s1 = any [ br0 -> {_37 = None} (! bb13) | br1 (x0: tup2_i64_i64) -> {_37 = Some x0} (! bb14) ] ]
+  | bb14 = s0
+    [ s0 = elim_Some {_37} (fun (r0: tup2_i64_i64) -> [ &next <- r0.f1 ] s1)
+    | s1 = advance_high_watermark [%#scomposition'1] {w.hw} {reported_hw} {next}
+        (fun (_x: Int64.t) -> [ &_44 <- _x ] s2)
+    | s2 = [ &_26 <- { f0 = next; f1 = _44 } ] s3
+    | s3 = bb17 ]
+  | bb13 = s0 [ s0 = [ &_26 <- { f0 = w.log_end; f1 = w.hw } ] s1 | s1 = bb17 ]
+  | bb7 = s0
+    [ s0 = truncation_frontier [%#scomposition'2] {w.log_end} {diverging_end_offset}
+        (fun (_x: Int64.t) -> [ &end''0 <- _x ] s1)
+    | s1 = truncation_frontier [%#scomposition'3] {w.hw} {end''0} (fun (_x: Int64.t) -> [ &_34 <- _x ] s2)
+    | s2 = [ &_26 <- { f0 = end''0; f1 = _34 } ] s3
+    | s3 = bb17 ]
+  | bb5 = s0 [ s0 = [ &_26 <- { f0 = w.log_end; f1 = w.hw } ] s1 | s1 = bb17 ]
+  | bb17 = s0
+    [ s0 = [ &end' <- _26.f0 ] s1
+    | s1 = [ &hw'0 <- _26.f1 ] s2
+    | s2 = [ &_53 <- { log_start = w.log_start; hw = hw'0; lso = w.lso; log_end = end'; deliverable = w.deliverable } ]
+      s3
+    | s3 = fetch_visibility [%#scomposition'6] {[%#scomposition'4] false} {[%#scomposition'5] true} {_53} {w.log_start}
+        (fun (_x: t_FetchVisibility) -> [ &visibility <- _x ] s4)
+    | s4 = [ &_ret <- { f0'0 = end'; f1'0 = hw'0; f2'0 = visibility.limit_offset } ] s5
+    | s5 = return {_ret} ] ]
+  [ & _ret: tup3_i64_i64_i64 = Any.any_l ()
+  | & facts: t_ReplicaFetchFacts = facts
+  | & diverging_end_offset: Int64.t = diverging_end_offset
+  | & supplied_base: Int64.t = supplied_base
+  | & delta: Int32.t = delta
+  | & reported_hw: Int64.t = reported_hw
+  | & w: t_FetchWatermarks = w
+  | & end': Int64.t = Any.any_l ()
+  | & hw'0: Int64.t = Any.any_l ()
+  | & _26: tup2_i64_i64 = Any.any_l ()
+  | & _27: t_ReplicaFetchMutation = Any.any_l ()
+  | & end''0: Int64.t = Any.any_l ()
+  | & _34: Int64.t = Any.any_l ()
+  | & _37: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _44: Int64.t = Any.any_l ()
+  | & visibility: t_FetchVisibility = Any.any_l ()
+  | & _53: t_FetchWatermarks = Any.any_l () ])
+  [ return (result: tup3_i64_i64_i64) ->
+  {[@stop_split] [@expl:fenced_replication_bounds_fetch ensures] ([@stop_split] [@expl:fenced_replication_bounds_fetch ensures #0] [%#scomposition'8] Int64.to_int result.f1'0
+        <= Int64.to_int result.f0'0
+      /\ Int64.to_int result.f2'0 <= Int64.to_int result.f1'0)
+    /\ ([@stop_split] [@expl:fenced_replication_bounds_fetch ensures #1] [%#scomposition'9] if replica_fetch_fenced facts
+      \/ Int16.to_int facts.error_code <> 0 then
+        result.f0'0 = w.log_end /\ result.f1'0 = w.hw
+      else
+        true
+      )
+    /\ ([@stop_split] [@expl:fenced_replication_bounds_fetch ensures #2] [%#scomposition'10] ge_log_Int (Int32.to_int facts.diverging_epoch) 0
+      -> Int64.to_int result.f0'0 <= Int64.to_int w.log_end /\ Int64.to_int result.f1'0 <= Int64.to_int w.hw)
+    /\ ([@stop_split] [@expl:fenced_replication_bounds_fetch ensures #3] [%#scomposition'11] gt_log_Int (Int64.to_int result.f0'0) (Int64.to_int w.log_end)
+    -> not replica_fetch_fenced facts
+    /\ Int16.to_int facts.error_code = 0
+    /\ Int32.to_int facts.diverging_epoch < 0
+    /\ Int64.to_int result.f0'0 = Int64.to_int supplied_base + Int32.to_int delta + 1)}
+    (! return {result}) ]

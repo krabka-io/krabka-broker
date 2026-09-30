@@ -151,6 +151,10 @@ pub fn local_retention_model(
     Some(debt) => local_retention_model(
         segments@, local_retention_limit(segments@), 0, debt@, true),
 })]
+#[ensures(result@ <= segments@.len())]
+#[ensures(forall<i: Int> 0 <= i && i < result@ ==> !segments@[i].blocked)]
+#[ensures(segments@.len() > 0 && segments@[segments@.len() - 1].size@ == 0
+    ==> result@ < segments@.len())]
 #[must_use]
 pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Option<u64>) -> usize {
     let limit = match segments.len().checked_sub(1) {
@@ -163,6 +167,7 @@ pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Opt
     };
     let mut len = 0usize;
     #[invariant(len@ <= limit@)]
+    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> !segments@[i].blocked)]
     #[invariant(limit@ == local_retention_limit(segments@))]
     #[invariant(local_retention_model(segments@, limit@, len@, debt@, sizing) == match size_debt {
         None => local_retention_model(segments@, limit@, 0, 0, false),
@@ -235,6 +240,7 @@ pub fn remote_retention_model(segments: Seq<RemoteRetentionSegment>, i: Int, deb
 } else {
     0
 })]
+#[ensures(result@ <= segments@.len())]
 #[must_use]
 pub fn remote_retention_prefix(
     deletes_allowed: bool,
