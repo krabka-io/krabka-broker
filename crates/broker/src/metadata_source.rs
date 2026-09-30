@@ -16,13 +16,14 @@ use krabka_raft::{
 use tokio::sync::watch;
 
 mod controller_handle;
+mod fatal_fault;
 mod image_watch;
 mod observer_source;
 mod quorum_forwarder;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::image_watch::watch_image_loop;
+pub(crate) use self::{fatal_fault::or_fatal_fault, image_watch::watch_image_loop};
 pub use self::{observer_source::ObserverSource, quorum_forwarder::QuorumForwarder};
 
 #[async_trait::async_trait]

@@ -385,8 +385,91 @@ async fn a_broker_refuses_to_start_over_a_log_finalized_at_an_unsupported_level(
     let Err(refused) = Broker::start(second).await else {
         panic!("a broker without the flag started over an unstable log");
     };
+    check!(matches!(&refused, BrokerError::FatalFault(fault) if fault == UNSUPPORTED_LEVEL_FAULT));
+    check!(refused.to_string() == format!("Encountered fatal fault: {UNSUPPORTED_LEVEL_FAULT}"));
+}
+
+/// Writes `records` as the length-prefixed frames of `bootstrap.records.bin`,
+/// the file `krabka format` leaves for the first start to submit.
+fn write_bootstrap_records(log_dir: &std::path::Path, records: &[krabka_metadata::MetadataRecord]) {
+    use serde_wincode::SerdeCompat;
+    use wincode::Serialize as _;
+
+    let mut bytes = Vec::new();
+    for record in records {
+        let frame = <SerdeCompat<krabka_metadata::MetadataRecord>>::serialize(record)
+            .expect("serialize a bootstrap record");
+        bytes.extend_from_slice(
+            &u32::try_from(frame.len())
+                .expect("bootstrap frame fits in u32")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&frame);
+    }
+    std::fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
+}
+
+/// A fault that lands while the node is still joining the quorum ends the start
+/// at once. The bootstrap records finalize an unsupported level, so the
+/// controller stops right after that batch commits, and the registrations that
+/// follow it would each retry against the dead controller under backoff. The
+/// backoff here is an hour, so a start that waited on it would time the test out
+/// instead of returning.
+#[tokio::test]
+async fn a_fault_while_joining_the_quorum_fails_the_start_without_waiting_on_backoff() {
+    let dir = tempdir().unwrap();
+    write_bootstrap_records(dir.path(), &[finalize_unstable_metadata_version()]);
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.self_registration_backoff_min = krabka_units::hours(1);
+    config.self_registration_backoff_max = krabka_units::hours(1);
+
+    let started = tokio::time::timeout(std::time::Duration::from_secs(60), Broker::start(config))
+        .await
+        .expect("the start waited on the retry backoff of a dead controller");
+
+    let Err(refused) = started else {
+        panic!("a broker without the flag started over a log that finalizes an unstable level");
+    };
     check!(
-        refused.to_string()
-            == format!("startup failed: startup misconfiguration: {UNSUPPORTED_LEVEL_FAULT}")
+        matches!(&refused, BrokerError::FatalFault(fault) if fault == UNSUPPORTED_LEVEL_FAULT),
+        "{refused}"
     );
+}
+
+/// Kafka halts the process on a controller fault, so no `LogManager.shutdown`
+/// runs and no `.kafka_cleanshutdown` is written: the restart registers with
+/// `previousBrokerEpoch` -1, an unclean shutdown for ELR. A stop that a fault
+/// caused leaves no proof either, and an ordinary stop still does.
+#[tokio::test]
+async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
+    for (name, faulted, proof_expected) in [
+        ("an ordinary stop", false, true),
+        ("a stop after a fatal fault", true, false),
+    ] {
+        let dir = tempdir().unwrap();
+        let handle = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+            .await
+            .expect("broker start");
+        if faulted {
+            let mut should_shutdown = handle.should_shutdown_rx();
+            handle
+                .submit_metadata_record_for_test(finalize_unstable_metadata_version())
+                .await
+                .expect("the unsupported level commits before the controller stops");
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                should_shutdown.wait_for(|down| *down),
+            )
+            .await
+            .expect("the fault did not latch the self-shutdown flag within 30s")
+            .expect("the self-shutdown flag closed");
+        }
+
+        handle.shutdown().await;
+
+        check!(
+            dir.path().join("clean_shutdown").exists() == proof_expected,
+            "{name}"
+        );
+    }
 }

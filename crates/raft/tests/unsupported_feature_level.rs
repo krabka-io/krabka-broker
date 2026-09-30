@@ -89,7 +89,8 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     else {
         panic!("a controller without the flag started over an unstable log");
     };
-    check!(matches!(&refused, RaftError::Startup(message) if message == REFUSAL));
+    check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
+    check!(refused.to_string() == format!("Encountered fatal fault: {REFUSAL}"));
 
     // The refusal changed nothing on disk: the same log starts with the flag on.
     let controller = Controller::start(config(

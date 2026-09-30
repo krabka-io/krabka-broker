@@ -90,7 +90,7 @@ The parts that carry the design:
 | Port | Listener | Configured by |
 | :--- | :--- | :--- |
 | 9092 | Kafka client and inter-broker listener | `--listen-addr` (default `127.0.0.1:9092`). Under `--config-file` each `[[listeners]]` entry sets its own port. |
-| 9093 | KIP-595 controller listener | Always `listen_addr` with the port set to 9093. Under `--config-file` it binds all interfaces. |
+| 9093 | KIP-595 controller listener | `--controller-listen-addr`, `KRABKA_CONTROLLER_LISTEN_ADDR`. By default `listen_addr` with the port set to 9093. Under `--config-file` the default binds all interfaces. It must equal the endpoint that `krabka format` recorded for the node. |
 | 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR`. `none` disables it. |
 | 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR`. `none` disables them. |
 

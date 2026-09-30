@@ -21,8 +21,8 @@
 //! Kafka's fatal fault halts the process (`ProcessTerminatingFaultHandler`,
 //! exit status 1). A library does not halt its host, so the controller
 //! reports the fault and the embedder halts. A controller that starts over such
-//! a log refuses to start with a [`RaftError::Startup`](crate::RaftError), and
-//! one that applies such a level from its leader stops itself: it publishes the
+//! a log refuses to start with a [`RaftError::FatalFault`](crate::RaftError),
+//! and one that applies such a level from its leader stops itself: it publishes the
 //! refusal on [`ControllerHandle::watch_fatal`](crate::ControllerHandle), then
 //! cancels the listener and the engine, and every later submit fails with
 //! [`RaftError::Shutdown`](crate::RaftError). A combined broker turns that

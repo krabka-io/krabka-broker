@@ -2,7 +2,7 @@
 //! controlled shutdown.
 
 use clap::Parser;
-use krabka_broker::Broker;
+use krabka_broker::{Broker, BrokerError, BrokerHandle};
 use krabka_units::convert::TimeExt as _;
 
 use crate::{
@@ -71,19 +71,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         .advertised_listener
         .take()
         .unwrap_or_else(|| args.listen_addr.to_string());
-    let controller_addr: std::net::SocketAddr = {
-        let mut a = args.listen_addr;
-        a.set_port(9093);
-        // Under `--config-file` (operator/StatefulSet mode), `--listen-addr`
-        // conflicts_with the config file, so `args.listen_addr` keeps its
-        // 127.0.0.1:9092 default. Peers dial this broker's controller via its
-        // pod FQDN, so binding the controller listener to loopback would make
-        // it unreachable across pods — bind all interfaces (0.0.0.0) instead.
-        if args.config_file.is_some() {
-            a.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-        }
-        a
-    };
+    let controller_addr = args.resolved_controller_listen_addr();
     let node_id = u64::try_from(args.broker_id).unwrap_or_else(|_| {
         eprintln!("broker_id must be non-negative");
         std::process::exit(1);
@@ -165,39 +153,159 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
                 if shutdown_rx.changed().await.is_err() { break; }
             }
         } => {
-            tracing::error!("self-shutdown triggered; stopping broker");
+            // Two things latch the flag: a fatal fault of the controller this
+            // node hosts, and every log dir going offline (KIP-112).
+            if handle.fatal_fault().is_some() {
+                tracing::error!(
+                    "self-shutdown triggered by a fatal fault of the metadata controller; \
+                     stopping broker"
+                );
+            } else {
+                tracing::error!("self-shutdown triggered (all log dirs offline); stopping broker");
+            }
         }
     }
     // Flip /readyz to 503 so load balancers pull the broker out of rotation
     // before the leadership hand-off starts.
     health_for_shutdown.mark_shutting_down();
-    // Read before the handle goes into the shutdown below.
-    let fatal_fault = handle.fatal_fault();
 
-    // KIP-500 controlled shutdown: ask the controller to move leadership of
-    // every partition this broker leads onto its other in-sync replicas
-    // BEFORE we stop. This is the difference between a near-seamless failover
-    // and stranding producers on a dead leader until their request timeout —
-    // `kubectl delete pod` sends SIGTERM, and without this hand-off the
-    // partition has no leader until the controller fences us (~tens of
-    // seconds). Bounded well under the pod's terminationGracePeriod (30s); on
-    // timeout `controlled_shutdown` falls back to a hard stop internally.
-    match handle
-        .controlled_shutdown(controlled_shutdown_drain_timeout.to_std())
-        .await
-    {
-        Ok(()) => tracing::info!("controlled shutdown complete (leadership drained)"),
-        Err(e) => tracing::warn!(error = %e, "controlled shutdown incomplete; hard-stopped"),
-    }
+    let outcome = stop_broker(handle, controlled_shutdown_drain_timeout.to_std()).await;
     // The probes outlive the broker's own drain deliberately: the kubelet is
     // still polling while `controlled_shutdown` hands leadership over, and a
     // refused connection there is indistinguishable from a crash.
     health_shutdown.cancel();
     tracing::info!("krabka-broker stopped");
     telemetry.shutdown();
-    // A fatal fault of the controller ends Kafka's process with status 1
-    // (`ProcessTerminatingFaultHandler`). The drain above had nothing to wait
-    // for, since the fault had already latched the self-shutdown flag. Failing
-    // `main` with the fault's message is what makes the exit status non-zero.
-    fatal_fault.map_or(Ok(()), |fault| Err(fault.into()))
+    Ok(outcome?)
+}
+
+/// Stops the broker and reports how the process should end.
+///
+/// A termination signal, or every log dir going offline (KIP-112), takes
+/// Kafka's controlled shutdown (KIP-500): ask the controller to move
+/// leadership of every partition this broker leads onto its other in-sync
+/// replicas BEFORE we stop. This is the difference between a near-seamless
+/// failover and stranding producers on a dead leader until their request
+/// timeout -- `kubectl delete pod` sends SIGTERM, and without this hand-off the
+/// partition has no leader until the controller fences us (~tens of seconds).
+/// Bounded well under the pod's terminationGracePeriod (30s); on timeout
+/// `controlled_shutdown` falls back to a hard stop internally.
+///
+/// A fatal fault of the controller takes none of that. Kafka handles it with
+/// `ProcessTerminatingFaultHandler`, which halts the process with status 1: no
+/// leadership hand-off, which a dead controller could not serve anyway, and no
+/// orderly stop, so no clean-shutdown proof for the next start
+/// (`BrokerHandle::shutdown` writes none after a fault). The stop that runs
+/// here only closes what it can within `drain_timeout`, so a task that hangs
+/// cannot keep the process alive, and the `FatalFault` it returns is what makes
+/// the exit status non-zero.
+pub(crate) async fn stop_broker(
+    handle: BrokerHandle,
+    drain_timeout: std::time::Duration,
+) -> Result<(), BrokerError> {
+    if let Some(fault) = handle.fatal_fault() {
+        if tokio::time::timeout(drain_timeout, handle.shutdown())
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                ?drain_timeout,
+                "the broker did not stop in time after a fatal fault; exiting anyway"
+            );
+        }
+        return Err(BrokerError::FatalFault(fault));
+    }
+    match handle.controlled_shutdown(drain_timeout).await {
+        Ok(()) => tracing::info!("controlled shutdown complete (leadership drained)"),
+        Err(e) => tracing::warn!(error = %e, "controlled shutdown incomplete; hard-stopped"),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use assert2::assert;
+    use krabka_broker::BrokerConfig;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    // Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one
+    // of trunk's unstable levels.
+    const FAULT: &str = "Tried to apply FeatureLevelRecord \
+        FeatureLevelRecord(name='metadata.version', featureLevel=33), \
+        but this controller only supports versions 7-30";
+
+    const CLEAN_SHUTDOWN_PROOF: &str = "clean_shutdown";
+
+    async fn start_broker(log_dir: &std::path::Path) -> BrokerHandle {
+        Broker::start(BrokerConfig::for_tests(log_dir.to_path_buf()))
+            .await
+            .expect("broker start")
+    }
+
+    // The default config supports no unstable feature level, so committing one
+    // makes the controller replay a level outside its range.
+    async fn make_the_controller_fault(handle: &BrokerHandle) {
+        handle
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: "metadata.version".into(),
+                    level: 33,
+                },
+            ))
+            .await
+            .expect("the unsupported level commits before the controller stops");
+        let mut should_shutdown = handle.should_shutdown_rx();
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            should_shutdown.wait_for(|down| *down),
+        )
+        .await
+        .expect("the fault did not latch the self-shutdown flag within 30s")
+        .expect("the self-shutdown flag closed");
+    }
+
+    // The post-start path of `krabka-broker`: a controller fault after the
+    // broker has come up ends the process with an error that carries Kafka's
+    // message, and the stop it runs leaves no clean-shutdown proof, as a
+    // halted Kafka process leaves none. The zero-length bound is a stop that
+    // does not finish in time, and the error still comes back.
+    #[tokio::test]
+    async fn a_fault_after_start_ends_in_a_fatal_fault_error_without_a_clean_shutdown_proof() {
+        for (name, bound) in [
+            ("time to stop", Duration::from_secs(30)),
+            ("no time to stop", Duration::ZERO),
+        ] {
+            let dir = tempdir().unwrap();
+            let handle = start_broker(dir.path()).await;
+            make_the_controller_fault(&handle).await;
+
+            let outcome = stop_broker(handle, bound).await;
+
+            assert!(
+                matches!(&outcome, Err(BrokerError::FatalFault(fault)) if fault == FAULT),
+                "{name}: {outcome:?}"
+            );
+            assert!(
+                !dir.path().join(CLEAN_SHUTDOWN_PROOF).exists(),
+                "{name}: a fault-driven stop left a clean-shutdown proof"
+            );
+        }
+    }
+
+    // The control for the test above: with no fault the same stop succeeds and
+    // leaves the proof, so the absence above is the fault's doing.
+    #[tokio::test]
+    async fn a_stop_without_a_fault_succeeds_and_leaves_the_clean_shutdown_proof() {
+        let dir = tempdir().unwrap();
+        let handle = start_broker(dir.path()).await;
+
+        let outcome = stop_broker(handle, Duration::from_secs(30)).await;
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(dir.path().join(CLEAN_SHUTDOWN_PROOF).exists());
+    }
 }

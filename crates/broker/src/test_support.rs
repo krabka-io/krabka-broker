@@ -715,6 +715,7 @@ type SubmitOutcome =
 pub(crate) struct FakeMetadataSource {
     image_tx: watch::Sender<Arc<MetadataImage>>,
     leader_tx: watch::Sender<Option<NodeId>>,
+    fatal_tx: watch::Sender<Option<String>>,
     controller_bound_addr: SocketAddr,
     term: u64,
     owns_controller_epoch: bool,
@@ -756,6 +757,14 @@ impl FakeMetadataSource {
     /// observes it, and `quorum_state` reports it as `current_leader`.
     pub(crate) fn set_leader(&self, leader: Option<NodeId>) {
         self.leader_tx.send_replace(leader);
+    }
+
+    /// Publish a fatal controller fault, as a controller does before it stops
+    /// itself. Every `watch_fatal` receiver observes it. A fake that never
+    /// calls this reports no fault, and its watchers wait rather than seeing
+    /// the channel close.
+    pub(crate) fn set_fatal(&self, fault: &str) {
+        self.fatal_tx.send_replace(Some(fault.to_owned()));
     }
 
     /// The leader channel's sender, for a test that drives a spawned watcher
@@ -872,9 +881,11 @@ impl FakeMetadataSourceBuilder {
     pub(crate) fn build(self) -> FakeMetadataSource {
         let (image_tx, _) = watch::channel(self.image);
         let (leader_tx, _) = watch::channel(self.leader);
+        let (fatal_tx, _) = watch::channel(None);
         FakeMetadataSource {
             image_tx,
             leader_tx,
+            fatal_tx,
             controller_bound_addr: self.controller_bound_addr,
             term: self.term,
             owns_controller_epoch: self.owns_controller_epoch,
@@ -909,6 +920,10 @@ impl MetadataSource for FakeMetadataSource {
 
     fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
         self.leader_tx.subscribe()
+    }
+
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        self.fatal_tx.subscribe()
     }
 
     /// A quorum that has committed nothing and knows no voters. Its leader

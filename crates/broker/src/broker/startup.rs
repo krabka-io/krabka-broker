@@ -21,6 +21,7 @@ use crate::{
     config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG},
     error::BrokerError,
     health::HealthState,
+    metadata_source::or_fatal_fault,
 };
 
 impl Broker {
@@ -140,11 +141,7 @@ impl Broker {
             &mut data_plane_listeners,
         )
         .await?;
-        let StartupTransport {
-            tls_dynamic,
-            ktls_enabled,
-            inter_broker_client,
-        } = prepare_startup_transport(&config).await?;
+        let transport = prepare_startup_transport(&config).await?;
         let metrics = crate::metrics::BrokerMetrics::new();
         let diskless_runtime = DisklessRuntime::new(
             config.node_id,
@@ -192,11 +189,55 @@ impl Broker {
         let (controller, controller_admin_router, raft_handshake_audit) = start_metadata_phase(
             &mut config,
             controller_listener,
-            tls_dynamic.as_ref(),
-            &inter_broker_client,
+            transport.tls_dynamic.as_ref(),
+            &transport.inter_broker_client,
             Arc::clone(&diskless_runtime.wal_shards),
         )
         .await?;
+
+        // The controller exists from here on, and it can stop itself over a
+        // fatal fault: Kafka halts the process at any point of its startup on
+        // such a fault. The rest of the start runs against that fault, so it
+        // ends the start at once and names its reason, rather than surfacing
+        // later as a stalled unfence wait or a bare "controller shut down".
+        or_fatal_fault(
+            controller.watch_fatal(),
+            Box::pin(Self::start_after_quorum_join(JoinedQuorum {
+                config,
+                data_plane_listeners,
+                health,
+                transport,
+                metrics,
+                diskless_runtime,
+                controller,
+                controller_admin_router,
+                raft_handshake_audit,
+            })),
+        )
+        .await
+    }
+
+    /// The startup phases that follow the join of the metadata quorum: storage
+    /// recovery, the coordinators, runtime services, and final assembly. It is
+    /// a function of its own so that [`Self::start_with_listeners_inner`] can
+    /// race the whole of it against the controller's fatal fault.
+    async fn start_after_quorum_join(joined: JoinedQuorum) -> Result<BrokerHandle, BrokerError> {
+        let JoinedQuorum {
+            mut config,
+            data_plane_listeners,
+            health,
+            transport:
+                StartupTransport {
+                    tls_dynamic,
+                    ktls_enabled,
+                    inter_broker_client,
+                },
+            metrics,
+            diskless_runtime,
+            controller,
+            controller_admin_router,
+            raft_handshake_audit,
+        } = joined;
 
         // 1b. KIP-853 controller auto-join. Spawned BEFORE the leader-wait in
         //     step 2: a `Join` broker's empty raft log keeps it in openraft's
@@ -425,6 +466,20 @@ impl Broker {
         health.mark_listeners_bound();
         Ok(handle)
     }
+}
+
+/// What startup holds once this node has joined the metadata quorum, handed on
+/// to [`Broker::start_after_quorum_join`].
+struct JoinedQuorum {
+    config: BrokerConfig,
+    data_plane_listeners: Vec<tokio::net::TcpListener>,
+    health: HealthState,
+    transport: StartupTransport,
+    metrics: crate::metrics::BrokerMetrics,
+    diskless_runtime: DisklessRuntime,
+    controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    controller_admin_router: Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
+    raft_handshake_audit: crate::raft_handshake::AuditLogArc,
 }
 
 /// Wait for the first heartbeat answer that says this broker is unfenced, as

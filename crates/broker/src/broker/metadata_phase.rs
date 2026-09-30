@@ -18,6 +18,7 @@ use crate::{
     },
     config::BrokerConfig,
     error::BrokerError,
+    metadata_source::or_fatal_fault,
 };
 
 struct RaftTransport {
@@ -206,7 +207,14 @@ async fn start_metadata_source(
         let controller = Arc::new(
             krabka_raft::Controller::start_with_listener(controller_config, controller_listener)
                 .await
-                .map_err(|error| BrokerError::Startup(error.to_string()))?,
+                .map_err(|error| match error {
+                    // The refusal of a log that finalized an unsupported
+                    // feature level. It reads the same as the fault that a
+                    // running controller publishes, as Kafka's handler logs
+                    // both alike.
+                    krabka_raft::RaftError::FatalFault(fault) => BrokerError::FatalFault(fault),
+                    other => BrokerError::Startup(other.to_string()),
+                })?,
         );
         let _ = controller_cell.set(Arc::clone(&controller));
         return Ok((
@@ -296,14 +304,8 @@ async fn wait_for_metadata_leader(
     timeout: std::time::Duration,
 ) -> Result<(), BrokerError> {
     let mut leaders = controller.watch_leader();
-    let fatal = controller.watch_fatal();
     let deadline = std::time::Instant::now() + timeout;
     while leaders.borrow().is_none() {
-        // A controller that stopped itself never elects a leader, and its
-        // fault names the reason where the timeout below would only guess.
-        if let Some(fault) = fatal.borrow().clone() {
-            return Err(BrokerError::Startup(fault));
-        }
         if std::time::Instant::now() > deadline {
             return Err(BrokerError::Startup(format!(
                 "no leader elected within {timeout:?}"
@@ -387,18 +389,14 @@ pub(super) async fn start_metadata_phase(
     .await?;
     spawn_auto_join(config, &controller.0, inter_broker_client);
     // A controller that stops itself over a fatal fault fails every later
-    // submit with a bare "controller shut down". Kafka's process halts on that
-    // fault with its message, so that message is what a failed start reports.
-    join_metadata_quorum(config, &controller.0, bootstrap_records)
-        .await
-        .map_err(|error| {
-            controller
-                .0
-                .watch_fatal()
-                .borrow()
-                .clone()
-                .map_or(error, BrokerError::Startup)
-        })?;
+    // submit with a bare "controller shut down", and each submit retries under
+    // backoff first. Kafka's process halts on that fault at once and with its
+    // message, so the fault ends the join and is what a failed start reports.
+    or_fatal_fault(
+        controller.0.watch_fatal(),
+        join_metadata_quorum(config, &controller.0, bootstrap_records),
+    )
+    .await?;
     Ok((controller.0, controller.1, audit_cell))
 }
 

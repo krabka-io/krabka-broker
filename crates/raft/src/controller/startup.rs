@@ -155,7 +155,7 @@ impl Controller {
             unsupported_feature_level(&engine.current_image(), config.unstable_feature_versions)
         {
             engine.shutdown().await;
-            return Err(RaftError::Startup(refusal));
+            return Err(RaftError::FatalFault(refusal));
         }
 
         // Controller listener.
