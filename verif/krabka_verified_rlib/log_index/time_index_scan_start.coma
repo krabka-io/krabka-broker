@@ -1,0 +1,119 @@
+(* #"/workspace/crates/verified/src/log_index.rs" 96 0 96 82 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 97 39 97 40
+let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 97 10 97 41
+let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 98 24 98 58
+let%span slog_index'2 = "/workspace/crates/verified/src/log_index.rs" 99 16 99 17
+let%span slog_index'3 = "/workspace/crates/verified/src/log_index.rs" 85 11 86 40
+let%span slog_index'4 = "/workspace/crates/verified/src/log_index.rs" 87 10 92 52
+let%span slog_index'5 = "/workspace/crates/verified/src/log_index.rs" 93 10 94 20
+let%span slog_index'6 = "/workspace/crates/verified/src/log_index.rs" 49 11 50 40
+let%span slog_index'7 = "/workspace/crates/verified/src/log_index.rs" 51 10 57 51
+let%span slog_index'8 = "/workspace/crates/verified/src/log_index.rs" 58 10 60 20
+
+use creusot.int.Int64
+use creusot.slice.Slice64
+use creusot.int.UInt32
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_sub (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_sub ensures] ([@stop_split] [@expl:checked_sub ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ - Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ - Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_sub ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ - Int64.to_int rhs)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_i64_u32 = { f0: Int64.t; f1: UInt32.t }
+
+let time_index_lookup (entries: Slice64.slice tup2_i64_u32) (target_timestamp: Int64.t) (return (x: UInt32.t)) =
+{[@stop_split] [@expl:time_index_lookup requires] [%#slog_index'6] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view entries)
+    -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0}
+  any
+  [ return (result: UInt32.t) ->
+  {[@stop_split] [@expl:time_index_lookup ensures] ([@stop_split] [@expl:time_index_lookup ensures #0] [%#slog_index'7] (exists i: int. 0
+            <= i
+          /\ i < Seq.length (Slice64.view entries)
+          /\ Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int target_timestamp)
+      -> (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view entries)
+        /\ Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int target_timestamp
+        /\ UInt32.t'int result = UInt32.t'int (Seq.get (Slice64.view entries) i).f1
+        /\ (forall j: int. i < j /\ j < Seq.length (Slice64.view entries)
+          -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view entries) j).f0) (Int64.to_int target_timestamp))))
+    /\ ([@stop_split] [@expl:time_index_lookup ensures #1] [%#slog_index'8] (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view entries)
+        -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view entries) i).f0) (Int64.to_int target_timestamp))
+    -> UInt32.t'int result = 0)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let time_index_scan_start [#"/workspace/crates/verified/src/log_index.rs" 96 0 96 82]
+  (entries: Slice64.slice tup2_i64_u32) (target_timestamp: Int64.t) (return (x: UInt32.t)) =
+{[@stop_split] [@expl:time_index_scan_start requires] [%#slog_index'3] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view entries)
+    -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = checked_sub [%#slog_index'0] {target_timestamp} {[%#slog_index] (1: Int64.t)}
+        (fun (_x: t_Option_i64) -> [ &_11 <- _x ] s1)
+    | s1 = any [ br0 -> {_11 = None} (! bb4) | br1 (x0: Int64.t) -> {_11 = Some x0} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = elim_Some {_11} (fun (r0: Int64.t) -> [ &before <- r0 ] s1)
+    | s1 = time_index_lookup [%#slog_index'1] {entries} {before} (fun (_x: UInt32.t) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#slog_index'2] (0: UInt32.t) ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: UInt32.t = Any.any_l ()
+  | & entries: Slice64.slice tup2_i64_u32 = entries
+  | & target_timestamp: Int64.t = target_timestamp
+  | & _11: t_Option_i64 = Any.any_l ()
+  | & before: Int64.t = Any.any_l () ])
+  [ return (result: UInt32.t) ->
+  {[@stop_split] [@expl:time_index_scan_start ensures] ([@stop_split] [@expl:time_index_scan_start ensures #0] [%#slog_index'4] (exists i: int. 0
+            <= i
+          /\ i < Seq.length (Slice64.view entries)
+          /\ Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp)
+      -> (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view entries)
+        /\ Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp
+        /\ UInt32.t'int result = UInt32.t'int (Seq.get (Slice64.view entries) i).f1
+        /\ (forall j: int. i < j /\ j < Seq.length (Slice64.view entries)
+          -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) j).f0) (Int64.to_int target_timestamp))))
+    /\ ([@stop_split] [@expl:time_index_scan_start ensures #1] [%#slog_index'5] (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view entries)
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) i).f0) (Int64.to_int target_timestamp))
+    -> UInt32.t'int result = 0)}
+    (! return {result}) ]

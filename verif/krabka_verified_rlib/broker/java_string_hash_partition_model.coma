@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/broker.rs" 686 0 686 81 *)
+(* #"/workspace/crates/verified/src/broker.rs" 685 0 685 81 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 685 11 685 31
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 652 11 652 45
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 653 10 653 15
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 656 8 661 9
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 671 8 677 9
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 684 11 684 31
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 651 11 651 45
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 652 10 652 15
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 655 8 660 9
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 670 8 676 9
 
 use creusot.int.UInt16
 use seq.Seq
@@ -17,7 +17,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker.rs" 654 0 654 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker.rs" 653 0 653 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
 
 axiom java_string_hash_prefix_model_def:
   forall units: Seq.seq UInt16.t, limit: int [java_string_hash_prefix_model units limit]. ([%#sbroker'0] 0 <= limit
@@ -32,7 +32,7 @@ axiom java_string_hash_prefix_model_def:
 
 constant const_MIN: Int32.t = (-2147483648: Int32.t)
 
-function java_string_abs_model [#"/workspace/crates/verified/src/broker.rs" 669 0 669 42] (hash: Int32.t) : Int32.t =
+function java_string_abs_model [#"/workspace/crates/verified/src/broker.rs" 668 0 668 42] (hash: Int32.t) : Int32.t =
   [%#sbroker'3] if hash = const_MIN then (0: Int32.t) else if Int32.lt hash (0: Int32.t) then Int32.neg hash else hash
 
 meta "compute_max_steps" 1000000
@@ -43,7 +43,7 @@ constant units : Seq.seq UInt16.t
 
 constant partition_count : Int32.t
 
-function java_string_hash_partition_model [#"/workspace/crates/verified/src/broker.rs" 686 0 686 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
+function java_string_hash_partition_model [#"/workspace/crates/verified/src/broker.rs" 685 0 685 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
 
 goal vc_java_string_hash_partition_model: ([%#sbroker] gt_log_Int (Int32.to_int partition_count) 0)
   -> ([@stop_split] [@expl:java_string_hash_prefix_model requires] [%#sbroker'0] 0 <= Seq.length units

@@ -1,0 +1,346 @@
+(* #"/workspace/crates/verified/src/composition.rs" 768 0 773 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 774 26 778 5
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 779 15 779 19
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 781 16 781 22
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 782 19 782 25
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 784 14 784 33
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 785 14 785 27
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 783 16 783 51
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 786 35 786 45
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 786 13 786 19
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 786 21 786 31
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 787 40 787 81
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 790 11 790 96
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 791 16 791 68
+let%span scomposition'12 = "/workspace/crates/verified/src/composition.rs" 792 19 792 72
+let%span scomposition'13 = "/workspace/crates/verified/src/composition.rs" 795 28 795 33
+let%span scomposition'14 = "/workspace/crates/verified/src/composition.rs" 800 20 800 21
+let%span scomposition'15 = "/workspace/crates/verified/src/composition.rs" 800 12 800 21
+let%span scomposition'16 = "/workspace/crates/verified/src/composition.rs" 802 13 802 14
+let%span scomposition'17 = "/workspace/crates/verified/src/composition.rs" 802 8 802 14
+let%span scomposition'18 = "/workspace/crates/verified/src/composition.rs" 788 19 788 23
+let%span scomposition'19 = "/workspace/crates/verified/src/composition.rs" 798 23 798 28
+let%span scomposition'20 = "/workspace/crates/verified/src/composition.rs" 804 47 804 48
+let%span scomposition'21 = "/workspace/crates/verified/src/composition.rs" 804 57 804 70
+let%span scomposition'22 = "/workspace/crates/verified/src/composition.rs" 804 10 804 71
+let%span scomposition'23 = "/workspace/crates/verified/src/composition.rs" 807 48 807 49
+let%span scomposition'24 = "/workspace/crates/verified/src/composition.rs" 807 60 807 73
+let%span scomposition'25 = "/workspace/crates/verified/src/composition.rs" 807 41 807 73
+let%span scomposition'26 = "/workspace/crates/verified/src/composition.rs" 806 48 806 49
+let%span scomposition'27 = "/workspace/crates/verified/src/composition.rs" 806 63 806 76
+let%span scomposition'28 = "/workspace/crates/verified/src/composition.rs" 806 40 806 80
+let%span scomposition'29 = "/workspace/crates/verified/src/composition.rs" 805 47 805 60
+let%span scomposition'30 = "/workspace/crates/verified/src/composition.rs" 767 10 767 16
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 18 10 31 1
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 279 10 284 1
+let%span srestore'0 = "/workspace/crates/verified/src/restore.rs" 60 10 64 1
+let%span srestore'1 = "/workspace/crates/verified/src/restore.rs" 104 10 107 1
+let%span srestore'2 = "/workspace/crates/verified/src/restore.rs" 86 10 90 1
+let%span srestore'3 = "/workspace/crates/verified/src/restore.rs" 265 8 270 65
+let%span srestore'4 = "/workspace/crates/verified/src/restore.rs" 250 8 253 9
+let%span srestore'5 = "/workspace/crates/verified/src/restore.rs" 50 8 53 40
+let%span sraft = "/workspace/crates/verified/src/raft.rs" 182 28 182 73
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+type t_RestoreTimestampType = CreateTime | LogAppendTime
+
+type t_RestoreBatchFrame = {
+  base_offset: Int64.t;
+  last_offset_delta: Int32.t;
+  timestamp_type: t_RestoreTimestampType;
+  base_timestamp: Int64.t;
+  max_timestamp: Int64.t }
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta'0: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sstorage] match result with
+      | Some {f0 = last; f1 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ Int64.to_int supplied_base = Int64.to_int expected_base
+      /\ ge_log_Int (Int32.to_int last_offset_delta'0) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta'0
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base <> Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta'0 < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta'0) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta'0 + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_tup2_i64_i64) (return (f0'0: tup2_i64_i64)) = any
+  [ _k (f0'0: tup2_i64_i64) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_RestoreRecordDeltas = { offset_delta: Int32.t; timestamp_delta: Int64.t }
+
+type t_RestoreContentExclusions = { key: bool; header: bool }
+
+type t_RestoreExclusions = { producer: bool; offset: bool; content: t_RestoreContentExclusions }
+
+type tup2_RestoreRecordDeltas_RestoreExclusions = { f0'0: t_RestoreRecordDeltas; f1'0: t_RestoreExclusions }
+
+let len_tup2_RestoreRecordDeltas_RestoreExclusions (self_: Slice64.slice tup2_RestoreRecordDeltas_RestoreExclusions)
+  (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore.rs" 248 0 248 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+ = [%#srestore'4] match frame.timestamp_type with
+    | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
+    | LogAppendTime -> Int64.to_int frame.max_timestamp
+    end
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore.rs" 263 0 263 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+  [%#srestore'3] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
+  /\ ge_log_Int (Int32.to_int record.offset_delta) 0
+  /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
+  /\ Int64.to_int frame.base_offset + Int32.to_int record.offset_delta <= Int64.to_int const_MAX
+  /\ ge_log_Int (kafka_record_timestamp frame record) (Int64.to_int const_MIN)
+  /\ kafka_record_timestamp frame record <= Int64.to_int const_MAX
+
+let restore_record_coordinates (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:restore_record_coordinates ensures] [%#srestore] match result with
+      | Some {f0 = offset'0; f1 = timestamp} -> restore_record_placeable frame record
+      /\ Int64.to_int offset'0 = Int64.to_int frame.base_offset + Int32.to_int record.offset_delta
+      /\ Int64.to_int timestamp = kafka_record_timestamp frame record
+      | None -> not restore_record_placeable frame record
+      end}
+    (! return {result}) ]
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+predicate restore_excluded [#"/workspace/crates/verified/src/restore.rs" 48 0 48 62] (exclusions: t_RestoreExclusions) =
+  [%#srestore'5] exclusions.producer \/ exclusions.offset \/ exclusions.content.key \/ exclusions.content.header
+
+let restore_record_selected (offset'0: Int64.t) (offset_bound: t_Option_i64) (timestamp: Int64.t)
+  (timestamp_bound: t_Option_i64) (exclusions: t_RestoreExclusions) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:restore_record_selected ensures] [%#srestore'0] result
+    = (match offset_bound with
+        | Some'0 bound -> Int64.to_int offset'0 <= Int64.to_int bound
+        | None'0 -> true
+        end
+    /\ match timestamp_bound with
+        | Some'0 bound -> Int64.to_int timestamp < Int64.to_int bound
+        | None'0 -> true
+        end
+    /\ not restore_excluded exclusions)}
+    (! return {result}) ]
+
+let in_half_open_window (value: Int64.t) (start: Int64.t) (end': Int64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:in_half_open_window ensures] [%#sraft] result
+    = (Int64.to_int start <= Int64.to_int value /\ Int64.to_int value < Int64.to_int end')}
+    (! return {result}) ]
+
+let restore_batch_past_offset_bound (batch_base: Int64.t) (offset_bound: t_Option_i64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:restore_batch_past_offset_bound ensures] [%#srestore'1] result
+    = match offset_bound with
+      | Some'0 bound -> gt_log_Int (Int64.to_int batch_base) (Int64.to_int bound)
+      | None'0 -> false
+      end}
+    (! return {result}) ]
+
+let elim_Some'0 (_x: t_Option_i64) (return (f0'1: Int64.t)) = any
+  [ _k (f0'1: Int64.t) -> {Some'0 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_RestoreFilterDecision = Keep | Empty | Filter
+
+let restore_batch_filter_decision (saw_keep: bool) (saw_drop: bool) (return (x: t_RestoreFilterDecision)) = any
+  [ return (result: t_RestoreFilterDecision) ->
+  {[@stop_split] [@expl:restore_batch_filter_decision ensures] [%#srestore'2] match result with
+      | Keep -> not saw_drop
+      | Empty -> saw_drop /\ not saw_keep
+      | Filter -> saw_keep /\ saw_drop
+      end}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_selection_respects_batch_extent [#"/workspace/crates/verified/src/composition.rs" 768 0 773 9]
+  (frame: t_RestoreBatchFrame) (records: Slice64.slice tup2_RestoreRecordDeltas_RestoreExclusions)
+  (offset_bound: t_Option_i64) (timestamp_bound: t_Option_i64) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = local_append_coordinates [%#scomposition] {frame.base_offset} {frame.base_offset} {frame.last_offset_delta}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_8 <- _x ] s1)
+    | s1 = any [ br0 -> {_8 = None} (! bb4) | br1 (x0: tup2_i64_i64) -> {_8 = Some x0} (! bb3) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#scomposition'0] true ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = elim_Some {_8} (fun (r0: tup2_i64_i64) -> [ &next <- r0.f1 ] s1)
+    | s1 = [ &i <- [%#scomposition'1] (0: UInt64.t) ] s2
+    | s2 = [ &kept <- [%#scomposition'2] (0: UInt64.t) ] s3
+    | s3 = bb5 ]
+  | bb5 = bb5invariant
+    [ bb5 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb5 ([%#scomposition'3] Seq.length (Slice64.view records)
+      - UInt64.t'int i)}
+      bb5invariant
+    | bb5invariant = {[@expl:loop invariant] [%#scomposition'5] UInt64.t'int kept <= UInt64.t'int i
+      /\ UInt64.t'int i <= Seq.length (Slice64.view records)}
+      (! [ &variant_old_bb5 <- [%#scomposition'3] Seq.length (Slice64.view records) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_RestoreRecordDeltas_RestoreExclusions [%#scomposition'4] {records}
+          (fun (_x: UInt64.t) -> [ &_27 <- _x ] s1)
+      | s1 = [ &_25 <- UInt64.lt i _27 ] s2
+      | s2 = any [ br0 -> {_25 = false} (! bb31) | br1 -> {_25} (! bb8) ] ]
+      [ bb8 = s0
+        [ s0 = [ &_31 <- i ] s1
+        | s1 = [ &_32 <- Slice64.length records ] s2
+        | s2 = [ &_33 <- UInt64.lt _31 _32 ] s3
+        | s3 = {[@expl:index in bounds] [%#scomposition'6] _33} s4
+        | s4 = Slice64.get [%#scomposition'7] <tup2_RestoreRecordDeltas_RestoreExclusions> {records} {_31}
+            (fun (r: tup2_RestoreRecordDeltas_RestoreExclusions) -> [ &record <- r.f0'0 ] s5)
+        | s5 = Slice64.get [%#scomposition'8] <tup2_RestoreRecordDeltas_RestoreExclusions> {records} {_31}
+            (fun (r: tup2_RestoreRecordDeltas_RestoreExclusions) -> [ &exclusions <- r.f1'0 ] s6)
+        | s6 = restore_record_coordinates [%#scomposition'9] {frame} {record}
+            (fun (_x: t_Option_tup2_i64_i64) -> [ &_37 <- _x ] s7)
+        | s7 = any [ br0 -> {_37 = None} (! bb13) | br1 (x0: tup2_i64_i64) -> {_37 = Some x0} (! bb12) ] ]
+      | bb12 = s0
+        [ s0 = elim_Some {_37} (fun (r0: tup2_i64_i64) -> [ &offset'0 <- r0.f0 ] s1)
+        | s1 = elim_Some {_37} (fun (r0: tup2_i64_i64) -> [ &timestamp <- r0.f1 ] s2)
+        | s2 = restore_record_selected [%#scomposition'10] {offset'0} {offset_bound} {timestamp} {timestamp_bound}
+            {exclusions} (fun (_x: bool) -> [ &_42 <- _x ] s3)
+        | s3 = any [ br0 -> {_42 = false} (! bb30) | br1 -> {_42} (! bb15) ] ]
+      | bb15 = s0
+        [ s0 = in_half_open_window [%#scomposition'11] {offset'0} {frame.base_offset} {next}
+            (fun (_x: bool) -> [ &_49 <- _x ] s1)
+        | s1 = any [ br0 -> {_49 = false} (! bb27) | br1 -> {_49} (! bb17) ] ]
+      | bb17 = s0
+        [ s0 = restore_batch_past_offset_bound [%#scomposition'12] {offset'0} {offset_bound}
+            (fun (_x: bool) -> [ &_53 <- _x ] s1)
+        | s1 = any [ br0 -> {_53 = false} (! bb21) | br1 -> {_53} (! bb27) ] ]
+      | bb21 = any
+        [ br0 -> {timestamp_bound = None'0} (! bb24) | br1 (x0: Int64.t) -> {timestamp_bound = Some'0 x0} (! bb25) ]
+      | bb25 = s0
+        [ s0 = elim_Some'0 {timestamp_bound} (fun (r0: Int64.t) -> [ &bound <- r0 ] s1)
+        | s1 = [ &_56 <- Int64.ge timestamp bound ] s2
+        | s2 = bb26 ]
+      | bb24 = s0 [ s0 = [ &_56 <- [%#scomposition'13] false ] s1 | s1 = bb26 ]
+      | bb26 = any [ br0 -> {_56 = false} (! bb28) | br1 -> {_56} (! bb27) ]
+      | bb28 = s0
+        [ s0 = UInt64.add [%#scomposition'15] {kept} {[%#scomposition'14] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &kept <- _x ] s1)
+        | s1 = bb30 ]
+      | bb30 = s0
+        [ s0 = UInt64.add [%#scomposition'17] {i} {[%#scomposition'16] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb5 ] ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- [%#scomposition'18] true ] s1 | s1 = return {_ret} ]
+  | bb27 = s0 [ s0 = [ &_ret <- [%#scomposition'19] false ] s1 | s1 = return {_ret} ]
+  | bb31 = s0
+    [ s0 = [ &_64 <- UInt64.gt kept ([%#scomposition'20] (0: UInt64.t)) ] s1
+    | s1 = len_tup2_RestoreRecordDeltas_RestoreExclusions [%#scomposition'21] {records}
+        (fun (_x: UInt64.t) -> [ &_68 <- _x ] s2)
+    | s2 = [ &_66 <- UInt64.lt kept _68 ] s3
+    | s3 = restore_batch_filter_decision [%#scomposition'22] {_64} {_66}
+        (fun (_x: t_RestoreFilterDecision) -> [ &_63 <- _x ] s4)
+    | s4 = any [ br0 -> {_63 = Keep} (! bb39) | br1 -> {_63 = Empty} (! bb38) | br2 -> {_63 = Filter} (! bb37) ] ]
+  | bb37 = s0
+    [ s0 = [ &_79 <- UInt64.gt kept ([%#scomposition'23] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_79 = false} (! bb50) | br1 -> {_79} (! bb49) ] ]
+  | bb49 = s0
+    [ s0 = len_tup2_RestoreRecordDeltas_RestoreExclusions [%#scomposition'24] {records}
+        (fun (_x: UInt64.t) -> [ &_82 <- _x ] s1)
+    | s1 = [ &_ret <- UInt64.lt kept _82 ] s2
+    | s2 = return {_ret} ]
+  | bb50 = s0 [ s0 = [ &_ret <- [%#scomposition'25] false ] s1 | s1 = return {_ret} ]
+  | bb38 = s0
+    [ s0 = [ &_74 <- kept = ([%#scomposition'26] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_74 = false} (! bb42) | br1 -> {_74} (! bb41) ] ]
+  | bb41 = s0
+    [ s0 = len_tup2_RestoreRecordDeltas_RestoreExclusions [%#scomposition'27] {records}
+        (fun (_x: UInt64.t) -> [ &_77 <- _x ] s1)
+    | s1 = any [ br0 -> {_77 = (0: UInt64.t)} (! bb46) | default -> -{_77 <> (0: UInt64.t)}- (! bb44) ] ]
+  | bb44 = s0 [ s0 = [ &_76 <- false ] s1 | s1 = bb47 ]
+  | bb46 = s0 [ s0 = [ &_76 <- true ] s1 | s1 = bb47 ]
+  | bb47 = s0 [ s0 = [ &_ret <- not _76 ] s1 | s1 = return {_ret} ]
+  | bb42 = s0 [ s0 = [ &_ret <- [%#scomposition'28] false ] s1 | s1 = return {_ret} ]
+  | bb39 = s0
+    [ s0 = len_tup2_RestoreRecordDeltas_RestoreExclusions [%#scomposition'29] {records}
+        (fun (_x: UInt64.t) -> [ &_72 <- _x ] s1)
+    | s1 = [ &_ret <- kept = _72 ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & frame: t_RestoreBatchFrame = frame
+  | & records: Slice64.slice tup2_RestoreRecordDeltas_RestoreExclusions = records
+  | & offset_bound: t_Option_i64 = offset_bound
+  | & timestamp_bound: t_Option_i64 = timestamp_bound
+  | & next: Int64.t = Any.any_l ()
+  | & _8: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & kept: UInt64.t = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: UInt64.t = Any.any_l ()
+  | & record: t_RestoreRecordDeltas = Any.any_l ()
+  | & exclusions: t_RestoreExclusions = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & offset'0: Int64.t = Any.any_l ()
+  | & timestamp: Int64.t = Any.any_l ()
+  | & _37: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _49: bool = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & bound: Int64.t = Any.any_l ()
+  | & _63: t_RestoreFilterDecision = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _66: bool = Any.any_l ()
+  | & _68: UInt64.t = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
+  | & _74: bool = Any.any_l ()
+  | & _76: bool = Any.any_l ()
+  | & _77: UInt64.t = Any.any_l ()
+  | & _79: bool = Any.any_l ()
+  | & _82: UInt64.t = Any.any_l ()
+  | & variant_old_bb5: int = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:restore_selection_respects_batch_extent ensures] [%#scomposition'30] result}
+    (! return {result}) ]

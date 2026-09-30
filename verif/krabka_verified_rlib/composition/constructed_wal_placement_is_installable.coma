@@ -1,0 +1,227 @@
+(* #"/workspace/crates/verified/src/composition.rs" 814 0 818 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 819 19 819 71
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 820 30 820 40
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 821 16 821 22
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 824 14 824 34
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 825 14 825 28
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 823 16 823 79
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 822 16 822 59
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 826 27 826 30
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 826 8 826 33
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 827 13 827 14
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 827 8 827 14
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 829 24 829 30
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 829 4 829 54
+let%span scomposition'12 = "/workspace/crates/verified/src/composition.rs" 830 24 830 25
+let%span scomposition'13 = "/workspace/crates/verified/src/composition.rs" 830 29 830 43
+let%span scomposition'14 = "/workspace/crates/verified/src/composition.rs" 830 11 830 57
+let%span scomposition'15 = "/workspace/crates/verified/src/composition.rs" 813 10 813 16
+let%span swal = "/workspace/crates/verified/src/wal.rs" 202 10 202 37
+let%span swal'0 = "/workspace/crates/verified/src/wal.rs" 203 10 204 89
+let%span swal'1 = "/workspace/crates/verified/src/wal.rs" 205 10 205 58
+let%span swal'2 = "/workspace/crates/verified/src/wal.rs" 206 10 207 86
+let%span swal'3 = "/workspace/crates/verified/src/wal.rs" 208 10 209 68
+let%span swal'4 = "/workspace/crates/verified/src/wal.rs" 210 10 213 85
+let%span swal'5 = "/workspace/crates/verified/src/wal.rs" 253 10 256 37
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+type t_Vec_tup2_u64_u64_Global
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_tup2_u64_u64_Global (self: t_Vec_tup2_u64_u64_Global) : Seq.seq tup2_u64_u64
+
+axiom view_Vec_tup2_u64_u64_Global_spec:
+  forall self: t_Vec_tup2_u64_u64_Global [view_Vec_tup2_u64_u64_Global self]. [%#svec'0] Seq.length (view_Vec_tup2_u64_u64_Global self)
+    <= UInt64.t'int const_MAX
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let select_wal_voters (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t)
+  (return (x: t_Vec_tup2_u64_u64_Global)) = any
+  [ return (result: t_Vec_tup2_u64_u64_Global) ->
+  {[@stop_split] [@expl:select_wal_voters ensures] ([@stop_split] [@expl:select_wal_voters ensures #0] [%#swal] Seq.length (view_Vec_tup2_u64_u64_Global result)
+      <= UInt64.t'int requested)
+    /\ ([@stop_split] [@expl:select_wal_voters ensures #1] [%#swal'0] (Seq.length (view_Vec_tup2_u64_u64_Global result)
+        = 0)
+      = (UInt64.t'int requested = 0
+      \/ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+        -> (Seq.get (Slice64.view candidates) i).f0 <> local_node)))
+    /\ ([@stop_split] [@expl:select_wal_voters ensures #2] [%#swal'1] gt_log_Int (Seq.length (view_Vec_tup2_u64_u64_Global result)) 0
+      -> (Seq.get (view_Vec_tup2_u64_u64_Global result) 0).f0 = local_node)
+    /\ ([@stop_split] [@expl:select_wal_voters ensures #3] [%#swal'2] forall i: int. 0 <= i
+          /\ i < Seq.length (view_Vec_tup2_u64_u64_Global result)
+        -> (exists j: int. 0 <= j
+          /\ j < Seq.length (Slice64.view candidates)
+          /\ Seq.get (view_Vec_tup2_u64_u64_Global result) i = Seq.get (Slice64.view candidates) j))
+    /\ ([@stop_split] [@expl:select_wal_voters ensures #4] [%#swal'3] forall i: int, j: int. 0 <= i
+          /\ i < j /\ j < Seq.length (view_Vec_tup2_u64_u64_Global result)
+        -> (Seq.get (view_Vec_tup2_u64_u64_Global result) i).f0 <> (Seq.get (view_Vec_tup2_u64_u64_Global result) j).f0
+        /\ (Seq.get (view_Vec_tup2_u64_u64_Global result) i).f1 <> (Seq.get (view_Vec_tup2_u64_u64_Global result) j).f1)
+    /\ ([@stop_split] [@expl:select_wal_voters ensures #5] [%#swal'4] 0
+        < Seq.length (view_Vec_tup2_u64_u64_Global result)
+      /\ Seq.length (view_Vec_tup2_u64_u64_Global result) < UInt64.t'int requested
+    -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+      -> (exists j: int. 0 <= j
+        /\ j < Seq.length (view_Vec_tup2_u64_u64_Global result)
+        /\ ((Seq.get (Slice64.view candidates) i).f0 = (Seq.get (view_Vec_tup2_u64_u64_Global result) j).f0
+        \/ (Seq.get (Slice64.view candidates) i).f1 = (Seq.get (view_Vec_tup2_u64_u64_Global result) j).f1))))}
+    (! return {result}) ]
+
+type t_Vec_u64_Global
+
+function view_Vec_u64_Global (self: t_Vec_u64_Global) : Seq.seq UInt64.t
+
+axiom view_Vec_u64_Global_spec:
+  forall self: t_Vec_u64_Global [view_Vec_u64_Global self]. [%#svec'0] Seq.length (view_Vec_u64_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_u64 (return (x: t_Vec_u64_Global)) = any
+  [ return (result: t_Vec_u64_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_u64_Global result) = 0}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_tup2_u64_u64 (self_: t_Vec_tup2_u64_u64_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#svec'1] UInt64.t'int result
+    = Seq.length (view_Vec_tup2_u64_u64_Global self_)}
+    (! return {result}) ]
+
+predicate in_bounds_usize [@inline:trivial] (self: UInt64.t) (seq: Seq.seq tup2_u64_u64) =
+  [%#sslice] UInt64.t'int self < Seq.length seq
+
+meta "rewrite_def" predicate in_bounds_usize
+
+predicate has_value_usize [@inline:trivial] (self: UInt64.t) (seq: Seq.seq tup2_u64_u64) (out: tup2_u64_u64) =
+  [%#sslice'0] Seq.get seq (UInt64.t'int self) = out
+
+meta "rewrite_def" predicate has_value_usize
+
+let index_Vec_tup2_u64_u64_Global (self_: t_Vec_tup2_u64_u64_Global) (ix: UInt64.t) (return (x: tup2_u64_u64)) =
+{[@stop_split] [@expl:index requires] [%#svec'2] in_bounds_usize ix (view_Vec_tup2_u64_u64_Global self_)}
+  any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:index ensures] [%#svec'3] has_value_usize ix (view_Vec_tup2_u64_u64_Global self_) result}
+    (! return {result}) ]
+
+let push_u64 (self_: MutBorrow.t t_Vec_u64_Global) (v: UInt64.t) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'4] view_Vec_u64_Global self_.final
+    = Seq.snoc (view_Vec_u64_Global self_.current) v}
+    (! return {result}) ]
+
+let deref_Vec_u64_Global (self_: t_Vec_u64_Global) (return (x: Slice64.slice UInt64.t)) = any
+  [ return (result: Slice64.slice UInt64.t) -> {[@stop_split] [@expl:deref ensures] [%#svec'5] Slice64.view result
+    = view_Vec_u64_Global self_}
+    (! return {result}) ]
+
+let wal_voter_set_valid (voters: Slice64.slice UInt64.t) (local_node: UInt64.t) (expected: UInt64.t)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:wal_voter_set_valid ensures] [%#swal'5] result
+    = (gt_log_Int (UInt64.t'int expected) 0
+    /\ Seq.length (Slice64.view voters) = UInt64.t'int expected
+    /\ Seq.get (Slice64.view voters) 0 = local_node
+    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (Slice64.view voters)
+      -> Seq.get (Slice64.view voters) i <> Seq.get (Slice64.view voters) j))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/composition.rs" 814 0 818 9]
+  (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = select_wal_voters [%#scomposition] {candidates} {local_node} {requested}
+        (fun (_x: t_Vec_tup2_u64_u64_Global) -> [ &selected <- _x ] s1)
+    | s1 = new_u64 [%#scomposition'0] (fun (_x: t_Vec_u64_Global) -> [ &nodes <- _x ] s2)
+    | s2 = [ &i <- [%#scomposition'1] (0: UInt64.t) ] s3
+    | s3 = bb3 ]
+  | bb3 = bb3invariant
+    [ bb3 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb3 ([%#scomposition'2] Seq.length (view_Vec_tup2_u64_u64_Global selected)
+      - UInt64.t'int i)}
+      bb3invariant
+    | bb3invariant = {[@expl:loop invariant #0] [%#scomposition'5] UInt64.t'int i
+        <= Seq.length (view_Vec_tup2_u64_u64_Global selected)
+      /\ Seq.length (view_Vec_u64_Global nodes) = UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#scomposition'4] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> Seq.get (view_Vec_u64_Global nodes) j = (Seq.get (view_Vec_tup2_u64_u64_Global selected) j).f0}
+      (! [ &variant_old_bb3 <- [%#scomposition'2] Seq.length (view_Vec_tup2_u64_u64_Global selected) - UInt64.t'int i ]
+      s0)
+      [ s0 = len_tup2_u64_u64 [%#scomposition'3] {selected} (fun (_x: UInt64.t) -> [ &_27 <- _x ] s1)
+      | s1 = [ &_25 <- UInt64.lt i _27 ] s2
+      | s2 = any [ br0 -> {_25 = false} (! bb9) | br1 -> {_25} (! bb6) ] ]
+      [ bb6 = s0
+        [ s0 = index_Vec_tup2_u64_u64_Global [%#scomposition'6] {selected} {i}
+            (fun (_x: tup2_u64_u64) -> [ &_32 <- _x ] s1)
+        | s1 = MutBorrow.borrow_mut <t_Vec_u64_Global> {nodes}
+            (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_30 <- _bor ] [ &nodes <- _bor.final ] s2)
+        | s2 = push_u64 [%#scomposition'7] {_30} {_32.f0} (fun (_x: ()) -> [ &_29 <- _x ] s3)
+        | s3 = UInt64.add [%#scomposition'9] {i} {[%#scomposition'8] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s4)
+        | s4 = bb3 ] ] ]
+  | bb9 = s0
+    [ s0 = [ &_40 <- nodes ] s1
+    | s1 = deref_Vec_u64_Global [%#scomposition'10] {_40} (fun (_x: Slice64.slice UInt64.t) -> [ &_38 <- _x ] s2)
+    | s2 = wal_voter_set_valid [%#scomposition'11] {_38} {local_node} {requested} (fun (_x: bool) -> [ &_36 <- _x ] s3)
+    | s3 = [ &_44 <- UInt64.gt requested ([%#scomposition'12] (0: UInt64.t)) ] s4
+    | s4 = any [ br0 -> {_44 = false} (! bb13) | br1 -> {_44} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = len_tup2_u64_u64 [%#scomposition'13] {selected} (fun (_x: UInt64.t) -> [ &_46 <- _x ] s1)
+    | s1 = [ &_43 <- _46 = requested ] s2
+    | s2 = bb15 ]
+  | bb13 = s0 [ s0 = [ &_43 <- [%#scomposition'14] false ] s1 | s1 = bb15 ]
+  | bb15 = s0 [ s0 = [ &_ret <- _36 = _43 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & candidates: Slice64.slice tup2_u64_u64 = candidates
+  | & local_node: UInt64.t = local_node
+  | & requested: UInt64.t = requested
+  | & selected: t_Vec_tup2_u64_u64_Global = Any.any_l ()
+  | & nodes: t_Vec_u64_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: UInt64.t = Any.any_l ()
+  | & _29: () = Any.any_l ()
+  | & _30: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
+  | & _32: tup2_u64_u64 = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _38: Slice64.slice UInt64.t = Any.any_l ()
+  | & _40: t_Vec_u64_Global = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & variant_old_bb3: int = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:constructed_wal_placement_is_installable ensures] [%#scomposition'15] result}
+    (! return {result}) ]

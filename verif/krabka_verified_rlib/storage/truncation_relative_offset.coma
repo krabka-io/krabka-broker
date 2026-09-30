@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/storage.rs" 96 0 96 77 *)
+(* #"/workspace/crates/verified/src/storage.rs" 94 0 94 77 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -11,13 +11,13 @@ let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
 let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
 let%span sint = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/int.rs" 155 8 155 62
-let%span sstorage = "/workspace/crates/verified/src/storage.rs" 97 22 97 23
-let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 100 19 100 45
-let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 101 28 101 36
-let%span sstorage'2 = "/workspace/crates/verified/src/storage.rs" 101 18 101 37
-let%span sstorage'3 = "/workspace/crates/verified/src/storage.rs" 106 26 106 37
-let%span sstorage'4 = "/workspace/crates/verified/src/storage.rs" 106 13 106 38
-let%span sstorage'5 = "/workspace/crates/verified/src/storage.rs" 86 10 94 1
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 95 22 95 23
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 98 19 98 45
+let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 99 28 99 36
+let%span sstorage'2 = "/workspace/crates/verified/src/storage.rs" 99 18 99 37
+let%span sstorage'3 = "/workspace/crates/verified/src/storage.rs" 104 26 104 37
+let%span sstorage'4 = "/workspace/crates/verified/src/storage.rs" 104 13 104 38
+let%span sstorage'5 = "/workspace/crates/verified/src/storage.rs" 84 10 92 1
 
 use creusot.int.Int64
 use creusot.int.UInt32
@@ -67,7 +67,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let truncation_relative_offset [#"/workspace/crates/verified/src/storage.rs" 96 0 96 77] (segment_base: Int64.t)
+let truncation_relative_offset [#"/workspace/crates/verified/src/storage.rs" 94 0 94 77] (segment_base: Int64.t)
   (cut: Int64.t) (return (x: t_Option_u32)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- Int64.lt segment_base ([%#sstorage] (0: Int64.t)) ] s1

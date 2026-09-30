@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 469 0 474 24 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 464 0 469 24 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -8,16 +8,16 @@ let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
 let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
 let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 475 19 475 20
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 482 32 482 65
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 482 32 482 87
-let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 459 10 459 69
-let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 460 10 462 73
-let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 463 10 467 1
-let%span sdelegation_token'5 = "/workspace/crates/verified/src/delegation_token.rs" 330 11 330 28
-let%span sdelegation_token'6 = "/workspace/crates/verified/src/delegation_token.rs" 331 10 331 57
-let%span sdelegation_token'7 = "/workspace/crates/verified/src/delegation_token.rs" 324 8 324 47
-let%span sdelegation_token'8 = "/workspace/crates/verified/src/delegation_token.rs" 304 8 304 89
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 470 19 470 20
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 477 32 477 65
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 477 32 477 87
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 454 10 454 69
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 455 10 457 73
+let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 458 10 462 1
+let%span sdelegation_token'5 = "/workspace/crates/verified/src/delegation_token.rs" 325 11 325 28
+let%span sdelegation_token'6 = "/workspace/crates/verified/src/delegation_token.rs" 326 10 326 57
+let%span sdelegation_token'7 = "/workspace/crates/verified/src/delegation_token.rs" 319 8 319 47
+let%span sdelegation_token'8 = "/workspace/crates/verified/src/delegation_token.rs" 299 8 299 89
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -35,7 +35,7 @@ meta "rewrite_def" predicate gt_log_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-function deadline_model [#"/workspace/crates/verified/src/delegation_token.rs" 302 0 302 55] (now_ms: Int64.t) (duration_ms: int) : int
+function deadline_model [#"/workspace/crates/verified/src/delegation_token.rs" 297 0 297 55] (now_ms: Int64.t) (duration_ms: int) : int
  = [%#sdelegation_token'8] if gt_log_Int (Int64.to_int now_ms + duration_ms) (Int64.to_int const_MAX) then
     Int64.to_int const_MAX
   else
@@ -64,14 +64,14 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
-function min_model [#"/workspace/crates/verified/src/delegation_token.rs" 322 0 322 42] (left: int) (right: int) : int =
+function min_model [#"/workspace/crates/verified/src/delegation_token.rs" 317 0 317 42] (left: int) (right: int) : int =
   [%#sdelegation_token'7] if left < right then left else right
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let expire_token_deadline [#"/workspace/crates/verified/src/delegation_token.rs" 469 0 474 24] (now_ms: Int64.t)
+let expire_token_deadline [#"/workspace/crates/verified/src/delegation_token.rs" 464 0 469 24] (now_ms: Int64.t)
   (period_ms: Int64.t) (current_expiry_ms: Int64.t) (max_timestamp_ms: Int64.t) (return (x: t_TokenExpireDecision)) =
 (! bb0
   [ bb0 = s0

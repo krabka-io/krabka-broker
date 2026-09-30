@@ -1,0 +1,27 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_aborted_transaction_interval": {
+        "prover": "alt-ergo",
+        "time": 0.006
+      },
+      "vc_aborted_transaction_overlaps": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_len_RestoreAbortedTxn": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_ne_Option_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_restore_txn_index_entry_valid": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_restored_aborts_remain_bounded_when_fetch_shrinks": {
+        "prover": "z3",
+        "time": 0.008
+      },
+      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.007 }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_election_has_quorum": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_index_Vec_tup2_u64_u64_Global": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_is_some_usize": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_select_wal_voters": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_wal_placement_survives_one_rack_loss": {
+        "prover": "alt-ergo",
+        "time": 0.045
+      }
+    }
+  }
+}

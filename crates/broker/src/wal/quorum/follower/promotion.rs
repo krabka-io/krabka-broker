@@ -8,16 +8,17 @@ use std::path::PathBuf;
 use krabka_ids::Offset;
 use krabka_log::{Log, LogConfig};
 use krabka_raft::NodeId;
+use krabka_verified::broker::DeleteRecordsTrimApplication;
 
 use super::log::{FollowerLog, voter_dir};
 use crate::wal::quorum::{
-    engine::{read_batches_exact, read_log_batches_exact},
+    engine::{read_batches_exact, read_log_batches_covering},
     registry::ShardId,
 };
 
 /// Copy this broker's checkpointed follower prefix into a newly promoted
-/// partition log. The follower directory remains intact so a crash during or
-/// after hydration can retry from the same durable source.
+/// partition log. The follower retains the reconciled logical floor durably
+/// before physical rebasing, so a restart can retry from the same source.
 pub(crate) fn hydrate_on_promotion(
     log_dirs: &[PathBuf],
     topic: &str,
@@ -39,19 +40,55 @@ pub(crate) fn hydrate_on_promotion(
     let destination_start = destination.log_start_offset();
     let destination_end = destination.log_end_offset();
 
+    let floor = match krabka_verified::broker::delete_records_trim_application(
+        0,
+        source_start.0,
+        destination_start.0,
+    ) {
+        DeleteRecordsTrimApplication::RejectMalformed => {
+            return Err(crate::BrokerError::Replication(
+                "promoted WAL has a malformed logical floor".into(),
+            ));
+        }
+        DeleteRecordsTrimApplication::TrimWal { frontier }
+        | DeleteRecordsTrimApplication::TrimLocal { frontier }
+        | DeleteRecordsTrimApplication::Complete { frontier } => Offset(frontier),
+    };
+
     if destination_start == destination_end && destination_end < source_end {
-        destination.reset_to(source_start)?;
+        // Preserve the logical floor in the durable source before rebasing the
+        // empty destination. A restart can then recover it after any partial copy.
+        follower.trim_to_blocking(floor)?;
+        let copy_start = follower.start_offset();
+        let batches = read_log_batches_covering(&follower.log.lock(), copy_start, source_end)?;
+        let physical_start = batches
+            .first()
+            .map_or(source_start, |batch| batch.base_offset);
+        destination.reset_to(physical_start)?;
+        for batch in batches {
+            destination.append_verbatim_at(&batch.verbatim, batch.base_offset)?;
+        }
     } else {
         let overlap_start = source_start.max(destination_start);
         let overlap_end = source_end.min(destination_end);
         if overlap_start < overlap_end {
-            let source = read_batches_exact(&follower.log, overlap_start, overlap_end)?;
-            let current = read_log_batches_exact(destination, overlap_start, overlap_end)?;
+            let source =
+                read_log_batches_covering(&follower.log.lock(), overlap_start, overlap_end)?;
+            let current = read_log_batches_covering(destination, overlap_start, overlap_end)?;
             if source.len() != current.len()
                 || source.iter().zip(&current).any(|(source, current)| {
-                    source.base_offset != current.base_offset
-                        || source.last_offset != current.last_offset
-                        || source.verbatim.bytes != current.verbatim.bytes
+                    !krabka_verified::wal::wal_batch_equal(
+                        (
+                            source.base_offset.0,
+                            source.last_offset.0,
+                            &source.verbatim.bytes,
+                        ),
+                        (
+                            current.base_offset.0,
+                            current.last_offset.0,
+                            &current.verbatim.bytes,
+                        ),
+                    )
                 })
             {
                 return Err(crate::BrokerError::Replication(format!(
@@ -80,6 +117,7 @@ pub(crate) fn hydrate_on_promotion(
             source_end.0
         )));
     }
+    destination.trim_to_offset(floor)?;
     destination.sync()?;
     Ok(Some(source_end))
 }
@@ -93,9 +131,235 @@ mod tests {
     use krabka_units::mebibytes;
 
     use super::*;
-    use crate::wal::quorum::follower::checkpoint::{
-        DURABLE_OFFSET_FILE, DurableRange, write_durable_offset,
+    use crate::wal::quorum::{
+        engine::read_log_batches_exact,
+        follower::checkpoint::{DURABLE_OFFSET_FILE, DurableRange, write_durable_offset},
     };
+
+    #[test]
+    fn promotion_preserves_control_marker_state_before_and_after_reopen() {
+        use krabka_ids::ProducerId;
+        use krabka_protocol::records::Attributes;
+
+        for marker_type in [0i16, 1, 1000, 23] {
+            let root = tempfile::tempdir().unwrap();
+            let shard = ShardId {
+                topic_id: uuid::Uuid::from_u128(106),
+                partition: PartitionIndex(0),
+            };
+            let follower_dir = voter_dir(root.path(), "diskless", shard, NodeId(2));
+            let mut source = Log::open(&follower_dir, LogConfig::default()).unwrap();
+            let mut data = RecordBatch {
+                producer_id: 7,
+                producer_epoch: 0,
+                base_sequence: 0,
+                attributes: Attributes::default().with_transactional(true),
+                records: vec![Record::default()],
+                ..RecordBatch::default()
+            };
+            source.append(&mut data).unwrap();
+            let mut key = Vec::from(0i16.to_be_bytes());
+            key.extend_from_slice(&marker_type.to_be_bytes());
+            let mut marker = RecordBatch {
+                producer_id: 7,
+                producer_epoch: 0,
+                base_sequence: if marker_type == 1000 { 77 } else { -1 },
+                attributes: Attributes::default()
+                    .with_control(true)
+                    .with_transactional(marker_type != 1000),
+                records: vec![Record {
+                    key: Some(Bytes::from(key)),
+                    value: Some(Bytes::from_static(&[0, 0, 0, 0, 0, 17])),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            };
+            source.append(&mut marker).unwrap();
+            source
+                .append(&mut RecordBatch {
+                    records: vec![Record::default()],
+                    ..RecordBatch::default()
+                })
+                .unwrap();
+            source.sync().unwrap();
+            let end = source.log_end_offset();
+            let expected_lso = source.last_stable_offset(end);
+            let expected_producers = source.producer_state_snapshot();
+            let expected_marker = source.transaction_marker_state(ProducerId(7));
+            let expected_aborts = source.aborted_in_range(Offset(0), end);
+            let expected_bytes = source.read_raw(Offset(0), end, mebibytes(1)).unwrap().bytes;
+            write_durable_offset(
+                &follower_dir.join(DURABLE_OFFSET_FILE),
+                DurableRange {
+                    start: Offset(0),
+                    end,
+                },
+            )
+            .unwrap();
+            drop(source);
+            let destination_dir = crate::log_dir::partition_dir(root.path(), "diskless", 0);
+            let mut destination = Log::open(&destination_dir, LogConfig::default()).unwrap();
+            for _ in 0..2 {
+                assert!(
+                    hydrate_on_promotion(
+                        &[root.path().to_path_buf()],
+                        "diskless",
+                        shard,
+                        NodeId(2),
+                        &LogConfig::default(),
+                        &mut destination
+                    )
+                    .unwrap()
+                        == Some(end)
+                );
+                assert!(
+                    destination.last_stable_offset(end) == expected_lso,
+                    "marker type {marker_type}"
+                );
+                assert!(destination.producer_state_snapshot() == expected_producers);
+                assert!(destination.transaction_marker_state(ProducerId(7)) == expected_marker);
+                assert!(destination.aborted_in_range(Offset(0), end) == expected_aborts);
+                assert!(
+                    destination
+                        .read_raw(Offset(0), end, mebibytes(1))
+                        .unwrap()
+                        .bytes
+                        == expected_bytes
+                );
+                drop(destination);
+                destination = Log::open(&destination_dir, LogConfig::default()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn promotion_preserves_interior_floors_and_whole_batches_through_retry() {
+        #[derive(Debug)]
+        struct InterruptedCopy;
+        impl krabka_log::LogIo for InterruptedCopy {
+            fn write(&self, _file: &std::fs::File, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("promotion copy interrupted"))
+            }
+            fn write_vectored(
+                &self,
+                _file: &std::fs::File,
+                _buf: &[std::io::IoSlice<'_>],
+            ) -> std::io::Result<usize> {
+                Err(std::io::Error::other("promotion copy interrupted"))
+            }
+        }
+        for (copied_batches, destination_floor) in [(0, 0), (0, 2), (0, 4), (1, 0), (1, 2), (2, 0)]
+        {
+            let root = tempfile::tempdir().unwrap();
+            let shard = ShardId {
+                topic_id: uuid::Uuid::from_u128(105),
+                partition: PartitionIndex(0),
+            };
+            let follower_dir = voter_dir(root.path(), "diskless", shard, NodeId(2));
+            let mut follower = Log::open(&follower_dir, LogConfig::default()).unwrap();
+            for _ in 0..2 {
+                let mut batch = RecordBatch {
+                    last_offset_delta: 2,
+                    records: (0..3)
+                        .map(|offset_delta| Record {
+                            offset_delta,
+                            ..Record::default()
+                        })
+                        .collect(),
+                    ..RecordBatch::default()
+                };
+                follower.append(&mut batch).unwrap();
+            }
+            let full_bytes = follower
+                .read_raw(Offset(0), Offset(6), mebibytes(1))
+                .unwrap()
+                .bytes;
+            let destination_dir = crate::log_dir::partition_dir(root.path(), "diskless", 0);
+            let mut destination = Log::open(&destination_dir, LogConfig::default()).unwrap();
+            for batch in
+                read_log_batches_exact(&follower, Offset(0), Offset(copied_batches * 3)).unwrap()
+            {
+                destination
+                    .append_verbatim_at(&batch.verbatim, batch.base_offset)
+                    .unwrap();
+            }
+            if copied_batches == 0 {
+                destination.reset_to(Offset(destination_floor)).unwrap();
+            } else {
+                destination
+                    .trim_to_offset(Offset(destination_floor))
+                    .unwrap();
+            }
+            follower.trim_to_offset(Offset(1)).unwrap();
+            follower.sync().unwrap();
+            write_durable_offset(
+                &follower_dir.join(DURABLE_OFFSET_FILE),
+                DurableRange {
+                    start: Offset(1),
+                    end: Offset(6),
+                },
+            )
+            .unwrap();
+            drop(follower);
+
+            if copied_batches == 0 && destination_floor > 1 {
+                destination.test_set_io(std::sync::Arc::new(InterruptedCopy));
+                let error = hydrate_on_promotion(
+                    &[root.path().to_path_buf()],
+                    "diskless",
+                    shard,
+                    NodeId(2),
+                    &LogConfig::default(),
+                    &mut destination,
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains("promotion copy interrupted"));
+                assert!(
+                    std::fs::read_to_string(follower_dir.join(DURABLE_OFFSET_FILE))
+                        .unwrap()
+                        .trim()
+                        == format!("{destination_floor} 6")
+                );
+                drop(destination);
+                destination = Log::open(&destination_dir, LogConfig::default()).unwrap();
+            }
+
+            for _ in 0..2 {
+                assert!(
+                    hydrate_on_promotion(
+                        &[root.path().to_path_buf()],
+                        "diskless",
+                        shard,
+                        NodeId(2),
+                        &LogConfig::default(),
+                        &mut destination
+                    )
+                    .unwrap()
+                        == Some(Offset(6))
+                );
+                let floor = Offset(destination_floor.max(1));
+                assert!(destination.log_start_offset() == floor);
+                assert!(destination.log_end_offset() == Offset(6));
+                let expected = if destination_floor >= 3 {
+                    crate::wal::quorum::engine::split_batches(&full_bytes).unwrap()[1]
+                        .verbatim
+                        .bytes
+                        .clone()
+                } else {
+                    full_bytes.clone()
+                };
+                assert!(
+                    destination
+                        .read_raw(floor, Offset(6), mebibytes(1))
+                        .unwrap()
+                        .bytes
+                        == expected
+                );
+                drop(destination);
+                destination = Log::open(&destination_dir, LogConfig::default()).unwrap();
+            }
+        }
+    }
 
     #[test]
     fn promotion_hydrates_exact_checkpointed_bytes_without_regression() {
@@ -192,6 +456,78 @@ mod tests {
                 == Some(Offset(2))
         );
         assert!(destination.log_end_offset() == Offset(3));
+        assert!(follower_dir.exists());
+    }
+
+    #[test]
+    fn promotion_rejects_equal_length_different_bytes_without_mutating_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let shard = ShardId {
+            topic_id: uuid::Uuid::from_u128(103),
+            partition: PartitionIndex(0),
+        };
+        let config = LogConfig::default();
+        let follower_dir = voter_dir(root.path(), "diskless", shard, NodeId(2));
+        let mut follower = Log::open(&follower_dir, config.clone()).unwrap();
+        let mut durable = RecordBatch {
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"source")),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        };
+        follower.append(&mut durable).unwrap();
+        follower.sync().unwrap();
+        write_durable_offset(
+            &follower_dir.join(DURABLE_OFFSET_FILE),
+            DurableRange {
+                start: Offset(0),
+                end: Offset(1),
+            },
+        )
+        .unwrap();
+        let source_bytes = follower
+            .read_raw(Offset(0), Offset(1), mebibytes(1))
+            .unwrap()
+            .bytes;
+        drop(follower);
+        let destination_dir = crate::log_dir::partition_dir(root.path(), "diskless", 0);
+        let mut destination = Log::open(&destination_dir, config.clone()).unwrap();
+        let mut different = RecordBatch {
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"target")),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        };
+        destination.append(&mut different).unwrap();
+        destination.sync().unwrap();
+        let before = destination
+            .read_raw(Offset(0), Offset(1), mebibytes(1))
+            .unwrap()
+            .bytes;
+        assert!(before.len() == source_bytes.len() && before != source_bytes);
+        let error = hydrate_on_promotion(
+            &[root.path().to_path_buf()],
+            "diskless",
+            shard,
+            NodeId(2),
+            &config,
+            &mut destination,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("diverges from canonical log"));
+        assert!(
+            destination.log_start_offset() == Offset(0)
+                && destination.log_end_offset() == Offset(1)
+        );
+        assert!(
+            destination
+                .read_raw(Offset(0), Offset(1), mebibytes(1))
+                .unwrap()
+                .bytes
+                == before
+        );
         assert!(follower_dir.exists());
     }
 

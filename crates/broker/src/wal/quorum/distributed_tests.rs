@@ -147,10 +147,12 @@ async fn durable_advance_waits_for_an_offset_strictly_after_the_observation() {
 }
 
 #[tokio::test]
-async fn distributed_wal_rejects_misordered_or_incomplete_voter_sets() {
+async fn distributed_wal_rejects_misordered_incomplete_or_duplicate_voter_sets() {
     for voters in [
         vec![NodeId(2), NodeId(1), NodeId(3)],
         vec![NodeId(1), NodeId(2)],
+        vec![NodeId(1), NodeId(2), NodeId(2)],
+        vec![NodeId(1), NodeId(1), NodeId(2)],
     ] {
         let dir = tempfile::tempdir().unwrap();
         let source = Arc::new(Mutex::new(

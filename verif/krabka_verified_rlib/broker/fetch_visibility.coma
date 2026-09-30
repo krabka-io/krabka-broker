@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/broker.rs" 293 0 298 20 *)
+(* #"/workspace/crates/verified/src/broker.rs" 292 0 297 20 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 306 32 306 62
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 318 15 318 59
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 277 10 277 63
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 278 10 279 97
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 280 10 280 83
-let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 281 10 283 58
-let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 284 10 284 74
-let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 285 10 289 1
-let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 290 10 290 36
-let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 291 10 291 59
-let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 227 16 227 42
-let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 242 8 248 9
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 305 32 305 62
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 317 15 317 59
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 276 10 276 63
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 277 10 278 97
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 279 10 279 83
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 280 10 282 58
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 283 10 283 74
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 284 10 288 1
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 289 10 289 36
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 290 10 290 59
+let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 226 16 226 42
+let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 241 8 247 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -33,10 +33,10 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-function offset_min [#"/workspace/crates/verified/src/broker.rs" 226 0 226 40] (a: int) (b: int) : int =
+function offset_min [#"/workspace/crates/verified/src/broker.rs" 225 0 225 40] (a: int) (b: int) : int =
   [%#sbroker'9] if a <= b then a else b
 
-function fetch_limit_model [#"/workspace/crates/verified/src/broker.rs" 240 0 240 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+function fetch_limit_model [#"/workspace/crates/verified/src/broker.rs" 239 0 239 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
  = [%#sbroker'10] if is_follower then
     Int64.to_int w.log_end
   else
@@ -51,7 +51,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let fetch_visibility [#"/workspace/crates/verified/src/broker.rs" 293 0 298 20] (is_follower: bool)
+let fetch_visibility [#"/workspace/crates/verified/src/broker.rs" 292 0 297 20] (is_follower: bool)
   (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t) (return (x: t_FetchVisibility)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_36 <- Int64.lt w.deliverable w.hw ] s1

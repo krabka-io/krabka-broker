@@ -69,8 +69,35 @@ pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), c
             durable.start.0, durable.end.0, start.0, end.0
         )));
     };
-    log.truncate_to(durable.end)?;
-    log.trim_to_offset(durable.start)?;
+    let observed_last = if durable.start == durable.end {
+        None
+    } else if durable.end == end {
+        Some(end.0 - 1)
+    } else {
+        // ponytail: scans one segment's tail; use a header-only boundary reader
+        // if large partial-checkpoint recovery scans become costly.
+        log.read_raw(Offset(durable.end.0 - 1), durable.end, log.size())?
+            .last_offset
+            .map(|offset| offset.0)
+    };
+    if !krabka_verified::wal::wal_checkpoint_range_valid(
+        start.0,
+        end.0,
+        durable.start.0,
+        durable.end.0,
+        observed_last,
+    ) {
+        return Err(crate::BrokerError::Replication(format!(
+            "WAL durable range {}..{} does not end at a whole-batch boundary",
+            durable.start.0, durable.end.0
+        )));
+    }
+    if durable.start == durable.end {
+        log.reset_to(durable.start)?;
+    } else {
+        log.truncate_to(durable.end)?;
+        log.trim_to_offset(durable.start)?;
+    }
     log.sync()?;
     write_durable_offset(path, durable)?;
     Ok(())
@@ -174,6 +201,64 @@ mod tests {
 
         assert2::assert!((reopened.log_end_offset()) == (Offset(1)));
         assert2::assert!((std::fs::read_to_string(checkpoint).unwrap().trim()) == ("0 1"));
+    }
+
+    #[test]
+    fn follower_checkpoint_recovery_respects_whole_batches_and_interior_floors() {
+        for (value, accepted, expected_start, expected_end) in [
+            (Some("0 1\n"), false, 0, 3),
+            (Some("1 2\n"), false, 0, 3),
+            (Some("1 3\n"), true, 1, 3),
+            (Some("1 1\n"), true, 1, 1),
+            (None, true, 1, 1),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let mut batch = RecordBatch {
+                last_offset_delta: 2,
+                records: (0..3)
+                    .map(|offset_delta| Record {
+                        offset_delta,
+                        ..Record::default()
+                    })
+                    .collect(),
+                ..RecordBatch::default()
+            };
+            log.append(&mut batch).unwrap();
+            if let Some(value) = value {
+                std::fs::write(&checkpoint, value).unwrap();
+            } else {
+                log.trim_to_offset(Offset(1)).unwrap();
+            }
+            log.sync().unwrap();
+            let before = log
+                .read_raw(log.log_start_offset(), Offset(3), krabka_units::bytes(1))
+                .unwrap()
+                .bytes;
+
+            assert!(
+                recover_durable_offset(&mut log, &checkpoint).is_ok() == accepted,
+                "checkpoint {value:?}"
+            );
+            assert!(log.log_start_offset() == Offset(expected_start));
+            assert!(log.log_end_offset() == Offset(expected_end));
+            if accepted {
+                drop(log);
+                let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+                recover_durable_offset(&mut reopened, &checkpoint).unwrap();
+                assert!(reopened.log_start_offset() == Offset(expected_start));
+                assert!(reopened.log_end_offset() == Offset(expected_end));
+            } else {
+                assert!(
+                    log.read_raw(Offset(0), Offset(3), krabka_units::bytes(1))
+                        .unwrap()
+                        .bytes
+                        == before
+                );
+                assert!(std::fs::read_to_string(&checkpoint).unwrap() == value.unwrap());
+            }
+        }
     }
 
     #[test]

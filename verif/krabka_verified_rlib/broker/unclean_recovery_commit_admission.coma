@@ -1,28 +1,28 @@
-(* #"/workspace/crates/verified/src/broker.rs" 611 0 618 9 *)
+(* #"/workspace/crates/verified/src/broker.rs" 610 0 617 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 621 11 621 34
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 621 38 621 60
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 623 15 623 20
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 626 30 626 35
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 627 16 627 22
-let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 634 32 634 61
-let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 635 14 635 37
-let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 632 34 633 59
-let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 630 34 631 57
-let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 629 34 629 85
-let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 628 34 628 64
-let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 636 11 636 31
-let%span sbroker'11 = "/workspace/crates/verified/src/broker.rs" 636 35 636 54
-let%span sbroker'12 = "/workspace/crates/verified/src/broker.rs" 639 11 639 30
-let%span sbroker'13 = "/workspace/crates/verified/src/broker.rs" 640 30 640 34
-let%span sbroker'14 = "/workspace/crates/verified/src/broker.rs" 642 13 642 14
-let%span sbroker'15 = "/workspace/crates/verified/src/broker.rs" 642 8 642 14
-let%span sbroker'16 = "/workspace/crates/verified/src/broker.rs" 637 19 637 24
-let%span sbroker'17 = "/workspace/crates/verified/src/broker.rs" 605 10 609 43
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 620 11 620 34
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 620 38 620 60
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 622 15 622 20
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 625 30 625 35
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 626 16 626 22
+let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 633 32 633 61
+let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 634 14 634 37
+let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 631 34 632 59
+let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 629 34 630 57
+let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 628 34 628 85
+let%span sbroker'9 = "/workspace/crates/verified/src/broker.rs" 627 34 627 64
+let%span sbroker'10 = "/workspace/crates/verified/src/broker.rs" 635 11 635 31
+let%span sbroker'11 = "/workspace/crates/verified/src/broker.rs" 635 35 635 54
+let%span sbroker'12 = "/workspace/crates/verified/src/broker.rs" 638 11 638 30
+let%span sbroker'13 = "/workspace/crates/verified/src/broker.rs" 639 30 639 34
+let%span sbroker'14 = "/workspace/crates/verified/src/broker.rs" 641 13 641 14
+let%span sbroker'15 = "/workspace/crates/verified/src/broker.rs" 641 8 641 14
+let%span sbroker'16 = "/workspace/crates/verified/src/broker.rs" 636 19 636 24
+let%span sbroker'17 = "/workspace/crates/verified/src/broker.rs" 604 10 608 43
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -53,7 +53,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let unclean_recovery_commit_admission [#"/workspace/crates/verified/src/broker.rs" 611 0 618 9]
+let unclean_recovery_commit_admission [#"/workspace/crates/verified/src/broker.rs" 610 0 617 9]
   (selected_partition_epoch: Int32.t) (current_partition_epoch: Int32.t) (selected_replicas: Slice64.slice UInt64.t)
   (current_replicas: Slice64.slice UInt64.t) (winner: UInt64.t) (current_leader_alive: bool) (return (x: bool)) = (! bb0
   [ bb0 = s0
