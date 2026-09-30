@@ -65,6 +65,8 @@ mod timestamp;
 mod v0;
 
 #[cfg(test)]
+mod record_limit_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;

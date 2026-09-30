@@ -22,7 +22,7 @@ use crate::compact::{
 const NEVER_AGE_NOW_MS: i64 = 0;
 
 fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
-    let map = build_offset_map(segment_refs, vec![]).unwrap();
+    let map = build_offset_map(segment_refs, vec![], None).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
     let active = HashMap::new();
     rewrite_segments(
@@ -277,7 +277,7 @@ fn rewrite_tombstone_gets_horizon_stamp() {
         vec![make_record(0, Some(b"k1"), None)], // tombstone, newest for k1
     );
     let segment_refs = vec![&first_segment];
-    let map = build_offset_map(&segment_refs, vec![]).unwrap();
+    let map = build_offset_map(&segment_refs, vec![], None).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
     let now = 5_000i64;
     let ret = 50i64;
@@ -334,7 +334,7 @@ fn rewrite_marker_dropped_when_data_gone_and_horizon_elapsed() {
     };
     let seg = write_sealed_batches(dir.path(), &[marker, data]);
     let segment_refs = vec![&seg];
-    let map = build_offset_map(&segment_refs, vec![]).unwrap();
+    let map = build_offset_map(&segment_refs, vec![], None).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
     // now=200 >= horizon 100 → marker deleted.
     let out = rewrite_segments(
@@ -392,7 +392,7 @@ fn rewrite_retain_empty_for_active_producer() {
     };
     let seg = write_sealed_batches(dir.path(), &[data1, data2]);
     let segment_refs = vec![&seg];
-    let map = build_offset_map(&segment_refs, vec![]).unwrap();
+    let map = build_offset_map(&segment_refs, vec![], None).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
     let mut active = HashMap::new();
     // pid 1000 is active, and its last data batch ends at offset 0.
@@ -581,7 +581,7 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
         let dir = tempfile::tempdir().unwrap();
         let seg = write_sealed_batches(dir.path(), &batches);
         let segment_refs = vec![&seg];
-        let map = build_offset_map(&segment_refs, vec![]).unwrap();
+        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
         let active: HashMap<_, _> = active
             .into_iter()
             .map(|last| (ProducerId(1000), last))
@@ -678,11 +678,12 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
     let dir = tempfile::tempdir().unwrap();
     let first = write_sealed_batches(dir.path(), &[one_record_batch(0, (-1, -1), None)]);
     let second = write_sealed_batches(dir.path(), &[one_record_batch(1, (-1, -1), None)]);
-    let map = build_offset_map(&[&first, &second], vec![]).unwrap();
+    let map = build_offset_map(&[&first, &second], vec![], None).unwrap();
     let active = HashMap::new();
     let round = CleaningRound {
         active_producers: &active,
         upper_bound: Offset(2),
+        max_decompressed_record: None,
     };
     let mut txn = CleanedTransactionMetadata::default();
 

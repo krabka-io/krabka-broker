@@ -13,15 +13,19 @@ use bytes::{Bytes, BytesMut};
 use krabka_compression::CompressionType;
 use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::{RecordBatch, TimestampType};
-use krabka_units::prelude::{Time, TimeExt};
+use krabka_units::prelude::{ByteSize, Time, TimeExt};
 use tracing::instrument;
 
 use super::{
     BatchMeta, CleanedTransactionMetadata, RecordMeta, RetainDecision, TxnDataState,
     batch_reader::read_all_batches, retain_decision,
 };
-use crate::{error::LogError, segment::Segment, txn_index::TxnIndex};
+use crate::{
+    error::LogError, record_limit::check_records_read, segment::Segment, txn_index::TxnIndex,
+};
 
+#[cfg(test)]
+mod record_limit_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -84,6 +88,9 @@ pub struct CleaningRound<'a> {
     /// Kafka's `upperBoundOffsetOfCleaningRound`: the offset after the last
     /// batch the round rewrites.
     pub upper_bound: Offset,
+    /// Kafka trunk's `max.decompressed.message.bytes`, the `maxRecordBodySize`
+    /// `Cleaner.cleanInto` hands to `MemoryRecords.filterTo`. `None` is no limit.
+    pub max_decompressed_record: Option<ByteSize>,
 }
 
 impl CleaningRound<'_> {
@@ -230,6 +237,16 @@ pub fn rewrite_segments(
                 txn_meta.on_batch_read(batch),
             )
         };
+        // `MemoryRecords.filterTo` decompresses every batch but one it deletes
+        // outright, which is an aborted batch that is neither the last record
+        // of an active producer nor the last batch of the round, and holds the
+        // batch it decompresses to `max.decompressed.message.bytes`.
+        if !aborted
+            || (producer_id.get() >= 0 && round.is_last_record_of_producer(batch))
+            || round.is_last_batch_of_round(batch)
+        {
+            check_records_read(batch, batch.records.len(), round.max_decompressed_record)?;
+        }
         let batch_meta = BatchMeta {
             is_control,
             producer_id,

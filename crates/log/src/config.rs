@@ -204,6 +204,18 @@ pub struct LogConfig {
     /// fetch whole.
     pub max_message_size: ByteSize,
 
+    /// Kafka trunk's `max.decompressed.message.bytes`: the largest record body a
+    /// compressed batch may hold when the log decompresses it, which it does to
+    /// compact a partition and to answer a by-timestamp `ListOffsets`. A record
+    /// above it fails the lookup or the pass with
+    /// [`LogError::RecordTooLarge`](crate::LogError::RecordTooLarge),
+    /// as `DefaultRecord.readFrom` throws `InvalidRecordException`. An
+    /// uncompressed batch is never held to it. `None` is no limit, which is
+    /// Kafka's default (`Records.SOFT_MAX_ARRAY_LENGTH`) and the only setting
+    /// Kafka 4.3.1 has: the broker sets it only under
+    /// `unstable.api.versions.enable`.
+    pub max_decompressed_record: Option<ByteSize>,
+
     /// Write one `.index`/`.timeindex` entry per this much `.log`. Kafka's
     /// `index.interval.bytes`; default 4 KiB.
     pub index_interval: ByteSize,
@@ -310,6 +322,7 @@ impl Default for LogConfig {
             retention: Some(DEFAULT_RETENTION),
             retention_size: None,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
+            max_decompressed_record: None,
             index_interval: DEFAULT_INDEX_INTERVAL,
             flush_on_append: false,
             validate_on_open: true,
@@ -363,6 +376,7 @@ mod tests {
                     retention: Some(days(7)),
                     retention_size: None,
                     max_message_size: bytes(1_048_588),
+                    max_decompressed_record: None,
                     index_interval: bytes(4096),
                     flush_on_append: false,
                     validate_on_open: true,

@@ -487,15 +487,26 @@ pub(super) async fn resolve_partition(
             // `UnifiedLog.fetchOffsetByTimestamp` answers it with an empty
             // result rather than the log start: KIP-207 fences that empty
             // result, and an unfenced one is the unknown row.
-            let (offset, timestamp) = partition
+            let found = partition
                 .log
                 .lock()
                 .expect("log mutex poisoned")
-                .max_timestamp_offset_and_ts()
-                .map_or(
+                .max_timestamp_offset_and_ts();
+            // A compressed record above the topic's trunk
+            // `max.decompressed.message.bytes` in the batch Kafka reads to
+            // resolve the maximum fails the row, as an exception out of
+            // `UnifiedLog.fetchOffsetByTimestamp` does.
+            let (offset, timestamp) = match found {
+                Ok(found) => found.map_or(
                     (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
                     |(offset, timestamp)| (offset.0, timestamp),
-                );
+                ),
+                Err(error) => {
+                    tracing::warn!(topic = topic_name, partition = index, error = %error,
+                        "list_offsets: max timestamp lookup refused a record");
+                    return error_response(index, codes::from_broker_error(&error.into()));
+                }
+            };
             // Kafka fills the epoch with the resolved batch's own
             // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
             if offset != UNKNOWN_OFFSET {
@@ -504,7 +515,7 @@ pub(super) async fn resolve_partition(
             (offset, timestamp)
         }
         ListOffsetsKind::Timestamp => {
-            let Some((offset, timestamp)) = resolve_timestamp_offset(
+            let (offset, timestamp) = match resolve_timestamp_offset(
                 broker,
                 &partition,
                 topic_name,
@@ -514,8 +525,9 @@ pub(super) async fn resolve_partition(
                 remote_timeout,
             )
             .await
-            else {
-                return error_response(index, codes::REQUEST_TIMED_OUT);
+            {
+                Ok(found) => found,
+                Err(error_code) => return error_response(index, error_code),
             };
             // Kafka fills the epoch with the matched batch's own epoch.
             // `FileRecords.java:364-381`.
