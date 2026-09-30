@@ -1,0 +1,481 @@
+(* #"/workspace/crates/verified/src/composition.rs" 939 0 944 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 360 4 365 65
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 454 4 460 6
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 945 23 945 58
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 951 77 951 81
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 951 83 951 87
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 951 23 951 89
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 957 15 957 20
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 959 10 962 6
+let%span scomposition'5 = "/workspace/crates/verified/src/composition.rs" 966 10 966 61
+let%span scomposition'6 = "/workspace/crates/verified/src/composition.rs" 975 19 975 67
+let%span scomposition'7 = "/workspace/crates/verified/src/composition.rs" 976 19 976 57
+let%span scomposition'8 = "/workspace/crates/verified/src/composition.rs" 978 13 978 58
+let%span scomposition'9 = "/workspace/crates/verified/src/composition.rs" 982 10 982 57
+let%span scomposition'10 = "/workspace/crates/verified/src/composition.rs" 983 24 983 66
+let%span scomposition'11 = "/workspace/crates/verified/src/composition.rs" 984 16 984 21
+let%span scomposition'12 = "/workspace/crates/verified/src/composition.rs" 980 15 980 20
+let%span scomposition'13 = "/workspace/crates/verified/src/composition.rs" 968 20 968 25
+let%span scomposition'14 = "/workspace/crates/verified/src/composition.rs" 964 20 964 25
+let%span scomposition'15 = "/workspace/crates/verified/src/composition.rs" 949 64 949 68
+let%span scomposition'16 = "/workspace/crates/verified/src/composition.rs" 932 11 933 35
+let%span scomposition'17 = "/workspace/crates/verified/src/composition.rs" 934 11 935 37
+let%span scomposition'18 = "/workspace/crates/verified/src/composition.rs" 936 11 937 48
+let%span scomposition'19 = "/workspace/crates/verified/src/composition.rs" 938 10 938 16
+let%span scomposition'20 = "/workspace/crates/verified/src/composition.rs" 879 11 879 66
+let%span scomposition'21 = "/workspace/crates/verified/src/composition.rs" 880 10 880 62
+let%span scomposition'22 = "/workspace/crates/verified/src/composition.rs" 881 10 881 96
+let%span scomposition'23 = "/workspace/crates/verified/src/composition.rs" 882 10 883 64
+let%span scomposition'24 = "/workspace/crates/verified/src/composition.rs" 884 10 885 65
+let%span scomposition'25 = "/workspace/crates/verified/src/composition.rs" 886 10 889 68
+let%span scomposition'26 = "/workspace/crates/verified/src/composition.rs" 890 10 891 42
+let%span scomposition'27 = "/workspace/crates/verified/src/composition.rs" 976 40 976 56
+let%span scomposition'28 = "/workspace/crates/verified/src/composition.rs" 976 32 976 39
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span sproducer_snapshot = "/workspace/crates/verified/src/producer_snapshot.rs" 182 10 184 79
+let%span sproducer_snapshot'0 = "/workspace/crates/verified/src/producer_snapshot.rs" 185 10 190 53
+let%span sproducer_snapshot'1 = "/workspace/crates/verified/src/producer_snapshot.rs" 133 10 133 81
+let%span sproducer_snapshot'2 = "/workspace/crates/verified/src/producer_snapshot.rs" 338 10 345 6
+let%span sproducer_snapshot'3 = "/workspace/crates/verified/src/producer_snapshot.rs" 346 10 346 100
+let%span sproducer_snapshot'4 = "/workspace/crates/verified/src/producer_snapshot.rs" 44 16 44 55
+let%span sproducer_snapshot'5 = "/workspace/crates/verified/src/producer_snapshot.rs" 88 8 95 9
+
+use creusot.int.Int64
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.MinMax
+use seq.Seq
+use creusot.int.UInt64
+use creusot.prelude.Opaque
+use int.Int
+
+type t_DeleteRecordsTrimFacts = {
+  requested: Int64.t;
+  high_watermark: Int64.t;
+  log_end: Int64.t;
+  current_start: Int64.t;
+  has_delivery_watermark: bool;
+  delivery_watermark: Int64.t }
+
+type t_DeleteRecordsTrimDecision = RejectMalformed | RejectOutOfRange | Noop Int64.t | Apply Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let delete_records_trim_decision (facts: t_DeleteRecordsTrimFacts) (return (x: t_DeleteRecordsTrimDecision)) = any
+  [ return (result: t_DeleteRecordsTrimDecision) ->
+  {[@stop_split] [@expl:delete_records_trim_decision ensures] [%#sbroker] let malformed = Int64.to_int facts.requested
+      < - 1
+    \/ Int64.to_int facts.current_start < 0
+    \/ Int64.to_int facts.high_watermark < Int64.to_int facts.current_start
+    \/ Int64.to_int facts.log_end < Int64.to_int facts.high_watermark
+    \/ facts.has_delivery_watermark
+    /\ Int64.to_int facts.delivery_watermark < Int64.to_int facts.current_start in let out_of_range = not malformed
+    /\ Int64.to_int facts.requested <> - 1
+    /\ gt_log_Int (Int64.to_int facts.requested) (Int64.to_int facts.high_watermark) in let resolved = if Int64.to_int facts.requested
+    = - 1 then
+      Int64.to_int facts.high_watermark
+    else
+      Int64.to_int facts.requested
+     in let bounded = if facts.has_delivery_watermark /\ Int64.to_int facts.delivery_watermark < resolved then
+      Int64.to_int facts.delivery_watermark
+    else
+      resolved
+     in match result with
+      | RejectMalformed -> malformed
+      | RejectOutOfRange -> out_of_range
+      | Noop frontier -> not malformed
+      /\ not out_of_range
+      /\ bounded <= Int64.to_int facts.current_start /\ Int64.to_int frontier = Int64.to_int facts.current_start
+      | Apply frontier -> not malformed
+      /\ not out_of_range
+      /\ gt_log_Int bounded (Int64.to_int facts.current_start)
+      /\ Int64.to_int frontier = bounded
+      /\ Int64.to_int frontier <= Int64.to_int facts.high_watermark
+      /\ Int64.to_int frontier <= Int64.to_int facts.log_end
+      /\ (not facts.has_delivery_watermark \/ Int64.to_int frontier <= Int64.to_int facts.delivery_watermark)
+      end}
+    (! return {result}) ]
+
+let elim_Apply (_x: t_DeleteRecordsTrimDecision) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {Apply frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim Apply] match _x with
+      | Apply _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Noop (_x: t_DeleteRecordsTrimDecision) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {Noop frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim Noop] match _x with
+      | Noop _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let trim_steps_converge (requested'0: Int64.t) (wal_start: Int64.t) (local_start: Int64.t) (applied: Slice64.slice bool)
+  (return (x: tup2_i64_i64)) =
+{[@stop_split] [@expl:trim_steps_converge requires] [%#scomposition'20] ge_log_Int (Int64.to_int requested'0) 0
+  /\ ge_log_Int (Int64.to_int wal_start) 0 /\ ge_log_Int (Int64.to_int local_start) 0}
+  any
+  [ return (result: tup2_i64_i64) ->
+  {[@stop_split] [@expl:trim_steps_converge ensures] ([@stop_split] [@expl:trim_steps_converge ensures #0] [%#scomposition'21] Int64.to_int wal_start
+        <= Int64.to_int result.f0
+      /\ Int64.to_int local_start <= Int64.to_int result.f1)
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #1] [%#scomposition'22] gt_log_Int (Int64.to_int result.f1) (Int64.to_int local_start)
+      -> Int64.to_int result.f0
+      = MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #2] [%#scomposition'23] Int64.to_int result.f0
+        <= MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start)
+      /\ Int64.to_int result.f1
+      <= MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #3] [%#scomposition'24] (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view applied) /\ Seq.get (Slice64.view applied) i)
+      -> Int64.to_int result.f0
+      = MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #4] [%#scomposition'25] (exists i: int, j: int. 0 <= i
+          /\ i < j
+          /\ j < Seq.length (Slice64.view applied)
+          /\ Seq.get (Slice64.view applied) i /\ Seq.get (Slice64.view applied) j)
+      -> result.f0 = result.f1
+      /\ Int64.to_int result.f1
+      = MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #5] [%#scomposition'26] (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view applied) -> not Seq.get (Slice64.view applied) i)
+    -> result = { f0 = wal_start; f1 = local_start })}
+    (! return {result}) ]
+
+type t_DeleteRecordsTrimApplication = RejectMalformed'0 | TrimWal'0 Int64.t | TrimLocal'0 Int64.t | Complete'0 Int64.t
+
+let delete_records_trim_application (requested'0: Int64.t) (wal_start: Int64.t) (local_start: Int64.t)
+  (return (x: t_DeleteRecordsTrimApplication)) = any
+  [ return (result: t_DeleteRecordsTrimApplication) ->
+  {[@stop_split] [@expl:delete_records_trim_application ensures] [%#sbroker'0] let frontier = if gt_log_Int (Int64.to_int requested'0) (Int64.to_int wal_start) then
+      if gt_log_Int (Int64.to_int requested'0) (Int64.to_int local_start) then
+        Int64.to_int requested'0
+      else
+        Int64.to_int local_start
+
+    else
+      if gt_log_Int (Int64.to_int wal_start) (Int64.to_int local_start) then
+        Int64.to_int wal_start
+      else
+        Int64.to_int local_start
+
+     in match result with
+      | RejectMalformed'0 -> Int64.to_int requested'0 < 0 \/ Int64.to_int wal_start < 0 \/ Int64.to_int local_start < 0
+      | TrimWal'0 next -> ge_log_Int (Int64.to_int requested'0) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0 /\ Int64.to_int wal_start < frontier /\ Int64.to_int next = frontier
+      | TrimLocal'0 next -> ge_log_Int (Int64.to_int requested'0) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0
+      /\ Int64.to_int wal_start = frontier /\ Int64.to_int local_start < frontier /\ Int64.to_int next = frontier
+      | Complete'0 done' -> ge_log_Int (Int64.to_int requested'0) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0
+      /\ Int64.to_int wal_start = frontier /\ Int64.to_int local_start = frontier /\ Int64.to_int done' = frontier
+      end}
+    (! return {result}) ]
+
+let elim_Complete (_x: t_DeleteRecordsTrimApplication) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {Complete'0 frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim Complete] match _x with
+      | Complete'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_ProducerReloadRange = { log_start'0: Int64.t; local_start'0: Int64.t; log_end'0: Int64.t }
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot.rs" 43 0 43 76] (offset: int) (log_start: int) (log_end'1: int) =
+  [%#sproducer_snapshot'4] log_start < offset /\ offset <= log_end'1
+
+let producer_snapshot_latest_index (offsets: Slice64.slice Int64.t) (range: t_ProducerReloadRange)
+  (return (x: t_Option_usize)) = any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:producer_snapshot_latest_index ensures] ([@stop_split] [@expl:producer_snapshot_latest_index ensures #0] [%#sproducer_snapshot] result
+        = None
+      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view offsets)
+        -> not kafka_reload_keeps (Int64.to_int (Seq.get (Slice64.view offsets) i)) (Int64.to_int range.log_start'0) (Int64.to_int range.log_end'0)))
+    /\ ([@stop_split] [@expl:producer_snapshot_latest_index ensures #1] [%#sproducer_snapshot'0] forall selected: UInt64.t. result
+        = Some selected
+      -> UInt64.t'int selected < Seq.length (Slice64.view offsets)
+      /\ kafka_reload_keeps (Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected))) (Int64.to_int range.log_start'0) (Int64.to_int range.log_end'0)
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view offsets)
+          /\ kafka_reload_keeps (Int64.to_int (Seq.get (Slice64.view offsets) i)) (Int64.to_int range.log_start'0) (Int64.to_int range.log_end'0)
+        -> Int64.to_int (Seq.get (Slice64.view offsets) i)
+        <= Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected))))}
+    (! return {result}) ]
+
+type closure0 = { c0: Slice64.slice Int64.t }
+
+let closure0 [#"/workspace/crates/verified/src/composition.rs" 976 32 976 39] [@coma:extspec]
+  (self: closure0) (index: UInt64.t) (return (x: Int64.t)) = bb0
+  [ bb0 = s0
+    [ s0 = [ &_3 <- index ] s1
+    | s1 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) -> -{Slice64.slice_ptr_len _ptr = Slice64.length self.c0}- [ &_4 <- _ptr ] s2)
+    | s2 = [ &_5 <- Slice64.slice_ptr_len _4 ] s3
+    | s3 = [ &_6 <- UInt64.lt _3 _5 ] s4
+    | s4 = {[@expl:index in bounds] [%#scomposition'27] _6} s5
+    | s5 = Slice64.get [%#scomposition'27] <Int64.t> {self.c0} {_3} (fun (r: Int64.t) -> [ &_ret <- r ] s6)
+    | s6 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & self: closure0 = self
+  | & index: UInt64.t = index
+  | & _3: UInt64.t = Any.any_l ()
+  | & _4: Opaque.ptr = Any.any_l ()
+  | & _5: UInt64.t = Any.any_l ()
+  | & _6: bool = Any.any_l () ] [ return (result: Int64.t) -> return {result} ]
+
+meta "rewrite_def" predicate closure0'pre
+
+meta "rewrite_def" predicate closure0'post'return
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+predicate precondition_closure0 (self: closure0) (args: UInt64.t) =
+  [%#scomposition'28] let index = args in closure0'pre self index
+
+meta "rewrite_def" predicate precondition_closure0
+
+predicate resolve_closure0 [@inline:trivial] (_1: closure0) = true
+
+meta "rewrite_def" predicate resolve_closure0
+
+predicate postcondition_once_closure0 (self: closure0) (args: UInt64.t) (result: Int64.t) =
+  [%#scomposition'28] let index = args in closure0'post'return self index result
+
+meta "rewrite_def" predicate postcondition_once_closure0
+
+let map_usize (self_: t_Option_usize) (f: closure0) (return (x: t_Option_i64)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self_ with
+    | None -> true
+    | Some t -> precondition_closure0 f t
+    end}
+  any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self_ with
+      | None -> resolve_closure0 f /\ result = None'0
+      | Some t -> exists r: Int64.t. result = Some'0 r /\ postcondition_once_closure0 f t r
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Some'0 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let producer_snapshot_reload_keeps (offset: Int64.t) (range: t_ProducerReloadRange) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:producer_snapshot_reload_keeps ensures] [%#sproducer_snapshot'1] result
+    = kafka_reload_keeps (Int64.to_int offset) (Int64.to_int range.log_start'0) (Int64.to_int range.log_end'0)}
+    (! return {result}) ]
+
+function kafka_replay_start [#"/workspace/crates/verified/src/producer_snapshot.rs" 86 0 86 83] (range: t_ProducerReloadRange) (snapshot: t_Option_i64) : int
+ = [%#sproducer_snapshot'5] match snapshot with
+    | Some'0 offset -> if ge_log_Int (Int64.to_int offset) (Int64.to_int range.local_start'0) then
+      Int64.to_int offset
+    else
+      Int64.to_int range.local_start'0
+
+    | None'0 -> if ge_log_Int (Int64.to_int range.log_start'0) (Int64.to_int range.local_start'0) then
+      Int64.to_int range.log_start'0
+    else
+      Int64.to_int range.local_start'0
+
+    end
+
+let producer_snapshot_replay_start (range: t_ProducerReloadRange) (snapshot: t_Option_i64) (return (x: t_Option_i64)) =
+any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:producer_snapshot_replay_start ensures] ([@stop_split] [@expl:producer_snapshot_replay_start ensures #0] [%#sproducer_snapshot'2] (result
+        <> None'0)
+      = (ge_log_Int (Int64.to_int range.log_start'0) 0
+      /\ Int64.to_int range.log_start'0 <= Int64.to_int range.log_end'0
+      /\ ge_log_Int (Int64.to_int range.local_start'0) 0
+      /\ Int64.to_int range.local_start'0 <= Int64.to_int range.log_end'0
+      /\ match snapshot with
+        | Some'0 offset -> kafka_reload_keeps (Int64.to_int offset) (Int64.to_int range.log_start'0) (Int64.to_int range.log_end'0)
+        | None'0 -> true
+        end))
+    /\ ([@stop_split] [@expl:producer_snapshot_replay_start ensures #1] [%#sproducer_snapshot'3] forall start: Int64.t. result
+        = Some'0 start -> Int64.to_int start = kafka_replay_start range snapshot)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let admitted_trim_bounds_reload_and_retry [#"/workspace/crates/verified/src/composition.rs" 939 0 944 9]
+  (facts: t_DeleteRecordsTrimFacts) (wal_start: Int64.t) (local_start: Int64.t) (snapshots: Slice64.slice Int64.t)
+  (return (x: bool)) =
+{[@stop_split] [@expl:admitted_trim_bounds_reload_and_retry requires] ([@stop_split] [@expl:admitted_trim_bounds_reload_and_retry requires #0] [%#scomposition'16] 0
+      <= Int64.to_int wal_start
+    /\ Int64.to_int wal_start <= Int64.to_int facts.high_watermark
+    /\ Int64.to_int wal_start <= Int64.to_int facts.log_end)
+  /\ ([@stop_split] [@expl:admitted_trim_bounds_reload_and_retry requires #1] [%#scomposition'17] 0
+      <= Int64.to_int local_start
+    /\ Int64.to_int local_start <= Int64.to_int facts.high_watermark
+    /\ Int64.to_int local_start <= Int64.to_int facts.log_end)
+  /\ ([@stop_split] [@expl:admitted_trim_bounds_reload_and_retry requires #2] [%#scomposition'18] facts.has_delivery_watermark
+  -> Int64.to_int wal_start <= Int64.to_int facts.delivery_watermark
+  /\ Int64.to_int local_start <= Int64.to_int facts.delivery_watermark)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = delete_records_trim_decision [%#scomposition] {facts}
+        (fun (_x: t_DeleteRecordsTrimDecision) -> [ &_20 <- _x ] s1)
+    | s1 = any
+      [ br0 -> {_20 = RejectMalformed} (! bb5)
+      | br1 -> {_20 = RejectOutOfRange} (! bb5)
+      | br2 (x0: Int64.t) -> {_20 = Noop x0} (! bb6)
+      | br3 (x0: Int64.t) -> {_20 = Apply x0} (! bb7) ] ]
+  | bb7 = s0 [ s0 = elim_Apply {_20} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb8 ]
+  | bb6 = s0 [ s0 = elim_Noop {_20} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &target <- frontier ] s1
+    | s1 = bb0'0
+      [ bb0'0 = s0'0
+        [ s0'0 = any
+          [ any_ (__arr_temp: Slice64.array bool) -> (! -{Seq.get __arr_temp.Slice64.elts 0
+            /\ Seq.get __arr_temp.Slice64.elts 1 /\ Seq.length __arr_temp.Slice64.elts = 2}-
+            [ &_1 <- __arr_temp ] s1'0) ]
+        | s1'0 = [ &_ret'0 <- _1 ] s2'0
+        | s2'0 = _const_ret {_ret'0} ] ]
+      [ & _ret'0: Slice64.array bool = Any.any_l () | & _1: Slice64.array bool = Any.any_l () ]
+      [ _const_ret (_const: Slice64.array bool) -> [ &_106 <- _const ] s2 ]
+    | s2 = [ &_33 <- _106 ] s3
+    | s3 = trim_steps_converge [%#scomposition'2] {target} {wal_start} {local_start} {_33}
+        (fun (_x: tup2_i64_i64) -> [ &_27 <- _x ] s4)
+    | s4 = [ &wal <- _27.f0 ] s5
+    | s5 = [ &local <- _27.f1 ] s6
+    | s6 = [ &_36 <- wal <> local ] s7
+    | s7 = any [ br0 -> {_36 = false} (! bb11) | br1 -> {_36} (! bb18) ] ]
+  | bb11 = s0
+    [ s0 = [ &_39 <- Int64.gt local facts.high_watermark ] s1
+    | s1 = any [ br0 -> {_39 = false} (! bb13) | br1 -> {_39} (! bb18) ] ]
+  | bb13 = s0
+    [ s0 = [ &_42 <- Int64.gt local facts.log_end ] s1
+    | s1 = any [ br0 -> {_42 = false} (! bb15) | br1 -> {_42} (! bb18) ] ]
+  | bb15 = any
+    [ br0 -> {facts.has_delivery_watermark = false} (! bb20) | br1 -> {facts.has_delivery_watermark} (! bb16) ]
+  | bb16 = s0
+    [ s0 = [ &_46 <- Int64.gt local facts.delivery_watermark ] s1
+    | s1 = any [ br0 -> {_46 = false} (! bb20) | br1 -> {_46} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- [%#scomposition'3] false ] s1 | s1 = return {_ret} ]
+  | bb20 = s0
+    [ s0 = [ &_52 <- { requested = facts.requested;
+                       high_watermark = facts.high_watermark;
+                       log_end = facts.log_end;
+                       current_start = local;
+                       has_delivery_watermark = facts.has_delivery_watermark;
+                       delivery_watermark = facts.delivery_watermark } ] s1
+    | s1 = delete_records_trim_decision [%#scomposition'4] {_52}
+        (fun (_x: t_DeleteRecordsTrimDecision) -> [ &_51 <- _x ] s2)
+    | s2 = any
+      [ br0 -> {_51 = RejectMalformed} (! bb22)
+      | br1 -> {_51 = RejectOutOfRange} (! bb22)
+      | br2 (x0: Int64.t) -> {_51 = Noop x0} (! bb24)
+      | br3 (x0: Int64.t) -> {_51 = Apply x0} (! bb22) ] ]
+  | bb24 = s0
+    [ s0 = elim_Noop {_51} (fun (rfrontier: Int64.t) -> [ &frontier'1 <- rfrontier ] s1)
+    | s1 = [ &_58 <- frontier'1 = local ] s2
+    | s2 = any [ br0 -> {_58 = false} (! bb22) | br1 -> {_58} (! bb25) ] ]
+  | bb25 = s0
+    [ s0 = elim_Noop {_51} (fun (rfrontier: Int64.t) -> [ &frontier'0 <- rfrontier ] s1)
+    | s1 = delete_records_trim_application [%#scomposition'5] {target} {wal} {local}
+        (fun (_x: t_DeleteRecordsTrimApplication) -> [ &_63 <- _x ] s2)
+    | s2 = any
+      [ br0 -> {_63 = RejectMalformed'0} (! bb28)
+      | br1 (x0: Int64.t) -> {_63 = TrimWal'0 x0} (! bb28)
+      | br2 (x0: Int64.t) -> {_63 = TrimLocal'0 x0} (! bb28)
+      | br3 (x0: Int64.t) -> {_63 = Complete'0 x0} (! bb30) ] ]
+  | bb30 = s0
+    [ s0 = elim_Complete {_63} (fun (rfrontier: Int64.t) -> [ &frontier'3 <- rfrontier ] s1)
+    | s1 = [ &_71 <- frontier'3 = local ] s2
+    | s2 = any [ br0 -> {_71 = false} (! bb28) | br1 -> {_71} (! bb31) ] ]
+  | bb31 = s0
+    [ s0 = elim_Complete {_63} (fun (rfrontier: Int64.t) -> [ &frontier'2 <- rfrontier ] s1)
+    | s1 = [ &range <- { log_start'0 = local; local_start'0 = local; log_end'0 = facts.log_end } ] s2
+    | s2 = producer_snapshot_latest_index [%#scomposition'6] {snapshots} {range}
+        (fun (_x: t_Option_usize) -> [ &selected <- _x ] s3)
+    | s3 = [ &_84 <- { c0 = snapshots } ] s4
+    | s4 = map_usize [%#scomposition'7] {selected} {_84} (fun (_x: t_Option_i64) -> [ &snapshot <- _x ] s5)
+    | s5 = any [ br0 -> {snapshot = None'0} (! bb43) | br1 (x0: Int64.t) -> {snapshot = Some'0 x0} (! bb36) ] ]
+  | bb36 = s0
+    [ s0 = elim_Some {snapshot} (fun (r0: Int64.t) -> [ &offset <- r0 ] s1)
+    | s1 = producer_snapshot_reload_keeps [%#scomposition'8] {offset} {range} (fun (_x: bool) -> [ &_89 <- _x ] s2)
+    | s2 = any [ br0 -> {_89 = false} (! bb42) | br1 -> {_89} (! bb38) ] ]
+  | bb38 = s0
+    [ s0 = [ &_92 <- Int64.le offset local ] s1 | s1 = any [ br0 -> {_92 = false} (! bb43) | br1 -> {_92} (! bb42) ] ]
+  | bb43 = s0
+    [ s0 = producer_snapshot_replay_start [%#scomposition'9] {range} {snapshot}
+        (fun (_x: t_Option_i64) -> [ &_96 <- _x ] s1)
+    | s1 = any [ br0 -> {_96 = None'0} (! bb47) | br1 (x0: Int64.t) -> {_96 = Some'0 x0} (! bb48) ] ]
+  | bb48 = s0
+    [ s0 = elim_Some {_96} (fun (r0: Int64.t) -> [ &cursor <- r0 ] s1)
+    | s1 = [ &_101 <- Int64.le local cursor ] s2
+    | s2 = any [ br0 -> {_101 = false} (! bb50) | br1 -> {_101} (! bb49) ] ]
+  | bb49 = s0 [ s0 = [ &_ret <- Int64.le cursor facts.log_end ] s1 | s1 = return {_ret} ]
+  | bb50 = s0 [ s0 = [ &_ret <- [%#scomposition'10] false ] s1 | s1 = return {_ret} ]
+  | bb47 = s0 [ s0 = [ &_ret <- [%#scomposition'11] false ] s1 | s1 = return {_ret} ]
+  | bb42 = s0 [ s0 = [ &_ret <- [%#scomposition'12] false ] s1 | s1 = return {_ret} ]
+  | bb28 = s0 [ s0 = [ &_ret <- [%#scomposition'13] false ] s1 | s1 = return {_ret} ]
+  | bb22 = s0 [ s0 = [ &_ret <- [%#scomposition'14] false ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- [%#scomposition'15] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & facts: t_DeleteRecordsTrimFacts = facts
+  | & wal_start: Int64.t = wal_start
+  | & local_start: Int64.t = local_start
+  | & snapshots: Slice64.slice Int64.t = snapshots
+  | & target: Int64.t = Any.any_l ()
+  | & _20: t_DeleteRecordsTrimDecision = Any.any_l ()
+  | & frontier: Int64.t = Any.any_l ()
+  | & wal: Int64.t = Any.any_l ()
+  | & local: Int64.t = Any.any_l ()
+  | & _27: tup2_i64_i64 = Any.any_l ()
+  | & _33: Slice64.array bool = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _51: t_DeleteRecordsTrimDecision = Any.any_l ()
+  | & _52: t_DeleteRecordsTrimFacts = Any.any_l ()
+  | & frontier'0: Int64.t = Any.any_l ()
+  | & frontier'1: Int64.t = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _63: t_DeleteRecordsTrimApplication = Any.any_l ()
+  | & frontier'2: Int64.t = Any.any_l ()
+  | & frontier'3: Int64.t = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & range: t_ProducerReloadRange = Any.any_l ()
+  | & selected: t_Option_usize = Any.any_l ()
+  | & snapshot: t_Option_i64 = Any.any_l ()
+  | & _84: closure0 = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _89: bool = Any.any_l ()
+  | & _92: bool = Any.any_l ()
+  | & _96: t_Option_i64 = Any.any_l ()
+  | & cursor: Int64.t = Any.any_l ()
+  | & _101: bool = Any.any_l ()
+  | & _106: Slice64.array bool = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:admitted_trim_bounds_reload_and_retry ensures] [%#scomposition'19] result}
+    (! return {result}) ]

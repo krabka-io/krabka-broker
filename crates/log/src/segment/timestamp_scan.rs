@@ -34,7 +34,7 @@ impl Segment {
         target_ts: i64,
         scan_window: ByteSize,
     ) -> Option<(Offset, i64)> {
-        let floor_rel = self.time_index.lookup(target_ts);
+        let floor_rel = self.time_index.scan_start(target_ts);
         let scan_from = self
             .base_offset
             .0
@@ -47,9 +47,8 @@ impl Segment {
     /// segment's `max_timestamp`.
     ///
     /// Ties resolve to the earliest offset, as in Kafka. The result is `None`
-    /// for an empty segment. This method starts the scan at the time index's
-    /// floor for the maximum, then scans forward for the first record whose
-    /// timestamp equals the segment maximum.
+    /// for an empty segment. This method starts before the first occurrence
+    /// of the maximum, then scans forward for the first record carrying it.
     #[must_use]
     pub fn offset_of_max_timestamp(&self) -> Option<(Offset, i64)> {
         self.offset_of_max_timestamp_with_window(DEFAULT_TIMESTAMP_SCAN_WINDOW)
@@ -62,7 +61,7 @@ impl Segment {
         if self.max_timestamp == i64::MIN {
             return self.scan_max_timestamp_windowed(scan_window);
         }
-        let floor_rel = self.time_index.lookup(self.max_timestamp);
+        let floor_rel = self.time_index.scan_start(self.max_timestamp);
         let scan_from = self
             .base_offset
             .0
@@ -263,6 +262,52 @@ mod tests {
     use super::*;
     use crate::segment::test_support::{DENSE_INDEX, sample_batch};
 
+    #[test]
+    fn sparse_running_maxima_do_not_skip_earlier_matches() {
+        for timestamps in [
+            [100, 100, 100],
+            [500, 100, 200],
+            [100, 50, 100],
+            [i64::MIN, i64::MIN, i64::MIN],
+            [i64::MIN, 0, i64::MAX],
+        ] {
+            for interval in [DENSE_INDEX, kibibytes(64)] {
+                let dir = tempdir().unwrap();
+                let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+                for (offset, timestamp) in timestamps.into_iter().enumerate() {
+                    let offset = i64::try_from(offset).unwrap();
+                    seg.append(&sample_batch(offset, 1, timestamp), interval)
+                        .unwrap();
+                }
+                seg.flush().unwrap();
+                let reopened = Segment::open_active(dir.path(), Offset(0), true).unwrap();
+                for segment in [&seg, &reopened] {
+                    for target in [i64::MIN, 49, 100, 150, 500, i64::MAX] {
+                        let expected = timestamps
+                            .iter()
+                            .enumerate()
+                            .find(|(_, timestamp)| **timestamp >= target)
+                            .map(|(offset, timestamp)| {
+                                (Offset(i64::try_from(offset).unwrap()), *timestamp)
+                            });
+                        assert2::assert!(
+                            segment.offset_for_timestamp_with_window(target, bytes(1)) == expected
+                        );
+                    }
+                    let maximum = *timestamps.iter().max().unwrap();
+                    let earliest = timestamps
+                        .iter()
+                        .position(|timestamp| *timestamp == maximum)
+                        .unwrap();
+                    assert2::assert!(
+                        segment.offset_of_max_timestamp_with_window(bytes(1))
+                            == Some((Offset(i64::try_from(earliest).unwrap()), maximum))
+                    );
+                }
+            }
+        }
+    }
+
     /// The scan reports the offset of the maximum timestamp as
     /// `batch.base_offset + record.offset_delta`, and keeps the first record
     /// holding that timestamp when several share it.
@@ -336,13 +381,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut stale = Segment::create(dir.path(), Offset(0)).unwrap();
         stale.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
-        stale.time_index.append(200, u32::MAX).unwrap();
+        stale.time_index.append(199, u32::MAX).unwrap();
         assert2::assert!(stale.offset_for_timestamp(200).is_none());
 
         let dir2 = tempdir().unwrap();
         let mut overflowing = Segment::create(dir2.path(), Offset(i64::MAX)).unwrap();
         overflowing.last_offset = Offset(i64::MAX);
-        overflowing.time_index.append(0, 1).unwrap();
+        overflowing.time_index.append(-1, 1).unwrap();
         assert2::assert!(overflowing.offset_for_timestamp(0).is_none());
     }
 

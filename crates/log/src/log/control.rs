@@ -55,18 +55,18 @@ pub enum ControlBatchKind {
 /// had before the barrier type existed. Compaction emits one for the
 /// `RETAIN_EMPTY` rule.
 pub fn control_batch_kind(batch: &RecordBatch) -> Option<ControlBatchKind> {
-    if !batch.attributes.is_control_batch() {
-        return None;
-    }
-    let marker_type = batch
+    use krabka_verified::transaction::{LogBatchKind, log_batch_kind};
+    let key = batch
         .records
         .first()
         .and_then(|record| record.key.as_deref())
-        .and_then(parse_control_marker_type);
-    if marker_type == Some(BARRIER_CONTROL_TYPE) {
-        Some(ControlBatchKind::Barrier)
-    } else {
-        Some(ControlBatchKind::Transaction)
+        .unwrap_or(&[]);
+    match log_batch_kind(batch.attributes.is_control_batch(), key) {
+        LogBatchKind::Data => None,
+        LogBatchKind::Barrier => Some(ControlBatchKind::Barrier),
+        LogBatchKind::Abort | LogBatchKind::Commit | LogBatchKind::OtherControl => {
+            Some(ControlBatchKind::Transaction)
+        }
     }
 }
 

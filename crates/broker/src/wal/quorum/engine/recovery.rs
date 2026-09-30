@@ -141,9 +141,14 @@ fn quorum_donor(
 fn same_batches(left: &[BatchBytes], right: &[BatchBytes]) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(left, right)| {
-            left.base_offset == right.base_offset
-                && left.last_offset == right.last_offset
-                && left.verbatim.bytes == right.verbatim.bytes
+            krabka_verified::wal::wal_batch_equal(
+                (left.base_offset.0, left.last_offset.0, &left.verbatim.bytes),
+                (
+                    right.base_offset.0,
+                    right.last_offset.0,
+                    &right.verbatim.bytes,
+                ),
+            )
         })
 }
 

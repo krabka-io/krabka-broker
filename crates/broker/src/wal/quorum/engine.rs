@@ -34,7 +34,9 @@ mod replica_io;
 use self::recovery::{bootstrap_durable_prefix, recover_durable_prefix};
 use self::replica_io::trim_log;
 pub(super) use self::{
-    batches::{read_batches_exact, read_log_batches_exact, split_batches},
+    batches::{
+        read_batches_exact, read_log_batches_covering, read_log_batches_exact, split_batches,
+    },
     replica_io::sync_replica,
 };
 use crate::{

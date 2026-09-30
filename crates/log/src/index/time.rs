@@ -114,12 +114,11 @@ impl TimeIndex {
         Ok(())
     }
 
-    /// Find the relative offset at or after the given timestamp. This method
-    /// returns the relative offset of the largest entry with
-    /// `timestamp <= target`, or 0 when there are no entries.
+    /// Start a forward scan before the first record at or above the target.
+    /// Equal running maxima cannot advance the start without skipping ties.
     #[must_use]
-    pub fn lookup(&self, target_timestamp: i64) -> u32 {
-        krabka_verified::time_index_lookup(&self.entries, target_timestamp)
+    pub(crate) fn scan_start(&self, target_timestamp: i64) -> u32 {
+        krabka_verified::log_index::time_index_scan_start(&self.entries, target_timestamp)
     }
 
     #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
@@ -242,7 +241,7 @@ mod time_tests {
     }
 
     #[test]
-    fn append_and_lookup_time() {
+    fn append_and_choose_scan_start() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("00000000000000000000.timeindex");
         let mut idx = TimeIndex::open(&path).unwrap();
@@ -252,11 +251,11 @@ mod time_tests {
         for (name, ts, want) in [
             ("before first", 0, 0),
             ("floor first", 1_500_000, 0),
-            ("exact middle", 2_000_000, 100),
+            ("exact middle", 2_000_000, 0),
             ("floor middle", 2_500_000, 100),
             ("past last", 5_000_000, 200),
         ] {
-            check!(idx.lookup(ts) == want, "case {name}: ts={ts}");
+            check!(idx.scan_start(ts) == want, "case {name}: ts={ts}");
         }
     }
 
@@ -293,6 +292,6 @@ mod time_tests {
         let idx = TimeIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
         assert2::assert!(idx.last_entry() == Some((2_000, 100)));
-        assert2::assert!(idx.lookup(2_500) == 100);
+        assert2::assert!(idx.scan_start(2_500) == 100);
     }
 }

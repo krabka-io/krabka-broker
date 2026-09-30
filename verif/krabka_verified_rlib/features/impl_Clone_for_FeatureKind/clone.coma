@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/features.rs" 38 27 38 32 *)
+
+(* <features::FeatureKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FeatureKind = MetadataVersion bool | KRaftVersion | Other bool
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FeatureKind [#"/workspace/crates/verified/src/features.rs" 38 27 38 32]
+  (self: t_FeatureKind) (return (x: t_FeatureKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FeatureKind = Any.any_l () | & self: t_FeatureKind = self ])
+  [ return (result: t_FeatureKind) -> (! return {result}) ]

@@ -79,6 +79,27 @@ pub fn time_index_lookup(entries: &[(i64, u32)], target_timestamp: i64) -> u32 {
     if lo == 0 { 0 } else { entries[lo - 1].1 }
 }
 
+/// A safe sparse starting offset for a forward scan seeking `timestamp >= target`.
+/// Entries carry running maxima. Starting at an equal maximum could skip its
+/// first occurrence, so only a strictly smaller maximum may advance the scan.
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
+    ==> entries@[i].0@ <= entries@[j].0@)]
+#[ensures((exists<i: Int> 0 <= i && i < entries@.len() && entries@[i].0@ < target_timestamp@)
+    ==> exists<i: Int> 0 <= i && i < entries@.len()
+        && entries@[i].0@ < target_timestamp@
+        && result@ == entries@[i].1@
+        && (forall<j: Int> i < j && j < entries@.len()
+            ==> entries@[j].0@ >= target_timestamp@))]
+#[ensures((forall<i: Int> 0 <= i && i < entries@.len() ==> entries@[i].0@ >= target_timestamp@)
+    ==> result@ == 0)]
+#[must_use]
+pub fn time_index_scan_start(entries: &[(i64, u32)], target_timestamp: i64) -> u32 {
+    match target_timestamp.checked_sub(1) {
+        Some(before) => time_index_lookup(entries, before),
+        None => 0,
+    }
+}
+
 /// The byte position of the first entry at or after `target`.
 ///
 /// Returns `None` when every entry is below `target`. `entries` must be

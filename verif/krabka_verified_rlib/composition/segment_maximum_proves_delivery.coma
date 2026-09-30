@@ -1,0 +1,94 @@
+(* #"/workspace/crates/verified/src/composition.rs" 642 0 642 91 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span scomposition = "/workspace/crates/verified/src/composition.rs" 643 10 643 51
+let%span scomposition'0 = "/workspace/crates/verified/src/composition.rs" 644 69 644 87
+let%span scomposition'1 = "/workspace/crates/verified/src/composition.rs" 644 50 644 54
+let%span scomposition'2 = "/workspace/crates/verified/src/composition.rs" 644 23 644 93
+let%span scomposition'3 = "/workspace/crates/verified/src/composition.rs" 645 16 645 20
+let%span scomposition'4 = "/workspace/crates/verified/src/composition.rs" 639 10 641 51
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 30 10 37 1
+let%span sdelivery = "/workspace/crates/verified/src/delivery.rs" 12 10 14 52
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_usize = None | Some UInt64.t
+
+let earliest_max_timestamp_index (timestamps: Slice64.slice Int64.t) (return (x: t_Option_usize)) = any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:earliest_max_timestamp_index ensures] [%#stimestamp] match result with
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
+        -> Int64.to_int (Seq.get (Slice64.view timestamps) i)
+          <= Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))
+        /\ (forall i'0: int. 0 <= i'0 /\ i'0 < UInt64.t'int index
+          -> Int64.to_int (Seq.get (Slice64.view timestamps) i'0)
+          < Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))))
+      | None -> Seq.length (Slice64.view timestamps) = 0
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let scheduled_delivery_visible (scheduled: bool) (uncertainty_ms: Int64.t) (activation_ms: Int64.t) (now_ms: Int64.t)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:scheduled_delivery_visible ensures] [%#sdelivery] result
+    = (not scheduled
+    \/ ge_log_Int (Int64.to_int uncertainty_ms) 0
+    /\ Int64.to_int activation_ms + Int64.to_int uncertainty_ms <= Int64.to_int const_MAX
+    /\ Int64.to_int activation_ms + Int64.to_int uncertainty_ms <= Int64.to_int now_ms)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let segment_maximum_proves_delivery [#"/workspace/crates/verified/src/composition.rs" 642 0 642 91]
+  (activations: Slice64.slice Int64.t) (uncertainty: Int64.t) (now: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = earliest_max_timestamp_index [%#scomposition] {activations} (fun (_x: t_Option_usize) -> [ &_8 <- _x ] s1)
+    | s1 = any [ br0 -> {_8 = None} (! bb4) | br1 (x0: UInt64.t) -> {_8 = Some x0} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = elim_Some {_8} (fun (r0: UInt64.t) -> [ &index <- r0 ] s1)
+    | s1 = [ &_14 <- index ] s2
+    | s2 = [ &_15 <- Slice64.length activations ] s3
+    | s3 = [ &_16 <- UInt64.lt _14 _15 ] s4
+    | s4 = {[@expl:index in bounds] [%#scomposition'0] _16} s5
+    | s5 = Slice64.get [%#scomposition'0] <Int64.t> {activations} {_14} (fun (r: Int64.t) -> [ &_13 <- r ] s6)
+    | s6 = scheduled_delivery_visible [%#scomposition'2] {[%#scomposition'1] true} {uncertainty} {_13} {now}
+        (fun (_x: bool) -> [ &_ret <- _x ] s7)
+    | s7 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#scomposition'3] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & activations: Slice64.slice Int64.t = activations
+  | & uncertainty: Int64.t = uncertainty
+  | & now: Int64.t = now
+  | & _8: t_Option_usize = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _13: Int64.t = Any.any_l ()
+  | & _14: UInt64.t = Any.any_l ()
+  | & _15: UInt64.t = Any.any_l ()
+  | & _16: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:segment_maximum_proves_delivery ensures] [%#scomposition'4] result
+    = (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view activations)
+      -> ge_log_Int (Int64.to_int uncertainty) 0
+      /\ Int64.to_int (Seq.get (Slice64.view activations) i) + Int64.to_int uncertainty <= Int64.to_int const_MAX
+      /\ Int64.to_int (Seq.get (Slice64.view activations) i) + Int64.to_int uncertainty <= Int64.to_int now)}
+    (! return {result}) ]

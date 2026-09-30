@@ -26,7 +26,7 @@ use crate::wal::quorum::{
     shard_dir,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct FollowerLog {
     pub(super) log: ShardLog,
     durable_offset_path: PathBuf,
@@ -107,22 +107,25 @@ impl FollowerLog {
         if offset <= self.start_offset() {
             return Ok(());
         }
-        let log = self.log.clone();
-        let durable_offset_path = self.durable_offset_path.clone();
-        run_blocking(move || {
-            let mut log = log.lock();
-            log.trim_to_offset(offset)?;
-            log.sync()?;
-            write_durable_offset(
-                &durable_offset_path,
-                DurableRange {
-                    start: log.log_start_offset(),
-                    end: log.log_end_offset(),
-                },
-            )?;
-            Ok(())
-        })
-        .await
+        let follower = self.clone();
+        run_blocking(move || follower.trim_to_blocking(offset)).await
+    }
+
+    pub(super) fn trim_to_blocking(&self, offset: Offset) -> Result<(), crate::BrokerError> {
+        let mut log = self.log.lock();
+        if offset <= log.log_start_offset() {
+            return Ok(());
+        }
+        log.trim_to_offset(offset)?;
+        log.sync()?;
+        write_durable_offset(
+            &self.durable_offset_path,
+            DurableRange {
+                start: log.log_start_offset(),
+                end: log.log_end_offset(),
+            },
+        )?;
+        Ok(())
     }
 
     pub(super) async fn reset_to(&self, offset: Offset) -> Result<(), crate::BrokerError> {

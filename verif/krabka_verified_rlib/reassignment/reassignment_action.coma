@@ -1,20 +1,20 @@
-(* #"/workspace/crates/verified/src/reassignment.rs" 86 0 90 23 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 92 0 96 23 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 97 16 97 22
-let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 100 14 100 43
-let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 101 14 101 37
-let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 99 16 99 74
-let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 98 16 98 46
-let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 102 11 102 31
-let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 105 13 105 14
-let%span sreassignment'6 = "/workspace/crates/verified/src/reassignment.rs" 105 8 105 14
-let%span sreassignment'7 = "/workspace/crates/verified/src/reassignment.rs" 71 10 71 83
-let%span sreassignment'8 = "/workspace/crates/verified/src/reassignment.rs" 72 10 72 91
-let%span sreassignment'9 = "/workspace/crates/verified/src/reassignment.rs" 73 10 84 1
+let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 103 16 103 22
+let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 106 14 106 43
+let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 107 14 107 37
+let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 105 16 105 74
+let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 104 16 104 46
+let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 108 11 108 31
+let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 111 13 111 14
+let%span sreassignment'6 = "/workspace/crates/verified/src/reassignment.rs" 111 8 111 14
+let%span sreassignment'7 = "/workspace/crates/verified/src/reassignment.rs" 77 10 77 80
+let%span sreassignment'8 = "/workspace/crates/verified/src/reassignment.rs" 78 10 78 88
+let%span sreassignment'9 = "/workspace/crates/verified/src/reassignment.rs" 79 10 90 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -46,9 +46,10 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 86 0 90 23] (additions_caught_up: bool)
-  (leader_removed: bool) (eligible_handoffs: Slice64.slice bool) (return (x: t_ReassignmentAction)) = (! bb0
-  [ bb0 = any [ br0 -> {additions_caught_up = false} (! bb1) | br1 -> {additions_caught_up} (! bb2) ]
+let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 92 0 96 23]
+  (completion_ready: bool) (leader_removed: bool) (eligible_handoffs: Slice64.slice bool)
+  (return (x: t_ReassignmentAction)) = (! bb0
+  [ bb0 = any [ br0 -> {completion_ready = false} (! bb1) | br1 -> {completion_ready} (! bb2) ]
   | bb2 = any [ br0 -> {leader_removed = false} (! bb4) | br1 -> {leader_removed} (! bb3) ]
   | bb3 = s0 [ s0 = [ &i <- [%#sreassignment] (0: UInt64.t) ] s1 | s1 = bb5 ]
   | bb5 = bb5invariant
@@ -80,7 +81,7 @@ let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 86 0 
   | bb4 = s0 [ s0 = [ &_ret <- Complete ] s1 | s1 = return {_ret} ]
   | bb1 = s0 [ s0 = [ &_ret <- WaitForReplication ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReassignmentAction = Any.any_l ()
-  | & additions_caught_up: bool = additions_caught_up
+  | & completion_ready: bool = completion_ready
   | & leader_removed: bool = leader_removed
   | & eligible_handoffs: Slice64.slice bool = eligible_handoffs
   | & i: UInt64.t = Any.any_l ()
@@ -92,16 +93,16 @@ let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 86 0 
   | & _40: bool = Any.any_l ()
   | & variant_old_bb5: int = Any.any_l () ])
   [ return (result: t_ReassignmentAction) ->
-  {[@stop_split] [@expl:reassignment_action ensures] ([@stop_split] [@expl:reassignment_action ensures #0] [%#sreassignment'7] not additions_caught_up
+  {[@stop_split] [@expl:reassignment_action ensures] ([@stop_split] [@expl:reassignment_action ensures #0] [%#sreassignment'7] not completion_ready
       -> result = WaitForReplication)
-    /\ ([@stop_split] [@expl:reassignment_action ensures #1] [%#sreassignment'8] additions_caught_up
-        /\ not leader_removed -> result = Complete)
+    /\ ([@stop_split] [@expl:reassignment_action ensures #1] [%#sreassignment'8] completion_ready /\ not leader_removed
+      -> result = Complete)
     /\ ([@stop_split] [@expl:reassignment_action ensures #2] [%#sreassignment'9] match result with
-      | WaitForLeader -> additions_caught_up
+      | WaitForLeader -> completion_ready
       /\ leader_removed
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view eligible_handoffs)
         -> not Seq.get (Slice64.view eligible_handoffs) i)
-      | Handoff index -> additions_caught_up
+      | Handoff index -> completion_ready
       /\ leader_removed
       /\ UInt64.t'int index < Seq.length (Slice64.view eligible_handoffs)
       /\ Seq.get (Slice64.view eligible_handoffs) (UInt64.t'int index)

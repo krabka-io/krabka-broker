@@ -1,0 +1,15 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_committed_fetch_excludes_unstable": {
+        "prover": "alt-ergo",
+        "time": 0.082
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_first_unstable_offset": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.008 }
+    }
+  }
+}

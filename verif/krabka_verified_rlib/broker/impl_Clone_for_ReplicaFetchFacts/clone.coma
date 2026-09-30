@@ -4,7 +4,6 @@
 
 use creusot.int.Int32
 use creusot.int.Int16
-use creusot.int.Int64
 use creusot.prelude.Any
 
 type t_ReplicaFetchFacts = {
@@ -13,14 +12,14 @@ type t_ReplicaFetchFacts = {
   target_matches: bool;
   reported_target_matches: bool;
   error_code: Int16.t;
-  diverging_end_offset: Int64.t }
+  diverging_epoch: Int32.t }
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ReplicaFetchFacts [#"/workspace/crates/verified/src/broker.rs" 65 27 65 32] (self: t_ReplicaFetchFacts)
-  (return (x: t_ReplicaFetchFacts)) = (! bb0
+let clone_ReplicaFetchFacts [#"/workspace/crates/verified/src/broker.rs" 65 27 65 32]
+  (self: t_ReplicaFetchFacts) (return (x: t_ReplicaFetchFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReplicaFetchFacts = Any.any_l () | & self: t_ReplicaFetchFacts = self ])
   [ return (result: t_ReplicaFetchFacts) -> (! return {result}) ]

@@ -49,39 +49,10 @@ pub(crate) fn select_voters_from_sorted_racks(
         ));
     }
 
-    let mut selected = Vec::with_capacity(voters);
-    let mut used_nodes = Vec::with_capacity(voters);
-    let mut used_racks = Vec::with_capacity(voters);
-    let Some(local_index) = krabka_verified::wal::select_wal_voter_index(
-        &candidates,
-        &used_nodes,
-        &used_racks,
-        local_node.0,
-        true,
-    ) else {
-        return selected;
-    };
-    let local = candidates[local_index];
-    selected.push(NodeId(local.0));
-    used_nodes.push(local.0);
-    used_racks.push(local.1);
-
-    while selected.len() < voters {
-        let Some(index) = krabka_verified::wal::select_wal_voter_index(
-            &candidates,
-            &used_nodes,
-            &used_racks,
-            local_node.0,
-            false,
-        ) else {
-            break;
-        };
-        let candidate = candidates[index];
-        selected.push(NodeId(candidate.0));
-        used_nodes.push(candidate.0);
-        used_racks.push(candidate.1);
-    }
-    selected
+    krabka_verified::wal::select_wal_voters(&candidates, local_node.0, voters)
+        .into_iter()
+        .map(|(node, _)| NodeId(node))
+        .collect()
 }
 
 #[cfg(test)]
