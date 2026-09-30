@@ -214,10 +214,10 @@ fn parse_connection_request<'a>(
     Some((parsed, span))
 }
 
-fn begin_request(
-    broker: &Broker,
+fn begin_request<'a>(
+    broker: &'a Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
-) -> (std::time::Instant, InFlightGuard) {
+) -> (std::time::Instant, InFlightGuard<'a>) {
     let started = std::time::Instant::now();
     broker.metrics.record_api_request(parsed.api_key);
     // Kafka's `RequestChannel` logs each request at DEBUG on

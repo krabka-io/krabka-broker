@@ -68,6 +68,9 @@ pub struct Segment {
     /// Kafka's `shallowOffsetOfMaxTimestampSoFar`. The time index pairs the
     /// running maximum timestamp with this offset.
     max_timestamp_offset: Offset,
+    /// First record's timestamp, cached for append-time segment rolling.
+    /// Truncation clears it so a replacement first batch gets a fresh clock.
+    first_timestamp: Option<i64>,
     /// Last absolute offset (inclusive) of any batch in this segment.
     last_offset: Offset,
 }
