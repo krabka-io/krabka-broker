@@ -261,14 +261,26 @@ fn ascii_letter(code: u32) -> Option<char> {
 /// - An ASCII letter is the letter itself. `fancy_regex` reads `\x41` and
 ///   `A`, and not the octal `\0101`.
 /// - A bare `]`, which is a member only first in a class, is `\]`.
+/// - In a class, a bare `-` is `\-`. Java reads a `-` that does not join two
+///   members as the character, where `fancy_regex` reads it as a range from
+///   the member before it, whatever that one is: the last char of a `\w` or
+///   `\s` the rewrite has expanded, or the other case of a folded letter.
+/// - In a class, a bare `^` that comes right after the `[` is `\^`. Under
+///   `(?x)` it can, with the white space and comments between the two gone,
+///   and Java reads it as a member where `fancy_regex` reads a negation.
+/// - A bare `[`, which only ends a range, as in `(?x)[+- [b]]`, is `\[`, so
+///   that it does not open a class.
 /// - `\<` and `\>` are `<` and `>`. Java reads a backslash before either as
 ///   the character, and `fancy_regex` as the edge of a word.
 ///
 /// Any other character is `source`.
-pub(super) fn push_member(out: &mut String, source: &[char], code: u32) {
+pub(super) fn push_member(out: &mut String, source: &[char], code: u32, in_class: bool) {
     match (ascii_letter(code), source) {
         (Some(letter), _) => out.push(letter),
         (None, [']']) => out.push_str("\\]"),
+        (None, ['[']) => out.push_str("\\["),
+        (None, ['-']) if in_class => out.push_str("\\-"),
+        (None, ['^']) if in_class && out.ends_with('[') => out.push_str("\\^"),
         (None, ['\\', edge @ ('<' | '>')]) => out.push(*edge),
         _ => out.extend(source),
     }
@@ -280,7 +292,7 @@ pub(super) fn push_member(out: &mut String, source: &[char], code: u32) {
 /// [`push_member`] writes it.
 pub(super) fn push_folded(out: &mut String, source: &[char], code: u32, in_class: bool) {
     let Some(letter) = ascii_letter(code) else {
-        push_member(out, source, code);
+        push_member(out, source, code, in_class);
         return;
     };
     let (lower, upper) = (letter.to_ascii_lowercase(), letter.to_ascii_uppercase());
@@ -506,28 +518,41 @@ mod tests {
     }
 
     /// A member is written as `fancy_regex` reads it: `]` first in a class is
-    /// `\]`, `\<` and `\>` are the bare characters, and an ASCII letter is the
-    /// letter whatever escape named it.
+    /// `\]`, `\<` and `\>` are the bare characters, an ASCII letter is the
+    /// letter whatever escape named it, a `-` in a class is `\-`, a `^` right
+    /// after the `[` of a class is `\^`, and a `[` that ends a range is `\[`.
     #[test]
     fn push_member_writes_what_fancy_regex_reads() {
-        // (source, code, written)
+        // (written so far, source, code, in a class, written after)
         let cases = [
-            ("]", 0x5D, "\\]"),
-            ("\\]", 0x5D, "\\]"),
-            ("\\<", 0x3C, "<"),
-            ("\\>", 0x3E, ">"),
-            ("<", 0x3C, "<"),
-            ("\\.", 0x2E, "\\."),
-            ("\\x41", 0x41, "A"),
-            ("\\0101", 0x41, "A"),
-            ("\\t", 0x09, "\\t"),
-            ("\u{e9}", 0xE9, "\u{e9}"),
+            ("", "]", 0x5D, false, "\\]"),
+            ("", "\\]", 0x5D, false, "\\]"),
+            ("", "\\<", 0x3C, false, "<"),
+            ("", "\\>", 0x3E, false, ">"),
+            ("", "<", 0x3C, false, "<"),
+            ("", "\\.", 0x2E, false, "\\."),
+            ("", "\\x41", 0x41, false, "A"),
+            ("", "\\0101", 0x41, false, "A"),
+            ("", "\\t", 0x09, false, "\\t"),
+            ("", "\u{e9}", 0xE9, false, "\u{e9}"),
+            ("", "[", 0x5B, true, "\\["),
+            ("", "-", 0x2D, true, "\\-"),
+            ("[a", "-", 0x2D, true, "[a\\-"),
+            ("[0-9A-Za-z_", "-", 0x2D, true, "[0-9A-Za-z_\\-"),
+            ("", "-", 0x2D, false, "-"),
+            ("", "\\-", 0x2D, true, "\\-"),
+            ("[", "^", 0x5E, true, "[\\^"),
+            ("[a[", "^", 0x5E, true, "[a[\\^"),
+            ("[a", "^", 0x5E, true, "[a^"),
+            ("[^", "^", 0x5E, true, "[^^"),
+            ("\\[", "^", 0x5E, false, "\\[^"),
+            ("", "^", 0x5E, false, "^"),
         ];
-        for (source, code, expected) in cases {
+        for (before, source, code, in_class, expected) in cases {
             let chars: Vec<char> = source.chars().collect();
-            let mut out = String::new();
-            push_member(&mut out, &chars, code);
-            check!(out == expected, "{source:?}");
+            let mut out = before.to_owned();
+            push_member(&mut out, &chars, code, in_class);
+            check!(out == expected, "{before:?} then {source:?}");
         }
     }
 }

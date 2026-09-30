@@ -239,8 +239,8 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
-/// for a group opener Java refuses, or a `\N{name}`, which the rewrite cannot
-/// read.
+/// for a group opener Java refuses, a `)` that closes no group, a class range
+/// Java refuses (`[a-\w]`), or a `\N{name}`, which the rewrite cannot read.
 ///
 /// `fancy_regex` accepts Python and Oniguruma forms Java refuses, such as
 /// `(?P<name>x)`, `(?P=name)`, `(?'name'x)` and `(?~x)`, so every `(?` outside
@@ -263,8 +263,10 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 /// - `(?i)` (`CASE_INSENSITIVE`) folds ASCII case only, where `fancy_regex`'s
 ///   `i` folds Unicode case, until `(?u)` (`UNICODE_CASE`) or `(?U)` asks for
 ///   Unicode folding. While an ASCII fold is in force the rewrite writes both
-///   cases of each ASCII letter itself, and a backreference as `(?i:\1)`. See
-///   [`java_fold`] for the two places where that differs from Java.
+///   cases of each ASCII letter itself, and a backreference as `(?i:\1)`. Two
+///   differences are left, which [`java_fold`] describes: `\w`, `\W`,
+///   `\p{Lower}` and `\p{Upper}` inside a class under `(?iu)`, and a non-ASCII
+///   letter that a backreference matches in the other case under `(?i)`.
 /// - Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
 ///   comments Java ignores, so that the text of a comment is never read as
 ///   pattern.
@@ -326,8 +328,10 @@ impl Translator<'_> {
         match c {
             '\\' => self.escape()?,
             '(' if !self.in_class() => self.group()?,
+            // Every `(` that opens a group pushed its flags, so an empty stack
+            // is a `)` with no group: `Unmatched closing ')'` in Java.
             ')' if !self.in_class() => {
-                self.scope = self.outer.pop().unwrap_or(self.scope);
+                self.scope = self.outer.pop()?;
                 self.copy(1);
             }
             '[' => self.open_class(),
@@ -341,7 +345,7 @@ impl Translator<'_> {
                 self.out.push_str(JAVA_DOT);
                 self.at += 1;
             }
-            _ => self.atom(u32::from(c), 1),
+            _ => self.atom(u32::from(c), 1)?,
         }
         Some(())
     }
@@ -372,7 +376,7 @@ impl Translator<'_> {
                 self.copy(len);
                 self.out.push(')');
             }
-            Escape::Char(code) => self.atom(code, len),
+            Escape::Char(code) => self.atom(code, len)?,
             Escape::Property { name, negated } => {
                 match java_fold::property_class(&name, negated, in_class, self.scope) {
                     Some(class) => {
@@ -402,50 +406,67 @@ impl Translator<'_> {
 
     /// One char, `len` chars long in the pattern and standing for `code`, and
     /// in a class the range it starts. Under an ASCII fold a letter is both of
-    /// its cases, and a range takes the other case of the letters in it.
-    fn atom(&mut self, code: u32, len: usize) {
+    /// its cases, and a range takes the other case of the letters in it. `None`
+    /// for a range that Java refuses.
+    fn atom(&mut self, code: u32, len: usize) -> Option<()> {
         let (chars, start, in_class) = (self.chars, self.at, self.in_class());
         let fold = self.scope.ascii_fold();
         let after = start + len;
         let range = if in_class {
             self.range_end(after)
         } else {
-            None
+            RangeEnd::Single
         };
-        if let Some((end, end_code, end_len)) = range {
-            let (first, last) = (&chars[start..after], &chars[end..end + end_len]);
-            java_fold::push_member(&mut self.out, first, code);
-            self.out.push('-');
-            java_fold::push_member(&mut self.out, last, end_code);
-            if fold {
-                java_fold::push_other_case_ranges(&mut self.out, code, end_code);
+        match range {
+            RangeEnd::Illegal => return None,
+            RangeEnd::To {
+                end,
+                code: end_code,
+                len: end_len,
+            } => {
+                let (first, last) = (&chars[start..after], &chars[end..end + end_len]);
+                java_fold::push_member(&mut self.out, first, code, true);
+                self.out.push('-');
+                java_fold::push_member(&mut self.out, last, end_code, true);
+                if fold {
+                    java_fold::push_other_case_ranges(&mut self.out, code, end_code);
+                }
+                self.at = end + end_len;
             }
-            self.at = end + end_len;
-        } else {
-            let source = &chars[start..after];
-            if fold {
-                java_fold::push_folded(&mut self.out, source, code, in_class);
-            } else {
-                java_fold::push_member(&mut self.out, source, code);
+            RangeEnd::Single => {
+                let source = &chars[start..after];
+                if fold {
+                    java_fold::push_folded(&mut self.out, source, code, in_class);
+                } else {
+                    java_fold::push_member(&mut self.out, source, code, in_class);
+                }
+                self.at = after;
             }
-            self.at = after;
         }
+        Some(())
     }
 
-    /// Where the range that starts before `after` ends, and the code and the
-    /// length of its last char. Java reads a `-` after a member and before a
-    /// char that is not `]` or `[` as the range of the two.
-    fn range_end(&self, after: usize) -> Option<(usize, u32, usize)> {
+    /// How the class member that ends before `after` goes on. Java reads a `-`
+    /// after a member and before a char that is not `]` or `[` as the range of
+    /// the two. It looks at the char right after the `-`, without skipping
+    /// `(?x)` white space, so `(?x)[a- ]` is a range from `a` to the `]` past
+    /// the space, and an illegal one.
+    fn range_end(&self, after: usize) -> RangeEnd {
         let dash = after + self.ignored_len(after);
         if self.chars.get(dash) != Some(&'-') {
-            return None;
+            return RangeEnd::Single;
+        }
+        if matches!(self.chars.get(dash + 1), None | Some(']' | '[')) {
+            return RangeEnd::Single;
         }
         let end = dash + 1 + self.ignored_len(dash + 1);
-        if matches!(self.chars.get(end), Some(']' | '[')) {
-            return None;
+        match java_fold::read_member(self.chars, end) {
+            Some((code, len)) => RangeEnd::To { end, code, len },
+            // The end is an escape for more than one char, or none Java
+            // reads: `[a-\w]` is `Illegal character range`, and `[a-\p{L}]`
+            // is `Illegal/unsupported escape sequence`.
+            None => RangeEnd::Illegal,
         }
-        let (code, len) = java_fold::read_member(self.chars, end)?;
-        Some((end, code, len))
     }
 
     /// A `[`, which opens a class, or a class in a class.
@@ -515,6 +536,18 @@ impl Translator<'_> {
         self.at += 2 + group.len;
         Some(())
     }
+}
+
+/// What a `-` after a class member makes of the member, as
+/// [`Translator::range_end`] reads it.
+enum RangeEnd {
+    /// No range: there is no `-`, or it is a member of its own.
+    Single,
+    /// A range that ends with the char of `len` chars at `end`, which stands
+    /// for `code`.
+    To { end: usize, code: u32, len: usize },
+    /// A range Java refuses.
+    Illegal,
 }
 
 /// The Java flags that change what [`java_to_fancy`] writes for a construct.
@@ -793,6 +826,15 @@ mod tests {
             ("match", "client_id=(?<1n>x)", illegal("client_id=(?<1n>x)")),
             ("match", "client_id=[(?P<n>]", Ok(())),
             ("match", "client_id=\\Q(?P<\\E", Ok(())),
+            // A `)` that closes no group is Java's `Unmatched closing ')'`, and
+            // a range that ends in a shorthand class is `Illegal character
+            // range`; a `)` in a class or an escape is a character.
+            ("match", "client_id=a)|(b", illegal("client_id=a)|(b")),
+            ("match", "client_id=(a))", illegal("client_id=(a))")),
+            ("match", "client_id=[a-\\w]", illegal("client_id=[a-\\w]")),
+            ("match", "client_id=[)]", Ok(())),
+            ("match", "client_id=\\)", Ok(())),
+            ("match", "client_id=[\\w-.]", Ok(())),
         ];
         for (key, value, expected) in cases {
             check!(validate_one(key, value) == expected, "{key}={value:?}");

@@ -641,6 +641,212 @@ mod tests {
         }
     }
 
+    /// A `^` that Java reads as a class member stays one under `(?x)`, where
+    /// the white space and comments between it and the `[` are dropped, and a
+    /// `-` that does not join two members is the character, whatever member
+    /// comes before it, `\w` and `\s` included. Each row is `Pattern.matches`
+    /// on JDK 17.
+    #[test]
+    fn matches_reads_a_literal_caret_and_dash_in_a_class_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // `^` is a negation only right after the `[`
+            ("(?x)[ ^a]", "^", true),
+            ("(?x)[ ^a]", "a", true),
+            ("(?x)[ ^a]", "b", false),
+            ("(?ix)[ ^a]", "^", true),
+            ("(?ix)[ ^a]", "A", true),
+            ("(?ix)[ ^a]", "b", false),
+            ("(?ix)[#c\n^a]", "^", true),
+            ("(?ix)[#c\n^a]", "A", true),
+            ("(?ix)[#c\n^a]", "b", false),
+            ("(?x)[ ^-b]", "^", true),
+            ("(?x)[ ^-b]", "a", true),
+            ("(?x)[ ^-b]", "c", false),
+            ("(?x)[a[ ^b]]", "^", true),
+            ("(?x)[a[ ^b]]", "b", true),
+            ("(?x)[a[ ^b]]", "c", false),
+            ("(?x)[^ a]", "a", false),
+            ("(?x)[^ a]", "b", true),
+            ("(?x)[^ ^a]", "^", false),
+            ("(?x)[^ ^a]", "b", true),
+            ("[\\[^a]", "^", true),
+            ("[\\[^a]", "b", false),
+            // outside a class it is an anchor, after a `\[` too
+            ("\\[^a", "[a", false),
+            ("\\[^a", "[^a", false),
+            ("(?x)\\[ ^a", "[^a", false),
+            // a `-` that is not a range operator, after `\w`, `\s`, a folded
+            // letter, a property, and a range
+            ("[\\w-.]", "-", true),
+            ("[\\w-.]", ".", true),
+            ("[\\w-.]", "a", true),
+            ("[\\w-.]", ",", false),
+            ("[\\w-a]", "-", true),
+            ("[\\w-a]", "a", true),
+            ("[\\w-a]", "`", false),
+            ("[\\s-.]", "-", true),
+            ("[\\s-.]", ".", true),
+            ("[\\s-.]", " ", true),
+            ("[\\s-.]", ",", false),
+            ("(?i)[a-[b]]", "-", true),
+            ("(?i)[a-[b]]", "A", true),
+            ("(?i)[a-[b]]", "B", true),
+            ("(?i)[a-[b]]", "X", false),
+            ("(?i)[a-[b]]", "[", false),
+            ("[\\p{Lower}-z]", "-", true),
+            ("[\\p{Lower}-z]", ".", false),
+            ("[\\p{L}-z]", "-", true),
+            ("[\\p{L}-z]", "\u{e9}", true),
+            ("[\\p{L}-z]", ".", false),
+            ("[\\w-\\d]", "-", true),
+            ("[\\d-a]", "-", true),
+            ("[\\d-a]", "a", true),
+            ("[\\d-a]", "b", false),
+            ("[a-b-c]", "-", true),
+            ("[a-b-c]", "c", true),
+            ("[a-b-c]", "d", false),
+            ("(?i)[a-b-c]", "-", true),
+            ("(?i)[a-b-c]", "C", true),
+            ("(?i)[a-b-c]", "D", false),
+            ("[a-c-e]", "-", true),
+            ("[a-c-e]", "b", true),
+            ("[a-c-e]", "d", false),
+            ("[a-c-e]", "e", true),
+            // first, last and negated
+            ("[-a]", "-", true),
+            ("[^-a]", "-", false),
+            ("[^-a]", "b", true),
+            ("[a-]", "-", true),
+            // a `-` as either end of a range
+            ("[+--]", ",", true),
+            ("[+--]", "-", true),
+            ("[+--]", ".", false),
+            ("(?i)[+--]", "-", true),
+            ("[--/]", ".", true),
+            ("[--/]", "0", false),
+            ("[!--]", ",", true),
+            ("[!--]", ".", false),
+            // outside a class it is a plain character
+            ("a-b", "a-b", true),
+            ("(?i)a-b", "A-B", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Under `(?x)` Java tells a `-` that ends a class from one that starts a
+    /// range by the char right after it, without skipping white space or a
+    /// comment: `(?x)[+- ]]` is the range from `+` to the first `]`, then the
+    /// class ends at the second. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn matches_reads_a_range_that_ends_past_x_flag_white_space_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("(?x)[+- ]]", ",", true),
+            ("(?x)[+- ]]", "a", false),
+            ("(?x)[+- ]]", "]", true),
+            ("(?x)[+- ]]", "-", true),
+            ("(?x)[+- [b]]", "X]", true),
+            ("(?x)[+- [b]]", "b]", true),
+            ("(?x)[+- [b]]", "c]", false),
+            ("(?x)[+- [b]]", "-]", true),
+            ("(?x)[+-#c\n]]", "a", false),
+            ("(?x)[+-#c\n]]", ",", true),
+            ("(?x)[+-#c\n]]", "]", true),
+            ("(?x)[a-b- ]", "-", true),
+            ("(?x)[a-b- ]", "b", true),
+            ("(?x)[a-b- ]", "c", false),
+            ("(?x)[a - c]", "b", true),
+            ("(?x)[a - c]", "-", false),
+            ("(?x)[a - c]", " ", false),
+            ("(?x)[a-\n b]", "a", true),
+            ("(?x)[a-\n b]", "b", true),
+            ("(?x)[a-\n b]", "-", false),
+            ("(?x)[a-#c\nb]", "b", true),
+            ("(?x)[a-#c\nb]", "-", false),
+            ("(?x)[a-]", "-", true),
+            ("(?x)[a-[b]]", "-", true),
+            ("(?x)[a-[b]]", "b", true),
+            ("(?x)[a-[b]]", "c", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+        // The range ends at the `]` or the `[` past the white space, which
+        // Java refuses as a reversed range or an unclosed class.
+        for source in [
+            "(?x)[.- ]",
+            "(?x)[a- ]",
+            "(?x)[a-\n]",
+            "(?x)[.-\n]",
+            "(?x)[_- [b]]",
+            "(?x)[a-#c\n]]",
+        ] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
+        }
+    }
+
+    /// A `)` with no `(` before it is `Unmatched closing ')'` in Java, which
+    /// the `\A(?:...)\z` wrapper would otherwise read as the end of a group,
+    /// and a range that ends in `\w`, `\s` or `\p{..}` is `Illegal character
+    /// range` there. Each row is refused by `Pattern.compile` on JDK 17.
+    #[test]
+    fn a_stray_closing_paren_or_a_range_to_a_shorthand_does_not_compile() {
+        for source in [
+            "a)|(b",
+            "a)",
+            "(a))",
+            "a(?i))",
+            ")",
+            "(?x)a )",
+            "(?:a))",
+            "(?=a))",
+            "(?i:a))",
+            "[a--b]",
+            "[a-\\w]",
+            "[a-\\d]",
+            "[!-\\d]",
+            "[+-\\w]",
+            "[a-\\p{L}]",
+            "[a-\\s]",
+            "[!-\\W]",
+            "[--\\w]",
+            "(?i)[a-\\w]",
+            "(?x)[a- \\w]",
+        ] {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
+        }
+    }
+
+    /// A `)` that Java reads as a member, or as part of a comment, is not
+    /// stray. Each row is `Pattern.matches` on JDK 17.
+    #[test]
+    fn a_closing_paren_that_closes_no_group_is_still_a_character_where_java_reads_one() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("[)]", ")", true),
+            ("\\)", ")", true),
+            ("\\Q)\\E", ")", true),
+            ("(?x)a #c)\n", "a", true),
+            ("(a)|(b)", "b", true),
+            ("(?i)(a)|b", "B", true),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
     /// A backreference under an ASCII fold is written `(?i:\1)`, and
     /// `fancy_regex`'s `i` compares the text of the group Unicode-insensitively
     /// when either text is not ASCII. So `(?i)(é)\1` matches `éÉ` here, where
