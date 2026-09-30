@@ -79,3 +79,7 @@ mod epoch_replay;
 mod offset_seek;
 
 mod constructed_tiered_timestamp;
+
+mod validated_time_scan;
+
+mod trim_witnesses;

@@ -3,8 +3,7 @@ use creusot_std::prelude::*;
 use super::{
     DeleteRecordsTrimApplication, DeleteRecordsTrimDecision, DeleteRecordsTrimFacts,
     ProducerReloadRange, delete_records_trim_application, delete_records_trim_decision,
-    diskless_trim_decision, producer_snapshot_latest_index, producer_snapshot_reload_keeps,
-    producer_snapshot_replay_start,
+    diskless_trim_decision, producer_snapshot_latest_index, producer_snapshot_replay_start,
 };
 
 /// Fold completed durable steps, including arbitrary pauses/failed attempts.
@@ -60,49 +59,77 @@ pub(super) fn trim_steps_converge(
     (wal, local)
 }
 
-/// Admission and two completed reconciliation steps preserve HWM/delivery
-/// bounds, make the same request a no-op, and bound producer reload selection
-/// and its cursor above the new floor. Prior store frontiers must themselves be
-/// bounded; admission alone cannot establish that. Snapshot contents and whole
-/// batches read around a cursor may still contain historical producer metadata.
-#[requires(0 <= wal_start@ && wal_start@ <= facts.high_watermark@
-    && wal_start@ <= facts.log_end@)]
-#[requires(0 <= local_start@ && local_start@ <= facts.high_watermark@
-    && local_start@ <= facts.log_end@)]
-#[requires(facts.has_delivery_watermark ==> wal_start@ <= facts.delivery_watermark@
-    && local_start@ <= facts.delivery_watermark@)]
-#[ensures(result)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn trim_well_formed(facts: DeleteRecordsTrimFacts) -> bool {
+    pearlite! { facts.requested@ >= -1 && facts.current_start@ >= 0
+    && facts.current_start@ <= facts.high_watermark@ && facts.high_watermark@ <= facts.log_end@
+    && (!facts.has_delivery_watermark || facts.current_start@ <= facts.delivery_watermark@) }
+}
+
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn trim_frontier(facts: DeleteRecordsTrimFacts) -> Int {
+    pearlite! {
+        let resolved = if facts.requested@ == -1 { facts.high_watermark@ } else { facts.requested@ };
+        let bounded = if facts.has_delivery_watermark { resolved.min(facts.delivery_watermark@) } else { resolved };
+        bounded.max(facts.current_start@)
+    }
+}
+
+/// Admit logical deletion, complete reconciliation and return its actual floor,
+/// latest retained snapshot index and exact replay cursor. Rejections preserve
+/// their precise admission reason. Store frontiers must already obey the caps;
+/// durable host completion, snapshot contents and whole-batch replay are external.
+#[requires(0 <= wal_start@ && wal_start@ <= facts.high_watermark@ && wal_start@ <= facts.log_end@)]
+#[requires(0 <= local_start@ && local_start@ <= facts.high_watermark@ && local_start@ <= facts.log_end@)]
+#[requires(facts.has_delivery_watermark ==> wal_start@ <= facts.delivery_watermark@ && local_start@ <= facts.delivery_watermark@)]
+#[ensures(match result {
+    Err(error) => match error {
+        DeleteRecordsTrimDecision::RejectMalformed => !trim_well_formed(facts),
+        DeleteRecordsTrimDecision::RejectOutOfRange => trim_well_formed(facts) && facts.requested@ != -1 && facts.requested@ > facts.high_watermark@,
+        _ => false,
+    },
+    Ok((floor, selected, cursor)) => trim_well_formed(facts)
+        && (facts.requested@ == -1 || facts.requested@ <= facts.high_watermark@)
+        && floor@ == trim_frontier(facts).max(wal_start@).max(local_start@)
+        && 0 <= floor@ && floor@ <= cursor@ && cursor@ <= facts.log_end@
+        && floor@ <= facts.high_watermark@
+        && (!facts.has_delivery_watermark || floor@ <= facts.delivery_watermark@)
+        && match selected {
+            None => cursor == floor && forall<i: Int> 0 <= i && i < snapshots@.len()
+                ==> !(floor@ < snapshots@[i]@ && snapshots@[i]@ <= facts.log_end@),
+            Some(index) => index@ < snapshots@.len() && floor@ < snapshots@[index@]@ && snapshots@[index@]@ <= facts.log_end@
+                && cursor == snapshots@[index@]
+                && forall<i: Int> 0 <= i && i < snapshots@.len() && floor@ < snapshots@[i]@ && snapshots@[i]@ <= facts.log_end@
+                    ==> snapshots@[i]@ <= snapshots@[index@]@,
+        },
+})]
 pub(super) fn admitted_trim_bounds_reload_and_retry(
     facts: DeleteRecordsTrimFacts,
     wal_start: i64,
     local_start: i64,
     snapshots: &[i64],
-) -> bool {
+) -> Result<(i64, Option<usize>, i64), DeleteRecordsTrimDecision> {
     let target = match delete_records_trim_decision(facts) {
         DeleteRecordsTrimDecision::Apply { frontier }
         | DeleteRecordsTrimDecision::Noop { frontier } => frontier,
-        DeleteRecordsTrimDecision::RejectMalformed
-        | DeleteRecordsTrimDecision::RejectOutOfRange => return true,
+        error => return Err(error),
     };
     let (wal, local) = trim_steps_converge(target, wal_start, local_start, &[true, true]);
-    if wal != local
-        || local > facts.high_watermark
-        || local > facts.log_end
-        || (facts.has_delivery_watermark && local > facts.delivery_watermark)
-    {
-        return false;
-    }
-    match delete_records_trim_decision(DeleteRecordsTrimFacts {
+    let _retry = delete_records_trim_decision(DeleteRecordsTrimFacts {
         current_start: local,
         ..facts
-    }) {
-        DeleteRecordsTrimDecision::Noop { frontier } if frontier == local => {}
-        _ => return false,
-    }
-    match delete_records_trim_application(target, wal, local) {
-        DeleteRecordsTrimApplication::Complete { frontier } if frontier == local => {}
-        _ => return false,
-    }
+    });
+    let _application = delete_records_trim_application(target, wal, local);
+    proof_assert!(
+        _retry == DeleteRecordsTrimDecision::Noop { frontier: local }
+            && _application == DeleteRecordsTrimApplication::Complete { frontier: local }
+    );
     let range = ProducerReloadRange {
         log_start: local,
         local_start: local,
@@ -110,24 +137,35 @@ pub(super) fn admitted_trim_bounds_reload_and_retry(
     };
     let selected = producer_snapshot_latest_index(snapshots, range);
     let snapshot = selected.map(|index| snapshots[index]);
-    if let Some(offset) = snapshot
-        && (!producer_snapshot_reload_keeps(offset, range) || offset <= local)
-    {
-        return false;
-    }
-    match producer_snapshot_replay_start(range, snapshot) {
-        Some(cursor) => local <= cursor && cursor <= facts.log_end,
-        None => false,
-    }
+    let cursor = producer_snapshot_replay_start(range, snapshot)
+        .expect("completed trim preserves reload bounds");
+    Ok((local, selected, cursor))
 }
 
-/// Eviction of the local WAL/cache stays inside committed object coverage and
-/// the HWM safety lag after arbitrary completed/paused reconciliation steps.
-/// Previous WAL eviction must obey those same bounds. This changes physical
-/// availability; it does not change the logical `DeleteRecords` floor.
+/// Return the actual physical WAL/cache frontiers after the eviction trace.
+/// A disabled plan returns unchanged frontiers, including an inherited invalid
+/// cache start; it cannot claim that unrelated inherited state is newly safe.
+/// Enabled plans preserve object/HWM caps, progress and exact completion.
+/// Physical eviction does not advance the logical deletion floor; durable
+/// checkpoint publication and committed object coverage remain host obligations.
 #[requires(0 <= wal_start@ && wal_start@ <= indexed_frontier@)]
 #[requires(wal_start@ + (if safety_lag@ < 0 { 0 } else { safety_lag@ }) <= high_watermark@)]
-#[ensures(result)]
+#[ensures(result.0@ >= wal_start@)]
+#[ensures(result.1@ >= local_start@)]
+#[ensures({
+    let lag = safety_lag@.max(0);
+    let enabled = local_start@ >= 0 && local_start@ < indexed_frontier@.min(high_watermark@ - lag);
+    if !enabled { result == (wal_start, local_start) }
+    else { let frontier = indexed_frontier@.min(high_watermark@ - lag).max(wal_start@);
+        result.0@ <= frontier && result.1@ <= frontier
+        && result.0@ <= indexed_frontier@ && result.1@ <= indexed_frontier@
+        && result.0@ + lag <= high_watermark@ && result.1@ + lag <= high_watermark@
+        && ((exists<i: Int> 0 <= i && i < applied@.len() && applied@[i]) ==> result.0@ == frontier)
+        && ((exists<i: Int, j: Int> 0 <= i && i < j && j < applied@.len() && applied@[i] && applied@[j])
+            ==> result.0@ == frontier && result.1@ == frontier)
+        && ((forall<i: Int> 0 <= i && i < applied@.len() ==> !applied@[i]) ==> result == (wal_start, local_start))
+    }
+})]
 pub(super) fn diskless_trim_reconciliation_preserves_coverage(
     indexed_frontier: i64,
     high_watermark: i64,
@@ -135,15 +173,10 @@ pub(super) fn diskless_trim_reconciliation_preserves_coverage(
     wal_start: i64,
     local_start: i64,
     applied: &[bool],
-) -> bool {
+) -> (i64, i64) {
     let plan = diskless_trim_decision(indexed_frontier, high_watermark, safety_lag, local_start);
     if !plan.should_trim {
-        return true;
+        return (wal_start, local_start);
     }
-    let lag = safety_lag.max(0);
-    let (wal, local) = trim_steps_converge(plan.target, wal_start, local_start, applied);
-    wal <= indexed_frontier
-        && local <= indexed_frontier
-        && wal <= high_watermark - lag
-        && local <= high_watermark - lag
+    trim_steps_converge(plan.target, wal_start, local_start, applied)
 }

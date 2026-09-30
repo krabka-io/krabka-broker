@@ -2,8 +2,6 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_eq_Option_usize": { "prover": "alt-ergo", "time": 0.006 },
-      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.006 },
       "vc_index_slice_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.005 },
       "vc_index_slice_tup2_i64_u32'0": {
         "prover": "alt-ergo",
@@ -18,8 +16,24 @@
         "time": 0.007
       },
       "vc_remote_timestamp_scan_preserves_first": {
-        "prover": "z3",
-        "time": 0.525
+        "tactic": "compute_specified",
+        "children": [
+          {
+            "tactic": "split_vc",
+            "children": [
+              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.009 },
+              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.008 },
+              { "prover": "alt-ergo", "time": 0.009 },
+              { "prover": "alt-ergo", "time": 0.02 },
+              { "prover": "z3", "time": 0.03 },
+              { "prover": "alt-ergo", "time": 0.05 },
+              { "prover": "alt-ergo", "time": 0.062 }
+            ]
+          }
+        ]
       },
       "vc_time_index_scan_start": { "prover": "alt-ergo", "time": 0.006 }
     }

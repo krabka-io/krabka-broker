@@ -4,10 +4,10 @@ The proof suite contains substantial search, conservation, progress, and quorum 
 
 ## Scope and method
 
-This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds fifty-one cross-module compositions. The 28
+This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds fifty-four cross-module compositions. The 28
 sources with at least 300 lines now use matching subdirectories for kernels
 and tests; the public module paths remain the same. Composition theorems are
-grouped into 33 topic files. The layout-only move preserved all 305 function bodies and
+grouped into 36 topic files. The layout-only move preserved all 305 function bodies and
 contracts, passed all 264 tests, and preserved the 3,625-entry mutation
 inventory. Saved proof sessions and catalog links follow the new paths.
 Fresh generation and the final two-worker no-cache saved-session replay passed
@@ -132,15 +132,18 @@ A specification is not automatically weak because it resembles a short function.
 | `constructed_wal_placement_is_installable` | Returns the actual node/rack placement, exact node-ID projection, and exact installer admission. Selected identities and racks are distinct; incomplete nonempty selections block every remaining candidate. | Faithful node/rack metadata projection and durable membership transitions remain external. Greedy selection is maximal, not globally maximum when metadata conflicts; the contract permits tied choices rather than pinning full greedy order. |
 | `wal_placement_survives_one_rack_loss` | Consumes that witness and returns exactly all surviving node IDs in placement order, installer admission and quorum capacity. Any one rack removes at most one voter; every installed configuration of at least three voters retains its original majority. Incomplete installation cannot claim quorum capacity. | Physical failure-domain identity, survivor communication, fsync, election scheduling and durable membership transitions remain external. This is capacity under one-rack loss, not unconditional availability. |
 | `trim_steps_converge` | Arbitrary traces of completed/paused steps keep a fixed global frontier, never regress either store, catch WAL up after one completed step, and catch both stores up after two. Local advancement requires WAL already at the frontier; replay after completion cannot advance either. | A completed step durably applies exactly the selected store frontier. Paused/failed entries leave observed state unchanged; partial I/O, checkpoint durability, acknowledgement loss, and concurrent mutation remain external. This is an aggregate theorem over the existing application kernel. |
-| `admitted_trim_bounds_reload_and_retry` | Admission plus two completed reconciliation steps preserve HWM/delivery/log-end bounds, make the same request a Noop and application Complete, exclude snapshots at/below the new floor, and bound the producer replay cursor inside the remaining log. | Both prior store frontiers obey the caps. The post-trim logical floor is the reconciled floor; diskless local-cache eviction has a separate logical floor. Snapshot bytes and producer history, whole-batch replay, and durable host application remain external. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
-| `diskless_trim_reconciliation_preserves_coverage` | Diskless trim selection plus arbitrary completed/paused reconciliation steps keeps both physical frontiers inside committed object coverage and behind the clamped HWM safety lag. | Prior WAL eviction obeys those same caps; committed index/object coverage is accurate. This is physical eviction, not logical deletion; PUT/index/checkpoint persistence remains external. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `admitted_trim_bounds_reload_and_retry` | Rejects with the actual admission reason; accepted requests export the exact completed logical floor, latest retained snapshot index and replay cursor, bounded by HWM/delivery/end. | Prior store frontiers obey those caps. Snapshot contents, durable host completion and whole-batch replay remain external; the producer replay cursor is not a data-read floor. |
+| `diskless_trim_reconciliation_preserves_coverage` | Exports actual physical WAL/cache frontiers, exact unchanged state for disabled plans and bounded progress/completion for enabled traces. | Prior WAL eviction obeys coverage/lag bounds. A disabled plan cannot repair unsafe inherited cache state. Committed object coverage and durable checkpoint completion remain external; physical eviction does not change the logical floor. |
 | `running_maximum_index_entry` | The actual earliest-maximum selector constructs a sparse row that bounds every record through its batch and at/before its indexed offset. | Ordered offsets and accurate complete record timestamps; the indexed row may name the batch base while its prefix includes the entire batch. |
 | `indexed_timestamp_scan_finds_first` | A strict-predecessor index cursor plus the existing record selector returns the global earliest qualifying record, or establishes no match. Timestamp regressions and offset gaps are allowed. | Every sparse maximum bounds records strictly before its offset; the scan reads the complete suffix of the same log. |
-| `remote_timestamp_scan_preserves_first` | The real remote candidate-count kernel and its floor adapter preserve the global first matching record, even with offset padding and unsorted conservative timestamps. | Every row with earlier records must bound those timestamps; zero-offset padding imposes no record bound. A complete suffix of the same log must be read. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
-| `validated_remote_and_local_time_starts_agree` | Folding the actual archive row validator establishes that remote linear-prefix selection and local strict binary search choose identical scan starts. | Validated rows exclude raw trailing padding. Agreement does not establish that maxima are truthful or that record bytes are complete. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `remote_timestamp_scan_preserves_first` | Returns the actual counted prefix, scan floor and globally first matching record, even with offset padding and unsorted conservative timestamps. Records below the returned floor cannot match. | Every row with earlier records must bound those timestamps; zero-offset padding imposes no record bound. A complete suffix of the same log must be read. |
+| `validated_remote_and_local_time_starts_agree` | Rejects exactly structurally invalid archives; valid inputs return the actual count and identical remote/local scan floors, with global row ordering and extent bounds. | Canonical rows exclude raw trailing padding. Agreement alone does not establish truthful prefix bounds or complete record bytes. |
 | `constructed_time_index_preserves_first` | Returns the actual sparse rows with exact attained prefix maxima, source offset coordinates, monotone row columns, global prefix bounds and the globally first matching record or complete absence. | Complete faithfully decoded ordered record offsets and valid indexed/through positions. Rows here name actual record coordinates; header-only or padding coordinates, file encoding and I/O remain external. |
 | `constructed_index_retained_candidate` | Consumes constructed index bounds to return the original index of the first retained matching record. A pruned match cannot hide a later retained match; no result excludes every retained match. | Coherent nonnegative base/floor and representable absolute record coordinates. Complete decoded windows and faithful row construction remain external. |
 | `constructed_tiered_timestamp_preserves_first` | Consumes each tier's retained result, chooses the least absolute offset in their union and applies exclusive ListOffsets visibility while preserving the chosen record's timestamp and supplied epoch. Unknown excludes all retained visible matches. | Individually ordered complete tier windows may overlap and timestamps may regress. Cross-tier record consistency, epoch lookup, frontiers, byte decoding, I/O errors and publication remain host obligations. |
+| `validated_retained_time_scan_agrees` | Checks decoded record shape, order, extent and every row’s prefix bound; consumes actual remote/local cursors to return the original first retained match, or exclude every retained match. Invalid inputs are rejected exactly. | Complete faithful decoding and enumeration, archived-byte parsing and physical reads remain external. Structural validity cannot substitute for the semantic bound checks. |
+| `completed_trim_preserves_retained_timestamp` | Consumes the completed logical trim and snapshot replay witness to preserve the first retained timestamp match, including matches below the producer replay cursor. | Complete decoded windows, snapshot contents and coherent durable trim completion remain external. |
+| `physical_eviction_routes_retained_timestamp` | Consumes physical frontiers to route the unchanged logical first match to surviving cache or committed remote coverage, preserving coverage/lag bounds. | Both inherited physical frontiers obey those bounds. Correct object coverage, complete record decoding and successful physical I/O remain external. |
 
 The implication-shaped checks explicitly return true on rejected input. They prove a property of admitted operations, not successful admission of every input. `composition_boundary_witnesses` and `restored_state_composition_boundaries` exercise successful paths, corruption, empty sets, exact boundaries, epoch gating, repeated timestamps, cross-segment/interleaved transactions, stale snapshots, and integer exhaustion. This separates legitimate conditional safety from a vacuous all-reject decision: the decision kernels themselves still have admission-completeness contracts, and the token negative control checks that distinction directly.
 
@@ -491,7 +494,7 @@ restore/retry controls. At that checkpoint, replacing all fifteen boolean-only
 bodies with `true` proved all fifteen affected files and passed all 48 composition
 tests. The append and reservation entries now return concrete witnesses with
 exact relational postconditions and independent arithmetic oracles. The
-remaining five contracts still need exported relations or witnesses. The
+remaining time-cursor contract still needs exported relations or witnesses. The
 thirteen-function checkpoint control proved all thirteen replacements and passed
 all 53 composition tests. The read-committed Fetch entry has since been upgraded
 and consumed by the stability/abort-source composition below. At the twelve-entry checkpoint, repeating the
@@ -509,10 +512,6 @@ restored byte-for-byte:
 
 
 - `validated_time_cursors_are_monotone`
-- `remote_timestamp_scan_preserves_first`
-- `validated_remote_and_local_time_starts_agree`
-- `admitted_trim_bounds_reload_and_retry`
-- `diskless_trim_reconciliation_preserves_coverage`
 
 
 The forty-third-composition batch passes fresh pinned generation and full
@@ -941,3 +940,111 @@ discovery. Only their three sessions are refreshed; all 1,068 unrelated prior
 artifact files, including the published quota repair, remain byte-identical.
 Every verified Rust source remains below 300 lines. These timestamp compositions
 form a separate review layer above PR #1260's quota CI repair.
+
+## Checked archived timestamps and retained remote/local agreement
+
+Two former boolean-only entries now export usable witnesses. The raw remote
+scan returns its actual counted prefix, chosen floor and globally first matching
+record, including exclusion of matches below that floor. It continues to admit
+padding and conservatively bounded rows whose timestamps are unsorted. The
+canonical archive validator instead rejects exactly invalid extent/order and
+returns the actual remote count and equal remote/local floors, including the
+empty-index fallback and signed target extremes.
+
+The fifty-second composition consumes both exports. It validates decoded array
+shape, record order and extent, then checks every archived row's timestamp bound
+against records strictly before that row's coordinate. Structural validity alone
+is insufficient: the existing sorted in-range row `(0, 3)` skips a real match at
+offset zero in records `[(0, 100), (3, 300), (6, 200)]`. The checked composition
+rejects that row rather than assuming its semantic bound. Conservative upper
+bounds need not be attained maxima; equality at the floor remains scan-visible.
+
+It scans the retained suffix with both existing selectors, proves their answers
+agree and returns the original first retained index. No match excludes all
+retained records; an earlier pruned match cannot suppress a later retained one.
+Explicit proved slice-coordinate equalities lift the first-match relation back
+to original indices. No trusted annotation or narrowed input domain is added.
+Complete faithful decoding/enumeration, byte parsing, physical reads and coherent
+host publication remain external. This checker is proof/test-only and does not
+add a quadratic validation pass to production reads.
+
+Four new independent oracle tests compare complete record scans, adjacent
+archive ordering and full record-prefix bounds. They cover valid generated
+archives, malformed arrays, false semantic bounds, padding, repeated timestamps,
+regressions, pruned matches, empty inputs and signed/unsigned extremes. All 307
+verified library tests pass. Five restored controls demonstrate the dependencies:
+hiding either helper's contract keeps its own five-file proof and all tests
+passing but fails the consumer; removing the semantic check, bypassing retention
+or rejecting every input fails both the consumer proof and independent tests.
+New failure seeds are quarantined and all temporary source changes are restored.
+Three boolean-only composition contracts remain explicitly listed above.
+
+Fresh pinned Creusot 0.13.0 generation and the full no-cache two-worker replay
+prove all 538 files. Workspace all-target Clippy with warnings denied, the four
+verified/log/remote-storage Bazel test targets including verified doctests,
+formatting and Creusot/mutation configuration gates pass. All three witness
+functions appear in mutation discovery. Only their three sessions are refreshed;
+all 1,070 unrelated prior artifact files remain byte-identical, and every verified
+Rust source remains below 300 lines. This batch and the following trim witnesses
+form a review layer above PR #1261; remote qualification of the parent covers
+its published snapshot only.
+
+## Trim witnesses distinguish logical visibility, replay and physical eviction
+
+Both trim entries formerly exported only `true`. Logical trim now returns its
+actual completed floor, newest retained snapshot index and exact producer replay
+cursor. Malformed and out-of-range rejections preserve their distinct reasons;
+valid admissions cannot be rejected indiscriminately. The floor is the admitted
+request reconciled with both observed stores, inside HWM/delivery/end caps.
+Snapshot absence excludes all eligible snapshots, and a selected snapshot is
+maximal in `(floor, log_end]`. Inherited store frontiers must obey the same caps;
+admission alone cannot establish that.
+
+Physical eviction now returns the actual WAL/cache pair. Enabled traces preserve
+object coverage and lag bounds, report monotone progress and converge after two
+completed steps. Disabled plans return inherited state exactly, including an
+unsafe cache start: a disabled operation does not make unrelated state safe.
+The primitive's `trim_target` model was closed to callers, so its own contract
+could not expose the exact `min(coverage, HWM - lag)` target to this composition.
+The existing definition is now open; its lag helper is visible to that logical
+body. Both changes affect Creusot specifications only, with no trusted assumption
+or production behavior change.
+
+The fifty-third composition consumes completed logical trim and retained sparse
+lookup. It keeps the read floor distinct from producer replay progress: with
+floor 1 and a snapshot at 6, a timestamp match at offset 2 remains the first
+retained read. The fifty-fourth composition consumes the physical eviction pair
+and reroutes the unchanged logical first match to surviving local cache or
+committed remote coverage. Evicting cache to offset 8 cannot delete a visible
+match at offset 3. Routing through remote coverage preserves the configured
+HWM lag. Both inherited physical frontiers must already obey coverage/lag caps.
+
+Four new independent frontier, snapshot and full-record oracles cover accepted
+and rejected requests, delivery caps, stale store frontiers, duplicate snapshots,
+missing snapshots, arbitrary paused/completed traces, retained matches below
+replay/cache frontiers, disabled unsafe cache state and integer extremes. All 311
+verified library tests pass. Faithful decoding, complete enumeration, actual
+committed object coverage, snapshot contents, whole-batch replay and crash-safe
+checkpoint completion remain host obligations. Only time-cursor monotonicity
+still has a boolean-only exported contract.
+
+Six restored negative controls distinguish the contracts from their runtime
+oracles. Hiding either trim export keeps the helper's three-file proof and all
+311 tests passing but fails its new consumer. Substituting producer replay or
+physical cache frontiers for the logical read floor fails proof and tests;
+rejecting every logical trim also fails both. Making the target model closed
+again leaves the primitive's own proof and all tests passing, while six exact
+reconciliation obligations become unproved. Temporary source changes and new
+failure seeds are restored or quarantined. These are scoped controls, not a
+claim that a full mutation sweep has completed.
+
+Fresh pinned Creusot 0.13.0 generation and full no-cache two-worker saved-session
+replay prove all 540 files. All 311 verified library tests, focused verified/log/
+remote-storage Bazel tests including verified doctests, workspace all-target
+Clippy with warnings denied, formatting and Creusot/mutation configuration gates
+pass. All four witness functions appear in mutation discovery. Only these five
+sessions are refreshed; all 1,070 unrelated prior artifact files, including the
+previous unpublished timestamp batch, remain byte-identical. Every verified
+Rust source remains below 300 lines. Both batches form a review layer above
+PR #1261, whose published snapshot separately passed its remote CI gate.
+These local checks do not establish remote CI for this new layer.
