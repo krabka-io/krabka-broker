@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ReplayRecordDecision [#"/workspace/crates/verified/src/recovery.rs" 9 27 9 32] (self: t_ReplayRecordDecision)
-  (return (x: t_ReplayRecordDecision)) = (! bb0
+let clone_ReplayRecordDecision [#"/workspace/crates/verified/src/recovery.rs" 9 27 9 32]
+  (self: t_ReplayRecordDecision) (return (x: t_ReplayRecordDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReplayRecordDecision = Any.any_l () | & self: t_ReplayRecordDecision = self ])
   [ return (result: t_ReplayRecordDecision) -> (! return {result}) ]

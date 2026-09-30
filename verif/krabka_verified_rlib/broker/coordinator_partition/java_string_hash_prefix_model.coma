@@ -1,0 +1,45 @@
+(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 100 0 100 72 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 99 10 99 15
+let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 98 11 98 45
+
+use creusot.int.UInt16
+use seq.Seq
+use creusot.int.Int32
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant units : Seq.seq UInt16.t
+
+constant limit : int
+
+function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 100 0 100 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+
+goal vc_java_string_hash_prefix_model: ([%#scoordinator_partition'0] 0 <= limit /\ limit <= Seq.length units)
+  -> (if limit <= 0 then
+    true
+  else
+    ([@stop_split] [@expl:java_string_hash_prefix_model requires] [%#scoordinator_partition'0] 0 <= limit - 1
+      /\ limit - 1 <= Seq.length units)
+    /\ ([@expl:variant decreases] well_founded_relation_Int ([%#scoordinator_partition] limit) ([%#scoordinator_partition] limit
+    - 1))
+  )

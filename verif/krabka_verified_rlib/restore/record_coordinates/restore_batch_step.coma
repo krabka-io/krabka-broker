@@ -1,0 +1,89 @@
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 136 0 136 87 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 137 20 137 21
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 141 16 141 37
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 14 142 22
+let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 14 142 30
+let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 33 142 34
+let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 14 142 34
+let%span srecord_coordinates'5 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 145 13 145 25
+let%span srecord_coordinates'6 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 145 28 145 29
+let%span srecord_coordinates'7 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 145 13 145 29
+let%span srecord_coordinates'8 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 125 10 134 1
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_batch_step [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 136 0 136 87]
+  (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int32.lt last_delta ([%#srecord_coordinates] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_11 <- Int64.lt base minimum_base ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb5) | br1 -> {_11} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = from_i64 [%#srecord_coordinates'0] {last_delta} (fun (_x: Int64.t) -> [ &delta <- _x ] s1)
+    | s1 = Int64.sub [%#srecord_coordinates'2] {[%#srecord_coordinates'1] const_MAX} {delta}
+        (fun (_x: Int64.t) -> [ &_20 <- _x ] s2)
+    | s2 = Int64.sub [%#srecord_coordinates'4] {_20} {[%#srecord_coordinates'3] (1: Int64.t)}
+        (fun (_x: Int64.t) -> [ &_19 <- _x ] s3)
+    | s3 = [ &_17 <- Int64.gt base _19 ] s4
+    | s4 = any [ br0 -> {_17 = false} (! bb8) | br1 -> {_17} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = Int64.add [%#srecord_coordinates'5] {base} {delta} (fun (_x: Int64.t) -> [ &_23 <- _x ] s1)
+    | s1 = Int64.add [%#srecord_coordinates'7] {_23} {[%#srecord_coordinates'6] (1: Int64.t)}
+        (fun (_x: Int64.t) -> [ &_22 <- _x ] s2)
+    | s2 = [ &_ret <- Some _22 ] s3
+    | s3 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & minimum_base: Int64.t = minimum_base
+  | & base: Int64.t = base
+  | & last_delta: Int32.t = last_delta
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & delta: Int64.t = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: Int64.t = Any.any_l ()
+  | & _20: Int64.t = Any.any_l ()
+  | & _22: Int64.t = Any.any_l ()
+  | & _23: Int64.t = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:restore_batch_step ensures] [%#srecord_coordinates'8] match result with
+      | Some next -> ge_log_Int (Int32.to_int last_delta) 0
+      /\ ge_log_Int (Int64.to_int base) (Int64.to_int minimum_base)
+      /\ Int64.to_int next = Int64.to_int base + Int32.to_int last_delta + 1
+      /\ gt_log_Int (Int64.to_int next) (Int64.to_int base) /\ Int64.to_int next <= Int64.to_int const_MAX
+      | None -> Int32.to_int last_delta < 0
+      \/ Int64.to_int base < Int64.to_int minimum_base
+      \/ gt_log_Int (Int64.to_int base + Int32.to_int last_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]

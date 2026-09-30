@@ -1,0 +1,121 @@
+(* #"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 145 0 145 72 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 62 16 62 28
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 146 17 146 23
+let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 147 17 147 30
+let%span smetadata_record_offset_deltas'1 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 153 32 153 39
+let%span smetadata_record_offset_deltas'2 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 151 34 152 68
+let%span smetadata_record_offset_deltas'3 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 149 34 150 54
+let%span smetadata_record_offset_deltas'4 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 148 34 148 69
+let%span smetadata_record_offset_deltas'5 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 155 23 155 32
+let%span smetadata_record_offset_deltas'6 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 155 35 155 36
+let%span smetadata_record_offset_deltas'7 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 155 23 155 36
+let%span smetadata_record_offset_deltas'8 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 155 18 155 36
+let%span smetadata_record_offset_deltas'9 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 156 11 156 23
+let%span smetadata_record_offset_deltas'10 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 157 23 157 24
+let%span smetadata_record_offset_deltas'11 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 157 12 157 24
+let%span smetadata_record_offset_deltas'12 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 137 29 138 73
+let%span smetadata_record_offset_deltas'13 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 139 28 139 53
+let%span smetadata_record_offset_deltas'14 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 140 28 141 54
+let%span smetadata_record_offset_deltas'15 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 142 28 143 68
+
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.int.Int64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate gt_log_usize [@inline:trivial] (self: UInt64.t) (other: UInt64.t) = [%#sord] UInt64.lt other self
+
+meta "rewrite_def" predicate gt_log_usize
+
+predicate well_founded_relation_usize [@inline:trivial] (self: UInt64.t) (other: UInt64.t) =
+  [%#swell_founded] gt_log_usize self other
+
+meta "rewrite_def" predicate well_founded_relation_usize
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let control_history_frontier [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 145 0 145 72]
+  (offsets: Slice64.slice Int64.t) (frontier: Int64.t) (return (x: UInt64.t)) =
+{[@stop_split] [@expl:control_history_frontier requires] [%#smetadata_record_offset_deltas'12] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view offsets)
+    -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int (Seq.get (Slice64.view offsets) j)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &lo <- [%#smetadata_record_offset_deltas] (0: UInt64.t) ] s1
+    | s1 = len_i64 [%#smetadata_record_offset_deltas'0] {offsets} (fun (_x: UInt64.t) -> [ &hi <- _x ] s2)
+    | s2 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_usize variant_old_bb2 ([%#smetadata_record_offset_deltas'1] UInt64.sub hi lo)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#smetadata_record_offset_deltas'4] UInt64.t'int lo <= UInt64.t'int hi
+      /\ UInt64.t'int hi <= Seq.length (Slice64.view offsets)}
+      {[@expl:loop invariant #1] [%#smetadata_record_offset_deltas'3] forall i: int. 0 <= i /\ i < UInt64.t'int lo
+        -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int frontier}
+      {[@expl:loop invariant #2] [%#smetadata_record_offset_deltas'2] forall i: int. UInt64.t'int hi <= i
+          /\ i < Seq.length (Slice64.view offsets)
+        -> Int64.to_int frontier <= Int64.to_int (Seq.get (Slice64.view offsets) i)}
+      (! [ &variant_old_bb2 <- [%#smetadata_record_offset_deltas'1] UInt64.sub hi lo ] s0)
+      [ s0 = [ &_34 <- UInt64.lt lo hi ] s1 | s1 = any [ br0 -> {_34 = false} (! bb10) | br1 -> {_34} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = UInt64.sub [%#smetadata_record_offset_deltas'5] {hi} {lo} (fun (_x: UInt64.t) -> [ &_40 <- _x ] s1)
+        | s1 = [ &_43 <- ([%#smetadata_record_offset_deltas'6] (2: UInt64.t))
+          = ([%#smetadata_record_offset_deltas'7] (0: UInt64.t)) ] s2
+        | s2 = {[@expl:division by zero] [%#smetadata_record_offset_deltas'7] not _43} s3
+        | s3 = UInt64.div [%#smetadata_record_offset_deltas'7] {_40}
+            {[%#smetadata_record_offset_deltas'6] (2: UInt64.t)} (fun (_x: UInt64.t) -> [ &_39 <- _x ] s4)
+        | s4 = UInt64.add [%#smetadata_record_offset_deltas'8] {lo} {_39} (fun (_x: UInt64.t) -> [ &mid <- _x ] s5)
+        | s5 = [ &_46 <- mid ] s6
+        | s6 = [ &_47 <- Slice64.length offsets ] s7
+        | s7 = [ &_48 <- UInt64.lt _46 _47 ] s8
+        | s8 = {[@expl:index in bounds] [%#smetadata_record_offset_deltas'9] _48} s9
+        | s9 = Slice64.get [%#smetadata_record_offset_deltas'9] <Int64.t> {offsets} {_46}
+            (fun (r: Int64.t) -> [ &_45 <- r ] s10)
+        | s10 = [ &_44 <- Int64.lt _45 frontier ] s11
+        | s11 = any [ br0 -> {_44 = false} (! bb8) | br1 -> {_44} (! bb7) ] ]
+      | bb7 = s0
+        [ s0 = UInt64.add [%#smetadata_record_offset_deltas'11] {mid}
+            {[%#smetadata_record_offset_deltas'10] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &lo <- _x ] s1)
+        | s1 = bb2 ]
+      | bb8 = s0 [ s0 = [ &hi <- mid ] s1 | s1 = bb2 ] ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- lo ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: UInt64.t = Any.any_l ()
+  | & offsets: Slice64.slice Int64.t = offsets
+  | & frontier: Int64.t = frontier
+  | & lo: UInt64.t = Any.any_l ()
+  | & hi: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & mid: UInt64.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _45: Int64.t = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & variant_old_bb2: UInt64.t = Any.any_l () ])
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:control_history_frontier ensures] ([@stop_split] [@expl:control_history_frontier ensures #0] [%#smetadata_record_offset_deltas'13] UInt64.t'int result
+      <= Seq.length (Slice64.view offsets))
+    /\ ([@stop_split] [@expl:control_history_frontier ensures #1] [%#smetadata_record_offset_deltas'14] forall i: int. 0
+            <= i
+          /\ i < UInt64.t'int result -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:control_history_frontier ensures #2] [%#smetadata_record_offset_deltas'15] forall i: int. UInt64.t'int result
+          <= i
+        /\ i < Seq.length (Slice64.view offsets)
+      -> Int64.to_int frontier <= Int64.to_int (Seq.get (Slice64.view offsets) i))}
+    (! return {result}) ]

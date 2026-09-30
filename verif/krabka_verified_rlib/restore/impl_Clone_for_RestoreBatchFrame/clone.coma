@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 221 27 221 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 79 27 79 32 *)
 
 (* <restore::RestoreBatchFrame as std::clone::Clone> *)
 
@@ -19,8 +19,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreBatchFrame [#"/workspace/crates/verified/src/restore.rs" 221 27 221 32] (self: t_RestoreBatchFrame)
-  (return (x: t_RestoreBatchFrame)) = (! bb0
+let clone_RestoreBatchFrame [#"/workspace/crates/verified/src/restore.rs" 79 27 79 32]
+  (self: t_RestoreBatchFrame) (return (x: t_RestoreBatchFrame)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreBatchFrame = Any.any_l () | & self: t_RestoreBatchFrame = self ])
   [ return (result: t_RestoreBatchFrame) -> (! return {result}) ]

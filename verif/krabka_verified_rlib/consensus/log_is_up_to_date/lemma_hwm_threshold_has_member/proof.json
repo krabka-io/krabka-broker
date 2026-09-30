@@ -1,0 +1,19 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_lemma_hwm_threshold_has_member": {
+        "tactic": "compute_specified",
+        "children": [
+          {
+            "tactic": "split_vc",
+            "children": [
+              { "prover": "alt-ergo", "time": 0.006 },
+              { "prover": "alt-ergo", "time": 0.007 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

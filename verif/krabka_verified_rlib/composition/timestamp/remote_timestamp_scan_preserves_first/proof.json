@@ -1,0 +1,27 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_eq_Option_usize": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_index_slice_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_index_slice_tup2_i64_u32'0": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_indexed_timestamp_scan_finds_first": {
+        "prover": "alt-ergo",
+        "time": 0.006
+      },
+      "vc_remote_time_index_candidate_count": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_remote_timestamp_scan_preserves_first": {
+        "prover": "z3",
+        "time": 0.525
+      },
+      "vc_time_index_scan_start": { "prover": "alt-ergo", "time": 0.006 }
+    }
+  }
+}

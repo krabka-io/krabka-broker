@@ -127,20 +127,12 @@ fn prepare_filtered_batch(
         FilteredBatch::Filtered(rewritten) => {
             let kept = u64::try_from(rewritten.records.len()).unwrap_or(0);
             let dropped = records_in_batch.saturating_sub(kept);
-            // `filter_batch` recomputes `last_offset_delta` as the highest
-            // surviving record's delta, which is right for compaction: the
-            // cleaner writes raw bytes to a fresh `.log`/`.index` and never
-            // re-checks contiguity between what it just wrote and what comes
-            // next. This restore appends through `Log::append_at`, which
-            // demands every batch land exactly at `log_end_offset()` --  so a
-            // shrunk `last_offset_delta` here would silently strand every
-            // batch archived after this one at an offset the target log no
-            // longer expects, the moment an exclude predicate happens to
-            // drop a batch's trailing record. The fix is the same one
-            // `FilteredBatch::Empty` already applies below: keep the
-            // archived `last_offset_delta`, so the batch claims its full
-            // original offset span regardless of which records inside it
-            // survive.
+            // The generic record filter shrinks the span to its survivors.
+            // Restore preserves the archived span instead, as Kafka's
+            // MemoryRecords.buildRetainedRecordsInto does with overrideLastOffset:
+            // last_offset_delta is also the producer's sequence delta. Losing
+            // the tail must not change retry identity or the next expected
+            // sequence after producer-state reconstruction.
             let rewritten = RecordBatch {
                 last_offset_delta: owned.last_offset_delta,
                 ..rewritten

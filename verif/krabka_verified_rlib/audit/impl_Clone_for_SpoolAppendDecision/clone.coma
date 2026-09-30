@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_SpoolAppendDecision [#"/workspace/crates/verified/src/audit.rs" 9 27 9 32] (self: t_SpoolAppendDecision)
-  (return (x: t_SpoolAppendDecision)) = (! bb0
+let clone_SpoolAppendDecision [#"/workspace/crates/verified/src/audit.rs" 9 27 9 32]
+  (self: t_SpoolAppendDecision) (return (x: t_SpoolAppendDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_SpoolAppendDecision = Any.any_l () | & self: t_SpoolAppendDecision = self ])
   [ return (result: t_SpoolAppendDecision) -> (! return {result}) ]

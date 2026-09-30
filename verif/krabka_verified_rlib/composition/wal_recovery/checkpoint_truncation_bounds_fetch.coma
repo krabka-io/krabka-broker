@@ -1,0 +1,391 @@
+(* #"/workspace/crates/verified/src/composition/wal_recovery.rs" 34 0 40 25 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 178 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 179 10 179 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 182 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 188 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 189 10 189 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 126 16 126 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 141 8 147 9
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 100 10 100 40
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
+let%span sfuture_log_swap_admission'2 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 142 10 144 98
+let%span swal_recovery = "/workspace/crates/verified/src/composition/wal_recovery.rs" 45 19 45 25
+let%span swal_recovery'0 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 48 16 48 22
+let%span swal_recovery'1 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 59 14 59 30
+let%span swal_recovery'2 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 60 14 60 24
+let%span swal_recovery'3 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 57 16 58 109
+let%span swal_recovery'4 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 55 16 56 62
+let%span swal_recovery'5 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 53 16 54 60
+let%span swal_recovery'6 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 52 16 52 86
+let%span swal_recovery'7 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 51 16 51 91
+let%span swal_recovery'8 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 50 16 50 32
+let%span swal_recovery'9 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 49 16 49 48
+let%span swal_recovery'10 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 61 19 61 26
+let%span swal_recovery'11 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 61 29 61 30
+let%span swal_recovery'12 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 61 19 61 30
+let%span swal_recovery'13 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 62 11 62 34
+let%span swal_recovery'14 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 62 45 62 52
+let%span swal_recovery'15 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 65 11 65 47
+let%span swal_recovery'16 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 66 25 66 32
+let%span swal_recovery'17 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 67 20 67 21
+let%span swal_recovery'18 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 67 12 67 21
+let%span swal_recovery'19 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 69 13 69 14
+let%span swal_recovery'20 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 69 8 69 14
+let%span swal_recovery'21 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 71 8 71 89
+let%span swal_recovery'22 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 75 15 75 16
+let%span swal_recovery'23 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 78 18 78 35
+let%span swal_recovery'24 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 82 12 82 49
+let%span swal_recovery'25 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 83 13 83 51
+let%span swal_recovery'26 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 84 21 84 67
+let%span swal_recovery'27 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 86 33 86 38
+let%span swal_recovery'28 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 86 40 86 44
+let%span swal_recovery'29 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 86 16 86 55
+let%span swal_recovery'30 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 13 11 13 66
+let%span swal_recovery'31 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 14 11 14 83
+let%span swal_recovery'32 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 15 11 15 94
+let%span swal_recovery'33 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 16 11 16 37
+let%span swal_recovery'34 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 17 11 18 36
+let%span swal_recovery'35 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 19 10 23 1
+let%span swal_recovery'36 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 24 10 33 1
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.MinMax
+use int.Int
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type tup2_usize_i64 = { f0: UInt64.t; f1: Int64.t }
+
+type t_Option_tup2_usize_i64 = None | Some tup2_usize_i64
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let is_none_i64 (self_: t_Option_i64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_none ensures] [%#soption] result = (self_ = None'0)}
+    (! return {result}) ]
+
+let truncation_batch_retained (batch_last: Int64.t) (cut: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:truncation_batch_retained ensures] [%#sfuture_log_swap_admission] result
+    = (Int64.to_int batch_last < Int64.to_int cut)}
+    (! return {result}) ]
+
+let wal_checkpoint_range_valid (recovered_start: Int64.t) (recovered_end: Int64.t) (start: Int64.t) (end': Int64.t)
+  (observed_last: t_Option_i64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:wal_checkpoint_range_valid ensures] [%#sbatch_equal] result
+    = (0 <= Int64.to_int recovered_start
+    /\ Int64.to_int recovered_start <= Int64.to_int start
+    /\ Int64.to_int start <= Int64.to_int end'
+    /\ Int64.to_int end' <= Int64.to_int recovered_end
+    /\ (start = end'
+    \/ match observed_last with
+      | Some'0 last -> Int64.to_int last = Int64.to_int end' - 1
+      | None'0 -> false
+      end))}
+    (! return {result}) ]
+
+let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sfuture_log_swap_admission'0] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sfuture_log_swap_admission'1] Int64.to_int result
+      <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sfuture_log_swap_admission'2] Int64.to_int result
+      = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 125 0 125 40] (a: int) (b: int) : int
+ = [%#sfetch'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 139 0 139 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sfetch'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sfetch] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sfetch'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sfetch'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sfetch'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sfetch'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sfetch'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sfetch'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sfetch'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composition/wal_recovery.rs" 34 0 40 25]
+  (ends: Slice64.slice Int64.t) (physical_start: Int64.t) (w: t_FetchWatermarks) (start: Int64.t) (cut: Int64.t)
+  (return (x: t_Option_tup2_usize_i64)) =
+{[@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires] ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #0] [%#swal_recovery'30] 0
+      <= Int64.to_int physical_start
+    /\ Int64.to_int physical_start <= Int64.to_int w.log_start)
+  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #1] [%#swal_recovery'31] forall i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view ends)
+      -> Int64.to_int physical_start < Int64.to_int (Seq.get (Slice64.view ends) i))
+  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #2] [%#swal_recovery'32] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view ends)
+      -> Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view ends) j))
+  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #3] [%#swal_recovery'33] Int64.to_int w.log_start
+    <= Int64.to_int w.log_end)
+  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #4] [%#swal_recovery'34] Int64.to_int w.log_end
+  = (if Seq.length (Slice64.view ends) = 0 then
+    Int64.to_int physical_start
+  else
+    Int64.to_int (Seq.get (Slice64.view ends) (Seq.length (Slice64.view ends) - 1))
+  ))}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &recovered_end <- w.log_end ] s1
+    | s1 = [ &_36 <- Int64.gt w.log_start start ] s2
+    | s2 = any [ br0 -> {_36 = false} (! bb2) | br1 -> {_36} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_39 <- Int64.gt start cut ] s1 | s1 = any [ br0 -> {_39 = false} (! bb4) | br1 -> {_39} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_42 <- Int64.gt cut recovered_end ] s1
+    | s1 = any [ br0 -> {_42 = false} (! bb7) | br1 -> {_42} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &kept <- [%#swal_recovery] (0: UInt64.t) ] s1
+    | s1 = [ &actual_end <- physical_start ] s2
+    | s2 = [ &observed_last <- None'0 ] s3
+    | s3 = [ &i <- [%#swal_recovery'0] (0: UInt64.t) ] s4
+    | s4 = bb8 ]
+  | bb8 = bb8invariant
+    [ bb8 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb8 ([%#swal_recovery'1] Seq.length (Slice64.view ends)
+      - UInt64.t'int i)}
+      bb8invariant
+    | bb8invariant = {[@expl:loop invariant #0] [%#swal_recovery'9] UInt64.t'int i <= Seq.length (Slice64.view ends)
+      /\ UInt64.t'int kept <= UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#swal_recovery'8] 0 <= Int64.to_int actual_end}
+      {[@expl:loop invariant #2] [%#swal_recovery'7] Int64.to_int actual_end
+      = (if UInt64.t'int kept = 0 then
+        Int64.to_int physical_start
+      else
+        Int64.to_int (Seq.get (Slice64.view ends) (UInt64.t'int kept - 1))
+      )}
+      {[@expl:loop invariant #3] [%#swal_recovery'6] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (j < UInt64.t'int kept) = (Int64.to_int (Seq.get (Slice64.view ends) j) <= Int64.to_int cut)}
+      {[@expl:loop invariant #4] [%#swal_recovery'5] match observed_last with
+          | Some'0 last'0 -> Int64.to_int last'0 = Int64.to_int cut - 1
+          | None'0 -> false
+          end
+      = (exists j: int. 0 <= j /\ j < UInt64.t'int i /\ Seq.get (Slice64.view ends) j = cut)}
+      {[@expl:loop invariant #5] [%#swal_recovery'4] (observed_last = None'0)
+      = (forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> Int64.to_int (Seq.get (Slice64.view ends) j) < Int64.to_int cut)}
+      {[@expl:loop invariant #6] [%#swal_recovery'3] observed_last <> None'0
+      -> (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i
+        /\ match observed_last with
+            | Some'0 last'0 -> Int64.to_int last'0 = Int64.to_int (Seq.get (Slice64.view ends) j) - 1
+            | None'0 -> false
+            end
+        /\ Int64.to_int cut <= Int64.to_int (Seq.get (Slice64.view ends) j))}
+      (! [ &variant_old_bb8 <- [%#swal_recovery'1] Seq.length (Slice64.view ends) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#swal_recovery'2] {ends} (fun (_x: UInt64.t) -> [ &_89 <- _x ] s1)
+      | s1 = [ &_87 <- UInt64.lt i _89 ] s2
+      | s2 = any [ br0 -> {_87 = false} (! bb26) | br1 -> {_87} (! bb11) ] ]
+      [ bb11 = s0
+        [ s0 = [ &_93 <- i ] s1
+        | s1 = [ &_94 <- Slice64.length ends ] s2
+        | s2 = [ &_95 <- UInt64.lt _93 _94 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_recovery'10] _95} s4
+        | s4 = Slice64.get [%#swal_recovery'10] <Int64.t> {ends} {_93} (fun (r: Int64.t) -> [ &_92 <- r ] s5)
+        | s5 = Int64.sub [%#swal_recovery'12] {_92} {[%#swal_recovery'11] (1: Int64.t)}
+            (fun (_x: Int64.t) -> [ &last <- _x ] s6)
+        | s6 = is_none_i64 [%#swal_recovery'13] {observed_last} (fun (_x: bool) -> [ &_97 <- _x ] s7)
+        | s7 = any [ br0 -> {_97 = false} (! bb20) | br1 -> {_97} (! bb14) ] ]
+      | bb14 = s0
+        [ s0 = [ &_102 <- i ] s1
+        | s1 = [ &_103 <- Slice64.length ends ] s2
+        | s2 = [ &_104 <- UInt64.lt _102 _103 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_recovery'14] _104} s4
+        | s4 = Slice64.get [%#swal_recovery'14] <Int64.t> {ends} {_102} (fun (r: Int64.t) -> [ &_101 <- r ] s5)
+        | s5 = [ &_99 <- Int64.le cut _101 ] s6
+        | s6 = any [ br0 -> {_99 = false} (! bb20) | br1 -> {_99} (! bb16) ] ]
+      | bb16 = s0 [ s0 = [ &_105 <- Some'0 last ] s1 | s1 = [ &observed_last <- _105 ] s2 | s2 = bb20 ]
+      | bb20 = s0
+        [ s0 = truncation_batch_retained [%#swal_recovery'15] {last} {cut} (fun (_x: bool) -> [ &_108 <- _x ] s1)
+        | s1 = any [ br0 -> {_108 = false} (! bb25) | br1 -> {_108} (! bb22) ] ]
+      | bb22 = s0
+        [ s0 = [ &_112 <- i ] s1
+        | s1 = [ &_113 <- Slice64.length ends ] s2
+        | s2 = [ &_114 <- UInt64.lt _112 _113 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_recovery'16] _114} s4
+        | s4 = Slice64.get [%#swal_recovery'16] <Int64.t> {ends} {_112} (fun (r: Int64.t) -> [ &_111 <- r ] s5)
+        | s5 = [ &actual_end <- _111 ] s6
+        | s6 = UInt64.add [%#swal_recovery'18] {kept} {[%#swal_recovery'17] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &kept <- _x ] s7)
+        | s7 = bb25 ]
+      | bb25 = s0
+        [ s0 = UInt64.add [%#swal_recovery'20] {i} {[%#swal_recovery'19] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb8 ] ] ]
+  | bb26 = s0
+    [ s0 = wal_checkpoint_range_valid [%#swal_recovery'21] {w.log_start} {recovered_end} {start} {cut} {observed_last}
+        (fun (_x: bool) -> [ &_117 <- _x ] s1)
+    | s1 = any [ br0 -> {_117 = false} (! bb29) | br1 -> {_117} (! bb28) ] ]
+  | bb28 = s0
+    [ s0 = [ &_125 <- start = cut ] s1 | s1 = any [ br0 -> {_125 = false} (! bb32) | br1 -> {_125} (! bb30) ] ]
+  | bb30 = s0 [ s0 = [ &kept <- [%#swal_recovery'22] (0: UInt64.t) ] s1 | s1 = [ &actual_end <- start ] s2 | s2 = bb32 ]
+  | bb32 = s0
+    [ s0 = {[@expl:assertion] [%#swal_recovery'23] actual_end = cut} s1
+    | s1 = truncation_frontier [%#swal_recovery'24] {w.hw} {actual_end} (fun (_x: Int64.t) -> [ &_136 <- _x ] s2)
+    | s2 = truncation_frontier [%#swal_recovery'25] {w.lso} {actual_end} (fun (_x: Int64.t) -> [ &_139 <- _x ] s3)
+    | s3 = truncation_frontier [%#swal_recovery'26] {w.deliverable} {actual_end}
+        (fun (_x: Int64.t) -> [ &_142 <- _x ] s4)
+    | s4 = [ &w'0 <- { log_start = start; hw = _136; lso = _139; log_end = actual_end; deliverable = _142 } ] s5
+    | s5 = fetch_visibility [%#swal_recovery'29] {[%#swal_recovery'27] false} {[%#swal_recovery'28] true} {w'0} {start}
+        (fun (_x: t_FetchVisibility) -> [ &_148 <- _x ] s6)
+    | s6 = [ &_145 <- { f0 = kept; f1 = _148.limit_offset } ] s7
+    | s7 = [ &_ret <- Some _145 ] s8
+    | s8 = return {_ret} ]
+  | bb29 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_usize_i64 = Any.any_l ()
+  | & ends: Slice64.slice Int64.t = ends
+  | & physical_start: Int64.t = physical_start
+  | & w: t_FetchWatermarks = w
+  | & start: Int64.t = start
+  | & cut: Int64.t = cut
+  | & recovered_end: Int64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & kept: UInt64.t = Any.any_l ()
+  | & actual_end: Int64.t = Any.any_l ()
+  | & observed_last: t_Option_i64 = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _87: bool = Any.any_l ()
+  | & _89: UInt64.t = Any.any_l ()
+  | & last: Int64.t = Any.any_l ()
+  | & _92: Int64.t = Any.any_l ()
+  | & _93: UInt64.t = Any.any_l ()
+  | & _94: UInt64.t = Any.any_l ()
+  | & _95: bool = Any.any_l ()
+  | & _97: bool = Any.any_l ()
+  | & _99: bool = Any.any_l ()
+  | & _101: Int64.t = Any.any_l ()
+  | & _102: UInt64.t = Any.any_l ()
+  | & _103: UInt64.t = Any.any_l ()
+  | & _104: bool = Any.any_l ()
+  | & _105: t_Option_i64 = Any.any_l ()
+  | & _108: bool = Any.any_l ()
+  | & _111: Int64.t = Any.any_l ()
+  | & _112: UInt64.t = Any.any_l ()
+  | & _113: UInt64.t = Any.any_l ()
+  | & _114: bool = Any.any_l ()
+  | & _117: bool = Any.any_l ()
+  | & _125: bool = Any.any_l ()
+  | & w'0: t_FetchWatermarks = Any.any_l ()
+  | & _136: Int64.t = Any.any_l ()
+  | & _139: Int64.t = Any.any_l ()
+  | & _142: Int64.t = Any.any_l ()
+  | & _145: tup2_usize_i64 = Any.any_l ()
+  | & _148: t_FetchVisibility = Any.any_l ()
+  | & variant_old_bb8: int = Any.any_l () ])
+  [ return (result: t_Option_tup2_usize_i64) ->
+  {[@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures] ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures #0] [%#swal_recovery'35] match result with
+          | None -> false
+          | Some _ -> true
+          end
+      = (Int64.to_int w.log_start <= Int64.to_int start
+      /\ Int64.to_int start <= Int64.to_int cut
+      /\ Int64.to_int cut
+        <= (if Seq.length (Slice64.view ends) = 0 then
+          Int64.to_int physical_start
+        else
+          Int64.to_int (Seq.get (Slice64.view ends) (Seq.length (Slice64.view ends) - 1))
+        )
+      /\ (start = cut
+      \/ (exists i: int. 0 <= i /\ i < Seq.length (Slice64.view ends) /\ Seq.get (Slice64.view ends) i = cut))))
+    /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures #1] [%#swal_recovery'36] match result with
+      | None -> true
+      | Some {f0 = kept; f1 = limit} -> UInt64.t'int kept <= Seq.length (Slice64.view ends)
+      /\ (start = cut -> UInt64.t'int kept = 0)
+      /\ (start <> cut
+        -> gt_log_Int (UInt64.t'int kept) 0
+        /\ Seq.get (Slice64.view ends) (UInt64.t'int kept - 1) = cut
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view ends)
+          -> (i < UInt64.t'int kept) = (Int64.to_int (Seq.get (Slice64.view ends) i) <= Int64.to_int cut)))
+      /\ Int64.to_int limit
+        = MinMax.min (MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int cut)) (MinMax.min (Int64.to_int w.lso) (Int64.to_int cut))) (MinMax.min (Int64.to_int w.deliverable) (Int64.to_int cut))
+      /\ Int64.to_int limit <= Int64.to_int cut
+      /\ Int64.to_int limit <= Int64.to_int w.hw
+      /\ Int64.to_int limit <= Int64.to_int w.lso /\ Int64.to_int limit <= Int64.to_int w.deliverable
+      end)}
+    (! return {result}) ]

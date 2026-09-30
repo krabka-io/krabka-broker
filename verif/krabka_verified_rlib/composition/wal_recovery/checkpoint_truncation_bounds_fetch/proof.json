@@ -1,0 +1,20 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_checkpoint_truncation_bounds_fetch": {
+        "prover": "z3",
+        "time": 0.034
+      },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_is_none_i64": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_truncation_batch_retained": { "prover": "alt-ergo", "time": 0.002 },
+      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_wal_checkpoint_range_valid": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      }
+    }
+  }
+}

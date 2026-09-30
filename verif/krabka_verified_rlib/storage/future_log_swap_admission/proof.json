@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_future_log_swap_admission": { "prover": "alt-ergo", "time": 0.013 }
-    }
-  }
-}

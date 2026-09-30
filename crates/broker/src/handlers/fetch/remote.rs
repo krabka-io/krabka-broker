@@ -211,7 +211,7 @@ fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_sta
 /// activation time instead. See [`remote_batch_is_deliverable`].
 ///
 /// The whole cold read -- the batch and, for a read-committed fetch, the
-/// segment's aborted-transaction list -- runs under one permit from the
+/// remote tail's aborted-transaction indexes -- runs under one permit from the
 /// reader's bounded pool, exactly as Kafka runs one `RemoteLogReader` task per
 /// remote fetch. A read that arrives with the pool's pending queue already
 /// full is refused: see [`reject_saturated`].
@@ -354,11 +354,10 @@ pub(super) async fn try_remote_read(
             let bytes_est = <RecordBatch as Encode>::encoded_len(&batch, 0);
 
             // KIP-405 read-committed: surface the aborted-transaction list
-            // from the segment's `.txnindex` so the consumer drops aborted
-            // records client-side, mirroring the local `aborted_in_range`
-            // call in `do_read` — bounded here to the single batch this read
-            // returns (inclusive last offset), since the local path bounds by
-            // the returned window over the LSO. `Some(empty)` is the correct
+            // from remote and local `.txnindex` files, including later marker
+            // segments, so the consumer drops aborted records client-side.
+            // Select against this batch's returned window, then deduplicate
+            // wire rows shared by both tiers. `Some(empty)` is the correct
             // read-committed signal (read-uncommitted leaves it `None`).
             if p.read_committed && !p.is_follower_fetch {
                 let Some(batch_last_offset) = batch
@@ -373,6 +372,9 @@ pub(super) async fn try_remote_read(
                     );
                     return Some(fail_partition(p));
                 };
+                let Some(batch_end) = batch_last_offset.checked_add(1) else {
+                    return Some(fail_partition(p));
+                };
                 let aborts = match reader
                     .aborted_transactions(&tp, leader_epoch, p.fetch_offset, batch_last_offset)
                     .await
@@ -380,12 +382,26 @@ pub(super) async fn try_remote_read(
                     Ok(aborts) => aborts,
                     Err(e) => return Some(fail_remote_read(&broker.metrics, p, &e)),
                 };
+                let local = part
+                    .log
+                    .lock()
+                    .expect("log mutex poisoned")
+                    .aborted_in_range(Offset(p.fetch_offset), Offset(batch_end));
+                let rows: Vec<_> = aborts
+                    .into_iter()
+                    .map(|entry| (entry.producer_id, entry.start_offset))
+                    .chain(
+                        local
+                            .into_iter()
+                            .map(|entry| (entry.producer_id.get(), entry.start_offset.0)),
+                    )
+                    .collect();
                 p.out.aborted_transactions = Some(
-                    aborts
+                    krabka_verified::transaction::unique_aborted_transaction_rows(&rows)
                         .into_iter()
-                        .map(|e| AbortedTransaction {
-                            producer_id: e.producer_id,
-                            first_offset: e.start_offset,
+                        .map(|(producer_id, first_offset)| AbortedTransaction {
+                            producer_id,
+                            first_offset,
                             ..Default::default()
                         })
                         .collect(),
@@ -413,6 +429,8 @@ pub(super) async fn try_remote_read(
 
 #[cfg(test)]
 mod tests {
+    mod aborts;
+
     use assert2::{assert, check};
     use krabka_log::{DeliveryPolicy, Log, LogConfig};
     use krabka_units::prelude::millis;

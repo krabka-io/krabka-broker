@@ -1,0 +1,21 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_constructed_wal_placement_is_installable": {
+        "prover": "alt-ergo",
+        "time": 0.07
+      },
+      "vc_deref_Vec_u64_Global": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_index_Vec_tup2_u64_u64_Global": {
+        "prover": "alt-ergo",
+        "time": 0.004
+      },
+      "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_new_u64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_push_u64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_select_wal_voters": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_wal_voter_set_valid": { "prover": "alt-ergo", "time": 0.004 }
+    }
+  }
+}

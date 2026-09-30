@@ -1,0 +1,963 @@
+(* #"/workspace/crates/verified/src/composition/wal_copy.rs" 179 0 187 38 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 178 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 179 10 179 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 182 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 188 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 189 10 189 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 126 16 126 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 141 8 147 9
+let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 100 4 106 6
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 8 10 21 1
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 188 54 188 55
+let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 188 22 188 76
+let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 197 30 197 40
+let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 198 30 198 40
+let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 199 16 199 22
+let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 205 14 205 32
+let%span swal_copy'5 = "/workspace/crates/verified/src/composition/wal_copy.rs" 206 14 206 26
+let%span swal_copy'6 = "/workspace/crates/verified/src/composition/wal_copy.rs" 201 16 204 57
+let%span swal_copy'7 = "/workspace/crates/verified/src/composition/wal_copy.rs" 200 16 200 79
+let%span swal_copy'8 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 49 207 58
+let%span swal_copy'9 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 49 207 60
+let%span swal_copy'10 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 62 207 71
+let%span swal_copy'11 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 62 207 73
+let%span swal_copy'12 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 75 207 84
+let%span swal_copy'13 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 75 207 86
+let%span swal_copy'14 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 24 207 87
+let%span swal_copy'15 = "/workspace/crates/verified/src/composition/wal_copy.rs" 207 24 207 88
+let%span swal_copy'16 = "/workspace/crates/verified/src/composition/wal_copy.rs" 208 19 208 28
+let%span swal_copy'17 = "/workspace/crates/verified/src/composition/wal_copy.rs" 208 19 208 30
+let%span swal_copy'18 = "/workspace/crates/verified/src/composition/wal_copy.rs" 208 8 208 31
+let%span swal_copy'19 = "/workspace/crates/verified/src/composition/wal_copy.rs" 209 8 209 24
+let%span swal_copy'20 = "/workspace/crates/verified/src/composition/wal_copy.rs" 210 13 210 14
+let%span swal_copy'21 = "/workspace/crates/verified/src/composition/wal_copy.rs" 210 8 210 14
+let%span swal_copy'22 = "/workspace/crates/verified/src/composition/wal_copy.rs" 212 44 212 50
+let%span swal_copy'23 = "/workspace/crates/verified/src/composition/wal_copy.rs" 212 52 212 58
+let%span swal_copy'24 = "/workspace/crates/verified/src/composition/wal_copy.rs" 212 19 212 74
+let%span swal_copy'25 = "/workspace/crates/verified/src/composition/wal_copy.rs" 212 19 212 75
+let%span swal_copy'26 = "/workspace/crates/verified/src/composition/wal_copy.rs" 214 8 214 94
+let%span swal_copy'27 = "/workspace/crates/verified/src/composition/wal_copy.rs" 214 8 214 95
+let%span swal_copy'28 = "/workspace/crates/verified/src/composition/wal_copy.rs" 216 8 216 12
+let%span swal_copy'29 = "/workspace/crates/verified/src/composition/wal_copy.rs" 217 8 217 13
+let%span swal_copy'30 = "/workspace/crates/verified/src/composition/wal_copy.rs" 215 21 226 5
+let%span swal_copy'31 = "/workspace/crates/verified/src/composition/wal_copy.rs" 230 16 230 22
+let%span swal_copy'32 = "/workspace/crates/verified/src/composition/wal_copy.rs" 234 14 234 32
+let%span swal_copy'33 = "/workspace/crates/verified/src/composition/wal_copy.rs" 235 14 235 26
+let%span swal_copy'34 = "/workspace/crates/verified/src/composition/wal_copy.rs" 232 16 233 60
+let%span swal_copy'35 = "/workspace/crates/verified/src/composition/wal_copy.rs" 231 16 231 35
+let%span swal_copy'36 = "/workspace/crates/verified/src/composition/wal_copy.rs" 236 47 236 56
+let%span swal_copy'37 = "/workspace/crates/verified/src/composition/wal_copy.rs" 236 47 236 58
+let%span swal_copy'38 = "/workspace/crates/verified/src/composition/wal_copy.rs" 236 60 236 69
+let%span swal_copy'39 = "/workspace/crates/verified/src/composition/wal_copy.rs" 236 60 236 71
+let%span swal_copy'40 = "/workspace/crates/verified/src/composition/wal_copy.rs" 236 19 236 72
+let%span swal_copy'41 = "/workspace/crates/verified/src/composition/wal_copy.rs" 236 19 236 73
+let%span swal_copy'42 = "/workspace/crates/verified/src/composition/wal_copy.rs" 237 42 237 51
+let%span swal_copy'43 = "/workspace/crates/verified/src/composition/wal_copy.rs" 237 42 237 53
+let%span swal_copy'44 = "/workspace/crates/verified/src/composition/wal_copy.rs" 237 11 237 60
+let%span swal_copy'45 = "/workspace/crates/verified/src/composition/wal_copy.rs" 240 13 240 14
+let%span swal_copy'46 = "/workspace/crates/verified/src/composition/wal_copy.rs" 240 8 240 14
+let%span swal_copy'47 = "/workspace/crates/verified/src/composition/wal_copy.rs" 144 10 160 1
+let%span swal_copy'48 = "/workspace/crates/verified/src/composition/wal_copy.rs" 161 10 178 1
+let%span swal_copy'49 = "/workspace/crates/verified/src/composition/wal_copy.rs" 40 10 53 1
+let%span swal_copy'50 = "/workspace/crates/verified/src/composition/wal_copy.rs" 54 10 60 1
+let%span swal_copy'51 = "/workspace/crates/verified/src/composition/wal_copy.rs" 61 10 67 1
+let%span swal_copy'52 = "/workspace/crates/verified/src/composition/wal_copy.rs" 14 10 14 15
+let%span swal_copy'53 = "/workspace/crates/verified/src/composition/wal_copy.rs" 12 11 12 47
+let%span swal_copy'54 = "/workspace/crates/verified/src/composition/wal_copy.rs" 13 10 13 21
+let%span swal_copy'55 = "/workspace/crates/verified/src/composition/wal_copy.rs" 17 8 19 9
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 99 28 105 1
+let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 106 28 113 1
+let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 86 8 93 9
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 123 28 123 73
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int32
+use creusot.prelude.MutBorrow
+use creusot.int.UInt8
+use creusot.prelude.Any
+use int.MinMax
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_DeleteRecordsTrimApplication = RejectMalformed | TrimWal Int64.t | TrimLocal Int64.t | Complete Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let delete_records_trim_application (requested: Int64.t) (wal_start: Int64.t) (local_start: Int64.t)
+  (return (x: t_DeleteRecordsTrimApplication)) = any
+  [ return (result: t_DeleteRecordsTrimApplication) ->
+  {[@stop_split] [@expl:delete_records_trim_application ensures] [%#strim_admission] let frontier = if gt_log_Int (Int64.to_int requested) (Int64.to_int wal_start) then
+      if gt_log_Int (Int64.to_int requested) (Int64.to_int local_start) then
+        Int64.to_int requested
+      else
+        Int64.to_int local_start
+
+    else
+      if gt_log_Int (Int64.to_int wal_start) (Int64.to_int local_start) then
+        Int64.to_int wal_start
+      else
+        Int64.to_int local_start
+
+     in match result with
+      | RejectMalformed -> Int64.to_int requested < 0 \/ Int64.to_int wal_start < 0 \/ Int64.to_int local_start < 0
+      | TrimWal next -> ge_log_Int (Int64.to_int requested) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0 /\ Int64.to_int wal_start < frontier /\ Int64.to_int next = frontier
+      | TrimLocal next -> ge_log_Int (Int64.to_int requested) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0
+      /\ Int64.to_int wal_start = frontier /\ Int64.to_int local_start < frontier /\ Int64.to_int next = frontier
+      | Complete done' -> ge_log_Int (Int64.to_int requested) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0
+      /\ Int64.to_int wal_start = frontier /\ Int64.to_int local_start = frontier /\ Int64.to_int done' = frontier
+      end}
+    (! return {result}) ]
+
+let elim_Complete (_x: t_DeleteRecordsTrimApplication) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {Complete frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim Complete] match _x with
+      | Complete _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_TrimLocal (_x: t_DeleteRecordsTrimApplication) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {TrimLocal frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim TrimLocal] match _x with
+      | TrimLocal _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_TrimWal (_x: t_DeleteRecordsTrimApplication) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {TrimWal frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim TrimWal] match _x with
+      | TrimWal _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+type tup3_i64_u64_Option_usize = { f0'0: Int64.t; f1'0: UInt64.t; f2'0: t_Option_usize }
+
+type t_Option_tup3_i64_u64_Option_usize = None'0 | Some'0 tup3_i64_u64_Option_usize
+
+type t_Vec_i64_Global
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_i64_Global (self: t_Vec_i64_Global) : Seq.seq Int64.t
+
+axiom view_Vec_i64_Global_spec:
+  forall self: t_Vec_i64_Global [view_Vec_i64_Global self]. [%#svec'0] Seq.length (view_Vec_i64_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_i64 (return (x: t_Vec_i64_Global)) = any
+  [ return (result: t_Vec_i64_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_i64_Global result) = 0}
+    (! return {result}) ]
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_Vec_u8_Global
+
+type tup3_i64_i32_Vec_u8_Global = { f0'1: Int64.t; f1'1: Int32.t; f2'1: t_Vec_u8_Global }
+
+let len_tup3_i64_i32_Vec_u8_Global (self_: Slice64.slice tup3_i64_i32_Vec_u8_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
+
+type t_Option_tup2_i64_i64 = None'1 | Some'1 tup2_i64_i64
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sfuture_log_swap_admission] match result with
+      | Some'1 {f0 = last; f1 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ ge_log_Int (Int64.to_int supplied_base) (Int64.to_int expected_base)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None'1 -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base < Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX'0)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX'0)
+      end}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'2 | Some'2 ()
+
+type t_ControlFlow_Option_Infallible_tup2_i64_i64 = Continue tup2_i64_i64 | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'2 -> true
+      | Some'2 f0'2 -> inv_Infallible f0'2
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup2_i64_i64 (_1: t_ControlFlow_Option_Infallible_tup2_i64_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_i64_i64 [inv_ControlFlow_Option_Infallible_tup2_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_i64 x
+    = match x with
+      | Continue f0'2 -> true
+      | Break f0'2 -> inv_Option_Infallible f0'2
+      end
+
+let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_i64_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_i64_i64) ->
+  {[@stop_split] [@expl:branch_Option_tup2_i64_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_i64_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'1 v -> result = Continue v
+      | None'1 -> result = Break (None'2)
+      end)}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'2: tup2_i64_i64)) = any
+  [ _k (f0'2: tup2_i64_i64) -> {Continue f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let push_i64 (self_: MutBorrow.t t_Vec_i64_Global) (v: Int64.t) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_i64_Global self_.final
+    = Seq.snoc (view_Vec_i64_Global self_.current) v}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'2: t_Option_Infallible)) = any
+  [ _k (f0'2: t_Option_Infallible) -> {Break f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_residual_Option_tup3_i64_u64_Option_usize (residual: t_Option_Infallible)
+  (return (x: t_Option_tup3_i64_u64_Option_usize)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup3_i64_u64_Option_usize) ->
+  {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None'0}
+    (! return {result}) ]
+
+let deref_Vec_i64_Global (self_: t_Vec_i64_Global) (return (x: Slice64.slice Int64.t)) = any
+  [ return (result: Slice64.slice Int64.t) -> {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result
+    = view_Vec_i64_Global self_}
+    (! return {result}) ]
+
+type t_Option_i64 = None'3 | Some'3 Int64.t
+
+predicate wal_batch_layout [#"/workspace/crates/verified/src/wal/batch_equal.rs" 84 0 84 90] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (start: int) (target: int) =
+  [%#sbatch_equal'1] Seq.length bases = Seq.length lasts
+  /\ (if start = target then
+    Seq.length bases = 0
+  else
+    (forall i: int. 0 <= i /\ i < Seq.length bases
+        -> Int64.le (Seq.get bases i) (Seq.get lasts i)
+        /\ Int64.lt (Seq.get lasts i) const_MAX'0
+        /\ Int64.to_int (Seq.get bases i) = (if i = 0 then start else Int64.to_int (Seq.get lasts (i - 1)) + 1))
+    /\ target = (if Seq.length bases = 0 then start else Int64.to_int (Seq.get lasts (Seq.length bases - 1)) + 1)
+  )
+
+let wal_covering_batch_range (bases: Slice64.slice Int64.t) (lasts: Slice64.slice Int64.t) (start: Int64.t)
+  (target: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:wal_covering_batch_range ensures] ([@stop_split] [@expl:wal_covering_batch_range ensures #0] [%#sbatch_equal] match result with
+          | None'3 -> false
+          | Some'3 _ -> true
+          end
+      = (0 <= Int64.to_int start
+      /\ Int64.to_int start <= Int64.to_int target
+      /\ Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)
+      /\ (if start = target then
+        Seq.length (Slice64.view bases) = 0
+      else
+        gt_log_Int (Seq.length (Slice64.view bases)) 0
+        /\ 0 <= Int64.to_int (Seq.get (Slice64.view bases) 0)
+        /\ Int64.to_int (Seq.get (Slice64.view bases) 0) <= Int64.to_int start
+        /\ Int64.to_int start <= Int64.to_int (Seq.get (Slice64.view lasts) 0)
+        /\ wal_batch_layout (Slice64.view bases) (Slice64.view lasts) (Int64.to_int (Seq.get (Slice64.view bases) 0)) (Int64.to_int target)
+      )))
+    /\ ([@stop_split] [@expl:wal_covering_batch_range ensures #1] [%#sbatch_equal'0] match result with
+      | None'3 -> true
+      | Some'3 physical -> Int64.to_int physical
+        = (if Seq.length (Slice64.view bases) = 0 then
+          Int64.to_int start
+        else
+          Int64.to_int (Seq.get (Slice64.view bases) 0)
+        )
+      /\ 0 <= Int64.to_int physical
+      /\ Int64.to_int physical <= Int64.to_int start
+      /\ Int64.to_int start <= Int64.to_int target
+      /\ wal_batch_layout (Slice64.view bases) (Slice64.view lasts) (Int64.to_int physical) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
+        -> Int64.to_int physical <= Int64.to_int (Seq.get (Slice64.view bases) i)
+        /\ Int64.to_int (Seq.get (Slice64.view bases) i) <= Int64.to_int (Seq.get (Slice64.view lasts) i)
+        /\ Int64.to_int (Seq.get (Slice64.view lasts) i) < Int64.to_int target)
+      end)}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_i64 = Continue'0 Int64.t | Break'0 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'1 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue'0 f0'2 -> true
+      | Break'0 f0'2 -> inv_Option_Infallible f0'2
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'3 v -> result = Continue'0 v
+      | None'3 -> result = Break'0 (None'2)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'2: t_Option_Infallible)) = any
+  [ _k (f0'2: t_Option_Infallible) -> {Break'0 f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'2: Int64.t)) = any
+  [ _k (f0'2: Int64.t) -> {Continue'0 f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_i64_u64 = { f0'2: Int64.t; f1'2: UInt64.t }
+
+type t_Option_tup2_i64_u64 = None'4 | Some'4 tup2_i64_u64
+
+function view_Vec_u8_Global (self: t_Vec_u8_Global) : Seq.seq UInt8.t
+
+axiom view_Vec_u8_Global_spec:
+  forall self: t_Vec_u8_Global [view_Vec_u8_Global self]. [%#svec'0] Seq.length (view_Vec_u8_Global self)
+    <= UInt64.t'int const_MAX
+
+function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 15 0 15 69] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
+
+axiom wal_copy_byte_count_def:
+  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'53] 0
+        <= count
+      /\ count <= Seq.length batches)
+    -> wal_copy_byte_count batches count
+    = ([%#swal_copy'55] if count = 0 then
+      0
+    else
+      wal_copy_byte_count batches (count - 1) + Seq.length (view_Vec_u8_Global (Seq.get batches (count - 1)).f2'1)
+    )
+
+axiom wal_copy_byte_count_spec:
+  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'53] 0
+        <= count
+      /\ count <= Seq.length batches) -> ([%#swal_copy'54] ge_log_Int (wal_copy_byte_count batches count) 0)
+
+let checked_wal_copy_replays_exactly (source: Slice64.slice tup3_i64_i32_Vec_u8_Global)
+  (stored: Slice64.slice tup3_i64_i32_Vec_u8_Global) (start: Int64.t) (target: Int64.t) (position: UInt64.t)
+  (file_end: UInt64.t) (return (x: t_Option_tup2_i64_u64)) = any
+  [ return (result: t_Option_tup2_i64_u64) ->
+  {[@stop_split] [@expl:checked_wal_copy_replays_exactly ensures] ([@stop_split] [@expl:checked_wal_copy_replays_exactly ensures #0] [%#swal_copy'49] match result with
+          | None'4 -> false
+          | Some'4 _ -> true
+          end
+      = (ge_log_Int (Int64.to_int start) 0
+      /\ Seq.length (Slice64.view source) = Seq.length (Slice64.view stored)
+      /\ UInt64.t'int position <= UInt64.t'int file_end
+      /\ UInt64.t'int position + wal_copy_byte_count (Slice64.view source) (Seq.length (Slice64.view source))
+        <= UInt64.t'int file_end
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view source)
+          -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view source) i).f0'1) 0
+          /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view source) i).f1'1) 0
+          /\ Int64.to_int (Seq.get (Slice64.view source) i).f0'1 + Int32.to_int (Seq.get (Slice64.view source) i).f1'1
+              + 1
+            <= Int64.to_int const_MAX'0
+          /\ Int64.to_int (Seq.get (Slice64.view source) i).f0'1
+            = (if i = 0 then
+              Int64.to_int start
+            else
+              Int64.to_int (Seq.get (Slice64.view source) (i - 1)).f0'1
+                + Int32.to_int (Seq.get (Slice64.view source) (i - 1)).f1'1
+              + 1
+            )
+          /\ gt_log_Int (Seq.length (view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'1)) 0
+          /\ (Seq.get (Slice64.view source) i).f0'1 = (Seq.get (Slice64.view stored) i).f0'1
+          /\ (Seq.get (Slice64.view source) i).f1'1 = (Seq.get (Slice64.view stored) i).f1'1
+          /\ view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'1
+          = view_Vec_u8_Global (Seq.get (Slice64.view stored) i).f2'1)
+      /\ Int64.to_int target
+      = (if Seq.length (Slice64.view source) = 0 then
+        Int64.to_int start
+      else
+        Int64.to_int (Seq.get (Slice64.view source) (Seq.length (Slice64.view source) - 1)).f0'1
+          + Int32.to_int (Seq.get (Slice64.view source) (Seq.length (Slice64.view source) - 1)).f1'1
+        + 1
+      )))
+    /\ ([@stop_split] [@expl:checked_wal_copy_replays_exactly ensures #1] [%#swal_copy'50] match result with
+        | None'4 -> true
+        | Some'4 {f0'2 = end'; f1'2 = bytes_end} -> end' = target
+        /\ Int64.to_int start <= Int64.to_int end'
+        /\ (gt_log_Int (Seq.length (Slice64.view source)) 0
+          -> Int64.to_int start < Int64.to_int end' /\ UInt64.t'int position < UInt64.t'int bytes_end)
+        /\ UInt64.t'int bytes_end
+          = UInt64.t'int position + wal_copy_byte_count (Slice64.view source) (Seq.length (Slice64.view source))
+        /\ UInt64.t'int position <= UInt64.t'int bytes_end /\ UInt64.t'int bytes_end <= UInt64.t'int file_end
+        end)
+    /\ ([@stop_split] [@expl:checked_wal_copy_replays_exactly ensures #2] [%#swal_copy'51] match result with
+      | None'4 -> true
+      | Some'4 _ -> Seq.length (Slice64.view source) = Seq.length (Slice64.view stored)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view source)
+        -> (Seq.get (Slice64.view source) i).f0'1 = (Seq.get (Slice64.view stored) i).f0'1
+        /\ (Seq.get (Slice64.view source) i).f1'1 = (Seq.get (Slice64.view stored) i).f1'1
+        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'1
+        = view_Vec_u8_Global (Seq.get (Slice64.view stored) i).f2'1)
+      end)}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_tup2_i64_u64 = Continue'1 tup2_i64_u64 | Break'1 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_tup2_i64_u64 (_1: t_ControlFlow_Option_Infallible_tup2_i64_u64)
+
+axiom inv_axiom'2 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_i64_u64 [inv_ControlFlow_Option_Infallible_tup2_i64_u64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_u64 x
+    = match x with
+      | Continue'1 f0'3 -> true
+      | Break'1 f0'3 -> inv_Option_Infallible f0'3
+      end
+
+let branch_Option_tup2_i64_u64 (self_: t_Option_tup2_i64_u64)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_i64_u64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_i64_u64) ->
+  {[@stop_split] [@expl:branch_Option_tup2_i64_u64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_i64_u64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'4 v -> result = Continue'1 v
+      | None'4 -> result = Break'1 (None'2)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'1 (_x: t_ControlFlow_Option_Infallible_tup2_i64_u64) (return (f0'3: t_Option_Infallible)) = any
+  [ _k (f0'3: t_Option_Infallible) -> {Break'1 f0'3 = _x} (! return {f0'3})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'1 (_x: t_ControlFlow_Option_Infallible_tup2_i64_u64) (return (f0'3: tup2_i64_u64)) = any
+  [ _k (f0'3: tup2_i64_u64) -> {Continue'1 f0'3 = _x} (! return {f0'3})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 125 0 125 40] (a: int) (b: int) : int
+ = [%#sfetch'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 139 0 139 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sfetch'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sfetch] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sfetch'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sfetch'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sfetch'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sfetch'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sfetch'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sfetch'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sfetch'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+let produce_durability_frontier (base_offset: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:produce_durability_frontier ensures] [%#sproduce] match result with
+      | Some'3 frontier -> ge_log_Int (Int64.to_int base_offset) 0
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int frontier = Int64.to_int base_offset + Int32.to_int last_offset_delta + 1
+      /\ Int64.to_int base_offset < Int64.to_int frontier
+      | None'3 -> Int64.to_int base_offset < 0
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int base_offset + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX'0)
+      end}
+    (! return {result}) ]
+
+let in_half_open_window (value: Int64.t) (start: Int64.t) (end': Int64.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:in_half_open_window ensures] [%#smetadata_record_offset_deltas] result
+    = (Int64.to_int start <= Int64.to_int value /\ Int64.to_int value < Int64.to_int end')}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let covering_copy_preserves_logical_fetch [#"/workspace/crates/verified/src/composition/wal_copy.rs" 179 0 187 38]
+  (source: Slice64.slice tup3_i64_i32_Vec_u8_Global) (stored: Slice64.slice tup3_i64_i32_Vec_u8_Global)
+  (floors: tup2_i64_i64) (target: Int64.t) (position: UInt64.t) (file_end: UInt64.t) (requested: Int64.t)
+  (return (x: t_Option_tup3_i64_u64_Option_usize)) = (! bb0
+  [ bb0 = s0
+    [ s0 = delete_records_trim_application [%#swal_copy'0] {[%#swal_copy] (0: Int64.t)} {floors.f0} {floors.f1}
+        (fun (_x: t_DeleteRecordsTrimApplication) -> [ &_26 <- _x ] s1)
+    | s1 = any
+      [ br0 -> {_26 = RejectMalformed} (! bb9)
+      | br1 (x0: Int64.t) -> {_26 = TrimWal x0} (! bb8)
+      | br2 (x0: Int64.t) -> {_26 = TrimLocal x0} (! bb7)
+      | br3 (x0: Int64.t) -> {_26 = Complete x0} (! bb6) ] ]
+  | bb6 = s0 [ s0 = elim_Complete {_26} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb10 ]
+  | bb7 = s0 [ s0 = elim_TrimLocal {_26} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb10 ]
+  | bb8 = s0 [ s0 = elim_TrimWal {_26} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb10 ]
+  | bb10 = s0
+    [ s0 = [ &floor <- frontier ] s1
+    | s1 = [ &_33 <- Int64.lt target floor ] s2
+    | s2 = any [ br0 -> {_33 = false} (! bb12) | br1 -> {_33} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = new_i64 [%#swal_copy'1] (fun (_x: t_Vec_i64_Global) -> [ &bases <- _x ] s1)
+    | s1 = new_i64 [%#swal_copy'2] (fun (_x: t_Vec_i64_Global) -> [ &lasts <- _x ] s2)
+    | s2 = [ &i <- [%#swal_copy'3] (0: UInt64.t) ] s3
+    | s3 = bb15 ]
+  | bb15 = bb15invariant
+    [ bb15 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb15 ([%#swal_copy'4] Seq.length (Slice64.view source)
+      - UInt64.t'int i)}
+      bb15invariant
+    | bb15invariant = {[@expl:loop invariant #0] [%#swal_copy'7] UInt64.t'int i <= Seq.length (Slice64.view source)
+      /\ Seq.length (view_Vec_i64_Global bases) = UInt64.t'int i
+      /\ Seq.length (view_Vec_i64_Global lasts) = UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#swal_copy'6] forall j'0: int. 0 <= j'0 /\ j'0 < UInt64.t'int i
+        -> Seq.get (view_Vec_i64_Global bases) j'0 = (Seq.get (Slice64.view source) j'0).f0'1
+        /\ Int64.to_int (Seq.get (view_Vec_i64_Global lasts) j'0)
+          = Int64.to_int (Seq.get (Slice64.view source) j'0).f0'1
+          + Int32.to_int (Seq.get (Slice64.view source) j'0).f1'1
+        /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view source) j'0).f0'1) 0
+        /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view source) j'0).f1'1) 0
+        /\ Int64.to_int (Seq.get (Slice64.view source) j'0).f0'1 + Int32.to_int (Seq.get (Slice64.view source) j'0).f1'1
+          + 1
+        <= Int64.to_int const_MAX'0}
+      (! [ &variant_old_bb15 <- [%#swal_copy'4] Seq.length (Slice64.view source) - UInt64.t'int i ] s0)
+      [ s0 = len_tup3_i64_i32_Vec_u8_Global [%#swal_copy'5] {source} (fun (_x: UInt64.t) -> [ &_58 <- _x ] s1)
+      | s1 = [ &_56 <- UInt64.lt i _58 ] s2
+      | s2 = any [ br0 -> {_56 = false} (! bb32) | br1 -> {_56} (! bb18) ] ]
+      [ bb18 = s0
+        [ s0 = [ &_65 <- i ] s1
+        | s1 = [ &_66 <- Slice64.length source ] s2
+        | s2 = [ &_67 <- UInt64.lt _65 _66 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_copy'8] _67} s4
+        | s4 = Slice64.get [%#swal_copy'9] <tup3_i64_i32_Vec_u8_Global> {source} {_65}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_64 <- r.f0'1 ] s5)
+        | s5 = [ &_69 <- i ] s6
+        | s6 = [ &_70 <- Slice64.length source ] s7
+        | s7 = [ &_71 <- UInt64.lt _69 _70 ] s8
+        | s8 = {[@expl:index in bounds] [%#swal_copy'10] _71} s9
+        | s9 = Slice64.get [%#swal_copy'11] <tup3_i64_i32_Vec_u8_Global> {source} {_69}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_68 <- r.f0'1 ] s10)
+        | s10 = [ &_73 <- i ] s11
+        | s11 = [ &_74 <- Slice64.length source ] s12
+        | s12 = [ &_75 <- UInt64.lt _73 _74 ] s13
+        | s13 = {[@expl:index in bounds] [%#swal_copy'12] _75} s14
+        | s14 = Slice64.get [%#swal_copy'13] <tup3_i64_i32_Vec_u8_Global> {source} {_73}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_72 <- r.f1'1 ] s15)
+        | s15 = local_append_coordinates [%#swal_copy'14] {_64} {_68} {_72}
+            (fun (_x: t_Option_tup2_i64_i64) -> [ &_63 <- _x ] s16)
+        | s16 = branch_Option_tup2_i64_i64 [%#swal_copy'15] {_63}
+            (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_62 <- _x ] s17)
+        | s17 = any
+          [ br0 (x0: tup2_i64_i64) -> {_62 = Continue x0} (! bb26)
+          | br1 (x0: t_Option_Infallible) -> {_62 = Break x0} (! bb27) ] ]
+      | bb26 = s0
+        [ s0 = elim_Continue {_62} (fun (r0: tup2_i64_i64) -> [ &val' <- r0 ] s1)
+        | s1 = [ &_61 <- val' ] s2
+        | s2 = [ &last <- _61.f0 ] s3
+        | s3 = [ &_84 <- i ] s4
+        | s4 = [ &_85 <- Slice64.length source ] s5
+        | s5 = [ &_86 <- UInt64.lt _84 _85 ] s6
+        | s6 = {[@expl:index in bounds] [%#swal_copy'16] _86} s7
+        | s7 = Slice64.get [%#swal_copy'17] <tup3_i64_i32_Vec_u8_Global> {source} {_84}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_83 <- r.f0'1 ] s8)
+        | s8 = MutBorrow.borrow_mut <t_Vec_i64_Global> {bases}
+            (fun (_bor: MutBorrow.t t_Vec_i64_Global) -> [ &_82 <- _bor ] [ &bases <- _bor.final ] s9)
+        | s9 = push_i64 [%#swal_copy'18] {_82} {_83} (fun (_x: ()) -> [ &_81 <- _x ] s10)
+        | s10 = MutBorrow.borrow_mut <t_Vec_i64_Global> {lasts}
+            (fun (_bor: MutBorrow.t t_Vec_i64_Global) -> [ &_88 <- _bor ] [ &lasts <- _bor.final ] s11)
+        | s11 = push_i64 [%#swal_copy'19] {_88} {last} (fun (_x: ()) -> [ &_87 <- _x ] s12)
+        | s12 = UInt64.add [%#swal_copy'21] {i} {[%#swal_copy'20] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s13)
+        | s13 = bb15 ] ] ]
+  | bb27 = s0
+    [ s0 = elim_Break {_62} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_u64_Option_usize [%#swal_copy'15] {residual}
+        (fun (_x: t_Option_tup3_i64_u64_Option_usize) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb32 = s0
+    [ s0 = [ &_97 <- bases ] s1
+    | s1 = deref_Vec_i64_Global [%#swal_copy'22] {_97} (fun (_x: Slice64.slice Int64.t) -> [ &_95 <- _x ] s2)
+    | s2 = [ &_101 <- lasts ] s3
+    | s3 = deref_Vec_i64_Global [%#swal_copy'23] {_101} (fun (_x: Slice64.slice Int64.t) -> [ &_99 <- _x ] s4)
+    | s4 = wal_covering_batch_range [%#swal_copy'24] {_95} {_99} {floor} {target}
+        (fun (_x: t_Option_i64) -> [ &_93 <- _x ] s5)
+    | s5 = branch_Option_i64 [%#swal_copy'25] {_93} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_92 <- _x ] s6)
+    | s6 = any
+      [ br0 (x0: Int64.t) -> {_92 = Continue'0 x0} (! bb39)
+      | br1 (x0: t_Option_Infallible) -> {_92 = Break'0 x0} (! bb40) ] ]
+  | bb40 = s0
+    [ s0 = elim_Break'0 {_92} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_u64_Option_usize [%#swal_copy'25] {residual'0}
+        (fun (_x: t_Option_tup3_i64_u64_Option_usize) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb39 = s0
+    [ s0 = elim_Continue'0 {_92} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &physical <- val''0 ] s2
+    | s2 = checked_wal_copy_replays_exactly [%#swal_copy'26] {source} {stored} {physical} {target} {position} {file_end}
+        (fun (_x: t_Option_tup2_i64_u64) -> [ &_113 <- _x ] s3)
+    | s3 = branch_Option_tup2_i64_u64 [%#swal_copy'27] {_113}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_u64) -> [ &_112 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: tup2_i64_u64) -> {_112 = Continue'1 x0} (! bb46)
+      | br1 (x0: t_Option_Infallible) -> {_112 = Break'1 x0} (! bb47) ] ]
+  | bb47 = s0
+    [ s0 = elim_Break'1 {_112} (fun (r0: t_Option_Infallible) -> [ &residual'1 <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_u64_Option_usize [%#swal_copy'27] {residual'1}
+        (fun (_x: t_Option_tup3_i64_u64_Option_usize) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb46 = s0
+    [ s0 = elim_Continue'1 {_112} (fun (r0: tup2_i64_u64) -> [ &val''1 <- r0 ] s1)
+    | s1 = [ &_111 <- val''1 ] s2
+    | s2 = [ &end' <- _111.f0'2 ] s3
+    | s3 = [ &bytes_end <- _111.f1'2 ] s4
+    | s4 = [ &_126 <- { log_start = floor; hw = end'; lso = end'; log_end = end'; deliverable = end' } ] s5
+    | s5 = fetch_visibility [%#swal_copy'30] {[%#swal_copy'28] true} {[%#swal_copy'29] false} {_126} {requested}
+        (fun (_x: t_FetchVisibility) -> [ &visibility <- _x ] s6)
+    | s6 = any [ br0 -> {visibility.out_of_range = false} (! bb50) | br1 -> {visibility.out_of_range} (! bb51) ] ]
+  | bb50 = any [ br0 -> {visibility.empty = false} (! bb52) | br1 -> {visibility.empty} (! bb51) ]
+  | bb51 = s0
+    [ s0 = [ &_140 <- None ] s1
+    | s1 = [ &_137 <- { f0'0 = physical; f1'0 = bytes_end; f2'0 = _140 } ] s2
+    | s2 = [ &_ret <- Some'0 _137 ] s3
+    | s3 = return {_ret} ]
+  | bb52 = s0 [ s0 = [ &j <- [%#swal_copy'31] (0: UInt64.t) ] s1 | s1 = bb53 ]
+  | bb53 = bb53invariant
+    [ bb53 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb53 ([%#swal_copy'32] Seq.length (Slice64.view source)
+      - UInt64.t'int j)}
+      bb53invariant
+    | bb53invariant = {[@expl:loop invariant #0] [%#swal_copy'35] UInt64.t'int j <= Seq.length (Slice64.view source)}
+      {[@expl:loop invariant #1] [%#swal_copy'34] ge_log_Int (Int64.to_int requested) (if UInt64.t'int j = 0 then
+        Int64.to_int physical
+      else
+        Int64.to_int (Seq.get (Slice64.view source) (UInt64.t'int j - 1)).f0'1
+          + Int32.to_int (Seq.get (Slice64.view source) (UInt64.t'int j - 1)).f1'1
+        + 1
+      )}
+      (! [ &variant_old_bb53 <- [%#swal_copy'32] Seq.length (Slice64.view source) - UInt64.t'int j ] s0)
+      [ s0 = len_tup3_i64_i32_Vec_u8_Global [%#swal_copy'33] {source} (fun (_x: UInt64.t) -> [ &_157 <- _x ] s1)
+      | s1 = [ &_155 <- UInt64.lt j _157 ] s2
+      | s2 = any [ br0 -> {_155 = false} (! bb70) | br1 -> {_155} (! bb56) ] ]
+      [ bb56 = s0
+        [ s0 = [ &_163 <- j ] s1
+        | s1 = [ &_164 <- Slice64.length source ] s2
+        | s2 = [ &_165 <- UInt64.lt _163 _164 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_copy'36] _165} s4
+        | s4 = Slice64.get [%#swal_copy'37] <tup3_i64_i32_Vec_u8_Global> {source} {_163}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_162 <- r.f0'1 ] s5)
+        | s5 = [ &_167 <- j ] s6
+        | s6 = [ &_168 <- Slice64.length source ] s7
+        | s7 = [ &_169 <- UInt64.lt _167 _168 ] s8
+        | s8 = {[@expl:index in bounds] [%#swal_copy'38] _169} s9
+        | s9 = Slice64.get [%#swal_copy'39] <tup3_i64_i32_Vec_u8_Global> {source} {_167}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_166 <- r.f1'1 ] s10)
+        | s10 = produce_durability_frontier [%#swal_copy'40] {_162} {_166}
+            (fun (_x: t_Option_i64) -> [ &_161 <- _x ] s11)
+        | s11 = branch_Option_i64 [%#swal_copy'41] {_161}
+            (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_160 <- _x ] s12)
+        | s12 = any
+          [ br0 (x0: Int64.t) -> {_160 = Continue'0 x0} (! bb63)
+          | br1 (x0: t_Option_Infallible) -> {_160 = Break'0 x0} (! bb64) ] ]
+      | bb63 = s0
+        [ s0 = elim_Continue'0 {_160} (fun (r0: Int64.t) -> [ &val''2 <- r0 ] s1)
+        | s1 = [ &next <- val''2 ] s2
+        | s2 = [ &_179 <- j ] s3
+        | s3 = [ &_180 <- Slice64.length source ] s4
+        | s4 = [ &_181 <- UInt64.lt _179 _180 ] s5
+        | s5 = {[@expl:index in bounds] [%#swal_copy'42] _181} s6
+        | s6 = Slice64.get [%#swal_copy'43] <tup3_i64_i32_Vec_u8_Global> {source} {_179}
+            (fun (r: tup3_i64_i32_Vec_u8_Global) -> [ &_178 <- r.f0'1 ] s7)
+        | s7 = in_half_open_window [%#swal_copy'44] {requested} {_178} {next} (fun (_x: bool) -> [ &_176 <- _x ] s8)
+        | s8 = any [ br0 -> {_176 = false} (! bb69) | br1 -> {_176} (! bb68) ] ]
+      | bb69 = s0
+        [ s0 = UInt64.add [%#swal_copy'46] {j} {[%#swal_copy'45] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &j <- _x ] s1)
+        | s1 = bb53 ] ] ]
+  | bb64 = s0
+    [ s0 = elim_Break'0 {_160} (fun (r0: t_Option_Infallible) -> [ &residual'2 <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_u64_Option_usize [%#swal_copy'41] {residual'2}
+        (fun (_x: t_Option_tup3_i64_u64_Option_usize) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb68 = s0
+    [ s0 = [ &_187 <- Some j ] s1
+    | s1 = [ &_184 <- { f0'0 = physical; f1'0 = bytes_end; f2'0 = _187 } ] s2
+    | s2 = [ &_ret <- Some'0 _184 ] s3
+    | s3 = return {_ret} ]
+  | bb70 = s0
+    [ s0 = [ &_193 <- None ] s1
+    | s1 = [ &_190 <- { f0'0 = physical; f1'0 = bytes_end; f2'0 = _193 } ] s2
+    | s2 = [ &_ret <- Some'0 _190 ] s3
+    | s3 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup3_i64_u64_Option_usize = Any.any_l ()
+  | & source: Slice64.slice tup3_i64_i32_Vec_u8_Global = source
+  | & stored: Slice64.slice tup3_i64_i32_Vec_u8_Global = stored
+  | & floors: tup2_i64_i64 = floors
+  | & target: Int64.t = target
+  | & position: UInt64.t = position
+  | & file_end: UInt64.t = file_end
+  | & requested: Int64.t = requested
+  | & floor: Int64.t = Any.any_l ()
+  | & _26: t_DeleteRecordsTrimApplication = Any.any_l ()
+  | & frontier: Int64.t = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & bases: t_Vec_i64_Global = Any.any_l ()
+  | & lasts: t_Vec_i64_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _58: UInt64.t = Any.any_l ()
+  | & last: Int64.t = Any.any_l ()
+  | & _61: tup2_i64_i64 = Any.any_l ()
+  | & _62: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _63: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _64: Int64.t = Any.any_l ()
+  | & _65: UInt64.t = Any.any_l ()
+  | & _66: UInt64.t = Any.any_l ()
+  | & _67: bool = Any.any_l ()
+  | & _68: Int64.t = Any.any_l ()
+  | & _69: UInt64.t = Any.any_l ()
+  | & _70: UInt64.t = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & _72: Int32.t = Any.any_l ()
+  | & _73: UInt64.t = Any.any_l ()
+  | & _74: UInt64.t = Any.any_l ()
+  | & _75: bool = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup2_i64_i64 = Any.any_l ()
+  | & _81: () = Any.any_l ()
+  | & _82: MutBorrow.t t_Vec_i64_Global = Any.any_l ()
+  | & _83: Int64.t = Any.any_l ()
+  | & _84: UInt64.t = Any.any_l ()
+  | & _85: UInt64.t = Any.any_l ()
+  | & _86: bool = Any.any_l ()
+  | & _87: () = Any.any_l ()
+  | & _88: MutBorrow.t t_Vec_i64_Global = Any.any_l ()
+  | & physical: Int64.t = Any.any_l ()
+  | & _92: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _93: t_Option_i64 = Any.any_l ()
+  | & _95: Slice64.slice Int64.t = Any.any_l ()
+  | & _97: t_Vec_i64_Global = Any.any_l ()
+  | & _99: Slice64.slice Int64.t = Any.any_l ()
+  | & _101: t_Vec_i64_Global = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l ()
+  | & end': Int64.t = Any.any_l ()
+  | & bytes_end: UInt64.t = Any.any_l ()
+  | & _111: tup2_i64_u64 = Any.any_l ()
+  | & _112: t_ControlFlow_Option_Infallible_tup2_i64_u64 = Any.any_l ()
+  | & _113: t_Option_tup2_i64_u64 = Any.any_l ()
+  | & residual'1: t_Option_Infallible = Any.any_l ()
+  | & val''1: tup2_i64_u64 = Any.any_l ()
+  | & visibility: t_FetchVisibility = Any.any_l ()
+  | & _126: t_FetchWatermarks = Any.any_l ()
+  | & _137: tup3_i64_u64_Option_usize = Any.any_l ()
+  | & _140: t_Option_usize = Any.any_l ()
+  | & j: UInt64.t = Any.any_l ()
+  | & _155: bool = Any.any_l ()
+  | & _157: UInt64.t = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _160: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _161: t_Option_i64 = Any.any_l ()
+  | & _162: Int64.t = Any.any_l ()
+  | & _163: UInt64.t = Any.any_l ()
+  | & _164: UInt64.t = Any.any_l ()
+  | & _165: bool = Any.any_l ()
+  | & _166: Int32.t = Any.any_l ()
+  | & _167: UInt64.t = Any.any_l ()
+  | & _168: UInt64.t = Any.any_l ()
+  | & _169: bool = Any.any_l ()
+  | & residual'2: t_Option_Infallible = Any.any_l ()
+  | & val''2: Int64.t = Any.any_l ()
+  | & _176: bool = Any.any_l ()
+  | & _178: Int64.t = Any.any_l ()
+  | & _179: UInt64.t = Any.any_l ()
+  | & _180: UInt64.t = Any.any_l ()
+  | & _181: bool = Any.any_l ()
+  | & _184: tup3_i64_u64_Option_usize = Any.any_l ()
+  | & _187: t_Option_usize = Any.any_l ()
+  | & _190: tup3_i64_u64_Option_usize = Any.any_l ()
+  | & _193: t_Option_usize = Any.any_l ()
+  | & variant_old_bb15: int = Any.any_l ()
+  | & variant_old_bb53: int = Any.any_l () ])
+  [ return (result: t_Option_tup3_i64_u64_Option_usize) ->
+  {[@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures] ([@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures #0] [%#swal_copy'47] match result with
+          | None'0 -> false
+          | Some'0 _ -> true
+          end
+      = (0 <= Int64.to_int floors.f0
+      /\ 0 <= Int64.to_int floors.f1
+      /\ Int64.to_int floors.f0 <= Int64.to_int target
+      /\ Int64.to_int floors.f1 <= Int64.to_int target
+      /\ Seq.length (Slice64.view source) = Seq.length (Slice64.view stored)
+      /\ UInt64.t'int position <= UInt64.t'int file_end
+      /\ UInt64.t'int position + wal_copy_byte_count (Slice64.view source) (Seq.length (Slice64.view source))
+        <= UInt64.t'int file_end
+      /\ (if Seq.length (Slice64.view source) = 0 then
+          MinMax.max (Int64.to_int floors.f0) (Int64.to_int floors.f1) = Int64.to_int target
+        else
+          MinMax.max (Int64.to_int floors.f0) (Int64.to_int floors.f1) < Int64.to_int target
+          /\ Int64.to_int (Seq.get (Slice64.view source) 0).f0'1
+            <= MinMax.max (Int64.to_int floors.f0) (Int64.to_int floors.f1)
+          /\ MinMax.max (Int64.to_int floors.f0) (Int64.to_int floors.f1)
+            < Int64.to_int (Seq.get (Slice64.view source) 0).f0'1 + Int32.to_int (Seq.get (Slice64.view source) 0).f1'1
+            + 1
+          /\ Int64.to_int target
+          = Int64.to_int (Seq.get (Slice64.view source) (Seq.length (Slice64.view source) - 1)).f0'1
+            + Int32.to_int (Seq.get (Slice64.view source) (Seq.length (Slice64.view source) - 1)).f1'1
+          + 1
+        )
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view source)
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view source) i).f0'1) 0
+        /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view source) i).f1'1) 0
+        /\ Int64.to_int (Seq.get (Slice64.view source) i).f0'1 + Int32.to_int (Seq.get (Slice64.view source) i).f1'1 + 1
+          <= Int64.to_int const_MAX'0
+        /\ (gt_log_Int i 0
+          -> Int64.to_int (Seq.get (Slice64.view source) i).f0'1
+          = Int64.to_int (Seq.get (Slice64.view source) (i - 1)).f0'1
+            + Int32.to_int (Seq.get (Slice64.view source) (i - 1)).f1'1
+          + 1)
+        /\ gt_log_Int (Seq.length (view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'1)) 0
+        /\ (Seq.get (Slice64.view source) i).f0'1 = (Seq.get (Slice64.view stored) i).f0'1
+        /\ (Seq.get (Slice64.view source) i).f1'1 = (Seq.get (Slice64.view stored) i).f1'1
+        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'1
+        = view_Vec_u8_Global (Seq.get (Slice64.view stored) i).f2'1)))
+    /\ ([@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures #1] [%#swal_copy'48] match result with
+      | None'0 -> true
+      | Some'0 {f0'0 = physical; f1'0 = bytes_end; f2'0 = selected} -> Int64.to_int physical
+        = (if Seq.length (Slice64.view source) = 0 then
+          MinMax.max (Int64.to_int floors.f0) (Int64.to_int floors.f1)
+        else
+          Int64.to_int (Seq.get (Slice64.view source) 0).f0'1
+        )
+      /\ 0 <= Int64.to_int physical
+      /\ Int64.to_int physical <= MinMax.max (Int64.to_int floors.f0) (Int64.to_int floors.f1)
+      /\ UInt64.t'int bytes_end
+        = UInt64.t'int position + wal_copy_byte_count (Slice64.view source) (Seq.length (Slice64.view source))
+      /\ UInt64.t'int bytes_end <= UInt64.t'int file_end
+      /\ match selected with
+            | None -> false
+            | Some _ -> true
+            end
+        = (Int64.to_int floors.f0 <= Int64.to_int requested
+        /\ Int64.to_int floors.f1 <= Int64.to_int requested /\ Int64.to_int requested < Int64.to_int target)
+      /\ match selected with
+        | None -> true
+        | Some i -> UInt64.t'int i < Seq.length (Slice64.view source)
+        /\ UInt64.t'int i < Seq.length (Slice64.view stored)
+        /\ Int64.to_int (Seq.get (Slice64.view source) (UInt64.t'int i)).f0'1 <= Int64.to_int requested
+        /\ Int64.to_int requested
+          < Int64.to_int (Seq.get (Slice64.view source) (UInt64.t'int i)).f0'1
+            + Int32.to_int (Seq.get (Slice64.view source) (UInt64.t'int i)).f1'1
+          + 1
+        /\ (Seq.get (Slice64.view source) (UInt64.t'int i)).f0'1 = (Seq.get (Slice64.view stored) (UInt64.t'int i)).f0'1
+        /\ (Seq.get (Slice64.view source) (UInt64.t'int i)).f1'1 = (Seq.get (Slice64.view stored) (UInt64.t'int i)).f1'1
+        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) (UInt64.t'int i)).f2'1
+        = view_Vec_u8_Global (Seq.get (Slice64.view stored) (UInt64.t'int i)).f2'1
+        end
+      end)}
+    (! return {result}) ]

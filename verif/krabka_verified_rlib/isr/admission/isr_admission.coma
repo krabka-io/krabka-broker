@@ -1,0 +1,110 @@
+(* #"/workspace/crates/verified/src/isr/admission.rs" 58 0 58 64 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sadmission = "/workspace/crates/verified/src/isr/admission.rs" 48 10 48 62
+let%span sadmission'0 = "/workspace/crates/verified/src/isr/admission.rs" 49 10 56 1
+let%span sadmission'1 = "/workspace/crates/verified/src/isr/admission.rs" 14 8 37 9
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_ProposedIsr = Invalid | WithoutLeader | Valid
+
+type t_AlterPartitionFacts = {
+  request_leader_epoch: Int32.t;
+  current_leader_epoch: Int32.t;
+  request_partition_epoch: Int32.t;
+  current_partition_epoch: Int32.t;
+  requester_is_leader: bool;
+  proposed_isr: t_ProposedIsr;
+  recovery_state_valid: bool;
+  replicas_eligible: bool }
+
+type t_IsrAdmission =
+  | NotController
+  | FencedLeaderEpoch
+  | InvalidUpdateVersion
+  | InvalidRequest
+  | IneligibleReplica
+  | Admit
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function kafka_validate_alter_partition_data [#"/workspace/crates/verified/src/isr/admission.rs" 12 0 12 82] (facts: t_AlterPartitionFacts) : t_IsrAdmission
+ = [%#sadmission'1] if gt_log_Int (Int32.to_int facts.request_leader_epoch) (Int32.to_int facts.current_leader_epoch)
+  \/ gt_log_Int (Int32.to_int facts.request_partition_epoch) (Int32.to_int facts.current_partition_epoch) then
+    NotController
+  else
+    if Int32.to_int facts.request_leader_epoch < Int32.to_int facts.current_leader_epoch then
+      FencedLeaderEpoch
+    else
+      if not facts.requester_is_leader then
+        InvalidRequest
+      else
+        if Int32.to_int facts.request_partition_epoch < Int32.to_int facts.current_partition_epoch then
+          InvalidUpdateVersion
+        else
+          match facts.proposed_isr with
+            | Valid -> if not facts.recovery_state_valid then
+              InvalidRequest
+            else
+              if not facts.replicas_eligible then IneligibleReplica else Admit
+
+            | _ -> InvalidRequest
+            end
+
+
+
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let isr_admission [#"/workspace/crates/verified/src/isr/admission.rs" 58 0 58 64]
+  (facts: t_AlterPartitionFacts) (return (x: t_IsrAdmission)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- Int32.gt facts.request_leader_epoch facts.current_leader_epoch ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_17 <- Int32.gt facts.request_partition_epoch facts.current_partition_epoch ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb5) | br1 -> {_17} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- NotController ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_22 <- Int32.lt facts.request_leader_epoch facts.current_leader_epoch ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb7) | br1 -> {_22} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- FencedLeaderEpoch ] s1 | s1 = return {_ret} ]
+  | bb7 = any [ br0 -> {facts.requester_is_leader = false} (! bb9) | br1 -> {facts.requester_is_leader} (! bb8) ]
+  | bb8 = s0
+    [ s0 = [ &_30 <- Int32.lt facts.request_partition_epoch facts.current_partition_epoch ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb11) | br1 -> {_30} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- InvalidUpdateVersion ] s1 | s1 = return {_ret} ]
+  | bb11 = any
+    [ br0 -> {facts.proposed_isr = Invalid} (! bb14)
+    | br1 -> {facts.proposed_isr = WithoutLeader} (! bb14)
+    | br2 -> {facts.proposed_isr = Valid} (! bb15) ]
+  | bb15 = any [ br0 -> {facts.recovery_state_valid = false} (! bb17) | br1 -> {facts.recovery_state_valid} (! bb16) ]
+  | bb16 = any [ br0 -> {facts.replicas_eligible = false} (! bb19) | br1 -> {facts.replicas_eligible} (! bb18) ]
+  | bb18 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb19 = s0 [ s0 = [ &_ret <- IneligibleReplica ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- InvalidRequest ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- InvalidRequest ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- InvalidRequest ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IsrAdmission = Any.any_l ()
+  | & facts: t_AlterPartitionFacts = facts
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _30: bool = Any.any_l () ])
+  [ return (result: t_IsrAdmission) ->
+  {[@stop_split] [@expl:isr_admission ensures] ([@stop_split] [@expl:isr_admission ensures #0] [%#sadmission] result
+      = kafka_validate_alter_partition_data facts)
+    /\ ([@stop_split] [@expl:isr_admission ensures #1] [%#sadmission'0] (result = Admit)
+    = (Int32.to_int facts.request_leader_epoch = Int32.to_int facts.current_leader_epoch
+    /\ Int32.to_int facts.request_partition_epoch = Int32.to_int facts.current_partition_epoch
+    /\ facts.requester_is_leader
+    /\ facts.proposed_isr = Valid /\ facts.recovery_state_valid /\ facts.replicas_eligible))}
+    (! return {result}) ]

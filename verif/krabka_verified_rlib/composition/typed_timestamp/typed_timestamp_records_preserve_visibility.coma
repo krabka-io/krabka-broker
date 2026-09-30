@@ -1,0 +1,370 @@
+(* #"/workspace/crates/verified/src/composition/typed_timestamp.rs" 37 0 44 33 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 149 10 156 1
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 62 10 69 1
+let%span styped_timestamp = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 46 39 46 49
+let%span styped_timestamp'0 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 47 20 47 26
+let%span styped_timestamp'1 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 52 14 52 37
+let%span styped_timestamp'2 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 53 18 53 31
+let%span styped_timestamp'3 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 49 16 51 114
+let%span styped_timestamp'4 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 48 16 48 68
+let%span styped_timestamp'5 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 54 46 54 60
+let%span styped_timestamp'6 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 54 13 54 25
+let%span styped_timestamp'7 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 54 27 54 42
+let%span styped_timestamp'8 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 55 24 55 87
+let%span styped_timestamp'9 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 56 20 56 47
+let%span styped_timestamp'10 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 55 24 56 48
+let%span styped_timestamp'11 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 58 72 58 73
+let%span styped_timestamp'12 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 58 12 58 74
+let%span styped_timestamp'13 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 59 24 59 47
+let%span styped_timestamp'14 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 58 12 59 48
+let%span styped_timestamp'15 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 57 8 60 9
+let%span styped_timestamp'16 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 61 17 61 18
+let%span styped_timestamp'17 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 61 8 61 18
+let%span styped_timestamp'18 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 63 49 63 57
+let%span styped_timestamp'19 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 63 4 63 89
+let%span styped_timestamp'20 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 14 11 14 94
+let%span styped_timestamp'21 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 15 11 16 66
+let%span styped_timestamp'22 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 17 11 18 39
+let%span styped_timestamp'23 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 19 11 20 95
+let%span styped_timestamp'24 = "/workspace/crates/verified/src/composition/typed_timestamp.rs" 21 10 36 1
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span stiered_timestamp = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 15 11 15 71
+let%span stiered_timestamp'0 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 16 11 16 76
+let%span stiered_timestamp'1 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 17 11 17 74
+let%span stiered_timestamp'2 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 18 11 19 37
+let%span stiered_timestamp'3 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 20 11 21 35
+let%span stiered_timestamp'4 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 22 10 37 1
+
+use creusot.int.Int64
+use seq.Seq
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.int.Int32
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type tup3_i64_i64_i64 = { f0: Int64.t; f1: Int64.t; f2: Int64.t }
+
+type t_Vec_tup2_i64_i64_Global
+
+type tup2_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_tup2_i64_i64_Global (self: t_Vec_tup2_i64_i64_Global) : Seq.seq tup2_i64_i64
+
+axiom view_Vec_tup2_i64_i64_Global_spec:
+  forall self: t_Vec_tup2_i64_i64_Global [view_Vec_tup2_i64_i64_Global self]. [%#svec'0] Seq.length (view_Vec_tup2_i64_i64_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_tup2_i64_i64 (return (x: t_Vec_tup2_i64_i64_Global)) = any
+  [ return (result: t_Vec_tup2_i64_i64_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_tup2_i64_i64_Global result) = 0}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup2_i32_i64 = { f0'1: Int32.t; f1'1: Int64.t }
+
+let len_tup2_i32_i64 (self_: Slice64.slice tup2_i32_i64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
+
+let timestamp_record_time (batch_timestamp: Int64.t) (timestamp_delta: Int64.t) (append_time: t_Option_i64)
+  (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:timestamp_record_time ensures] [%#stimestamp] match result with
+      | Some timestamp -> Int64.to_int timestamp
+      = match append_time with
+        | Some stamp -> Int64.to_int stamp
+        | None -> Int64.to_int batch_timestamp + Int64.to_int timestamp_delta
+        end
+      | None -> append_time = None
+      /\ (Int64.to_int batch_timestamp + Int64.to_int timestamp_delta < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int batch_timestamp + Int64.to_int timestamp_delta) (Int64.to_int const_MAX'0))
+      end}
+    (! return {result}) ]
+
+let expect_i64 (self_: t_Option_i64) (msg: string) (return (x: Int64.t)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None}
+  any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:expect ensures] [%#soption'0] Some result = self_}
+    (! return {result}) ]
+
+type t_Option_tup2_i64_i64 = None'0 | Some'0 tup2_i64_i64
+
+let timestamp_record_coordinates (batch_base: Int64.t) (offset_delta: Int32.t) (batch_timestamp: Int64.t)
+  (timestamp_delta: Int64.t) (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:timestamp_record_coordinates ensures] [%#stimestamp'0] match result with
+      | Some'0 {f0'0 = offset; f1'0 = timestamp} -> Int64.to_int offset
+        = Int64.to_int batch_base + Int32.to_int offset_delta
+      /\ Int64.to_int timestamp = Int64.to_int batch_timestamp + Int64.to_int timestamp_delta
+      | None'0 -> Int64.to_int batch_base + Int32.to_int offset_delta < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int offset_delta) (Int64.to_int const_MAX'0)
+      \/ Int64.to_int batch_timestamp + Int64.to_int timestamp_delta < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int batch_timestamp + Int64.to_int timestamp_delta) (Int64.to_int const_MAX'0)
+      end}
+    (! return {result}) ]
+
+let expect_tup2_i64_i64 (self_: t_Option_tup2_i64_i64) (msg: string) (return (x: tup2_i64_i64)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None'0}
+  any
+  [ return (result: tup2_i64_i64) -> {[@stop_split] [@expl:expect ensures] [%#soption'0] Some'0 result = self_}
+    (! return {result}) ]
+
+let push_tup2_i64_i64 (self_: MutBorrow.t t_Vec_tup2_i64_i64_Global) (v: tup2_i64_i64) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_tup2_i64_i64_Global self_.final
+    = Seq.snoc (view_Vec_tup2_i64_i64_Global self_.current) v}
+    (! return {result}) ]
+
+let deref_Vec_tup2_i64_i64_Global (self_: t_Vec_tup2_i64_i64_Global) (return (x: Slice64.slice tup2_i64_i64)) = any
+  [ return (result: Slice64.slice tup2_i64_i64) -> {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result
+    = view_Vec_tup2_i64_i64_Global self_}
+    (! return {result}) ]
+
+type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
+
+let tiered_timestamp_lookup_preserves_first (remote: Slice64.slice tup2_i64_i64) (local: Slice64.slice tup2_i64_i64)
+  (target: Int64.t) (minimum: Int64.t) (bound: Int64.t) (epoch: Int32.t) (return (x: t_ListOffsetsSelectionDecision)) =
+{[@stop_split] [@expl:tiered_timestamp_lookup_preserves_first requires] ([@stop_split] [@expl:tiered_timestamp_lookup_preserves_first requires #0] [%#stiered_timestamp] ge_log_Int (Int64.to_int target) 0
+    /\ ge_log_Int (Int64.to_int minimum) 0
+    /\ ge_log_Int (Int64.to_int bound) 0 /\ ge_log_Int (Int32.to_int epoch) (- 1))
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_preserves_first requires #1] [%#stiered_timestamp'0] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view remote) -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view remote) i).f0'0) 0)
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_preserves_first requires #2] [%#stiered_timestamp'1] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view local) -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view local) i).f0'0) 0)
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_preserves_first requires #3] [%#stiered_timestamp'2] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view remote)
+      -> Int64.to_int (Seq.get (Slice64.view remote) i).f0'0 < Int64.to_int (Seq.get (Slice64.view remote) j).f0'0)
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_preserves_first requires #4] [%#stiered_timestamp'3] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view local)
+    -> Int64.to_int (Seq.get (Slice64.view local) i).f0'0 < Int64.to_int (Seq.get (Slice64.view local) j).f0'0)}
+  any
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:tiered_timestamp_lookup_preserves_first ensures] [%#stiered_timestamp'4] match result with
+      | RejectMalformed -> false
+      | Resolved offset timestamp leader_epoch -> Int64.to_int minimum <= Int64.to_int offset
+      /\ Int64.to_int offset < Int64.to_int bound
+      /\ ge_log_Int (Int64.to_int timestamp) (Int64.to_int target)
+      /\ leader_epoch = epoch
+      /\ ((exists i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view remote)
+            /\ { f0'0 = offset; f1'0 = timestamp } = Seq.get (Slice64.view remote) i)
+        \/ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view local)
+          /\ { f0'0 = offset; f1'0 = timestamp } = Seq.get (Slice64.view local) i))
+      /\ (forall i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view remote)
+            /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view remote) i).f0'0) (Int64.to_int minimum)
+            /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view remote) i).f1'0) (Int64.to_int target)
+          -> Int64.to_int offset <= Int64.to_int (Seq.get (Slice64.view remote) i).f0'0)
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view local)
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view local) i).f0'0) (Int64.to_int minimum)
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view local) i).f1'0) (Int64.to_int target)
+        -> Int64.to_int offset <= Int64.to_int (Seq.get (Slice64.view local) i).f0'0)
+      | Unknown -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view remote)
+          -> Int64.to_int (Seq.get (Slice64.view remote) i).f0'0 < Int64.to_int minimum
+          \/ Int64.to_int (Seq.get (Slice64.view remote) i).f1'0 < Int64.to_int target
+          \/ ge_log_Int (Int64.to_int (Seq.get (Slice64.view remote) i).f0'0) (Int64.to_int bound))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view local)
+        -> Int64.to_int (Seq.get (Slice64.view local) i).f0'0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view local) i).f1'0 < Int64.to_int target
+        \/ ge_log_Int (Int64.to_int (Seq.get (Slice64.view local) i).f0'0) (Int64.to_int bound))
+      end}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let typed_timestamp_records_preserve_visibility [#"/workspace/crates/verified/src/composition/typed_timestamp.rs" 37 0 44 33]
+  (records: Slice64.slice tup2_i32_i64) (base: Int64.t) (batch_time: Int64.t) (append_time: t_Option_i64)
+  (request: tup3_i64_i64_i64) (epoch: Int32.t) (return (x: t_ListOffsetsSelectionDecision)) =
+{[@stop_split] [@expl:typed_timestamp_records_preserve_visibility requires] ([@stop_split] [@expl:typed_timestamp_records_preserve_visibility requires #0] [%#styped_timestamp'20] ge_log_Int (Int64.to_int base) 0
+    /\ ge_log_Int (Int64.to_int request.f0) 0
+    /\ ge_log_Int (Int64.to_int request.f1) 0
+    /\ ge_log_Int (Int64.to_int request.f2) 0 /\ ge_log_Int (Int32.to_int epoch) (- 1))
+  /\ ([@stop_split] [@expl:typed_timestamp_records_preserve_visibility requires #1] [%#styped_timestamp'21] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view records)
+      -> ge_log_Int (Int32.to_int (Seq.get (Slice64.view records) i).f0'1) 0
+      /\ Int64.to_int base + Int32.to_int (Seq.get (Slice64.view records) i).f0'1 <= Int64.to_int const_MAX'0)
+  /\ ([@stop_split] [@expl:typed_timestamp_records_preserve_visibility requires #2] [%#styped_timestamp'22] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view records)
+      -> Int32.to_int (Seq.get (Slice64.view records) i).f0'1 < Int32.to_int (Seq.get (Slice64.view records) j).f0'1)
+  /\ ([@stop_split] [@expl:typed_timestamp_records_preserve_visibility requires #3] [%#styped_timestamp'23] append_time
+    <> None
+  \/ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view records)
+    -> Int64.to_int const_MIN <= Int64.to_int batch_time + Int64.to_int (Seq.get (Slice64.view records) i).f1'1
+    /\ Int64.to_int batch_time + Int64.to_int (Seq.get (Slice64.view records) i).f1'1 <= Int64.to_int const_MAX'0))}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &minimum <- request.f0 ] s1
+    | s1 = [ &target <- request.f1 ] s2
+    | s2 = [ &bound <- request.f2 ] s3
+    | s3 = new_tup2_i64_i64 [%#styped_timestamp] (fun (_x: t_Vec_tup2_i64_i64_Global) -> [ &decoded <- _x ] s4)
+    | s4 = [ &index <- [%#styped_timestamp'0] (0: UInt64.t) ] s5
+    | s5 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#styped_timestamp'1] Seq.length (Slice64.view records)
+      - UInt64.t'int index)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#styped_timestamp'4] UInt64.t'int index
+        <= Seq.length (Slice64.view records)
+      /\ Seq.length (view_Vec_tup2_i64_i64_Global decoded) = UInt64.t'int index}
+      {[@expl:loop invariant #1] [%#styped_timestamp'3] forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (view_Vec_tup2_i64_i64_Global decoded) i).f0'0
+          = Int64.to_int base + Int32.to_int (Seq.get (Slice64.view records) i).f0'1
+        /\ Int64.to_int (Seq.get (view_Vec_tup2_i64_i64_Global decoded) i).f1'0
+        = match append_time with
+          | Some stamp -> Int64.to_int stamp
+          | None -> Int64.to_int batch_time + Int64.to_int (Seq.get (Slice64.view records) i).f1'1
+          end}
+      (! [ &variant_old_bb2 <- [%#styped_timestamp'1] Seq.length (Slice64.view records) - UInt64.t'int index ] s0)
+      [ s0 = len_tup2_i32_i64 [%#styped_timestamp'2] {records} (fun (_x: UInt64.t) -> [ &_55 <- _x ] s1)
+      | s1 = [ &_53 <- UInt64.lt index _55 ] s2
+      | s2 = any [ br0 -> {_53 = false} (! bb12) | br1 -> {_53} (! bb5) ] ]
+      [ bb5 = s0
+        [ s0 = [ &_59 <- index ] s1
+        | s1 = [ &_60 <- Slice64.length records ] s2
+        | s2 = [ &_61 <- UInt64.lt _59 _60 ] s3
+        | s3 = {[@expl:index in bounds] [%#styped_timestamp'5] _61} s4
+        | s4 = Slice64.get [%#styped_timestamp'6] <tup2_i32_i64> {records} {_59}
+            (fun (r: tup2_i32_i64) -> [ &offset_delta <- r.f0'1 ] s5)
+        | s5 = Slice64.get [%#styped_timestamp'7] <tup2_i32_i64> {records} {_59}
+            (fun (r: tup2_i32_i64) -> [ &timestamp_delta <- r.f1'1 ] s6)
+        | s6 = timestamp_record_time [%#styped_timestamp'8] {batch_time} {timestamp_delta} {append_time}
+            (fun (_x: t_Option_i64) -> [ &_63 <- _x ] s7)
+        | s7 = [ &_68 <- [%#styped_timestamp'9] "valid effective timestamp" ] s8
+        | s8 = expect_i64 [%#styped_timestamp'10] {_63} {_68} (fun (_x: Int64.t) -> [ &timestamp <- _x ] s9)
+        | s9 = timestamp_record_coordinates [%#styped_timestamp'12] {base} {offset_delta} {timestamp}
+            {[%#styped_timestamp'11] (0: Int64.t)} (fun (_x: t_Option_tup2_i64_i64) -> [ &_72 <- _x ] s10)
+        | s10 = [ &_77 <- [%#styped_timestamp'13] "valid absolute offset" ] s11
+        | s11 = expect_tup2_i64_i64 [%#styped_timestamp'14] {_72} {_77} (fun (_x: tup2_i64_i64) -> [ &_71 <- _x ] s12)
+        | s12 = MutBorrow.borrow_mut <t_Vec_tup2_i64_i64_Global> {decoded}
+            (fun (_bor: MutBorrow.t t_Vec_tup2_i64_i64_Global) -> [ &_70 <- _bor ] [ &decoded <- _bor.final ] s13)
+        | s13 = push_tup2_i64_i64 [%#styped_timestamp'15] {_70} {_71} (fun (_x: ()) -> [ &_69 <- _x ] s14)
+        | s14 = UInt64.add [%#styped_timestamp'17] {index} {[%#styped_timestamp'16] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &index <- _x ] s15)
+        | s15 = bb2 ] ] ]
+  | bb12 = s0
+    [ s0 = bb0'0
+      [ bb0'0 = s0'0
+        [ s0'0 = any
+          [ any_ (__arr_temp: Slice64.array tup2_i64_i64) -> (! -{Seq.length __arr_temp.Slice64.elts = 0}-
+            [ &_1 <- __arr_temp ] s1'0) ]
+        | s1'0 = [ &_ret'0 <- _1 ] s2'0
+        | s2'0 = _const_ret {_ret'0} ] ]
+      [ & _ret'0: Slice64.array tup2_i64_i64 = Any.any_l () | & _1: Slice64.array tup2_i64_i64 = Any.any_l () ]
+      [ _const_ret (_const: Slice64.array tup2_i64_i64) -> [ &_91 <- _const ] s1 ]
+    | s1 = [ &_81 <- _91 ] s2
+    | s2 = [ &_86 <- decoded ] s3
+    | s3 = deref_Vec_tup2_i64_i64_Global [%#styped_timestamp'18] {_86}
+        (fun (_x: Slice64.slice tup2_i64_i64) -> [ &_84 <- _x ] s4)
+    | s4 = tiered_timestamp_lookup_preserves_first [%#styped_timestamp'19] {_81} {_84} {target} {minimum} {bound}
+        {epoch} (fun (_x: t_ListOffsetsSelectionDecision) -> [ &_ret <- _x ] s5)
+    | s5 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionDecision = Any.any_l ()
+  | & records: Slice64.slice tup2_i32_i64 = records
+  | & base: Int64.t = base
+  | & batch_time: Int64.t = batch_time
+  | & append_time: t_Option_i64 = append_time
+  | & request: tup3_i64_i64_i64 = request
+  | & epoch: Int32.t = epoch
+  | & minimum: Int64.t = Any.any_l ()
+  | & target: Int64.t = Any.any_l ()
+  | & bound: Int64.t = Any.any_l ()
+  | & decoded: t_Vec_tup2_i64_i64_Global = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & offset_delta: Int32.t = Any.any_l ()
+  | & timestamp_delta: Int64.t = Any.any_l ()
+  | & _59: UInt64.t = Any.any_l ()
+  | & _60: UInt64.t = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & timestamp: Int64.t = Any.any_l ()
+  | & _63: t_Option_i64 = Any.any_l ()
+  | & _68: string = Any.any_l ()
+  | & _69: () = Any.any_l ()
+  | & _70: MutBorrow.t t_Vec_tup2_i64_i64_Global = Any.any_l ()
+  | & _71: tup2_i64_i64 = Any.any_l ()
+  | & _72: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _77: string = Any.any_l ()
+  | & _81: Slice64.array tup2_i64_i64 = Any.any_l ()
+  | & _84: Slice64.slice tup2_i64_i64 = Any.any_l ()
+  | & _86: t_Vec_tup2_i64_i64_Global = Any.any_l ()
+  | & _91: Slice64.array tup2_i64_i64 = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l () ])
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:typed_timestamp_records_preserve_visibility ensures] [%#styped_timestamp'24] match result with
+      | RejectMalformed -> false
+      | Resolved offset timestamp leader_epoch -> Int64.to_int request.f0 <= Int64.to_int offset
+      /\ Int64.to_int offset < Int64.to_int request.f2
+      /\ ge_log_Int (Int64.to_int timestamp) (Int64.to_int request.f1)
+      /\ leader_epoch = epoch
+      /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view records)
+          /\ Int64.to_int offset = Int64.to_int base + Int32.to_int (Seq.get (Slice64.view records) i).f0'1
+          /\ Int64.to_int timestamp
+          = match append_time with
+            | Some stamp -> Int64.to_int stamp
+            | None -> Int64.to_int batch_time + Int64.to_int (Seq.get (Slice64.view records) i).f1'1
+            end)
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view records)
+          /\ ge_log_Int (Int64.to_int base
+            + Int32.to_int (Seq.get (Slice64.view records) i).f0'1) (Int64.to_int request.f0)
+          /\ ge_log_Int (match append_time with
+            | Some stamp -> Int64.to_int stamp
+            | None -> Int64.to_int batch_time + Int64.to_int (Seq.get (Slice64.view records) i).f1'1
+            end) (Int64.to_int request.f1)
+        -> Int64.to_int offset <= Int64.to_int base + Int32.to_int (Seq.get (Slice64.view records) i).f0'1)
+      | Unknown -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view records)
+        -> Int64.to_int base + Int32.to_int (Seq.get (Slice64.view records) i).f0'1 < Int64.to_int request.f0
+        \/ ge_log_Int (Int64.to_int base
+          + Int32.to_int (Seq.get (Slice64.view records) i).f0'1) (Int64.to_int request.f2)
+        \/ match append_time with
+            | Some stamp -> Int64.to_int stamp
+            | None -> Int64.to_int batch_time + Int64.to_int (Seq.get (Slice64.view records) i).f1'1
+            end
+        < Int64.to_int request.f1
+      end}
+    (! return {result}) ]

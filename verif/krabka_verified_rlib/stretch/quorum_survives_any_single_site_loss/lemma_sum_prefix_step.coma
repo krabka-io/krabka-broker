@@ -1,0 +1,33 @@
+(* #"/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 35 0 35 53 *)
+
+let%span squorum_survives_any_single_site_loss = "/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 33 11 33 41
+let%span squorum_survives_any_single_site_loss'0 = "/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 34 10 34 74
+let%span squorum_survives_any_single_site_loss'1 = "/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 8 10 8 15
+let%span squorum_survives_any_single_site_loss'2 = "/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 11 8 15 9
+
+use creusot.int.Int64
+use seq.Seq
+use int.Int
+
+function sum_prefix [#"/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 9 0 9 49] (s: Seq.seq Int64.t) (limit: int) : int
+
+axiom sum_prefix_def: forall s: Seq.seq Int64.t, limit: int [sum_prefix s limit]. sum_prefix s limit
+    = ([%#squorum_survives_any_single_site_loss'2] if limit <= 0 then
+      0
+    else
+      sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1))
+    )
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant s : Seq.seq Int64.t
+
+constant limit : int
+
+function lemma_sum_prefix_step [#"/workspace/crates/verified/src/stretch/quorum_survives_any_single_site_loss.rs" 35 0 35 53] (s: Seq.seq Int64.t) (limit: int) : ()
+
+goal vc_lemma_sum_prefix_step: ([%#squorum_survives_any_single_site_loss] 1 <= limit /\ limit <= Seq.length s)
+  -> ([@stop_split] [@expl:lemma_sum_prefix_step ensures] [%#squorum_survives_any_single_site_loss'0] sum_prefix s limit
+  = sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1)))

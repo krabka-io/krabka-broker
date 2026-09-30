@@ -1,0 +1,124 @@
+(* #"/workspace/crates/verified/src/timestamp.rs" 128 0 132 18 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 133 20 133 26
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 137 14 137 37
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 138 18 138 31
+let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 135 16 136 65
+let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 134 16 134 40
+let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 139 11 139 25
+let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 139 11 139 27
+let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 139 42 139 56
+let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 139 42 139 58
+let%span stimestamp'8 = "/workspace/crates/verified/src/timestamp.rs" 142 17 142 18
+let%span stimestamp'9 = "/workspace/crates/verified/src/timestamp.rs" 142 8 142 18
+let%span stimestamp'10 = "/workspace/crates/verified/src/timestamp.rs" 119 10 126 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+let len_tup2_i64_i64 (self_: Slice64.slice tup2_i64_i64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let first_timestamp_record_index [#"/workspace/crates/verified/src/timestamp.rs" 128 0 132 18]
+  (records: Slice64.slice tup2_i64_i64) (minimum: Int64.t) (target: Int64.t) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &index <- [%#stimestamp] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#stimestamp'0] Seq.length (Slice64.view records)
+      - UInt64.t'int index)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#stimestamp'3] UInt64.t'int index
+      <= Seq.length (Slice64.view records)}
+      {[@expl:loop invariant #1] [%#stimestamp'2] forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view records) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view records) i).f1 < Int64.to_int target}
+      (! [ &variant_old_bb1 <- [%#stimestamp'0] Seq.length (Slice64.view records) - UInt64.t'int index ] s0)
+      [ s0 = len_tup2_i64_i64 [%#stimestamp'1] {records} (fun (_x: UInt64.t) -> [ &_25 <- _x ] s1)
+      | s1 = [ &_23 <- UInt64.lt index _25 ] s2
+      | s2 = any [ br0 -> {_23 = false} (! bb12) | br1 -> {_23} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_30 <- index ] s1
+        | s1 = [ &_31 <- Slice64.length records ] s2
+        | s2 = [ &_32 <- UInt64.lt _30 _31 ] s3
+        | s3 = {[@expl:index in bounds] [%#stimestamp'4] _32} s4
+        | s4 = Slice64.get [%#stimestamp'5] <tup2_i64_i64> {records} {_30}
+            (fun (r: tup2_i64_i64) -> [ &_29 <- r.f0 ] s5)
+        | s5 = [ &_28 <- Int64.ge _29 minimum ] s6
+        | s6 = any [ br0 -> {_28 = false} (! bb11) | br1 -> {_28} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = [ &_36 <- index ] s1
+        | s1 = [ &_37 <- Slice64.length records ] s2
+        | s2 = [ &_38 <- UInt64.lt _36 _37 ] s3
+        | s3 = {[@expl:index in bounds] [%#stimestamp'6] _38} s4
+        | s4 = Slice64.get [%#stimestamp'7] <tup2_i64_i64> {records} {_36}
+            (fun (r: tup2_i64_i64) -> [ &_35 <- r.f1 ] s5)
+        | s5 = [ &_34 <- Int64.ge _35 target ] s6
+        | s6 = any [ br0 -> {_34 = false} (! bb11) | br1 -> {_34} (! bb8) ] ]
+      | bb11 = s0
+        [ s0 = UInt64.add [%#stimestamp'9] {index} {[%#stimestamp'8] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Some index ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & records: Slice64.slice tup2_i64_i64 = records
+  | & minimum: Int64.t = minimum
+  | & target: Int64.t = target
+  | & index: UInt64.t = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _25: UInt64.t = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _29: Int64.t = Any.any_l ()
+  | & _30: UInt64.t = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _35: Int64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:first_timestamp_record_index ensures] [%#stimestamp'10] match result with
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view records)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view records) (UInt64.t'int index)).f0) (Int64.to_int minimum)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view records) (UInt64.t'int index)).f1) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view records) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view records) i).f1 < Int64.to_int target)
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view records)
+        -> Int64.to_int (Seq.get (Slice64.view records) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view records) i).f1 < Int64.to_int target
+      end}
+    (! return {result}) ]

@@ -1,0 +1,29 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_deref_Vec_tup2_i64_i64_Global": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_expect_i64": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_expect_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_len_tup2_i32_i64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_new_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_push_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_tiered_timestamp_lookup_preserves_first": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_timestamp_record_coordinates": {
+        "prover": "alt-ergo",
+        "time": 0.006
+      },
+      "vc_timestamp_record_time": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_typed_timestamp_records_preserve_visibility": {
+        "prover": "z3",
+        "time": 0.016
+      }
+    }
+  }
+}

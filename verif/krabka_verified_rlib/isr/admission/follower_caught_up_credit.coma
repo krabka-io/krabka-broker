@@ -1,0 +1,46 @@
+(* #"/workspace/crates/verified/src/isr/admission.rs" 101 0 105 19 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sadmission = "/workspace/crates/verified/src/isr/admission.rs" 96 10 96 85
+let%span sadmission'0 = "/workspace/crates/verified/src/isr/admission.rs" 97 10 99 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_CaughtUpCredit = ThisFetch | PreviousFetch | Unchanged
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let follower_caught_up_credit [#"/workspace/crates/verified/src/isr/admission.rs" 101 0 105 19]
+  (fetch_offset: Int64.t) (leader_log_end: Int64.t) (last_fetch_leader_log_end: Int64.t)
+  (return (x: t_CaughtUpCredit)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_11 <- Int64.ge fetch_offset leader_log_end ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb2) | br1 -> {_11} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- ThisFetch ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_14 <- Int64.ge fetch_offset last_fetch_leader_log_end ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb4) | br1 -> {_14} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- PreviousFetch ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- Unchanged ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_CaughtUpCredit = Any.any_l ()
+  | & fetch_offset: Int64.t = fetch_offset
+  | & leader_log_end: Int64.t = leader_log_end
+  | & last_fetch_leader_log_end: Int64.t = last_fetch_leader_log_end
+  | & _11: bool = Any.any_l ()
+  | & _14: bool = Any.any_l () ])
+  [ return (result: t_CaughtUpCredit) ->
+  {[@stop_split] [@expl:follower_caught_up_credit ensures] ([@stop_split] [@expl:follower_caught_up_credit ensures #0] [%#sadmission] (result
+        = ThisFetch)
+      = ge_log_Int (Int64.to_int fetch_offset) (Int64.to_int leader_log_end))
+    /\ ([@stop_split] [@expl:follower_caught_up_credit ensures #1] [%#sadmission'0] (result = PreviousFetch)
+    = (Int64.to_int fetch_offset < Int64.to_int leader_log_end
+    /\ ge_log_Int (Int64.to_int fetch_offset) (Int64.to_int last_fetch_leader_log_end)))}
+    (! return {result}) ]

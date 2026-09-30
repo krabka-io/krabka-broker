@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_round_robin_load": { "prover": "alt-ergo", "time": 0.015 }
-    }
-  }
-}

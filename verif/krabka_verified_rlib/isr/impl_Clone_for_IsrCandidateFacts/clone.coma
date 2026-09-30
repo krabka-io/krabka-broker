@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/isr.rs" 325 27 325 32 *)
+(* #"/workspace/crates/verified/src/isr.rs" 130 27 130 32 *)
 
 (* <isr::IsrCandidateFacts as std::clone::Clone> *)
 
@@ -28,8 +28,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_IsrCandidateFacts [#"/workspace/crates/verified/src/isr.rs" 325 27 325 32] (self: t_IsrCandidateFacts)
-  (return (x: t_IsrCandidateFacts)) = (! bb0
+let clone_IsrCandidateFacts [#"/workspace/crates/verified/src/isr.rs" 130 27 130 32]
+  (self: t_IsrCandidateFacts) (return (x: t_IsrCandidateFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_IsrCandidateFacts = Any.any_l () | & self: t_IsrCandidateFacts = self ])
   [ return (result: t_IsrCandidateFacts) -> (! return {result}) ]

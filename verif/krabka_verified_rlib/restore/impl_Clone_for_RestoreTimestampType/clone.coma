@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 213 27 213 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 71 27 71 32 *)
 
 (* <restore::RestoreTimestampType as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreTimestampType [#"/workspace/crates/verified/src/restore.rs" 213 27 213 32]
+let clone_RestoreTimestampType [#"/workspace/crates/verified/src/restore.rs" 71 27 71 32]
   (self: t_RestoreTimestampType) (return (x: t_RestoreTimestampType)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreTimestampType = Any.any_l () | & self: t_RestoreTimestampType = self ])

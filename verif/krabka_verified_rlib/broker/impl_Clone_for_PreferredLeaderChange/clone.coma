@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/broker.rs" 142 27 142 32 *)
+(* #"/workspace/crates/verified/src/broker.rs" 92 27 92 32 *)
 
 (* <broker::PreferredLeaderChange as std::clone::Clone> *)
 
@@ -18,7 +18,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_PreferredLeaderChange [#"/workspace/crates/verified/src/broker.rs" 142 27 142 32]
+let clone_PreferredLeaderChange [#"/workspace/crates/verified/src/broker.rs" 92 27 92 32]
   (self: t_PreferredLeaderChange) (return (x: t_PreferredLeaderChange)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_PreferredLeaderChange = Any.any_l () | & self: t_PreferredLeaderChange = self ])

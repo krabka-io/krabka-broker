@@ -1,0 +1,219 @@
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 196 0 199 23 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 200 33 200 34
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 201 33 201 34
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 208 21 208 51
+let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 206 17 208 52
+let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 206 17 208 53
+let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 211 12 211 68
+let%span srecord_coordinates'5 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 211 12 211 69
+let%span srecord_coordinates'6 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 189 10 194 1
+let%span srecord_coordinates'7 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 175 8 180 65
+let%span srecord_coordinates'8 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 160 8 163 9
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_RestoreTimestampType = CreateTime | LogAppendTime
+
+type t_RestoreBatchFrame = {
+  base_offset: Int64.t;
+  last_offset_delta: Int32.t;
+  timestamp_type: t_RestoreTimestampType;
+  base_timestamp: Int64.t;
+  max_timestamp: Int64.t }
+
+type t_RestoreRecordDeltas = { offset_delta: Int32.t; timestamp_delta: Int64.t }
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None'0)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some'0 r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'0 v -> result = Continue v
+      | None'0 -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_residual_Option_tup2_i64_i64 (residual: t_Option_Infallible) (return (x: t_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_i64_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 158 0 158 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+ = [%#srecord_coordinates'8] match frame.timestamp_type with
+    | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
+    | LogAppendTime -> Int64.to_int frame.max_timestamp
+    end
+
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 173 0 173 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+  [%#srecord_coordinates'7] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
+  /\ ge_log_Int (Int32.to_int record.offset_delta) 0
+  /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
+  /\ Int64.to_int frame.base_offset + Int32.to_int record.offset_delta <= Int64.to_int const_MAX
+  /\ ge_log_Int (kafka_record_timestamp frame record) (Int64.to_int const_MIN)
+  /\ kafka_record_timestamp frame record <= Int64.to_int const_MAX
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_record_coordinates [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 196 0 199 23]
+  (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) (return (x: t_Option_tup2_i64_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_7 <- Int32.lt frame.last_offset_delta ([%#srecord_coordinates] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb2) | br1 -> {_7} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_9 <- Int32.lt record.offset_delta ([%#srecord_coordinates'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb4) | br1 -> {_9} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_11 <- Int32.gt record.offset_delta frame.last_offset_delta ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb7) | br1 -> {_11} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = from_i64 [%#srecord_coordinates'1] {record.offset_delta} (fun (_x: Int64.t) -> [ &_19 <- _x ] s1)
+    | s1 = checked_add [%#srecord_coordinates'2] {frame.base_offset} {_19} (fun (_x: t_Option_i64) -> [ &_17 <- _x ] s2)
+    | s2 = branch_Option_i64 [%#srecord_coordinates'3] {_17}
+        (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_16 <- _x ] s3)
+    | s3 = any
+      [ br0 (x0: Int64.t) -> {_16 = Continue x0} (! bb13)
+      | br1 (x0: t_Option_Infallible) -> {_16 = Break x0} (! bb14) ] ]
+  | bb14 = s0
+    [ s0 = elim_Break {_16} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#srecord_coordinates'3] {residual}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = elim_Continue {_16} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &offset <- val' ] s2
+    | s2 = any
+      [ br0 -> {frame.timestamp_type = CreateTime} (! bb19) | br1 -> {frame.timestamp_type = LogAppendTime} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &timestamp <- frame.max_timestamp ] s1 | s1 = bb27 ]
+  | bb19 = s0
+    [ s0 = checked_add [%#srecord_coordinates'4] {frame.base_timestamp} {record.timestamp_delta}
+        (fun (_x: t_Option_i64) -> [ &_29 <- _x ] s1)
+    | s1 = branch_Option_i64 [%#srecord_coordinates'5] {_29}
+        (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_28 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: Int64.t) -> {_28 = Continue x0} (! bb24)
+      | br1 (x0: t_Option_Infallible) -> {_28 = Break x0} (! bb25) ] ]
+  | bb25 = s0
+    [ s0 = elim_Break {_28} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#srecord_coordinates'5] {residual'0}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb24 = s0
+    [ s0 = elim_Continue {_28} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &timestamp <- val''0 ] s2
+    | s2 = bb27 ]
+  | bb27 = s0
+    [ s0 = [ &_37 <- { f0 = offset; f1 = timestamp } ] s1 | s1 = [ &_ret <- Some _37 ] s2 | s2 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & frame: t_RestoreBatchFrame = frame
+  | & record: t_RestoreRecordDeltas = record
+  | & _7: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _16: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _17: t_Option_i64 = Any.any_l ()
+  | & _19: Int64.t = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
+  | & timestamp: Int64.t = Any.any_l ()
+  | & _28: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _29: t_Option_i64 = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l ()
+  | & _37: tup2_i64_i64 = Any.any_l () ])
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:restore_record_coordinates ensures] [%#srecord_coordinates'6] match result with
+      | Some {f0 = offset; f1 = timestamp} -> restore_record_placeable frame record
+      /\ Int64.to_int offset = Int64.to_int frame.base_offset + Int32.to_int record.offset_delta
+      /\ Int64.to_int timestamp = kafka_record_timestamp frame record
+      | None -> not restore_record_placeable frame record
+      end}
+    (! return {result}) ]

@@ -66,7 +66,7 @@ impl Log {
     }
 
     /// Earliest local `(offset, record_timestamp)` whose record timestamp is
-    /// `>= target_ts`.
+    /// `>= target_ts`, excluding records below the logical log start.
     ///
     /// The search reads sealed segments oldest-first and then the active
     /// segment. The first segment whose `max_timestamp >= target_ts` holds
@@ -125,13 +125,19 @@ impl Log {
         scan_window: ByteSize,
         limit: Option<ByteSize>,
     ) -> Result<Option<(Offset, i64)>, LogError> {
+        let minimum = self.log_start_offset();
         for seg in &self.segments {
             // A sealed segment restores its maximum on open, so the unknown
             // sentinel survives only where the segment holds no readable
             // batch. There is nothing in such a segment to find.
-            if seg.max_timestamp() >= target_ts
-                && let Some(hit) =
-                    seg.offset_for_timestamp_with_window(target_ts, scan_window, limit)?
+            if seg.last_offset() >= minimum
+                && seg.max_timestamp() >= target_ts
+                && let Some(hit) = seg.offset_for_timestamp_with_window_from(
+                    target_ts,
+                    scan_window,
+                    limit,
+                    minimum,
+                )?
             {
                 return Ok(Some(hit));
             }
@@ -139,7 +145,12 @@ impl Log {
         if let Some(active) = &self.active
             && active.max_timestamp() >= target_ts
         {
-            return active.offset_for_timestamp_with_window(target_ts, scan_window, limit);
+            return active.offset_for_timestamp_with_window_from(
+                target_ts,
+                scan_window,
+                limit,
+                minimum,
+            );
         }
         Ok(None)
     }

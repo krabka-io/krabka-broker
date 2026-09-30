@@ -1,0 +1,312 @@
+(* #"/workspace/crates/verified/src/composition/snapshot_replay.rs" 34 0 38 33 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 65 10 72 6
+let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 73 10 73 100
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 152 10 154 79
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 155 10 160 53
+let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 14 16 14 55
+let%span ssnapshot_transaction_valid'2 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 58 8 65 9
+let%span ssnapshot_replay = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 40 17 40 56
+let%span ssnapshot_replay'0 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 43 19 43 69
+let%span ssnapshot_replay'1 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 19 44 55
+let%span ssnapshot_replay'2 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 17 45 68
+let%span ssnapshot_replay'3 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 17 45 69
+let%span ssnapshot_replay'4 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 11 11 11 86
+let%span ssnapshot_replay'5 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 12 11 12 64
+let%span ssnapshot_replay'6 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 13 10 13 57
+let%span ssnapshot_replay'7 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 14 10 19 1
+let%span ssnapshot_replay'8 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 20 10 33 1
+let%span ssnapshot_replay'9 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 40 44 54
+let%span ssnapshot_replay'10 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 32 44 39
+
+use creusot.int.Int64
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Opaque
+use creusot.prelude.Any
+use int.MinMax
+use int.Int
+
+type t_ProducerReloadRange = { log_start: Int64.t; local_start: Int64.t; log_end: Int64.t }
+
+let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sfuture_log_swap_admission] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sfuture_log_swap_admission'0] Int64.to_int result
+      <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sfuture_log_swap_admission'1] Int64.to_int result
+      = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 13 0 13 76] (offset: int) (log_start'0: int) (log_end'0: int) =
+  [%#ssnapshot_transaction_valid'1] log_start'0 < offset /\ offset <= log_end'0
+
+let producer_snapshot_latest_index (offsets: Slice64.slice Int64.t) (range: t_ProducerReloadRange)
+  (return (x: t_Option_usize)) = any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:producer_snapshot_latest_index ensures] ([@stop_split] [@expl:producer_snapshot_latest_index ensures #0] [%#ssnapshot_transaction_valid] result
+        = None
+      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view offsets)
+        -> not kafka_reload_keeps (Int64.to_int (Seq.get (Slice64.view offsets) i)) (Int64.to_int range.log_start) (Int64.to_int range.log_end)))
+    /\ ([@stop_split] [@expl:producer_snapshot_latest_index ensures #1] [%#ssnapshot_transaction_valid'0] forall selected: UInt64.t. result
+        = Some selected
+      -> UInt64.t'int selected < Seq.length (Slice64.view offsets)
+      /\ kafka_reload_keeps (Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected))) (Int64.to_int range.log_start) (Int64.to_int range.log_end)
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view offsets)
+          /\ kafka_reload_keeps (Int64.to_int (Seq.get (Slice64.view offsets) i)) (Int64.to_int range.log_start) (Int64.to_int range.log_end)
+        -> Int64.to_int (Seq.get (Slice64.view offsets) i)
+        <= Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected))))}
+    (! return {result}) ]
+
+type closure0 = { c0: Slice64.slice Int64.t }
+
+let closure0 [#"/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 32 44 39] [@coma:extspec]
+  (self: closure0) (index: UInt64.t) (return (x: Int64.t)) = bb0
+  [ bb0 = s0
+    [ s0 = [ &_3 <- index ] s1
+    | s1 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) -> -{Slice64.slice_ptr_len _ptr = Slice64.length self.c0}- [ &_4 <- _ptr ] s2)
+    | s2 = [ &_5 <- Slice64.slice_ptr_len _4 ] s3
+    | s3 = [ &_6 <- UInt64.lt _3 _5 ] s4
+    | s4 = {[@expl:index in bounds] [%#ssnapshot_replay'9] _6} s5
+    | s5 = Slice64.get [%#ssnapshot_replay'9] <Int64.t> {self.c0} {_3} (fun (r: Int64.t) -> [ &_ret <- r ] s6)
+    | s6 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & self: closure0 = self
+  | & index: UInt64.t = index
+  | & _3: UInt64.t = Any.any_l ()
+  | & _4: Opaque.ptr = Any.any_l ()
+  | & _5: UInt64.t = Any.any_l ()
+  | & _6: bool = Any.any_l () ] [ return (result: Int64.t) -> return {result} ]
+
+meta "rewrite_def" predicate closure0'pre
+
+meta "rewrite_def" predicate closure0'post'return
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+predicate precondition_closure0 (self: closure0) (args: UInt64.t) =
+  [%#ssnapshot_replay'10] let index = args in closure0'pre self index
+
+meta "rewrite_def" predicate precondition_closure0
+
+predicate resolve_closure0 [@inline:trivial] (_1: closure0) = true
+
+meta "rewrite_def" predicate resolve_closure0
+
+predicate postcondition_once_closure0 (self: closure0) (args: UInt64.t) (result: Int64.t) =
+  [%#ssnapshot_replay'10] let index = args in closure0'post'return self index result
+
+meta "rewrite_def" predicate postcondition_once_closure0
+
+let map_usize (self_: t_Option_usize) (f: closure0) (return (x: t_Option_i64)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self_ with
+    | None -> true
+    | Some t -> precondition_closure0 f t
+    end}
+  any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self_ with
+      | None -> resolve_closure0 f /\ result = None'0
+      | Some t -> exists r: Int64.t. result = Some'0 r /\ postcondition_once_closure0 f t r
+      end}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function kafka_replay_start [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 56 0 56 83] (range: t_ProducerReloadRange) (snapshot: t_Option_i64) : int
+ = [%#ssnapshot_transaction_valid'2] match snapshot with
+    | Some'0 offset -> if ge_log_Int (Int64.to_int offset) (Int64.to_int range.local_start) then
+      Int64.to_int offset
+    else
+      Int64.to_int range.local_start
+
+    | None'0 -> if ge_log_Int (Int64.to_int range.log_start) (Int64.to_int range.local_start) then
+      Int64.to_int range.log_start
+    else
+      Int64.to_int range.local_start
+
+    end
+
+let producer_snapshot_replay_start (range: t_ProducerReloadRange) (snapshot: t_Option_i64) (return (x: t_Option_i64)) =
+any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:producer_snapshot_replay_start ensures] ([@stop_split] [@expl:producer_snapshot_replay_start ensures #0] [%#sreplay_start] (result
+        <> None'0)
+      = (ge_log_Int (Int64.to_int range.log_start) 0
+      /\ Int64.to_int range.log_start <= Int64.to_int range.log_end
+      /\ ge_log_Int (Int64.to_int range.local_start) 0
+      /\ Int64.to_int range.local_start <= Int64.to_int range.log_end
+      /\ match snapshot with
+        | Some'0 offset -> kafka_reload_keeps (Int64.to_int offset) (Int64.to_int range.log_start) (Int64.to_int range.log_end)
+        | None'0 -> true
+        end))
+    /\ ([@stop_split] [@expl:producer_snapshot_replay_start ensures #1] [%#sreplay_start'0] forall start: Int64.t. result
+        = Some'0 start -> Int64.to_int start = kafka_replay_start range snapshot)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0 -> inv_Infallible f0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0 -> true
+      | Break f0 -> inv_Option_Infallible f0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'0 v -> result = Continue v
+      | None'0 -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0: t_Option_Infallible)) = any
+  [ _k (f0: t_Option_Infallible) -> {Break f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_Option_usize_i64 = { f0: t_Option_usize; f1: Int64.t }
+
+type t_Option_tup2_Option_usize_i64 = None'2 | Some'2 tup2_Option_usize_i64
+
+let from_residual_Option_tup2_Option_usize_i64 (residual: t_Option_Infallible)
+  (return (x: t_Option_tup2_Option_usize_i64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_Option_usize_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result
+    = None'2}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let truncated_snapshot_selection_bounds_replay [#"/workspace/crates/verified/src/composition/snapshot_replay.rs" 34 0 38 33]
+  (offsets: Slice64.slice Int64.t) (range: t_ProducerReloadRange) (cut: Int64.t)
+  (return (x: t_Option_tup2_Option_usize_i64)) =
+{[@stop_split] [@expl:truncated_snapshot_selection_bounds_replay requires] ([@stop_split] [@expl:truncated_snapshot_selection_bounds_replay requires #0] [%#ssnapshot_replay'4] 0
+      <= Int64.to_int range.log_start
+    /\ Int64.to_int range.log_start <= Int64.to_int cut /\ Int64.to_int cut <= Int64.to_int range.log_end)
+  /\ ([@stop_split] [@expl:truncated_snapshot_selection_bounds_replay requires #1] [%#ssnapshot_replay'5] 0
+    <= Int64.to_int range.local_start
+  /\ Int64.to_int range.local_start <= Int64.to_int cut)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = truncation_frontier [%#ssnapshot_replay] {range.log_end} {cut} (fun (_x: Int64.t) -> [ &_22 <- _x ] s1)
+    | s1 = [ &shortened <- { log_start = range.log_start; local_start = range.local_start; log_end = _22 } ] s2
+    | s2 = producer_snapshot_latest_index [%#ssnapshot_replay'0] {offsets} {shortened}
+        (fun (_x: t_Option_usize) -> [ &selected <- _x ] s3)
+    | s3 = [ &_30 <- { c0 = offsets } ] s4
+    | s4 = map_usize [%#ssnapshot_replay'1] {selected} {_30} (fun (_x: t_Option_i64) -> [ &snapshot <- _x ] s5)
+    | s5 = producer_snapshot_replay_start [%#ssnapshot_replay'2] {shortened} {snapshot}
+        (fun (_x: t_Option_i64) -> [ &_34 <- _x ] s6)
+    | s6 = branch_Option_i64 [%#ssnapshot_replay'3] {_34}
+        (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_33 <- _x ] s7)
+    | s7 = any
+      [ br0 (x0: Int64.t) -> {_33 = Continue x0} (! bb8) | br1 (x0: t_Option_Infallible) -> {_33 = Break x0} (! bb9) ] ]
+  | bb9 = s0
+    [ s0 = elim_Break {_33} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_Option_usize_i64 [%#ssnapshot_replay'3] {residual}
+        (fun (_x: t_Option_tup2_Option_usize_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = elim_Continue {_33} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &cursor <- val' ] s2
+    | s2 = [ &_42 <- { f0 = selected; f1 = cursor } ] s3
+    | s3 = [ &_ret <- Some'2 _42 ] s4
+    | s4 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_Option_usize_i64 = Any.any_l ()
+  | & offsets: Slice64.slice Int64.t = offsets
+  | & range: t_ProducerReloadRange = range
+  | & cut: Int64.t = cut
+  | & shortened: t_ProducerReloadRange = Any.any_l ()
+  | & _22: Int64.t = Any.any_l ()
+  | & selected: t_Option_usize = Any.any_l ()
+  | & snapshot: t_Option_i64 = Any.any_l ()
+  | & _30: closure0 = Any.any_l ()
+  | & cursor: Int64.t = Any.any_l ()
+  | & _33: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _34: t_Option_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
+  | & _42: tup2_Option_usize_i64 = Any.any_l () ])
+  [ return (result: t_Option_tup2_Option_usize_i64) ->
+  {[@stop_split] [@expl:truncated_snapshot_selection_bounds_replay ensures] ([@stop_split] [@expl:truncated_snapshot_selection_bounds_replay ensures #0] [%#ssnapshot_replay'6] match result with
+        | Some'2 _ -> true
+        | None'2 -> false
+        end)
+    /\ ([@stop_split] [@expl:truncated_snapshot_selection_bounds_replay ensures #1] [%#ssnapshot_replay'7] match result with
+        | None'2 -> true
+        | Some'2 {f0 = None; f1 = cursor} -> Int64.to_int cursor
+        = MinMax.max (Int64.to_int range.log_start) (Int64.to_int range.local_start)
+        | Some'2 {f0 = Some index; f1 = cursor} -> UInt64.t'int index < Seq.length (Slice64.view offsets)
+        /\ Int64.to_int cursor
+        = MinMax.max (Int64.to_int range.local_start) (Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int index)))
+        end)
+    /\ ([@stop_split] [@expl:truncated_snapshot_selection_bounds_replay ensures #2] [%#ssnapshot_replay'8] match result with
+      | None'2 -> true
+      | Some'2 {f0 = selected; f1 = cursor} -> Int64.to_int range.log_start <= Int64.to_int cursor
+      /\ Int64.to_int range.local_start <= Int64.to_int cursor
+      /\ Int64.to_int cursor <= Int64.to_int cut
+      /\ match selected with
+        | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view offsets)
+          -> not (Int64.to_int range.log_start < Int64.to_int (Seq.get (Slice64.view offsets) i)
+          /\ Int64.to_int (Seq.get (Slice64.view offsets) i) <= Int64.to_int cut)
+        | Some index -> UInt64.t'int index < Seq.length (Slice64.view offsets)
+        /\ Int64.to_int range.log_start < Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int index))
+        /\ Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int index)) <= Int64.to_int cut
+        /\ (forall i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view offsets)
+            /\ Int64.to_int range.log_start < Int64.to_int (Seq.get (Slice64.view offsets) i)
+            /\ Int64.to_int (Seq.get (Slice64.view offsets) i) <= Int64.to_int cut
+          -> Int64.to_int (Seq.get (Slice64.view offsets) i)
+          <= Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int index)))
+        end
+      end)}
+    (! return {result}) ]

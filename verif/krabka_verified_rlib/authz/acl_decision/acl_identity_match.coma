@@ -1,0 +1,20 @@
+(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 10 0 10 62 *)
+
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 11 4 11 21
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 8 10 8 39
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let acl_identity_match [#"/workspace/crates/verified/src/authz/acl_decision.rs" 10 0 10 62]
+  (wildcard: bool) (exact: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {wildcard = false} (! bb2) | br1 -> {wildcard} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#sacl_decision] true ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- exact ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & wildcard: bool = wildcard | & exact: bool = exact ])
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_identity_match ensures] [%#sacl_decision'0] result
+    = (wildcard \/ exact)}
+    (! return {result}) ]

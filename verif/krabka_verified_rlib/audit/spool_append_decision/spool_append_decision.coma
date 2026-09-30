@@ -1,0 +1,109 @@
+(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 133 0 139 24 *)
+
+let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 140 50 140 75
+let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 142 22 142 27
+let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 144 18 144 23
+let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 149 35 149 36
+let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 149 24 149 36
+let%span sspool_append_decision'4 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 153 19 153 46
+let%span sspool_append_decision'5 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 155 33 155 34
+let%span sspool_append_decision'6 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 152 18 152 22
+let%span sspool_append_decision'7 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 117 11 117 26
+let%span sspool_append_decision'8 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 118 11 118 34
+let%span sspool_append_decision'9 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 119 10 120 84
+let%span sspool_append_decision'10 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 121 10 121 80
+let%span sspool_append_decision'11 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 122 10 122 61
+let%span sspool_append_decision'12 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 123 10 123 66
+let%span sspool_append_decision'13 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 124 10 125 56
+let%span sspool_append_decision'14 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 126 10 126 45
+let%span sspool_append_decision'15 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 127 10 131 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_SpoolAppendDecision = { accepted: bool; new_bytes: UInt64.t; sync: bool; next_unsynced: UInt64.t }
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let spool_append_decision [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 133 0 139 24]
+  (current_bytes: UInt64.t) (frame_bytes: UInt64.t) (max_bytes: UInt64.t) (unsynced: UInt64.t) (sync_every: UInt64.t)
+  (return (x: t_SpoolAppendDecision)) =
+{[@stop_split] [@expl:spool_append_decision requires] ([@stop_split] [@expl:spool_append_decision requires #0] [%#sspool_append_decision'7] gt_log_Int (UInt64.t'int sync_every) 0)
+  /\ ([@stop_split] [@expl:spool_append_decision requires #1] [%#sspool_append_decision'8] UInt64.t'int unsynced
+  < UInt64.t'int sync_every)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_31 <- UInt64.gt current_bytes max_bytes ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb2) | br1 -> {_31} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = UInt64.sub [%#sspool_append_decision] {max_bytes} {current_bytes} (fun (_x: UInt64.t) -> [ &_36 <- _x ] s1)
+    | s1 = [ &_34 <- UInt64.gt frame_bytes _36 ] s2
+    | s2 = any [ br0 -> {_34 = false} (! bb5) | br1 -> {_34} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = [ &_ret <- { accepted = ([%#sspool_append_decision'0] false);
+                        new_bytes = current_bytes;
+                        sync = ([%#sspool_append_decision'1] false);
+                        next_unsynced = unsynced } ] s1
+    | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = UInt64.add [%#sspool_append_decision'3] {unsynced} {[%#sspool_append_decision'2] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &next_unsynced'0 <- _x ] s1)
+    | s1 = [ &sync'0 <- UInt64.ge next_unsynced'0 sync_every ] s2
+    | s2 = UInt64.add [%#sspool_append_decision'4] {current_bytes} {frame_bytes}
+        (fun (_x: UInt64.t) -> [ &_47 <- _x ] s3)
+    | s3 = any [ br0 -> {sync'0 = false} (! bb7) | br1 -> {sync'0} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_51 <- [%#sspool_append_decision'5] (0: UInt64.t) ] s1 | s1 = bb8 ]
+  | bb7 = s0 [ s0 = [ &_51 <- next_unsynced'0 ] s1 | s1 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &_ret <- { accepted = ([%#sspool_append_decision'6] true);
+                        new_bytes = _47;
+                        sync = sync'0;
+                        next_unsynced = _51 } ] s1
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_SpoolAppendDecision = Any.any_l ()
+  | & current_bytes: UInt64.t = current_bytes
+  | & frame_bytes: UInt64.t = frame_bytes
+  | & max_bytes: UInt64.t = max_bytes
+  | & unsynced: UInt64.t = unsynced
+  | & sync_every: UInt64.t = sync_every
+  | & _31: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & next_unsynced'0: UInt64.t = Any.any_l ()
+  | & sync'0: bool = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l () ])
+  [ return (result: t_SpoolAppendDecision) ->
+  {[@stop_split] [@expl:spool_append_decision ensures] ([@stop_split] [@expl:spool_append_decision ensures #0] [%#sspool_append_decision'9] result.accepted
+      = (UInt64.t'int current_bytes <= UInt64.t'int max_bytes
+      /\ UInt64.t'int frame_bytes <= UInt64.t'int max_bytes - UInt64.t'int current_bytes))
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #1] [%#sspool_append_decision'10] result.accepted
+      -> UInt64.t'int result.new_bytes = UInt64.t'int current_bytes + UInt64.t'int frame_bytes)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #2] [%#sspool_append_decision'11] result.accepted
+      -> UInt64.t'int result.new_bytes <= UInt64.t'int max_bytes)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #3] [%#sspool_append_decision'12] not result.accepted
+      -> UInt64.t'int result.new_bytes = UInt64.t'int current_bytes)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #4] [%#sspool_append_decision'13] result.sync
+      = (result.accepted /\ ge_log_Int (UInt64.t'int unsynced + 1) (UInt64.t'int sync_every)))
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #5] [%#sspool_append_decision'14] UInt64.t'int result.next_unsynced
+      < UInt64.t'int sync_every)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #6] [%#sspool_append_decision'15] UInt64.t'int result.next_unsynced
+    = (if result.accepted then
+      if ge_log_Int (UInt64.t'int unsynced + 1) (UInt64.t'int sync_every) then 0 else UInt64.t'int unsynced + 1
+    else
+      UInt64.t'int unsynced
+    ))}
+    (! return {result}) ]

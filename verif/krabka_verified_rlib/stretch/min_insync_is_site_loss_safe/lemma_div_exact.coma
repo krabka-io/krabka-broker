@@ -1,0 +1,33 @@
+(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 48 0 48 67 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 46 11 46 81
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 10 47 64
+
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant divisor : int
+
+constant quotient : int
+
+constant remainder : int
+
+function lemma_div_exact [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 48 0 48 67] (divisor: int) (quotient: int) (remainder: int) : ()
+
+goal vc_lemma_div_exact: ([%#smin_insync_is_site_loss_safe] ge_log_Int divisor 1
+    /\ ge_log_Int quotient 0 /\ 0 <= remainder /\ remainder < divisor)
+  -> ComputerDivision.div (divisor * quotient + remainder) divisor = quotient + ComputerDivision.div remainder divisor
+  && ComputerDivision.div remainder divisor = 0
+  && ([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (divisor
+      * quotient
+    + remainder) divisor
+  = quotient)

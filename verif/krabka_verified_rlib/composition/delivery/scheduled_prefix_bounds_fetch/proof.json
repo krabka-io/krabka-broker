@@ -1,0 +1,24 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_delivery_watermark_advance": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.018 },
+      "vc_len_tup2_i64_i32": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_restore_batch_step": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_scheduled_delivery_visible": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      },
+      "vc_scheduled_prefix_bounds_fetch": { "prover": "z3", "time": 0.012 },
+      "vc_segment_maximum_proves_delivery": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      }
+    }
+  }
+}

@@ -1,0 +1,267 @@
+(* #"/workspace/crates/verified/src/composition/append.rs" 64 0 68 28 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 69 25 69 59
+let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 69 25 69 60
+let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 70 19 70 69
+let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 70 19 70 70
+let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 71 26 71 65
+let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 71 26 71 66
+let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 72 18 72 55
+let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 52 10 54 61
+let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 55 10 63 1
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 94 10 94 87
+let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 95 10 96 55
+let%span soffset_allocator'1 = "/workspace/crates/verified/src/offset_allocator.rs" 19 10 29 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let reserve_offsets (next: Int64.t) (count: Int64.t) (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator] (result
+        <> None)
+      = (ge_log_Int (Int64.to_int next) 0
+      /\ gt_log_Int (Int64.to_int count) 0 /\ Int64.to_int next + Int64.to_int count <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'0] forall base: Int64.t, next_after: Int64.t. result
+        = Some { f0 = base; f1 = next_after }
+      -> Int64.to_int base = Int64.to_int next /\ Int64.to_int next_after = Int64.to_int next + Int64.to_int count)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'0 | Some'0 ()
+
+type t_ControlFlow_Option_Infallible_tup2_i64_i64 = Continue tup2_i64_i64 | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'0 -> true
+      | Some'0 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup2_i64_i64 (_1: t_ControlFlow_Option_Infallible_tup2_i64_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_i64_i64 [inv_ControlFlow_Option_Infallible_tup2_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_i64_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_i64_i64) ->
+  {[@stop_split] [@expl:branch_Option_tup2_i64_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_i64_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup3_i64_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t; f2'0: Int64.t }
+
+type t_Option_tup3_i64_i64_i64 = None'1 | Some'1 tup3_i64_i64_i64
+
+let from_residual_Option_tup3_i64_i64_i64 (residual: t_Option_Infallible) (return (x: t_Option_tup3_i64_i64_i64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup3_i64_i64_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result
+    = None'1}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'1: tup2_i64_i64)) = any
+  [ _k (f0'1: tup2_i64_i64) -> {Continue f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_i64 = None'2 | Some'2 Int64.t
+
+let wal_reservation_frontier (current': Int64.t) (pending_base: Int64.t) (pending_count: Int64.t)
+  (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:wal_reservation_frontier ensures] [%#soffset_allocator'1] match result with
+      | Some'2 next -> ge_log_Int (Int64.to_int current') 0
+      /\ Int64.to_int pending_base = Int64.to_int current'
+      /\ gt_log_Int (Int64.to_int pending_count) 0
+      /\ Int64.to_int next = Int64.to_int current' + Int64.to_int pending_count
+      /\ Int64.to_int next <= Int64.to_int const_MAX
+      | None'2 -> Int64.to_int current' < 0
+      \/ Int64.to_int pending_base <> Int64.to_int current'
+      \/ Int64.to_int pending_count <= 0
+      \/ gt_log_Int (Int64.to_int current' + Int64.to_int pending_count) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_i64 = Continue'0 Int64.t | Break'0 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'1 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue'0 f0'1 -> true
+      | Break'0 f0'1 -> inv_Option_Infallible f0'1
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'2 v -> result = Continue'0 v
+      | None'2 -> result = Break'0 (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'1: t_Option_Infallible)) = any
+  [ _k (f0'1: t_Option_Infallible) -> {Break'0 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'1: Int64.t)) = any
+  [ _k (f0'1: Int64.t) -> {Continue'0 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reservations_do_not_overlap [#"/workspace/crates/verified/src/composition/append.rs" 64 0 68 28]
+  (base: Int64.t) (first_count: Int64.t) (second_count: Int64.t) (return (x: t_Option_tup3_i64_i64_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = reserve_offsets [%#sappend] {base} {first_count} (fun (_x: t_Option_tup2_i64_i64) -> [ &_16 <- _x ] s1)
+    | s1 = branch_Option_tup2_i64_i64 [%#sappend'0] {_16}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_15 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: tup2_i64_i64) -> {_15 = Continue x0} (! bb5)
+      | br1 (x0: t_Option_Infallible) -> {_15 = Break x0} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = elim_Break {_15} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_i64_i64 [%#sappend'0] {residual}
+        (fun (_x: t_Option_tup3_i64_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = elim_Continue {_15} (fun (r0: tup2_i64_i64) -> [ &val' <- r0 ] s1)
+    | s1 = [ &_14 <- val' ] s2
+    | s2 = [ &first <- _14.f0 ] s3
+    | s3 = [ &split <- _14.f1 ] s4
+    | s4 = wal_reservation_frontier [%#sappend'1] {base} {first} {first_count}
+        (fun (_x: t_Option_i64) -> [ &_26 <- _x ] s5)
+    | s5 = branch_Option_i64 [%#sappend'2] {_26} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_25 <- _x ] s6)
+    | s6 = any
+      [ br0 (x0: Int64.t) -> {_25 = Continue'0 x0} (! bb12)
+      | br1 (x0: t_Option_Infallible) -> {_25 = Break'0 x0} (! bb13) ] ]
+  | bb13 = s0
+    [ s0 = elim_Break'0 {_25} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_i64_i64 [%#sappend'2] {residual'0}
+        (fun (_x: t_Option_tup3_i64_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = elim_Continue'0 {_25} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &frontier <- val''0 ] s2
+    | s2 = reserve_offsets [%#sappend'3] {frontier} {second_count}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_39 <- _x ] s3)
+    | s3 = branch_Option_tup2_i64_i64 [%#sappend'4] {_39}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_38 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: tup2_i64_i64) -> {_38 = Continue x0} (! bb19)
+      | br1 (x0: t_Option_Infallible) -> {_38 = Break x0} (! bb20) ] ]
+  | bb20 = s0
+    [ s0 = elim_Break {_38} (fun (r0: t_Option_Infallible) -> [ &residual'1 <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_i64_i64_i64 [%#sappend'4] {residual'1}
+        (fun (_x: t_Option_tup3_i64_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb19 = s0
+    [ s0 = elim_Continue {_38} (fun (r0: tup2_i64_i64) -> [ &val''1 <- r0 ] s1)
+    | s1 = [ &_37 <- val''1 ] s2
+    | s2 = [ &_second <- _37.f0 ] s3
+    | s3 = [ &next <- _37.f1 ] s4
+    | s4 = {[@expl:assertion] [%#sappend'5] frontier = split /\ _second = split} s5
+    | s5 = [ &_52 <- { f0'0 = first; f1'0 = split; f2'0 = next } ] s6
+    | s6 = [ &_ret <- Some'1 _52 ] s7
+    | s7 = return {_ret} ] ]
+  [ & _ret: t_Option_tup3_i64_i64_i64 = Any.any_l ()
+  | & base: Int64.t = base
+  | & first_count: Int64.t = first_count
+  | & second_count: Int64.t = second_count
+  | & first: Int64.t = Any.any_l ()
+  | & split: Int64.t = Any.any_l ()
+  | & _14: tup2_i64_i64 = Any.any_l ()
+  | & _15: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _16: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup2_i64_i64 = Any.any_l ()
+  | & frontier: Int64.t = Any.any_l ()
+  | & _25: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _26: t_Option_i64 = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l ()
+  | & _second: Int64.t = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _37: tup2_i64_i64 = Any.any_l ()
+  | & _38: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _39: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & residual'1: t_Option_Infallible = Any.any_l ()
+  | & val''1: tup2_i64_i64 = Any.any_l ()
+  | & _52: tup3_i64_i64_i64 = Any.any_l () ])
+  [ return (result: t_Option_tup3_i64_i64_i64) ->
+  {[@stop_split] [@expl:reservations_do_not_overlap ensures] ([@stop_split] [@expl:reservations_do_not_overlap ensures #0] [%#sappend'6] match result with
+          | Some'1 _ -> true
+          | None'1 -> false
+          end
+      = (ge_log_Int (Int64.to_int base) 0
+      /\ gt_log_Int (Int64.to_int first_count) 0
+      /\ gt_log_Int (Int64.to_int second_count) 0
+      /\ Int64.to_int base + Int64.to_int first_count + Int64.to_int second_count <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reservations_do_not_overlap ensures #1] [%#sappend'7] match result with
+      | None'1 -> true
+      | Some'1 {f0'0 = start; f1'0 = split; f2'0 = end'} -> Int64.to_int start = Int64.to_int base
+      /\ Int64.to_int split = Int64.to_int base + Int64.to_int first_count
+      /\ Int64.to_int end' = Int64.to_int split + Int64.to_int second_count
+      /\ Int64.to_int start < Int64.to_int split
+      /\ Int64.to_int split < Int64.to_int end'
+      /\ (forall offset: int. Int64.to_int start <= offset /\ offset < Int64.to_int split
+        -> not (Int64.to_int split <= offset /\ offset < Int64.to_int end'))
+      end)}
+    (! return {result}) ]

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/recovery.rs" 80 27 80 32 *)
+(* #"/workspace/crates/verified/src/recovery.rs" 19 27 19 32 *)
 
 (* <recovery::ReplayCursorDecision as std::clone::Clone> *)
 
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ReplayCursorDecision [#"/workspace/crates/verified/src/recovery.rs" 80 27 80 32]
+let clone_ReplayCursorDecision [#"/workspace/crates/verified/src/recovery.rs" 19 27 19 32]
   (self: t_ReplayCursorDecision) (return (x: t_ReplayCursorDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReplayCursorDecision = Any.any_l () | & self: t_ReplayCursorDecision = self ])

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_lemma_wal_copy_byte_count_monotone": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      }
+    }
+  }
+}

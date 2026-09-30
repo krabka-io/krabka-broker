@@ -17,7 +17,10 @@ The kernels cover the safety-critical decisions of consensus, storage,
 security, and protocol handling: KRaft vote admission and quorum size, ISR and
 leader failover, KIP-534 compaction retention, quota precedence and the token
 bucket refill, ACL matching, audit chain steps, break-glass admission, and
-more. One module holds each subject.
+more. Each subject keeps its public types and re-exports in a small module
+file; large subjects put their kernels and tests in a matching subdirectory.
+The [composition proofs](src/composition/) are grouped by the safety property
+they connect, such as quota accounting, snapshot replay, and WAL recovery.
 
 The contract attributes beside each function are the source of truth. The
 [verification catalog](../../docs/verification.md) lists every kernel, its

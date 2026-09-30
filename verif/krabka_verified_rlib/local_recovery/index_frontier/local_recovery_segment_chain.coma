@@ -1,0 +1,128 @@
+(* #"/workspace/crates/verified/src/local_recovery/index_frontier.rs" 68 0 68 58 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 69 16 69 22
+let%span sindex_frontier'0 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 74 14 74 31
+let%span sindex_frontier'1 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 75 14 75 25
+let%span sindex_frontier'2 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 71 16 73 54
+let%span sindex_frontier'3 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 70 16 70 34
+let%span sindex_frontier'4 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 11 76 19
+let%span sindex_frontier'5 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 22 76 23
+let%span sindex_frontier'6 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 32 76 33
+let%span sindex_frontier'7 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 47 76 48
+let%span sindex_frontier'8 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 43 76 48
+let%span sindex_frontier'9 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 37 76 49
+let%span sindex_frontier'10 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 76 53 76 61
+let%span sindex_frontier'11 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 79 13 79 14
+let%span sindex_frontier'12 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 79 8 79 14
+let%span sindex_frontier'13 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 77 19 77 24
+let%span sindex_frontier'14 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 81 4 81 8
+let%span sindex_frontier'15 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 64 10 66 51
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let local_recovery_segment_chain [#"/workspace/crates/verified/src/local_recovery/index_frontier.rs" 68 0 68 58]
+  (bases: Slice64.slice Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &i <- [%#sindex_frontier] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sindex_frontier'0] Seq.length (Slice64.view bases)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sindex_frontier'3] UInt64.t'int i <= Seq.length (Slice64.view bases)}
+      {[@expl:loop invariant #1] [%#sindex_frontier'2] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view bases) j)) 0
+        /\ (j = 0
+        \/ Int64.to_int (Seq.get (Slice64.view bases) (j - 1)) < Int64.to_int (Seq.get (Slice64.view bases) j))}
+      (! [ &variant_old_bb1 <- [%#sindex_frontier'0] Seq.length (Slice64.view bases) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#sindex_frontier'1] {bases} (fun (_x: UInt64.t) -> [ &_19 <- _x ] s1)
+      | s1 = [ &_17 <- UInt64.lt i _19 ] s2
+      | s2 = any [ br0 -> {_17 = false} (! bb16) | br1 -> {_17} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_24 <- i ] s1
+        | s1 = [ &_25 <- Slice64.length bases ] s2
+        | s2 = [ &_26 <- UInt64.lt _24 _25 ] s3
+        | s3 = {[@expl:index in bounds] [%#sindex_frontier'4] _26} s4
+        | s4 = Slice64.get [%#sindex_frontier'4] <Int64.t> {bases} {_24} (fun (r: Int64.t) -> [ &_23 <- r ] s5)
+        | s5 = [ &_22 <- Int64.lt _23 ([%#sindex_frontier'5] (0: Int64.t)) ] s6
+        | s6 = any [ br0 -> {_22 = false} (! bb7) | br1 -> {_22} (! bb12) ] ]
+      | bb7 = s0
+        [ s0 = [ &_27 <- UInt64.gt i ([%#sindex_frontier'6] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_27 = false} (! bb15) | br1 -> {_27} (! bb8) ] ]
+      | bb8 = s0
+        [ s0 = UInt64.sub [%#sindex_frontier'8] {i} {[%#sindex_frontier'7] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &_31 <- _x ] s1)
+        | s1 = [ &_33 <- Slice64.length bases ] s2
+        | s2 = [ &_34 <- UInt64.lt _31 _33 ] s3
+        | s3 = {[@expl:index in bounds] [%#sindex_frontier'9] _34} s4
+        | s4 = Slice64.get [%#sindex_frontier'9] <Int64.t> {bases} {_31} (fun (r: Int64.t) -> [ &_30 <- r ] s5)
+        | s5 = [ &_36 <- i ] s6
+        | s6 = [ &_37 <- Slice64.length bases ] s7
+        | s7 = [ &_38 <- UInt64.lt _36 _37 ] s8
+        | s8 = {[@expl:index in bounds] [%#sindex_frontier'10] _38} s9
+        | s9 = Slice64.get [%#sindex_frontier'10] <Int64.t> {bases} {_36} (fun (r: Int64.t) -> [ &_35 <- r ] s10)
+        | s10 = [ &_29 <- Int64.ge _30 _35 ] s11
+        | s11 = any [ br0 -> {_29 = false} (! bb15) | br1 -> {_29} (! bb12) ] ]
+      | bb15 = s0
+        [ s0 = UInt64.add [%#sindex_frontier'12] {i} {[%#sindex_frontier'11] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- [%#sindex_frontier'13] false ] s1 | s1 = return {_ret} ]
+  | bb16 = s0 [ s0 = [ &_ret <- [%#sindex_frontier'14] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & bases: Slice64.slice Int64.t = bases
+  | & i: UInt64.t = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: UInt64.t = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _23: Int64.t = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _25: UInt64.t = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _30: Int64.t = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _35: Int64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:local_recovery_segment_chain ensures] [%#sindex_frontier'15] result
+    = (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
+      -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view bases) i)) 0
+      /\ (i = 0
+      \/ Int64.to_int (Seq.get (Slice64.view bases) (i - 1)) < Int64.to_int (Seq.get (Slice64.view bases) i)))}
+    (! return {result}) ]

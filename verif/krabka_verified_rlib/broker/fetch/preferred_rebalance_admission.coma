@@ -1,0 +1,141 @@
+(* #"/workspace/crates/verified/src/broker/fetch.rs" 89 0 92 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 94 16 94 29
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 95 16 95 17
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 96 15 96 20
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 98 20 98 27
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 101 14 101 37
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 102 18 102 31
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 100 16 100 94
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 99 16 99 40
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 103 21 103 35
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 106 20 106 25
+let%span sfetch'9 = "/workspace/crates/verified/src/broker/fetch.rs" 115 17 115 18
+let%span sfetch'10 = "/workspace/crates/verified/src/broker/fetch.rs" 115 8 115 18
+let%span sfetch'11 = "/workspace/crates/verified/src/broker/fetch.rs" 113 19 113 24
+let%span sfetch'12 = "/workspace/crates/verified/src/broker/fetch.rs" 117 4 117 8
+let%span sfetch'13 = "/workspace/crates/verified/src/broker/fetch.rs" 82 10 87 1
+let%span sfetch'14 = "/workspace/crates/verified/src/broker/fetch.rs" 66 8 69 40
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_PreferredLeaderChange = {
+  new_leader: UInt64.t;
+  preferred_replica: t_Option_u64;
+  leader_in_isr: bool;
+  leader_alive: bool;
+  leader_is_witness: bool }
+
+let len_PreferredLeaderChange (self_: Slice64.slice t_PreferredLeaderChange) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+predicate preferred_change_eligible [#"/workspace/crates/verified/src/broker/fetch.rs" 64 0 64 71] (change: t_PreferredLeaderChange) =
+  [%#sfetch'14] change.preferred_replica = Some (change.new_leader)
+  /\ change.leader_in_isr /\ change.leader_alive /\ not change.leader_is_witness
+
+let elim_Some (_x: t_Option_u64) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let preferred_rebalance_admission [#"/workspace/crates/verified/src/broker/fetch.rs" 89 0 92 9]
+  (changes: Slice64.slice t_PreferredLeaderChange) (max_changes: UInt64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = len_PreferredLeaderChange [%#sfetch] {changes} (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
+    | s1 = [ &_9 <- count = ([%#sfetch'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_9 = false} (! bb3) | br1 -> {_9} (! bb5) ] ]
+  | bb3 = s0
+    [ s0 = [ &_11 <- UInt64.gt count max_changes ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb6) | br1 -> {_11} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &_ret <- [%#sfetch'1] false ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &index <- [%#sfetch'2] (0: UInt64.t) ] s1 | s1 = bb7 ]
+  | bb7 = bb7invariant
+    [ bb7 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb7 ([%#sfetch'3] Seq.length (Slice64.view changes)
+      - UInt64.t'int index)}
+      bb7invariant
+    | bb7invariant = {[@expl:loop invariant #0] [%#sfetch'6] UInt64.t'int index <= Seq.length (Slice64.view changes)}
+      {[@expl:loop invariant #1] [%#sfetch'5] forall k: int. 0 <= k /\ k < UInt64.t'int index
+        -> preferred_change_eligible (Seq.get (Slice64.view changes) k)}
+      (! [ &variant_old_bb7 <- [%#sfetch'3] Seq.length (Slice64.view changes) - UInt64.t'int index ] s0)
+      [ s0 = len_PreferredLeaderChange [%#sfetch'4] {changes} (fun (_x: UInt64.t) -> [ &_30 <- _x ] s1)
+      | s1 = [ &_28 <- UInt64.lt index _30 ] s2
+      | s2 = any [ br0 -> {_28 = false} (! bb22) | br1 -> {_28} (! bb10) ] ]
+      [ bb10 = s0
+        [ s0 = [ &_33 <- index ] s1
+        | s1 = [ &_34 <- Slice64.length changes ] s2
+        | s2 = [ &_35 <- UInt64.lt _33 _34 ] s3
+        | s3 = {[@expl:index in bounds] [%#sfetch'7] _35} s4
+        | s4 = Slice64.get [%#sfetch'7] <t_PreferredLeaderChange> {changes} {_33}
+            (fun (r: t_PreferredLeaderChange) -> [ &change <- r ] s5)
+        | s5 = any
+          [ br0 -> {change.preferred_replica = None} (! bb14)
+          | br1 (x0: UInt64.t) -> {change.preferred_replica = Some x0} (! bb15) ] ]
+      | bb15 = s0
+        [ s0 = elim_Some {change.preferred_replica} (fun (r0: UInt64.t) -> [ &preferred <- r0 ] s1)
+        | s1 = [ &installs_preferred <- preferred = change.new_leader ] s2
+        | s2 = bb16 ]
+      | bb14 = s0 [ s0 = [ &installs_preferred <- [%#sfetch'8] false ] s1 | s1 = bb16 ]
+      | bb16 = any [ br0 -> {installs_preferred = false} (! bb20) | br1 -> {installs_preferred} (! bb17) ]
+      | bb17 = any [ br0 -> {change.leader_in_isr = false} (! bb20) | br1 -> {change.leader_in_isr} (! bb18) ]
+      | bb18 = any [ br0 -> {change.leader_alive = false} (! bb20) | br1 -> {change.leader_alive} (! bb19) ]
+      | bb19 = any [ br0 -> {change.leader_is_witness = false} (! bb21) | br1 -> {change.leader_is_witness} (! bb20) ]
+      | bb21 = s0
+        [ s0 = UInt64.add [%#sfetch'10] {index} {[%#sfetch'9] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb7 ] ] ]
+  | bb20 = s0 [ s0 = [ &_ret <- [%#sfetch'11] false ] s1 | s1 = return {_ret} ]
+  | bb22 = s0 [ s0 = [ &_ret <- [%#sfetch'12] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & changes: Slice64.slice t_PreferredLeaderChange = changes
+  | & max_changes: UInt64.t = max_changes
+  | & count: UInt64.t = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _30: UInt64.t = Any.any_l ()
+  | & change: t_PreferredLeaderChange = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & installs_preferred: bool = Any.any_l ()
+  | & preferred: UInt64.t = Any.any_l ()
+  | & variant_old_bb7: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:preferred_rebalance_admission ensures] [%#sfetch'13] result
+    = (0 < Seq.length (Slice64.view changes)
+    /\ Seq.length (Slice64.view changes) <= UInt64.t'int max_changes
+    /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view changes)
+      -> preferred_change_eligible (Seq.get (Slice64.view changes) i)))}
+    (! return {result}) ]

@@ -1,0 +1,352 @@
+(* #"/workspace/crates/verified/src/composition/epoch.rs" 11 0 16 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 178 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 179 10 179 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 182 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 188 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 189 10 189 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 126 16 126 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 141 8 147 9
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
+let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 133 10 141 6
+let%span sepoch = "/workspace/crates/verified/src/composition/epoch.rs" 17 16 17 22
+let%span sepoch'0 = "/workspace/crates/verified/src/composition/epoch.rs" 31 14 31 33
+let%span sepoch'1 = "/workspace/crates/verified/src/composition/epoch.rs" 32 14 32 27
+let%span sepoch'2 = "/workspace/crates/verified/src/composition/epoch.rs" 28 16 30 72
+let%span sepoch'3 = "/workspace/crates/verified/src/composition/epoch.rs" 25 16 27 56
+let%span sepoch'4 = "/workspace/crates/verified/src/composition/epoch.rs" 22 16 24 5
+let%span sepoch'5 = "/workspace/crates/verified/src/composition/epoch.rs" 21 16 21 77
+let%span sepoch'6 = "/workspace/crates/verified/src/composition/epoch.rs" 20 16 20 45
+let%span sepoch'7 = "/workspace/crates/verified/src/composition/epoch.rs" 19 16 19 36
+let%span sepoch'8 = "/workspace/crates/verified/src/composition/epoch.rs" 33 20 33 30
+let%span sepoch'9 = "/workspace/crates/verified/src/composition/epoch.rs" 33 20 33 38
+let%span sepoch'10 = "/workspace/crates/verified/src/composition/epoch.rs" 34 20 34 30
+let%span sepoch'11 = "/workspace/crates/verified/src/composition/epoch.rs" 34 20 34 45
+let%span sepoch'12 = "/workspace/crates/verified/src/composition/epoch.rs" 35 12 35 93
+let%span sepoch'13 = "/workspace/crates/verified/src/composition/epoch.rs" 39 13 39 14
+let%span sepoch'14 = "/workspace/crates/verified/src/composition/epoch.rs" 39 8 39 14
+let%span sepoch'15 = "/workspace/crates/verified/src/composition/epoch.rs" 36 19 36 23
+let%span sepoch'16 = "/workspace/crates/verified/src/composition/epoch.rs" 42 8 42 88
+let%span sepoch'17 = "/workspace/crates/verified/src/composition/epoch.rs" 43 16 43 18
+let%span sepoch'18 = "/workspace/crates/verified/src/composition/epoch.rs" 44 26 44 28
+let%span sepoch'19 = "/workspace/crates/verified/src/composition/epoch.rs" 46 18 46 65
+let%span sepoch'20 = "/workspace/crates/verified/src/composition/epoch.rs" 47 18 47 40
+let%span sepoch'21 = "/workspace/crates/verified/src/composition/epoch.rs" 50 12 50 44
+let%span sepoch'22 = "/workspace/crates/verified/src/composition/epoch.rs" 51 13 51 46
+let%span sepoch'23 = "/workspace/crates/verified/src/composition/epoch.rs" 52 21 52 62
+let%span sepoch'24 = "/workspace/crates/verified/src/composition/epoch.rs" 55 38 55 43
+let%span sepoch'25 = "/workspace/crates/verified/src/composition/epoch.rs" 55 45 55 49
+let%span sepoch'26 = "/workspace/crates/verified/src/composition/epoch.rs" 55 21 55 72
+let%span sepoch'27 = "/workspace/crates/verified/src/composition/epoch.rs" 56 4 61 43
+let%span sepoch'28 = "/workspace/crates/verified/src/composition/epoch.rs" 10 10 10 16
+let%span sleader_epoch = "/workspace/crates/verified/src/leader_epoch.rs" 103 11 105 68
+let%span sleader_epoch'0 = "/workspace/crates/verified/src/leader_epoch.rs" 106 10 107 78
+let%span sleader_epoch'1 = "/workspace/crates/verified/src/leader_epoch.rs" 78 8 88 9
+let%span sleader_epoch'2 = "/workspace/crates/verified/src/leader_epoch.rs" 48 8 48 87
+let%span sleader_epoch'3 = "/workspace/crates/verified/src/leader_epoch.rs" 34 8 36 82
+
+use creusot.int.UInt64
+use creusot.int.Int32
+use creusot.int.Int64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i32_i64 = { f0: Int32.t; f1: Int64.t }
+
+type t_Option_tup2_i32_i64 = None | Some tup2_i32_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_LeaderEpoch = { f0'0: Int32.t }
+
+type t_Offset = { f0'1: Int64.t }
+
+type t_EpochEntry = { epoch: t_LeaderEpoch; start_offset: t_Offset }
+
+let len_EpochEntry (self_: Slice64.slice t_EpochEntry) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+let restore_leader_epoch_entry_valid (previous: t_Option_tup2_i32_i64) (epoch'0: Int32.t) (start_offset'0: Int64.t)
+  (segment_base: Int64.t) (segment_end: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:restore_leader_epoch_entry_valid ensures] [%#srestore_producer_ids_strict] result
+    = (ge_log_Int (Int32.to_int epoch'0) 0
+    /\ ge_log_Int (Int64.to_int segment_base) 0
+    /\ Int64.to_int segment_base <= Int64.to_int start_offset'0
+    /\ Int64.to_int start_offset'0 <= Int64.to_int segment_end
+    /\ match previous with
+      | Some {f0 = previous_epoch; f1 = previous_start} -> Int32.to_int previous_epoch < Int32.to_int epoch'0
+      /\ Int64.to_int previous_start < Int64.to_int start_offset'0
+      | None -> true
+      end)}
+    (! return {result}) ]
+
+type tup2_LeaderEpoch_Offset = { f0'2: t_LeaderEpoch; f1'2: t_Offset }
+
+predicate no_higher_entry [#"/workspace/crates/verified/src/leader_epoch.rs" 46 0 46 72] (entries: Seq.seq t_EpochEntry) (requested: int) =
+  [%#sleader_epoch'2] forall i: int. 0 <= i /\ i < Seq.length entries
+    -> Int32.to_int (Seq.get entries i).epoch.f0'0 <= requested
+
+predicate higher_entry_at [#"/workspace/crates/verified/src/leader_epoch.rs" 32 0 32 80] (entries: Seq.seq t_EpochEntry) (requested: int) (h: int) =
+  [%#sleader_epoch'3] 0 <= h
+  /\ h < Seq.length entries
+  /\ gt_log_Int (Int32.to_int (Seq.get entries h).epoch.f0'0) requested
+  /\ (forall j: int. 0 <= j /\ j < h -> Int32.to_int (Seq.get entries j).epoch.f0'0 <= requested)
+
+predicate kafka_end_offset_for [#"/workspace/crates/verified/src/leader_epoch.rs" 70 0 76 9] (entries: Seq.seq t_EpochEntry) (requested: int) (log_end'0: int) (found: int) (end': int) =
+  [%#sleader_epoch'1] if requested = - 1 then
+    found = - 1 /\ end' = - 1
+  else
+    if gt_log_Int (Seq.length entries) 0
+    /\ Int32.to_int (Seq.get entries (Seq.length entries - 1)).epoch.f0'0 = requested then
+      found = requested /\ end' = log_end'0
+    else
+      if no_higher_entry entries requested then
+        found = - 1 /\ end' = - 1
+      else
+        exists h: int. higher_entry_at entries requested h
+          /\ end' = Int64.to_int (Seq.get entries h).start_offset.f0'1
+          /\ found = (if h = 0 then requested else Int32.to_int (Seq.get entries (h - 1)).epoch.f0'0)
+
+
+
+
+let epoch_and_offset_for_entries (entries: Slice64.slice t_EpochEntry) (requested_epoch: t_LeaderEpoch)
+  (log_end_offset: t_Offset) (return (x: tup2_LeaderEpoch_Offset)) =
+{[@stop_split] [@expl:epoch_and_offset_for_entries requires] [%#sleader_epoch] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view entries)
+    -> Int32.to_int (Seq.get (Slice64.view entries) i).epoch.f0'0
+      < Int32.to_int (Seq.get (Slice64.view entries) j).epoch.f0'0
+    /\ Int64.to_int (Seq.get (Slice64.view entries) i).start_offset.f0'1
+    < Int64.to_int (Seq.get (Slice64.view entries) j).start_offset.f0'1}
+  any
+  [ return (result: tup2_LeaderEpoch_Offset) ->
+  {[@stop_split] [@expl:epoch_and_offset_for_entries ensures] [%#sleader_epoch'0] kafka_end_offset_for (Slice64.view entries) (Int32.to_int requested_epoch.f0'0) (Int64.to_int log_end_offset.f0'1) (Int32.to_int result.f0'2.f0'0) (Int64.to_int result.f1'2.f0'1)}
+    (! return {result}) ]
+
+let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sfuture_log_swap_admission] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sfuture_log_swap_admission'0] Int64.to_int result
+      <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sfuture_log_swap_admission'1] Int64.to_int result
+      = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 125 0 125 40] (a: int) (b: int) : int
+ = [%#sfetch'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 139 0 139 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sfetch'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sfetch] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sfetch'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sfetch'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sfetch'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sfetch'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sfetch'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sfetch'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sfetch'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let validated_epochs_bound_truncated_fetch [#"/workspace/crates/verified/src/composition/epoch.rs" 11 0 16 9]
+  (entries: Slice64.slice t_EpochEntry) (requested: Int32.t) (segment_base: Int64.t) (w: t_FetchWatermarks)
+  (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &i <- [%#sepoch] (0: UInt64.t) ] s1 | s1 = [ &previous <- None ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sepoch'0] Seq.length (Slice64.view entries)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sepoch'7] UInt64.t'int i <= Seq.length (Slice64.view entries)}
+      {[@expl:loop invariant #1] [%#sepoch'6] gt_log_Int (UInt64.t'int i) 0 -> ge_log_Int (Int64.to_int segment_base) 0}
+      {[@expl:loop invariant #2] [%#sepoch'5] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> ge_log_Int (Int32.to_int (Seq.get (Slice64.view entries) j).epoch.f0'0) 0}
+      {[@expl:loop invariant #3] [%#sepoch'4] previous
+      = (if UInt64.t'int i = 0 then
+        None
+      else
+        Some { f0 = (Seq.get (Slice64.view entries) (UInt64.t'int i - 1)).epoch.f0'0;
+               f1 = (Seq.get (Slice64.view entries) (UInt64.t'int i - 1)).start_offset.f0'1 }
+      )}
+      {[@expl:loop invariant #4] [%#sepoch'3] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> Int64.to_int segment_base <= Int64.to_int (Seq.get (Slice64.view entries) j).start_offset.f0'1
+        /\ Int64.to_int (Seq.get (Slice64.view entries) j).start_offset.f0'1 <= Int64.to_int w.log_end}
+      {[@expl:loop invariant #5] [%#sepoch'2] forall j: int, k: int. 0 <= j /\ j < k /\ k < UInt64.t'int i
+        -> Int32.to_int (Seq.get (Slice64.view entries) j).epoch.f0'0
+          < Int32.to_int (Seq.get (Slice64.view entries) k).epoch.f0'0
+        /\ Int64.to_int (Seq.get (Slice64.view entries) j).start_offset.f0'1
+        < Int64.to_int (Seq.get (Slice64.view entries) k).start_offset.f0'1}
+      (! [ &variant_old_bb1 <- [%#sepoch'0] Seq.length (Slice64.view entries) - UInt64.t'int i ] s0)
+      [ s0 = len_EpochEntry [%#sepoch'1] {entries} (fun (_x: UInt64.t) -> [ &_37 <- _x ] s1)
+      | s1 = [ &_35 <- UInt64.lt i _37 ] s2
+      | s2 = any [ br0 -> {_35 = false} (! bb10) | br1 -> {_35} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_40 <- i ] s1
+        | s1 = [ &_41 <- Slice64.length entries ] s2
+        | s2 = [ &_42 <- UInt64.lt _40 _41 ] s3
+        | s3 = {[@expl:index in bounds] [%#sepoch'8] _42} s4
+        | s4 = Slice64.get [%#sepoch'9] <t_EpochEntry> {entries} {_40}
+            (fun (r: t_EpochEntry) -> [ &epoch'0 <- r.epoch.f0'0 ] s5)
+        | s5 = [ &_44 <- i ] s6
+        | s6 = [ &_45 <- Slice64.length entries ] s7
+        | s7 = [ &_46 <- UInt64.lt _44 _45 ] s8
+        | s8 = {[@expl:index in bounds] [%#sepoch'10] _46} s9
+        | s9 = Slice64.get [%#sepoch'11] <t_EpochEntry> {entries} {_44}
+            (fun (r: t_EpochEntry) -> [ &start <- r.start_offset.f0'1 ] s10)
+        | s10 = restore_leader_epoch_entry_valid [%#sepoch'12] {previous} {epoch'0} {start} {segment_base} {w.log_end}
+            (fun (_x: bool) -> [ &_48 <- _x ] s11)
+        | s11 = any [ br0 -> {_48 = false} (! bb9) | br1 -> {_48} (! bb8) ] ]
+      | bb8 = s0
+        [ s0 = [ &_56 <- { f0 = epoch'0; f1 = start } ] s1
+        | s1 = [ &_55 <- Some _56 ] s2
+        | s2 = [ &previous <- _55 ] s3
+        | s3 = UInt64.add [%#sepoch'14] {i} {[%#sepoch'13] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s4)
+        | s4 = bb1 ] ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- [%#sepoch'15] true ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = [ &_64 <- { f0'0 = requested } ] s1
+    | s1 = [ &_66 <- { f0'1 = w.log_end } ] s2
+    | s2 = epoch_and_offset_for_entries [%#sepoch'16] {entries} {_64} {_66}
+        (fun (_x: tup2_LeaderEpoch_Offset) -> [ &_62 <- _x ] s3)
+    | s3 = [ &found <- _62.f0'2 ] s4
+    | s4 = [ &end' <- _62.f1'2 ] s5
+    | s5 = [ &_69 <- end'.f0'1 = ([%#sepoch'17] (-1: Int64.t)) ] s6
+    | s6 = any [ br0 -> {_69 = false} (! bb13) | br1 -> {_69} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- found.f0'0 = ([%#sepoch'18] (-1: Int32.t)) ] s1 | s1 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = {[@expl:assertion] [%#sepoch'19] Int64.to_int segment_base <= Int64.to_int end'.f0'1
+      /\ Int64.to_int end'.f0'1 <= Int64.to_int w.log_end}
+      s1
+    | s1 = {[@expl:assertion] [%#sepoch'20] Int32.to_int found.f0'0 <= Int32.to_int requested} s2
+    | s2 = truncation_frontier [%#sepoch'21] {w.hw} {end'.f0'1} (fun (_x: Int64.t) -> [ &_84 <- _x ] s3)
+    | s3 = truncation_frontier [%#sepoch'22] {w.lso} {end'.f0'1} (fun (_x: Int64.t) -> [ &_87 <- _x ] s4)
+    | s4 = truncation_frontier [%#sepoch'23] {w.deliverable} {end'.f0'1} (fun (_x: Int64.t) -> [ &_90 <- _x ] s5)
+    | s5 = [ &bounded <- { log_start = w.log_start; hw = _84; lso = _87; log_end = end'.f0'1; deliverable = _90 } ] s6
+    | s6 = fetch_visibility [%#sepoch'26] {[%#sepoch'24] false} {[%#sepoch'25] true} {bounded} {w.log_start}
+        (fun (_x: t_FetchVisibility) -> [ &visibility <- _x ] s7)
+    | s7 = [ &_96 <- Int64.le segment_base end'.f0'1 ] s8
+    | s8 = any [ br0 -> {_96 = false} (! bb28) | br1 -> {_96} (! bb18) ] ]
+  | bb18 = s0
+    [ s0 = [ &_99 <- Int64.le end'.f0'1 w.log_end ] s1
+    | s1 = any [ br0 -> {_99 = false} (! bb28) | br1 -> {_99} (! bb19) ] ]
+  | bb19 = s0
+    [ s0 = [ &_102 <- Int32.le found.f0'0 requested ] s1
+    | s1 = any [ br0 -> {_102 = false} (! bb28) | br1 -> {_102} (! bb20) ] ]
+  | bb20 = s0
+    [ s0 = [ &_105 <- Int64.le visibility.limit_offset end'.f0'1 ] s1
+    | s1 = any [ br0 -> {_105 = false} (! bb28) | br1 -> {_105} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = [ &_108 <- Int64.le visibility.response_hw end'.f0'1 ] s1
+    | s1 = any [ br0 -> {_108 = false} (! bb28) | br1 -> {_108} (! bb22) ] ]
+  | bb22 = s0 [ s0 = [ &_ret <- Int64.le visibility.response_lso end'.f0'1 ] s1 | s1 = return {_ret} ]
+  | bb28 = s0 [ s0 = [ &_ret <- [%#sepoch'27] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & entries: Slice64.slice t_EpochEntry = entries
+  | & requested: Int32.t = requested
+  | & segment_base: Int64.t = segment_base
+  | & w: t_FetchWatermarks = w
+  | & i: UInt64.t = Any.any_l ()
+  | & previous: t_Option_tup2_i32_i64 = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & epoch'0: Int32.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & start: Int64.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: UInt64.t = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _55: t_Option_tup2_i32_i64 = Any.any_l ()
+  | & _56: tup2_i32_i64 = Any.any_l ()
+  | & found: t_LeaderEpoch = Any.any_l ()
+  | & end': t_Offset = Any.any_l ()
+  | & _62: tup2_LeaderEpoch_Offset = Any.any_l ()
+  | & _64: t_LeaderEpoch = Any.any_l ()
+  | & _66: t_Offset = Any.any_l ()
+  | & _69: bool = Any.any_l ()
+  | & bounded: t_FetchWatermarks = Any.any_l ()
+  | & _84: Int64.t = Any.any_l ()
+  | & _87: Int64.t = Any.any_l ()
+  | & _90: Int64.t = Any.any_l ()
+  | & visibility: t_FetchVisibility = Any.any_l ()
+  | & _96: bool = Any.any_l ()
+  | & _99: bool = Any.any_l ()
+  | & _102: bool = Any.any_l ()
+  | & _105: bool = Any.any_l ()
+  | & _108: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:validated_epochs_bound_truncated_fetch ensures] [%#sepoch'28] result}
+    (! return {result}) ]

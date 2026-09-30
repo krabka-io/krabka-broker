@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/authz.rs" 164 27 164 32 *)
+(* #"/workspace/crates/verified/src/authz.rs" 74 27 74 32 *)
 
 (* <authz::RequestAuthState as std::clone::Clone> *)
 
@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RequestAuthState [#"/workspace/crates/verified/src/authz.rs" 164 27 164 32] (self: t_RequestAuthState)
-  (return (x: t_RequestAuthState)) = (! bb0
+let clone_RequestAuthState [#"/workspace/crates/verified/src/authz.rs" 74 27 74 32]
+  (self: t_RequestAuthState) (return (x: t_RequestAuthState)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RequestAuthState = Any.any_l () | & self: t_RequestAuthState = self ])
   [ return (result: t_RequestAuthState) -> (! return {result}) ]

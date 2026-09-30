@@ -1,0 +1,235 @@
+(* #"/workspace/crates/verified/src/transaction/abort_rows.rs" 13 0 13 78 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sabort_rows = "/workspace/crates/verified/src/transaction/abort_rows.rs" 14 40 14 50
+let%span sabort_rows'0 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 15 20 15 26
+let%span sabort_rows'1 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 23 14 23 34
+let%span sabort_rows'2 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 24 18 24 28
+let%span sabort_rows'3 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 21 16 22 40
+let%span sabort_rows'4 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 19 16 20 84
+let%span sabort_rows'5 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 17 16 18 75
+let%span sabort_rows'6 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 16 16 16 66
+let%span sabort_rows'7 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 25 18 25 29
+let%span sabort_rows'8 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 26 23 26 29
+let%span sabort_rows'9 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 31 18 31 41
+let%span sabort_rows'10 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 32 21 32 35
+let%span sabort_rows'11 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 30 20 30 78
+let%span sabort_rows'12 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 29 20 29 44
+let%span sabort_rows'13 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 32 49 32 55
+let%span sabort_rows'14 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 32 78 32 84
+let%span sabort_rows'15 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 33 20 33 21
+let%span sabort_rows'16 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 33 12 33 21
+let%span sabort_rows'17 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 35 19 35 33
+let%span sabort_rows'18 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 36 12 36 30
+let%span sabort_rows'19 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 38 17 38 18
+let%span sabort_rows'20 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 38 8 38 18
+let%span sabort_rows'21 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 5 10 5 38
+let%span sabort_rows'22 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 6 10 7 74
+let%span sabort_rows'23 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 8 10 9 76
+let%span sabort_rows'24 = "/workspace/crates/verified/src/transaction/abort_rows.rs" 10 10 11 32
+
+use seq.Seq
+use creusot.int.Int64
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type t_Vec_tup2_i64_i64_Global
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_tup2_i64_i64_Global (self: t_Vec_tup2_i64_i64_Global) : Seq.seq tup2_i64_i64
+
+axiom view_Vec_tup2_i64_i64_Global_spec:
+  forall self: t_Vec_tup2_i64_i64_Global [view_Vec_tup2_i64_i64_Global self]. [%#svec'0] Seq.length (view_Vec_tup2_i64_i64_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_tup2_i64_i64 (return (x: t_Vec_tup2_i64_i64_Global)) = any
+  [ return (result: t_Vec_tup2_i64_i64_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_tup2_i64_i64_Global result) = 0}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_tup2_i64_i64 (self_: Slice64.slice tup2_i64_i64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let len_tup2_i64_i64'0 (self_: t_Vec_tup2_i64_i64_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#svec'1] UInt64.t'int result
+    = Seq.length (view_Vec_tup2_i64_i64_Global self_)}
+    (! return {result}) ]
+
+predicate in_bounds_usize [@inline:trivial] (self: UInt64.t) (seq: Seq.seq tup2_i64_i64) =
+  [%#sslice'0] UInt64.t'int self < Seq.length seq
+
+meta "rewrite_def" predicate in_bounds_usize
+
+predicate has_value_usize [@inline:trivial] (self: UInt64.t) (seq: Seq.seq tup2_i64_i64) (out: tup2_i64_i64) =
+  [%#sslice'1] Seq.get seq (UInt64.t'int self) = out
+
+meta "rewrite_def" predicate has_value_usize
+
+let index_Vec_tup2_i64_i64_Global (self_: t_Vec_tup2_i64_i64_Global) (ix: UInt64.t) (return (x: tup2_i64_i64)) =
+{[@stop_split] [@expl:index requires] [%#svec'2] in_bounds_usize ix (view_Vec_tup2_i64_i64_Global self_)}
+  any
+  [ return (result: tup2_i64_i64) ->
+  {[@stop_split] [@expl:index ensures] [%#svec'3] has_value_usize ix (view_Vec_tup2_i64_i64_Global self_) result}
+    (! return {result}) ]
+
+let push_tup2_i64_i64 (self_: MutBorrow.t t_Vec_tup2_i64_i64_Global) (v: tup2_i64_i64) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'4] view_Vec_tup2_i64_i64_Global self_.final
+    = Seq.snoc (view_Vec_tup2_i64_i64_Global self_.current) v}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let unique_aborted_transaction_rows [#"/workspace/crates/verified/src/transaction/abort_rows.rs" 13 0 13 78]
+  (rows: Slice64.slice tup2_i64_i64) (return (x: t_Vec_tup2_i64_i64_Global)) = (! bb0
+  [ bb0 = s0
+    [ s0 = new_tup2_i64_i64 [%#sabort_rows] (fun (_x: t_Vec_tup2_i64_i64_Global) -> [ &selected <- _x ] s1)
+    | s1 = [ &index <- [%#sabort_rows'0] (0: UInt64.t) ] s2
+    | s2 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#sabort_rows'1] Seq.length (Slice64.view rows)
+      - UInt64.t'int index)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#sabort_rows'6] UInt64.t'int index <= Seq.length (Slice64.view rows)
+      /\ Seq.length (view_Vec_tup2_i64_i64_Global selected) <= UInt64.t'int index}
+      {[@expl:loop invariant #1] [%#sabort_rows'5] forall i: int. 0 <= i
+          /\ i < Seq.length (view_Vec_tup2_i64_i64_Global selected)
+        -> (exists j: int. 0 <= j
+          /\ j < UInt64.t'int index
+          /\ Seq.get (view_Vec_tup2_i64_i64_Global selected) i = Seq.get (Slice64.view rows) j)}
+      {[@expl:loop invariant #2] [%#sabort_rows'4] forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_tup2_i64_i64_Global selected)
+          /\ Seq.get (Slice64.view rows) i = Seq.get (view_Vec_tup2_i64_i64_Global selected) j)}
+      {[@expl:loop invariant #3] [%#sabort_rows'3] forall i: int, j: int. 0 <= i
+          /\ i < j /\ j < Seq.length (view_Vec_tup2_i64_i64_Global selected)
+        -> Seq.get (view_Vec_tup2_i64_i64_Global selected) i <> Seq.get (view_Vec_tup2_i64_i64_Global selected) j}
+      (! [ &variant_old_bb2 <- [%#sabort_rows'1] Seq.length (Slice64.view rows) - UInt64.t'int index ] s0)
+      [ s0 = len_tup2_i64_i64 [%#sabort_rows'2] {rows} (fun (_x: UInt64.t) -> [ &_33 <- _x ] s1)
+      | s1 = [ &_31 <- UInt64.lt index _33 ] s2
+      | s2 = any [ br0 -> {_31 = false} (! bb25) | br1 -> {_31} (! bb5) ] ]
+      [ bb5 = s0
+        [ s0 = [ &_36 <- index ] s1
+        | s1 = [ &_37 <- Slice64.length rows ] s2
+        | s2 = [ &_38 <- UInt64.lt _36 _37 ] s3
+        | s3 = {[@expl:index in bounds] [%#sabort_rows'7] _38} s4
+        | s4 = Slice64.get [%#sabort_rows'7] <tup2_i64_i64> {rows} {_36} (fun (r: tup2_i64_i64) -> [ &row <- r ] s5)
+        | s5 = [ &scan <- [%#sabort_rows'8] (0: UInt64.t) ] s6
+        | s6 = bb7 ]
+      | bb7 = bb7invariant
+        [ bb7 =
+          {[@expl:loop variant] well_founded_relation_Int variant_old_bb7 ([%#sabort_rows'9] Seq.length (view_Vec_tup2_i64_i64_Global selected)
+          - UInt64.t'int scan)}
+          bb7invariant
+        | bb7invariant = {[@expl:loop invariant #0] [%#sabort_rows'12] UInt64.t'int scan
+          <= Seq.length (view_Vec_tup2_i64_i64_Global selected)}
+          {[@expl:loop invariant #1] [%#sabort_rows'11] forall j: int. 0 <= j /\ j < UInt64.t'int scan
+            -> Seq.get (view_Vec_tup2_i64_i64_Global selected) j <> row}
+          (! [ &variant_old_bb7 <- [%#sabort_rows'9] Seq.length (view_Vec_tup2_i64_i64_Global selected)
+          - UInt64.t'int scan ] s0)
+          [ s0 = len_tup2_i64_i64'0 [%#sabort_rows'10] {selected} (fun (_x: UInt64.t) -> [ &_54 <- _x ] s1)
+          | s1 = [ &_52 <- UInt64.lt scan _54 ] s2
+          | s2 = any [ br0 -> {_52 = false} (! bb19) | br1 -> {_52} (! bb10) ] ]
+          [ bb10 = s0
+            [ s0 = index_Vec_tup2_i64_i64_Global [%#sabort_rows'13] {selected} {scan}
+                (fun (_x: tup2_i64_i64) -> [ &_58 <- _x ] s1)
+            | s1 = [ &_56 <- _58.f0 = row.f0 ] s2
+            | s2 = any [ br0 -> {_56 = false} (! bb17) | br1 -> {_56} (! bb12) ] ]
+          | bb12 = s0
+            [ s0 = index_Vec_tup2_i64_i64_Global [%#sabort_rows'14] {selected} {scan}
+                (fun (_x: tup2_i64_i64) -> [ &_64 <- _x ] s1)
+            | s1 = [ &_62 <- _64.f1 = row.f1 ] s2
+            | s2 = any [ br0 -> {_62 = false} (! bb17) | br1 -> {_62} (! bb19) ] ]
+          | bb17 = s0
+            [ s0 = UInt64.add [%#sabort_rows'16] {scan} {[%#sabort_rows'15] (1: UInt64.t)}
+                (fun (_x: UInt64.t) -> [ &scan <- _x ] s1)
+            | s1 = bb7 ] ] ]
+      | bb19 = s0
+        [ s0 = len_tup2_i64_i64'0 [%#sabort_rows'17] {selected} (fun (_x: UInt64.t) -> [ &_72 <- _x ] s1)
+        | s1 = [ &_70 <- scan = _72 ] s2
+        | s2 = any [ br0 -> {_70 = false} (! bb24) | br1 -> {_70} (! bb21) ] ]
+      | bb21 = s0
+        [ s0 = MutBorrow.borrow_mut <t_Vec_tup2_i64_i64_Global> {selected}
+            (fun (_bor: MutBorrow.t t_Vec_tup2_i64_i64_Global) -> [ &_75 <- _bor ] [ &selected <- _bor.final ] s1)
+        | s1 = push_tup2_i64_i64 [%#sabort_rows'18] {_75} {row} (fun (_x: ()) -> [ &_74 <- _x ] s2)
+        | s2 = bb24 ]
+      | bb24 = s0
+        [ s0 = UInt64.add [%#sabort_rows'20] {index} {[%#sabort_rows'19] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb2 ] ] ]
+  | bb25 = s0 [ s0 = [ &_ret <- selected ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Vec_tup2_i64_i64_Global = Any.any_l ()
+  | & rows: Slice64.slice tup2_i64_i64 = rows
+  | & selected: t_Vec_tup2_i64_i64_Global = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & row: tup2_i64_i64 = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & scan: UInt64.t = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _58: tup2_i64_i64 = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _64: tup2_i64_i64 = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
+  | & _74: () = Any.any_l ()
+  | & _75: MutBorrow.t t_Vec_tup2_i64_i64_Global = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l ()
+  | & variant_old_bb7: int = Any.any_l () ])
+  [ return (result: t_Vec_tup2_i64_i64_Global) ->
+  {[@stop_split] [@expl:unique_aborted_transaction_rows ensures] ([@stop_split] [@expl:unique_aborted_transaction_rows ensures #0] [%#sabort_rows'21] Seq.length (view_Vec_tup2_i64_i64_Global result)
+      <= Seq.length (Slice64.view rows))
+    /\ ([@stop_split] [@expl:unique_aborted_transaction_rows ensures #1] [%#sabort_rows'22] forall i: int. 0 <= i
+          /\ i < Seq.length (view_Vec_tup2_i64_i64_Global result)
+        -> (exists j: int. 0 <= j
+          /\ j < Seq.length (Slice64.view rows)
+          /\ Seq.get (view_Vec_tup2_i64_i64_Global result) i = Seq.get (Slice64.view rows) j))
+    /\ ([@stop_split] [@expl:unique_aborted_transaction_rows ensures #2] [%#sabort_rows'23] forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view rows)
+        -> (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_tup2_i64_i64_Global result)
+          /\ Seq.get (Slice64.view rows) i = Seq.get (view_Vec_tup2_i64_i64_Global result) j))
+    /\ ([@stop_split] [@expl:unique_aborted_transaction_rows ensures #3] [%#sabort_rows'24] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (view_Vec_tup2_i64_i64_Global result)
+      -> Seq.get (view_Vec_tup2_i64_i64_Global result) i <> Seq.get (view_Vec_tup2_i64_i64_Global result) j)}
+    (! return {result}) ]

@@ -1,0 +1,16 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_identity": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_transaction_completion_decision": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_transaction_reaper_completion_decision": {
+        "prover": "alt-ergo",
+        "time": 0.036
+      }
+    }
+  }
+}

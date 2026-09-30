@@ -1,0 +1,117 @@
+(* #"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 163 0 163 96 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span svoter_reconfiguration_decision = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 174 49 174 50
+let%span svoter_reconfiguration_decision'0 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 179 29 179 34
+let%span svoter_reconfiguration_decision'1 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 149 29 149 82
+let%span svoter_reconfiguration_decision'2 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 150 28 162 1
+let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 69 8 70 67
+let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 176 8 191 9
+
+use creusot.int.UInt64
+use creusot.int.UInt16
+use creusot.prelude.Any
+use int.Int
+
+type t_TargetMembership = Absent | PresentUnknownDirectory | PresentSameDirectory | PresentOtherDirectory
+
+type t_TargetVoter = { membership: t_TargetMembership; version_compatible: bool; caught_up: bool }
+
+type t_VoterReconfigurationPlan = {
+  next_voter_count: UInt64.t;
+  next_kraft_version: UInt16.t;
+  write_voters: bool;
+  write_kraft_version: bool;
+  preflight_only: bool }
+
+type t_VoterReconfigurationDecision =
+  | NotLeader
+  | InProgress
+  | EpochUncommitted
+  | EmptyCurrentVoterSet
+  | UnsupportedKraftVersion
+  | DuplicateVoter
+  | IncompatibleVoter
+  | VoterNotCaughtUp
+  | VoterNotFound
+  | DirectoryMismatch
+  | InvalidVersionTransition
+  | Admit t_VoterReconfigurationPlan
+
+type t_CurrentVoterSet = {
+  voter_count: UInt64.t;
+  kraft_version: UInt16.t;
+  latest_controls_committed: bool;
+  all_voters_support_requested: bool }
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 67 0 67 63] (membership'0: t_TargetMembership) =
+  [%#sadmitted_plan] membership'0 = PresentUnknownDirectory \/ membership'0 = PresentSameDirectory
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 170 0 174 9] (voters: t_CurrentVoterSet) (kind: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
+  [%#sadmitted_plan'0] match kind with
+    | Add -> UInt64.t'int plan.next_voter_count = UInt64.t'int voters.voter_count + 1
+    /\ plan.next_kraft_version = voters.kraft_version
+    /\ plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+    | Remove -> UInt64.t'int plan.next_voter_count + 1 = UInt64.t'int voters.voter_count
+    /\ plan.next_kraft_version = voters.kraft_version
+    /\ plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+    | Update -> plan.next_voter_count = voters.voter_count
+    /\ plan.next_kraft_version = voters.kraft_version
+    /\ plan.write_voters = (UInt16.t'int voters.kraft_version <> 0)
+    /\ not plan.write_kraft_version /\ plan.preflight_only = (UInt16.t'int voters.kraft_version = 0)
+    | FinalizeKraftVersion -> plan.next_voter_count = voters.voter_count
+    /\ UInt16.t'int plan.next_kraft_version = 1
+    /\ plan.write_voters /\ plan.write_kraft_version /\ not plan.preflight_only
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let update_decision [#"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 163 0 163 96]
+  (voters: t_CurrentVoterSet) (target: t_TargetVoter) (return (x: t_VoterReconfigurationDecision)) =
+{[@stop_split] [@expl:update_decision requires] [%#svoter_reconfiguration_decision'1] gt_log_Int (UInt64.t'int voters.voter_count) 0
+  /\ UInt16.t'int voters.kraft_version <= 1}
+  (! bb0
+  [ bb0 = any [ br0 -> {target.version_compatible = false} (! bb1) | br1 -> {target.version_compatible} (! bb2) ]
+  | bb2 = any
+    [ br0 -> {target.membership = Absent} (! bb8)
+    | br1 -> {target.membership = PresentUnknownDirectory} (! bb6)
+    | br2 -> {target.membership = PresentSameDirectory} (! bb6)
+    | br3 -> {target.membership = PresentOtherDirectory} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- DirectoryMismatch ] s1 | s1 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = [ &preflight_only'0 <- voters.kraft_version = ([%#svoter_reconfiguration_decision] (0: UInt16.t)) ] s1
+    | s1 = [ &_22 <- not preflight_only'0 ] s2
+    | s2 = [ &_19 <- { next_voter_count = voters.voter_count;
+                       next_kraft_version = voters.kraft_version;
+                       write_voters = _22;
+                       write_kraft_version = ([%#svoter_reconfiguration_decision'0] false);
+                       preflight_only = preflight_only'0 } ] s3
+    | s3 = [ &_ret <- Admit _19 ] s4
+    | s4 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- VoterNotFound ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- IncompatibleVoter ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterReconfigurationDecision = Any.any_l ()
+  | & voters: t_CurrentVoterSet = voters
+  | & target: t_TargetVoter = target
+  | & preflight_only'0: bool = Any.any_l ()
+  | & _19: t_VoterReconfigurationPlan = Any.any_l ()
+  | & _22: bool = Any.any_l () ])
+  [ return (result: t_VoterReconfigurationDecision) ->
+  {[@stop_split] [@expl:update_decision ensures] [%#svoter_reconfiguration_decision'2] match result with
+      | Admit plan -> target.version_compatible
+      /\ update_key_matches target.membership /\ admitted_plan voters (Update) plan
+      | IncompatibleVoter -> not target.version_compatible
+      | VoterNotFound -> target.version_compatible /\ target.membership = Absent
+      | DirectoryMismatch -> target.version_compatible
+      /\ target.membership <> Absent /\ not update_key_matches target.membership
+      | _ -> false
+      end}
+    (! return {result}) ]

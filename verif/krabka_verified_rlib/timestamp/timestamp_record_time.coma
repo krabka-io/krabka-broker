@@ -1,0 +1,70 @@
+(* #"/workspace/crates/verified/src/timestamp.rs" 158 0 162 16 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 165 16 165 60
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 149 10 156 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let timestamp_record_time [#"/workspace/crates/verified/src/timestamp.rs" 158 0 162 16]
+  (batch_timestamp: Int64.t) (timestamp_delta: Int64.t) (append_time: t_Option_i64) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = any [ br0 -> {append_time = None} (! bb3) | br1 (x0: Int64.t) -> {append_time = Some x0} (! bb4) ]
+  | bb4 = s0
+    [ s0 = elim_Some {append_time} (fun (r0: Int64.t) -> [ &stamp <- r0 ] s1)
+    | s1 = [ &_ret <- Some stamp ] s2
+    | s2 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = checked_add [%#stimestamp] {batch_timestamp} {timestamp_delta} (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & batch_timestamp: Int64.t = batch_timestamp
+  | & timestamp_delta: Int64.t = timestamp_delta
+  | & append_time: t_Option_i64 = append_time
+  | & stamp: Int64.t = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:timestamp_record_time ensures] [%#stimestamp'0] match result with
+      | Some timestamp -> Int64.to_int timestamp
+      = match append_time with
+        | Some stamp -> Int64.to_int stamp
+        | None -> Int64.to_int batch_timestamp + Int64.to_int timestamp_delta
+        end
+      | None -> append_time = None
+      /\ (Int64.to_int batch_timestamp + Int64.to_int timestamp_delta < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int batch_timestamp + Int64.to_int timestamp_delta) (Int64.to_int const_MAX))
+      end}
+    (! return {result}) ]

@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_lemma_round_robin_step": { "prover": "z3", "time": 0.021 }
-    }
-  }
-}

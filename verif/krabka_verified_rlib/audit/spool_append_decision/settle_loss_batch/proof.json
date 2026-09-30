@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_settle_loss_batch": { "prover": "alt-ergo", "time": 0.012 }
+    }
+  }
+}

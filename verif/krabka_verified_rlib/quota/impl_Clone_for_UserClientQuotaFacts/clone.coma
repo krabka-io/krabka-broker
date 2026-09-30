@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/quota.rs" 47 27 47 32 *)
+(* #"/workspace/crates/verified/src/quota.rs" 103 27 103 32 *)
 
 (* <quota::UserClientQuotaFacts as std::clone::Clone> *)
 
@@ -20,8 +20,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_UserClientQuotaFacts [#"/workspace/crates/verified/src/quota.rs" 47 27 47 32] (self: t_UserClientQuotaFacts)
-  (return (x: t_UserClientQuotaFacts)) = (! bb0
+let clone_UserClientQuotaFacts [#"/workspace/crates/verified/src/quota.rs" 103 27 103 32]
+  (self: t_UserClientQuotaFacts) (return (x: t_UserClientQuotaFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_UserClientQuotaFacts = Any.any_l () | & self: t_UserClientQuotaFacts = self ])
   [ return (result: t_UserClientQuotaFacts) -> (! return {result}) ]

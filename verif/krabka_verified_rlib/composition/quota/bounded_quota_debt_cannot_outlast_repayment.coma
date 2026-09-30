@@ -1,0 +1,192 @@
+(* #"/workspace/crates/verified/src/composition/quota.rs" 74 0 82 20 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span squota = "/workspace/crates/verified/src/composition/quota.rs" 83 19 83 68
+let%span squota'0 = "/workspace/crates/verified/src/composition/quota.rs" 84 18 84 77
+let%span squota'1 = "/workspace/crates/verified/src/composition/quota.rs" 85 17 85 69
+let%span squota'2 = "/workspace/crates/verified/src/composition/quota.rs" 88 21 88 22
+let%span squota'3 = "/workspace/crates/verified/src/composition/quota.rs" 86 21 91 5
+let%span squota'4 = "/workspace/crates/verified/src/composition/quota.rs" 63 11 63 71
+let%span squota'5 = "/workspace/crates/verified/src/composition/quota.rs" 64 11 64 29
+let%span squota'6 = "/workspace/crates/verified/src/composition/quota.rs" 65 10 65 47
+let%span squota'7 = "/workspace/crates/verified/src/composition/quota.rs" 67 4 67 81
+let%span squota'8 = "/workspace/crates/verified/src/composition/quota.rs" 71 10 71 91
+let%span squota'9 = "/workspace/crates/verified/src/composition/quota.rs" 72 10 72 75
+let%span squota'10 = "/workspace/crates/verified/src/composition/quota.rs" 73 10 73 83
+let%span squota'11 = "/workspace/crates/verified/src/quota.rs" 21 10 21 29
+let%span squota'12 = "/workspace/crates/verified/src/quota.rs" 22 10 22 77
+let%span squota'13 = "/workspace/crates/verified/src/quota.rs" 23 10 24 69
+let%span squota'14 = "/workspace/crates/verified/src/quota.rs" 25 10 25 80
+let%span squota'15 = "/workspace/crates/verified/src/quota.rs" 41 10 43 12
+let%span squota'16 = "/workspace/crates/verified/src/quota.rs" 44 10 45 89
+let%span squota'17 = "/workspace/crates/verified/src/quota.rs" 46 10 46 55
+let%span squota'18 = "/workspace/crates/verified/src/quota.rs" 47 10 47 80
+let%span squota'19 = "/workspace/crates/verified/src/composition/quota.rs" 12 4 16 5
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+ = [%#sthrottle'3] if available + refill <= burst then available + refill else burst
+
+let quota_credit (available: UInt64.t) (debt: UInt64.t) (credit: UInt64.t) (burst: UInt64.t)
+  (return (x: tup2_u64_u64)) = any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:quota_credit ensures] ([@stop_split] [@expl:quota_credit ensures #0] [%#squota'11] UInt64.t'int result.f0
+      <= UInt64.t'int burst)
+    /\ ([@stop_split] [@expl:quota_credit ensures #1] [%#squota'12] UInt64.t'int result.f1
+      = UInt64.t'int debt
+      - (if UInt64.t'int debt <= UInt64.t'int credit then UInt64.t'int debt else UInt64.t'int credit))
+    /\ ([@stop_split] [@expl:quota_credit ensures #2] [%#squota'13] UInt64.t'int result.f0
+      = capped (UInt64.t'int available) (UInt64.t'int credit
+      - (if UInt64.t'int debt <= UInt64.t'int credit then
+        UInt64.t'int debt
+      else
+        UInt64.t'int credit
+      )) (UInt64.t'int burst))
+    /\ ([@stop_split] [@expl:quota_credit ensures #3] [%#squota'14] UInt64.t'int available = 0 \/ UInt64.t'int debt = 0
+    -> UInt64.t'int result.f0 = 0 \/ UInt64.t'int result.f1 = 0)}
+    (! return {result}) ]
+
+let quota_charge (available: UInt64.t) (debt: UInt64.t) (requested: UInt64.t) (burst: UInt64.t) (debt_cap: UInt64.t)
+  (return (x: tup2_u64_u64)) = any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:quota_charge ensures] ([@stop_split] [@expl:quota_charge ensures #0] [%#squota'15] UInt64.t'int result.f0
+      = (if UInt64.t'int requested <= capped (UInt64.t'int available) 0 (UInt64.t'int burst) then
+        capped (UInt64.t'int available) 0 (UInt64.t'int burst) - UInt64.t'int requested
+      else
+        0
+      ))
+    /\ ([@stop_split] [@expl:quota_charge ensures #1] [%#squota'16] UInt64.t'int result.f1
+      = capped (UInt64.t'int debt) (UInt64.t'int requested
+      - (capped (UInt64.t'int available) 0 (UInt64.t'int burst) - UInt64.t'int result.f0)) (UInt64.t'int debt_cap))
+    /\ ([@stop_split] [@expl:quota_charge ensures #2] [%#squota'17] UInt64.t'int result.f0 <= UInt64.t'int burst
+      /\ UInt64.t'int result.f1 <= UInt64.t'int debt_cap)
+    /\ ([@stop_split] [@expl:quota_charge ensures #3] [%#squota'18] UInt64.t'int available = 0 \/ UInt64.t'int debt = 0
+    -> UInt64.t'int result.f0 = 0 \/ UInt64.t'int result.f1 = 0)}
+    (! return {result}) ]
+
+type t_AvailableTokens = { f0'0: UInt64.t }
+
+type t_RefillTokens = { f0'1: UInt64.t }
+
+type t_BurstCapacity = { f0'2: UInt64.t }
+
+type t_RequestedTokens = { f0'3: UInt64.t }
+
+type t_GrantedTokens = { f0'4: UInt64.t }
+
+type t_NewAvailable = { f0'5: UInt64.t }
+
+type tup2_GrantedTokens_NewAvailable = { f0'6: t_GrantedTokens; f1'6: t_NewAvailable }
+
+let plan_consume (available: t_AvailableTokens) (refill: t_RefillTokens) (burst: t_BurstCapacity)
+  (requested: t_RequestedTokens) (return (x: tup2_GrantedTokens_NewAvailable)) = any
+  [ return (result: tup2_GrantedTokens_NewAvailable) ->
+  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#sthrottle] UInt64.t'int result.f0'6.f0'4
+      <= UInt64.t'int requested.f0'3)
+    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#sthrottle'0] UInt64.t'int result.f1'6.f0'5
+      <= UInt64.t'int burst.f0'2)
+    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#sthrottle'1] UInt64.t'int result.f0'6.f0'4
+        + UInt64.t'int result.f1'6.f0'5
+      = capped (UInt64.t'int available.f0'0) (UInt64.t'int refill.f0'1) (UInt64.t'int burst.f0'2))
+    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#sthrottle'2] UInt64.t'int result.f0'6.f0'4
+    = (if UInt64.t'int requested.f0'3
+    <= capped (UInt64.t'int available.f0'0) (UInt64.t'int refill.f0'1) (UInt64.t'int burst.f0'2) then
+      UInt64.t'int requested.f0'3
+    else
+      capped (UInt64.t'int available.f0'0) (UInt64.t'int refill.f0'1) (UInt64.t'int burst.f0'2)
+    ))}
+    (! return {result}) ]
+
+type tup3_u64_u64_u64 = { f0'7: UInt64.t; f1'7: UInt64.t; f2'7: UInt64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function refilled_quota_balance [#"/workspace/crates/verified/src/composition/quota.rs" 11 0 11 84] (available: int) (debt: int) (refill: int) (burst: int) : int
+ = [%#squota'19] if available - debt + refill <= burst then available - debt + refill else burst
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let bounded_quota_debt_cannot_outlast_repayment [#"/workspace/crates/verified/src/composition/quota.rs" 74 0 82 20]
+  (initial: tup2_u64_u64) (refill: UInt64.t) (burst: UInt64.t) (requested: UInt64.t) (cap: UInt64.t)
+  (repayment: UInt64.t) (probe: UInt64.t) (return (x: tup3_u64_u64_u64)) =
+{[@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment requires] ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment requires #0] [%#squota'4] UInt64.t'int initial.f0
+      <= UInt64.t'int burst
+    /\ (UInt64.t'int initial.f0 = 0 \/ UInt64.t'int initial.f1 = 0))
+  /\ ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment requires #1] [%#squota'5] ge_log_Int (UInt64.t'int repayment) (UInt64.t'int cap))}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = quota_credit [%#squota] {initial.f0} {initial.f1} {refill} {burst}
+        (fun (_x: tup2_u64_u64) -> [ &refilled <- _x ] s1)
+    | s1 = quota_charge [%#squota'0] {refilled.f0} {refilled.f1} {requested} {burst} {cap}
+        (fun (_x: tup2_u64_u64) -> [ &charged <- _x ] s2)
+    | s2 = quota_credit [%#squota'1] {charged.f0} {charged.f1} {repayment} {burst}
+        (fun (_x: tup2_u64_u64) -> [ &repaid <- _x ] s3)
+    | s3 = [ &_54 <- { f0'0 = repaid.f0 } ] s4
+    | s4 = [ &_56 <- { f0'1 = ([%#squota'2] (0: UInt64.t)) } ] s5
+    | s5 = [ &_57 <- { f0'2 = burst } ] s6
+    | s6 = [ &_59 <- { f0'3 = probe } ] s7
+    | s7 = plan_consume [%#squota'3] {_54} {_56} {_57} {_59}
+        (fun (_x: tup2_GrantedTokens_NewAvailable) -> [ &_53 <- _x ] s8)
+    | s8 = [ &grant <- _53.f0'6 ] s9
+    | s9 = [ &_ret <- { f0'7 = repaid.f0; f1'7 = repaid.f1; f2'7 = grant.f0'4 } ] s10
+    | s10 = return {_ret} ] ]
+  [ & _ret: tup3_u64_u64_u64 = Any.any_l ()
+  | & initial: tup2_u64_u64 = initial
+  | & refill: UInt64.t = refill
+  | & burst: UInt64.t = burst
+  | & requested: UInt64.t = requested
+  | & cap: UInt64.t = cap
+  | & repayment: UInt64.t = repayment
+  | & probe: UInt64.t = probe
+  | & refilled: tup2_u64_u64 = Any.any_l ()
+  | & charged: tup2_u64_u64 = Any.any_l ()
+  | & repaid: tup2_u64_u64 = Any.any_l ()
+  | & grant: t_GrantedTokens = Any.any_l ()
+  | & _53: tup2_GrantedTokens_NewAvailable = Any.any_l ()
+  | & _54: t_AvailableTokens = Any.any_l ()
+  | & _56: t_RefillTokens = Any.any_l ()
+  | & _57: t_BurstCapacity = Any.any_l ()
+  | & _59: t_RequestedTokens = Any.any_l () ])
+  [ return (result: tup3_u64_u64_u64) ->
+  {[@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment ensures] ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment ensures #0] [%#squota'6] UInt64.t'int result.f1'7
+        = 0
+      /\ UInt64.t'int result.f0'7 <= UInt64.t'int burst)
+    /\ ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment ensures #1] [%#squota'7] let before = refilled_quota_balance (UInt64.t'int initial.f0) (UInt64.t'int initial.f1) (UInt64.t'int refill) (UInt64.t'int burst) in let charged = if ge_log_Int (before
+      - UInt64.t'int requested) (- UInt64.t'int cap) then
+        before - UInt64.t'int requested
+      else
+        - UInt64.t'int cap
+       in UInt64.t'int result.f0'7
+      = (if charged + UInt64.t'int repayment <= UInt64.t'int burst then
+        charged + UInt64.t'int repayment
+      else
+        UInt64.t'int burst
+      ))
+    /\ ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment ensures #2] [%#squota'8] ge_log_Int (UInt64.t'int result.f0'7) (if UInt64.t'int repayment
+        - UInt64.t'int cap
+      <= UInt64.t'int burst then
+        UInt64.t'int repayment - UInt64.t'int cap
+      else
+        UInt64.t'int burst
+      ))
+    /\ ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment ensures #3] [%#squota'9] UInt64.t'int result.f2'7
+      = (if UInt64.t'int probe <= UInt64.t'int result.f0'7 then UInt64.t'int probe else UInt64.t'int result.f0'7))
+    /\ ([@stop_split] [@expl:bounded_quota_debt_cannot_outlast_repayment ensures #4] [%#squota'10] UInt64.t'int probe
+        <= UInt64.t'int burst
+      /\ UInt64.t'int cap + UInt64.t'int probe <= UInt64.t'int repayment
+    -> UInt64.t'int result.f2'7 = UInt64.t'int probe)}
+    (! return {result}) ]

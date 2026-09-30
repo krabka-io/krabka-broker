@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_remote_segment_transition": { "prover": "alt-ergo", "time": 0.019 }
-    }
-  }
-}

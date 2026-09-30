@@ -1,0 +1,53 @@
+(* #"/workspace/crates/verified/src/composition.rs" 74 27 74 32 *)
+
+(* <composition::TokenDescriptionAcl as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_AclResourceTypeMatch = Same | Different
+
+type t_AclResourceFacts = {
+  resource_type: t_AclResourceTypeMatch;
+  exact_name: bool;
+  wildcard_name: bool;
+  name_has_prefix: bool }
+
+type t_AclPatternKind = Literal | Prefixed
+
+type t_AclOperationKind =
+  | All
+  | Read
+  | Write
+  | Create
+  | Delete
+  | Alter
+  | Describe
+  | ClusterAction
+  | DescribeConfigs
+  | AlterConfigs
+  | IdempotentWrite
+  | TwoPhaseCommit
+  | CreateTokens
+  | DescribeTokens
+
+type tup2_bool_bool = { f0: bool; f1: bool }
+
+type tup3_bool_bool_bool = { f0'0: bool; f1'0: bool; f2'0: bool }
+
+type t_TokenDescriptionAcl = {
+  resource: t_AclResourceFacts;
+  pattern: t_AclPatternKind;
+  operation: t_AclOperationKind;
+  allow: bool;
+  principal: tup2_bool_bool;
+  host: tup3_bool_bool_bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TokenDescriptionAcl [#"/workspace/crates/verified/src/composition.rs" 74 27 74 32]
+  (self: t_TokenDescriptionAcl) (return (x: t_TokenDescriptionAcl)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenDescriptionAcl = Any.any_l () | & self: t_TokenDescriptionAcl = self ])
+  [ return (result: t_TokenDescriptionAcl) -> (! return {result}) ]

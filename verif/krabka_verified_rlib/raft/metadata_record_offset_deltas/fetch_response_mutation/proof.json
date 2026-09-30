@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_fetch_response_mutation": { "prover": "alt-ergo", "time": 0.033 },
+      "vc_is_none_u64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_is_some_u64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_ne_Option_u64": { "prover": "alt-ergo", "time": 0.004 }
+    }
+  }
+}

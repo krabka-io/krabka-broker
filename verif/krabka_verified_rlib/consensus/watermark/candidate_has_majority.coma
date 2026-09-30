@@ -1,0 +1,150 @@
+(* #"/workspace/crates/verified/src/consensus/watermark.rs" 7 0 13 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swatermark = "/workspace/crates/verified/src/consensus/watermark.rs" 14 27 14 28
+let%span swatermark'0 = "/workspace/crates/verified/src/consensus/watermark.rs" 16 17 16 18
+let%span swatermark'1 = "/workspace/crates/verified/src/consensus/watermark.rs" 16 8 16 18
+let%span swatermark'2 = "/workspace/crates/verified/src/consensus/watermark.rs" 19 12 19 34
+let%span swatermark'3 = "/workspace/crates/verified/src/consensus/watermark.rs" 20 16 20 17
+let%span swatermark'4 = "/workspace/crates/verified/src/consensus/watermark.rs" 27 14 27 21
+let%span swatermark'5 = "/workspace/crates/verified/src/consensus/watermark.rs" 26 16 26 35
+let%span swatermark'6 = "/workspace/crates/verified/src/consensus/watermark.rs" 23 8 23 94
+let%span swatermark'7 = "/workspace/crates/verified/src/consensus/watermark.rs" 21 16 21 24
+let%span swatermark'8 = "/workspace/crates/verified/src/consensus/watermark.rs" 29 16 29 35
+let%span swatermark'9 = "/workspace/crates/verified/src/consensus/watermark.rs" 31 21 31 22
+let%span swatermark'10 = "/workspace/crates/verified/src/consensus/watermark.rs" 31 12 31 22
+let%span swatermark'11 = "/workspace/crates/verified/src/consensus/watermark.rs" 33 13 33 14
+let%span swatermark'12 = "/workspace/crates/verified/src/consensus/watermark.rs" 33 8 33 14
+let%span swatermark'13 = "/workspace/crates/verified/src/consensus/watermark.rs" 5 11 5 69
+let%span swatermark'14 = "/workspace/crates/verified/src/consensus/watermark.rs" 6 10 6 94
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 185 10 185 15
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 188 8 194 9
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 202 10 202 17
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 204 16 204 74
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 177 8 177 48
+
+use creusot.int.UInt64
+use creusot.int.Int64
+use creusot.slice.Slice64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 175 0 175 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+ = [%#sfailover'3] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
+
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 186 0 186 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+
+axiom count_ge_prefix_def:
+  forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
+    = ([%#sfailover'0] if limit <= 0 then
+      0
+    else
+      count_ge_prefix log_end s v (limit - 1) leader_counts
+      + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
+    )
+
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 203 0 203 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+
+axiom count_ge_def:
+  forall log_end: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end s v leader_counts]. count_ge log_end s v leader_counts
+    = ([%#sfailover'2] count_ge_prefix log_end s v (Seq.length s + 1) leader_counts)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let candidate_has_majority [#"/workspace/crates/verified/src/consensus/watermark.rs" 7 0 13 9]
+  (log_end: Int64.t) (follower_offsets: Slice64.slice Int64.t) (cand: Int64.t) (majority: UInt64.t)
+  (leader_counts: bool) (return (x: bool)) = {[@stop_split] [@expl:candidate_has_majority requires] [%#swatermark'13] 1
+    <= UInt64.t'int majority
+  /\ UInt64.t'int majority <= Seq.length (Slice64.view follower_offsets) + 1}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &count <- [%#swatermark] (0: UInt64.t) ] s1
+    | s1 = any [ br0 -> {leader_counts = false} (! bb7) | br1 -> {leader_counts} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_18 <- Int64.ge log_end cand ] s1 | s1 = any [ br0 -> {_18 = false} (! bb7) | br1 -> {_18} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_21 <- UInt64.lt count majority ] s1 | s1 = any [ br0 -> {_21 = false} (! bb7) | br1 -> {_21} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = UInt64.add [%#swatermark'1] {count} {[%#swatermark'0] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
+    | s1 = bb7 ]
+  | bb7 = s0
+    [ s0 = len_i64 [%#swatermark'2] {follower_offsets} (fun (_x: UInt64.t) -> [ &n <- _x ] s1)
+    | s1 = [ &j <- [%#swatermark'3] (0: UInt64.t) ] s2
+    | s2 = bb9 ]
+  | bb9 = bb9invariant
+    [ bb9 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb9 ([%#swatermark'4] UInt64.t'int n
+      - UInt64.t'int j)}
+      bb9invariant
+    | bb9invariant = {[@expl:loop invariant #0] [%#swatermark'7] UInt64.t'int j <= UInt64.t'int n}
+      {[@expl:loop invariant #1] [%#swatermark'6] let seen = count_ge_prefix (Int64.to_int log_end) (Slice64.view follower_offsets) (Int64.to_int cand) (UInt64.t'int j
+      + 1) leader_counts in UInt64.t'int count = (if seen < UInt64.t'int majority then seen else UInt64.t'int majority)}
+      {[@expl:loop invariant #2] [%#swatermark'5] UInt64.t'int count <= UInt64.t'int majority}
+      (! [ &variant_old_bb9 <- [%#swatermark'4] UInt64.t'int n - UInt64.t'int j ] s0)
+      [ s0 = [ &_47 <- UInt64.lt j n ] s1 | s1 = any [ br0 -> {_47 = false} (! bb19) | br1 -> {_47} (! bb11) ] ]
+      [ bb11 = s0
+        [ s0 = [ &_51 <- j ] s1
+        | s1 = [ &_52 <- Slice64.length follower_offsets ] s2
+        | s2 = [ &_53 <- UInt64.lt _51 _52 ] s3
+        | s3 = {[@expl:index in bounds] [%#swatermark'8] _53} s4
+        | s4 = Slice64.get [%#swatermark'8] <Int64.t> {follower_offsets} {_51} (fun (r: Int64.t) -> [ &x <- r ] s5)
+        | s5 = [ &_55 <- Int64.ge x cand ] s6
+        | s6 = any [ br0 -> {_55 = false} (! bb18) | br1 -> {_55} (! bb13) ] ]
+      | bb13 = s0
+        [ s0 = [ &_58 <- UInt64.lt count majority ] s1
+        | s1 = any [ br0 -> {_58 = false} (! bb18) | br1 -> {_58} (! bb14) ] ]
+      | bb14 = s0
+        [ s0 = UInt64.add [%#swatermark'10] {count} {[%#swatermark'9] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
+        | s1 = bb18 ]
+      | bb18 = s0
+        [ s0 = UInt64.add [%#swatermark'12] {j} {[%#swatermark'11] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &j <- _x ] s1)
+        | s1 = bb9 ] ] ]
+  | bb19 = s0 [ s0 = [ &_ret <- UInt64.ge count majority ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & log_end: Int64.t = log_end
+  | & follower_offsets: Slice64.slice Int64.t = follower_offsets
+  | & cand: Int64.t = cand
+  | & majority: UInt64.t = majority
+  | & leader_counts: bool = leader_counts
+  | & count: UInt64.t = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & n: UInt64.t = Any.any_l ()
+  | & j: UInt64.t = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & x: Int64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _55: bool = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & variant_old_bb9: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:candidate_has_majority ensures] [%#swatermark'14] result
+    = ge_log_Int (count_ge (Int64.to_int log_end) (Slice64.view follower_offsets) (Int64.to_int cand) leader_counts) (UInt64.t'int majority)}
+    (! return {result}) ]

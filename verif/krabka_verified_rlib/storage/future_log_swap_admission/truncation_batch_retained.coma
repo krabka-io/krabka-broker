@@ -1,0 +1,20 @@
+(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 102 0 102 73 *)
+
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 100 10 100 40
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let truncation_batch_retained [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 102 0 102 73]
+  (batch_last: Int64.t) (cut: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- Int64.lt batch_last cut ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & batch_last: Int64.t = batch_last | & cut: Int64.t = cut ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:truncation_batch_retained ensures] [%#sfuture_log_swap_admission] result
+    = (Int64.to_int batch_last < Int64.to_int cut)}
+    (! return {result}) ]

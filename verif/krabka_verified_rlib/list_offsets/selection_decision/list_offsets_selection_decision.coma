@@ -1,0 +1,133 @@
+(* #"/workspace/crates/verified/src/list_offsets/selection_decision.rs" 12 0 14 33 *)
+
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 160 8 194 9
+let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 21 13 21 14
+let%span sselection_decision'0 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 20 35 20 36
+let%span sselection_decision'1 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 19 70 19 71
+let%span sselection_decision'2 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 23 32 23 34
+let%span sselection_decision'3 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 23 62 23 64
+let%span sselection_decision'4 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 23 91 23 92
+let%span sselection_decision'5 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 26 33 26 35
+let%span sselection_decision'6 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 29 28 29 29
+let%span sselection_decision'7 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 34 15 34 16
+let%span sselection_decision'8 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 11 10 11 55
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+type t_ListOffsetsSelectionFacts = {
+  kind: t_ListOffsetsKind;
+  candidate_offset: Int64.t;
+  candidate_timestamp: Int64.t;
+  candidate_epoch: Int32.t;
+  last_fetchable: Int64.t }
+
+type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
+
+function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 156 0 158 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
+ = [%#sselection_model] if facts.kind = Unsupported
+  \/ Int64.to_int facts.candidate_offset < - 1
+  \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0 then
+    RejectMalformed
+  else
+    if Int64.to_int facts.candidate_offset = - 1 then
+      Unknown
+    else
+      if facts.kind = Earliest \/ facts.kind = EarliestLocal then
+        Resolved (facts.candidate_offset) (facts.candidate_timestamp) (facts.candidate_epoch)
+      else
+        if facts.kind = Latest then
+          Resolved (if Int64.to_int facts.last_fetchable < Int64.to_int facts.candidate_offset then
+            facts.last_fetchable
+          else
+            facts.candidate_offset
+          ) (facts.candidate_timestamp) (facts.candidate_epoch)
+        else
+          if Int64.to_int facts.candidate_offset < Int64.to_int facts.last_fetchable then
+            Resolved (facts.candidate_offset) (facts.candidate_timestamp) (facts.candidate_epoch)
+          else
+            Unknown
+
+
+
+
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let list_offsets_selection_decision [#"/workspace/crates/verified/src/list_offsets/selection_decision.rs" 12 0 14 33]
+  (facts: t_ListOffsetsSelectionFacts) (return (x: t_ListOffsetsSelectionDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.kind = Unsupported} (! bb7)
+    | br1 -> {facts.kind = Earliest} (! bb6)
+    | br2 -> {facts.kind = Latest} (! bb5)
+    | br3 -> {facts.kind = MaxTimestamp} (! bb1)
+    | br4 -> {facts.kind = EarliestLocal} (! bb6)
+    | br5 -> {facts.kind = LatestTiered} (! bb1)
+    | br6 -> {facts.kind = EarliestPendingUpload} (! bb1)
+    | br7 -> {facts.kind = Timestamp} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &mode <- [%#sselection_decision] (2: Int32.t) ] s1 | s1 = bb8 ]
+  | bb5 = s0 [ s0 = [ &mode <- [%#sselection_decision'0] (1: Int32.t) ] s1 | s1 = bb8 ]
+  | bb6 = s0 [ s0 = [ &mode <- [%#sselection_decision'1] (0: Int32.t) ] s1 | s1 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &_8 <- Int64.lt facts.candidate_offset ([%#sselection_decision'2] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_8 = false} (! bb10) | br1 -> {_8} (! bb14) ] ]
+  | bb10 = s0
+    [ s0 = [ &_10 <- Int32.lt facts.candidate_epoch ([%#sselection_decision'3] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb12) | br1 -> {_10} (! bb14) ] ]
+  | bb12 = s0
+    [ s0 = [ &_12 <- Int64.lt facts.last_fetchable ([%#sselection_decision'4] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb15) | br1 -> {_12} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_16 <- facts.candidate_offset = ([%#sselection_decision'5] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb17) | br1 -> {_16} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- Unknown ] s1 | s1 = return {_ret} ]
+  | bb17 = s0
+    [ s0 = [ &_20 <- mode = ([%#sselection_decision'6] (1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb22) | br1 -> {_20} (! bb18) ] ]
+  | bb18 = s0
+    [ s0 = [ &_22 <- Int64.lt facts.last_fetchable facts.candidate_offset ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb22) | br1 -> {_22} (! bb20) ] ]
+  | bb20 = s0 [ s0 = [ &offset <- facts.last_fetchable ] s1 | s1 = bb23 ]
+  | bb22 = s0 [ s0 = [ &offset <- facts.candidate_offset ] s1 | s1 = bb23 ]
+  | bb23 = s0
+    [ s0 = [ &_26 <- mode = ([%#sselection_decision'7] (2: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb28) | br1 -> {_26} (! bb24) ] ]
+  | bb24 = s0
+    [ s0 = [ &_28 <- Int64.ge offset facts.last_fetchable ] s1
+    | s1 = any [ br0 -> {_28 = false} (! bb28) | br1 -> {_28} (! bb25) ] ]
+  | bb25 = s0 [ s0 = [ &_ret <- Unknown ] s1 | s1 = return {_ret} ]
+  | bb28 = s0
+    [ s0 = [ &_ret <- Resolved offset (facts.candidate_timestamp) (facts.candidate_epoch) ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionDecision = Any.any_l ()
+  | & facts: t_ListOffsetsSelectionFacts = facts
+  | & mode: Int32.t = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: bool = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _28: bool = Any.any_l () ])
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:list_offsets_selection_decision ensures] [%#sselection_decision'8] result
+    = list_offsets_selection_model facts}
+    (! return {result}) ]

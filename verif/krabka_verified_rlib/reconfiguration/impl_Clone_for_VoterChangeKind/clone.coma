@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_VoterChangeKind [#"/workspace/crates/verified/src/reconfiguration.rs" 17 27 17 32] (self: t_VoterChangeKind)
-  (return (x: t_VoterChangeKind)) = (! bb0
+let clone_VoterChangeKind [#"/workspace/crates/verified/src/reconfiguration.rs" 17 27 17 32]
+  (self: t_VoterChangeKind) (return (x: t_VoterChangeKind)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_VoterChangeKind = Any.any_l () | & self: t_VoterChangeKind = self ])
   [ return (result: t_VoterChangeKind) -> (! return {result}) ]

@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_RestoreProducer": { "prover": "alt-ergo", "time": 0.029 }
+      "vc_clone_RestoreProducer": { "prover": "alt-ergo", "time": 0.007 }
     }
   }
 }

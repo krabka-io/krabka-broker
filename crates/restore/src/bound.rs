@@ -9,11 +9,11 @@
 //! because only some of its records survive; the borrowed batch view makes
 //! that decision without an owned decode of the batches that pass. Dropping a
 //! batch's bytes is never the same as dropping its offset range: the target
-//! log accepts an append only at its current end offset
-//! (`Log::append_at`/`append_verbatim_at`), so a batch whose records are all
-//! excluded still has to claim its offsets, or every batch archived after it
-//! in the partition becomes unappendable. For one record inside a batch that
-//! must be re-encoded, it answers whether the record survives. The exclude
+//! log permits compacted offset gaps, but a rewrite must preserve the archived
+//! batch span: it also determines the producer's last sequence and the
+//! partition's exclusive end. A batch whose records are all excluded therefore
+//! still claims its original offsets as a bare header. For one record inside
+//! a batch that must be re-encoded, it answers whether the record survives. The exclude
 //! patterns match the raw key and header bytes. This module decodes no
 //! payload and knows no schema.
 
@@ -48,17 +48,17 @@ pub enum BatchDecision {
     /// [`krabka_log::filter_batch`] calls this outcome
     /// [`krabka_log::FilteredBatch::Empty`] and leaves the caller to decide
     /// what an emptied batch becomes, and for a restore that must preserve
-    /// offsets, becoming a bare header is the only choice that does not
-    /// silently shift every later record. The bare header keeps the archived
-    /// `base_offset` and `last_offset_delta` unchanged, exactly as krabka's
-    /// own log cleaner does on its `RETAIN_EMPTY` path for the same reason.
+    /// offsets, the bare header preserves the original sequence span and
+    /// exclusive log end even when no record survives. The bare header keeps
+    /// the archived `base_offset` and `last_offset_delta` unchanged, exactly as
+    /// krabka's own log cleaner does on its `RETAIN_EMPTY` path for the same reason.
     Empty,
     /// Some records survive. The batch is re-encoded from the records that
     /// [`Predicates::decide_record`] keeps, so its bytes differ from the
     /// archived copy. [`krabka_log::filter_batch`] keeps the batch's
-    /// `base_offset` and recomputes `last_offset_delta` from the survivors,
-    /// so surviving records keep their absolute offsets and the gap left by a
-    /// dropped record is invisible to the log format.
+    /// `base_offset` and the survivors' deltas. The materializer restores the
+    /// archived `last_offset_delta` after filtering, preserving both record
+    /// coordinates and the producer sequence span.
     Filter,
 }
 

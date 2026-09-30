@@ -1,0 +1,107 @@
+(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 98 0 98 61 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 97 10 97 12
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 95 11 95 61
+let%span smin_insync_is_site_loss_safe'1 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 96 10 96 78
+let%span smin_insync_is_site_loss_safe'2 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 61 11 61 61
+let%span smin_insync_is_site_loss_safe'3 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 62 10 63 89
+let%span smin_insync_is_site_loss_safe'4 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 11 10 11 12
+let%span smin_insync_is_site_loss_safe'5 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 14 8 19 9
+let%span smin_insync_is_site_loss_safe'6 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 65 4 65 29
+let%span smin_insync_is_site_loss_safe'7 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 46 11 46 81
+let%span smin_insync_is_site_loss_safe'8 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 10 47 64
+let%span smin_insync_is_site_loss_safe'9 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 51 4 51 95
+
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function round_robin_load [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 12 0 12 62] (rf: int) (sites: int) (site: int) : int
+
+axiom round_robin_load_def:
+  forall rf: int, sites: int, site: int [round_robin_load rf sites site]. round_robin_load rf sites site
+    = ([%#smin_insync_is_site_loss_safe'5] if rf <= 0 then
+      0
+    else
+      round_robin_load (rf - 1) sites site + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)
+    )
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+function lemma_div_exact [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 48 0 48 67] (divisor: int) (quotient: int) (remainder: int) : ()
+ = [%#smin_insync_is_site_loss_safe'9] ()
+
+axiom lemma_div_exact_spec:
+  forall divisor: int, quotient: int, remainder: int. ([%#smin_insync_is_site_loss_safe'7] ge_log_Int divisor 1
+      /\ ge_log_Int quotient 0 /\ 0 <= remainder /\ remainder < divisor)
+    -> ([%#smin_insync_is_site_loss_safe'8] ComputerDivision.div (divisor * quotient + remainder) divisor = quotient)
+
+function lemma_round_robin_step [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 64 0 64 61] (rf: int) (sites: int) (site: int) : ()
+ = [%#smin_insync_is_site_loss_safe'6] let q = ComputerDivision.div (rf - 1) sites in let r = ComputerDivision.mod (rf
+  - 1) sites in if r = site then
+    let _ = lemma_div_exact sites (q + 1) 0 in let _ = lemma_div_exact sites q (sites - 1) in ()
+  else
+    if gt_log_Int r site then
+      let _ = lemma_div_exact sites (q + 1) (r - site) in let _ = lemma_div_exact sites (q + 1) (r - site - 1) in ()
+    else
+      let _ = lemma_div_exact sites q (sites + r - site) in let _ = lemma_div_exact sites q (sites + r - site - 1) in ()
+
+
+
+axiom lemma_round_robin_step_spec:
+  forall rf: int, sites: int, site: int. ([%#smin_insync_is_site_loss_safe'2] ge_log_Int rf 1
+      /\ ge_log_Int sites 1 /\ 0 <= site /\ site < sites)
+    -> ([%#smin_insync_is_site_loss_safe'3] ComputerDivision.div (rf - site + sites - 1) sites
+    = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+    + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0))
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant rf : int
+
+constant sites : int
+
+constant site : int
+
+function lemma_round_robin_load [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 98 0 98 61] (rf: int) (sites: int) (site: int) : ()
+
+goal vc_lemma_round_robin_load: ([%#smin_insync_is_site_loss_safe'0] ge_log_Int rf 0
+    /\ ge_log_Int sites 1 /\ 0 <= site /\ site < sites)
+  -> (if gt_log_Int rf 0 then
+    (([@stop_split] [@expl:lemma_round_robin_load requires] [%#smin_insync_is_site_loss_safe'0] ge_log_Int (rf - 1) 0
+        /\ ge_log_Int sites 1 /\ 0 <= site /\ site < sites)
+      /\ ([@expl:variant decreases] well_founded_relation_Int ([%#smin_insync_is_site_loss_safe] rf) ([%#smin_insync_is_site_loss_safe] rf
+      - 1)))
+    /\ (([@stop_split] [@expl:lemma_round_robin_load ensures] [%#smin_insync_is_site_loss_safe'1] round_robin_load (rf
+        - 1) sites site
+      = ComputerDivision.div (rf - 1 - site + sites - 1) sites)
+    -> (let _ = lemma_round_robin_load (rf
+    - 1) sites site in ([@stop_split] [@expl:lemma_round_robin_step requires] [%#smin_insync_is_site_loss_safe'2] ge_log_Int rf 1
+      /\ ge_log_Int sites 1 /\ 0 <= site /\ site < sites)
+    /\ (([@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'3] ComputerDivision.div (rf
+            - site
+          + sites
+        - 1) sites
+      = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+      + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0))
+    -> (let _ = lemma_round_robin_step rf sites site in [@stop_split] [@expl:lemma_round_robin_load ensures] [%#smin_insync_is_site_loss_safe'1] round_robin_load rf sites site
+    = ComputerDivision.div (rf - site + sites - 1) sites))))
+  else
+    [@stop_split] [@expl:lemma_round_robin_load ensures] [%#smin_insync_is_site_loss_safe'1] round_robin_load rf sites site
+    = ComputerDivision.div (rf - site + sites - 1) sites
+  )

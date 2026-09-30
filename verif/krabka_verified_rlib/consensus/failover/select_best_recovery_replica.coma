@@ -1,0 +1,146 @@
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 141 0 141 86 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 142 12 142 28
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 143 12 143 13
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 146 19 146 25
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 147 16 147 22
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 151 14 151 21
+let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 150 16 150 96
+let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 149 16 149 26
+let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 148 16 148 35
+let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 153 24 153 37
+let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 154 22 154 38
+let%span sfailover'9 = "/workspace/crates/verified/src/consensus/failover.rs" 164 13 164 14
+let%span sfailover'10 = "/workspace/crates/verified/src/consensus/failover.rs" 164 8 164 14
+let%span sfailover'11 = "/workspace/crates/verified/src/consensus/failover.rs" 134 10 139 1
+let%span sfailover'12 = "/workspace/crates/verified/src/consensus/failover.rs" 121 8 124 97
+
+use creusot.slice.Slice64
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_RecoveryCandidate = { last_epoch: Int32.t; log_end_offset: Int64.t; broker_id: UInt64.t }
+
+let len_RecoveryCandidate (self_: Slice64.slice t_RecoveryCandidate) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+predicate ranks_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 119 0 119 67] (a: t_RecoveryCandidate) (b: t_RecoveryCandidate) =
+  [%#sfailover'12] gt_log_Int (Int32.to_int a.last_epoch) (Int32.to_int b.last_epoch)
+  \/ Int32.to_int a.last_epoch = Int32.to_int b.last_epoch
+  /\ (gt_log_Int (Int64.to_int a.log_end_offset) (Int64.to_int b.log_end_offset)
+  \/ Int64.to_int a.log_end_offset = Int64.to_int b.log_end_offset
+  /\ UInt64.t'int a.broker_id <= UInt64.t'int b.broker_id)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_best_recovery_replica [#"/workspace/crates/verified/src/consensus/failover.rs" 141 0 141 86]
+  (candidates: Slice64.slice t_RecoveryCandidate) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0
+    [ s0 = len_RecoveryCandidate [%#sfailover] {candidates} (fun (_x: UInt64.t) -> [ &n <- _x ] s1)
+    | s1 = [ &_7 <- n = ([%#sfailover'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_7 = false} (! bb3) | br1 -> {_7} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = [ &best <- [%#sfailover'1] (0: UInt64.t) ] s1 | s1 = [ &i <- [%#sfailover'2] (1: UInt64.t) ] s2 | s2 = bb4 ]
+  | bb4 = bb4invariant
+    [ bb4 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb4 ([%#sfailover'3] UInt64.t'int n
+      - UInt64.t'int i)}
+      bb4invariant
+    | bb4invariant = {[@expl:loop invariant #0] [%#sfailover'6] 1 <= UInt64.t'int i /\ UInt64.t'int i <= UInt64.t'int n}
+      {[@expl:loop invariant #1] [%#sfailover'5] UInt64.t'int best < UInt64.t'int i}
+      {[@expl:loop invariant #2] [%#sfailover'4] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> ranks_ge (Seq.get (Slice64.view candidates) (UInt64.t'int best)) (Seq.get (Slice64.view candidates) j)}
+      (! [ &variant_old_bb4 <- [%#sfailover'3] UInt64.t'int n - UInt64.t'int i ] s0)
+      [ s0 = [ &_28 <- UInt64.lt i n ] s1 | s1 = any [ br0 -> {_28 = false} (! bb25) | br1 -> {_28} (! bb6) ] ]
+      [ bb6 = s0
+        [ s0 = [ &_32 <- i ] s1
+        | s1 = [ &_33 <- Slice64.length candidates ] s2
+        | s2 = [ &_34 <- UInt64.lt _32 _33 ] s3
+        | s3 = {[@expl:index in bounds] [%#sfailover'7] _34} s4
+        | s4 = Slice64.get [%#sfailover'7] <t_RecoveryCandidate> {candidates} {_32}
+            (fun (r: t_RecoveryCandidate) -> [ &candidate <- r ] s5)
+        | s5 = [ &_36 <- best ] s6
+        | s6 = [ &_37 <- Slice64.length candidates ] s7
+        | s7 = [ &_38 <- UInt64.lt _36 _37 ] s8
+        | s8 = {[@expl:index in bounds] [%#sfailover'8] _38} s9
+        | s9 = Slice64.get [%#sfailover'8] <t_RecoveryCandidate> {candidates} {_36}
+            (fun (r: t_RecoveryCandidate) -> [ &current' <- r ] s10)
+        | s10 = [ &_40 <- Int32.gt candidate.last_epoch current'.last_epoch ] s11
+        | s11 = any [ br0 -> {_40 = false} (! bb10) | br1 -> {_40} (! bb19) ] ]
+      | bb10 = s0
+        [ s0 = [ &_43 <- candidate.last_epoch = current'.last_epoch ] s1
+        | s1 = any [ br0 -> {_43 = false} (! bb15) | br1 -> {_43} (! bb11) ] ]
+      | bb11 = s0
+        [ s0 = [ &_46 <- Int64.gt candidate.log_end_offset current'.log_end_offset ] s1
+        | s1 = any [ br0 -> {_46 = false} (! bb15) | br1 -> {_46} (! bb19) ] ]
+      | bb15 = s0
+        [ s0 = [ &_49 <- candidate.last_epoch = current'.last_epoch ] s1
+        | s1 = any [ br0 -> {_49 = false} (! bb24) | br1 -> {_49} (! bb16) ] ]
+      | bb16 = s0
+        [ s0 = [ &_52 <- candidate.log_end_offset = current'.log_end_offset ] s1
+        | s1 = any [ br0 -> {_52 = false} (! bb24) | br1 -> {_52} (! bb17) ] ]
+      | bb17 = s0
+        [ s0 = [ &_55 <- UInt64.lt candidate.broker_id current'.broker_id ] s1
+        | s1 = any [ br0 -> {_55 = false} (! bb24) | br1 -> {_55} (! bb19) ] ]
+      | bb19 = s0 [ s0 = [ &best <- i ] s1 | s1 = bb24 ]
+      | bb24 = s0
+        [ s0 = UInt64.add [%#sfailover'10] {i} {[%#sfailover'9] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb4 ] ] ]
+  | bb25 = s0 [ s0 = [ &_ret <- Some best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & candidates: Slice64.slice t_RecoveryCandidate = candidates
+  | & n: UInt64.t = Any.any_l ()
+  | & _7: bool = Any.any_l ()
+  | & best: UInt64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & candidate: t_RecoveryCandidate = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & current': t_RecoveryCandidate = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _49: bool = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _55: bool = Any.any_l ()
+  | & variant_old_bb4: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_best_recovery_replica ensures] [%#sfailover'11] match result with
+      | None -> Seq.length (Slice64.view candidates) = 0
+      | Some best -> UInt64.t'int best < Seq.length (Slice64.view candidates)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view candidates)
+        -> ranks_ge (Seq.get (Slice64.view candidates) (UInt64.t'int best)) (Seq.get (Slice64.view candidates) j))
+      end}
+    (! return {result}) ]

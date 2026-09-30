@@ -1,11 +1,67 @@
-//! Kafka quota-entity precedence.
+//! Kafka quota-entity precedence and quota bucket debt accounting.
 
 #[cfg(creusot)]
 use std::clone::Clone;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+use creusot_std::prelude::*;
+
+use crate::throttle::{
+    AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
+};
+
+mod refill;
+pub use refill::quota_refill;
+
+mod request;
+pub use request::quota_whole_request;
+
+/// Credit micro-tokens to a quota bucket, repaying debt before filling its
+/// balance. Both refill and refund use this transition; rate and clock
+/// conversion and atomic state publication remain with the caller.
+#[ensures(result.0@ <= burst@)]
+#[ensures(result.1@ == debt@ - if debt@ <= credit@ { debt@ } else { credit@ })]
+#[ensures(result.0@ == crate::throttle::capped(available@,
+    credit@ - if debt@ <= credit@ { debt@ } else { credit@ }, burst@))]
+#[ensures((available@ == 0 || debt@ == 0) ==> (result.0@ == 0 || result.1@ == 0))]
+#[must_use]
+pub fn quota_credit(available: u64, debt: u64, credit: u64, burst: u64) -> (u64, u64) {
+    let repaid = credit.min(debt);
+    let (_, new_available) = plan_consume(
+        AvailableTokens(available),
+        RefillTokens(credit - repaid),
+        BurstCapacity(burst),
+        RequestedTokens(0),
+    );
+    (new_available.0, debt - repaid)
+}
+
+/// Charge the effective micro-token request in full, retaining its unpaid
+/// portion as debt up to `debt_cap`. A smaller cap intentionally forgets debt;
+/// `u64::MAX` is the unbounded mode's representability limit.
+#[ensures(result.0@ == if requested@ <= crate::throttle::capped(available@, 0, burst@) {
+    crate::throttle::capped(available@, 0, burst@) - requested@
+} else { 0 })]
+#[ensures(result.1@ == crate::throttle::capped(debt@,
+    requested@ - (crate::throttle::capped(available@, 0, burst@) - result.0@), debt_cap@))]
+#[ensures(result.0@ <= burst@ && result.1@ <= debt_cap@)]
+#[ensures((available@ == 0 || debt@ == 0) ==> (result.0@ == 0 || result.1@ == 0))]
+#[must_use]
+pub fn quota_charge(
+    available: u64,
+    debt: u64,
+    requested: u64,
+    burst: u64,
+    debt_cap: u64,
+) -> (u64, u64) {
+    let (grant, new_available) = plan_consume(
+        AvailableTokens(available),
+        RefillTokens(0),
+        BurstCapacity(burst),
+        RequestedTokens(requested),
+    );
+    let new_debt = debt.saturating_add(requested - grant.0).min(debt_cap);
+    (new_available.0, new_debt)
+}
 
 /// Selected user/client quota candidate, in Kafka's precedence order.
 ///

@@ -8,7 +8,7 @@
 
 use krabka_protocol::{
     primitives::varint::varlong_len,
-    records::{Attributes, Record, RecordBatch},
+    records::{Attributes, Record, RecordBatch, TimestampType},
 };
 
 use super::{LogOffset, TimestampMs, corrupt_log};
@@ -31,7 +31,8 @@ fn record_body_len(record: &Record) -> usize {
 }
 
 /// Decodes remote log batches and returns the earliest record at or after both
-/// `floor_offset` and `target_timestamp`.
+/// `floor_offset` and `target_timestamp`. Under `LogAppendTime`, every record
+/// uses the batch append stamp instead of producer base time and deltas.
 ///
 /// `max_record_body` is Kafka trunk's `max.decompressed.message.bytes`, or
 /// `None` for no limit. Kafka's `RemoteLogManager.lookupTimestamp` decompresses
@@ -62,6 +63,8 @@ pub fn first_record_at_or_after_timestamp(
                     .checked_add(i64::from(batch.last_offset_delta))
                     .is_some_and(|last_offset| last_offset >= floor_offset)
         });
+        let append_time = (batch.attributes.timestamp_type() == TimestampType::LogAppendTime)
+            .then_some(batch.max_timestamp);
         for record in &batch.records {
             if let Some(limit) = limit {
                 let size = record_body_len(record);
@@ -76,10 +79,12 @@ pub fn first_record_at_or_after_timestamp(
             if offset < floor_offset {
                 continue;
             }
-            let timestamp = batch
-                .base_timestamp
-                .checked_add(record.timestamp_delta)
-                .ok_or_else(|| corrupt_log("record timestamp overflow"))?;
+            let timestamp = krabka_verified::timestamp::timestamp_record_time(
+                batch.base_timestamp,
+                record.timestamp_delta,
+                append_time,
+            )
+            .ok_or_else(|| corrupt_log("record timestamp overflow"))?;
             if timestamp >= target_timestamp {
                 return Ok(Some((offset, timestamp)));
             }
@@ -224,6 +229,34 @@ mod tests {
                     == want,
                 "floor_offset {floor_offset} target {target}"
             );
+        }
+    }
+
+    #[test]
+    fn append_time_lookup_ignores_producer_timestamps() {
+        let mut batch = timestamped_batch_at(10, &[1_000, 1_100], b'a');
+        batch.attributes = batch
+            .attributes
+            .with_timestamp_type(TimestampType::LogAppendTime);
+        batch.max_timestamp = 2_400;
+        for (base, delta) in [(1_000, 0), (i64::MAX, 1), (i64::MIN, -1)] {
+            batch.base_timestamp = base;
+            for record in &mut batch.records {
+                record.timestamp_delta = delta;
+            }
+            let bytes = encoded(&[batch.clone()]);
+            for (floor, target, expected) in [
+                (10, 1_500, Some((10, 2_400))),
+                (11, 2_400, Some((11, 2_400))),
+                (12, 0, None),
+                (10, 2_401, None),
+            ] {
+                assert!(
+                    first_record_at_or_after_timestamp(&bytes, floor, target, None).unwrap()
+                        == expected,
+                    "base {base} delta {delta} floor {floor} target {target}"
+                );
+            }
         }
     }
 

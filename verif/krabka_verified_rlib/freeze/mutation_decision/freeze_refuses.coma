@@ -1,0 +1,56 @@
+(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 145 0 145 61 *)
+
+let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 159 45 159 50
+let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 153 43 153 47
+let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 143 10 143 46
+let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 169 4 183 5
+
+use creusot.prelude.Any
+
+type t_FreezeMutationKind =
+  | Produce
+  | TransactionEnlistment
+  | DeleteRecords
+  | DeleteTopic
+  | ReassignmentAlter
+  | ReassignmentCompletion
+  | Compaction
+  | Retention
+  | TransactionCompletion
+  | OffsetCommit
+  | Replication
+  | BarrierMarker
+  | TieringCopy
+
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 168 0 168 57] (kind: t_FreezeMutationKind) =
+  [%#smutation_decision'2] match kind with
+    | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
+    | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let freeze_refuses [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 145 0 145 61]
+  (kind: t_FreezeMutationKind) (return (x: bool)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {kind = Produce} (! bb4)
+    | br1 -> {kind = TransactionEnlistment} (! bb4)
+    | br2 -> {kind = DeleteRecords} (! bb4)
+    | br3 -> {kind = DeleteTopic} (! bb4)
+    | br4 -> {kind = ReassignmentAlter} (! bb4)
+    | br5 -> {kind = ReassignmentCompletion} (! bb3)
+    | br6 -> {kind = Compaction} (! bb4)
+    | br7 -> {kind = Retention} (! bb4)
+    | br8 -> {kind = TransactionCompletion} (! bb3)
+    | br9 -> {kind = OffsetCommit} (! bb3)
+    | br10 -> {kind = Replication} (! bb3)
+    | br11 -> {kind = BarrierMarker} (! bb3)
+    | br12 -> {kind = TieringCopy} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#smutation_decision] false ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#smutation_decision'0] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & kind: t_FreezeMutationKind = kind ])
+  [ return (result: bool) -> {[@stop_split] [@expl:freeze_refuses ensures] [%#smutation_decision'1] result
+    = freeze_refusal_model kind}
+    (! return {result}) ]

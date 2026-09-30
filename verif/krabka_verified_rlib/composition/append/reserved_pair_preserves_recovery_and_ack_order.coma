@@ -1,0 +1,339 @@
+(* #"/workspace/crates/verified/src/composition/append.rs" 100 0 104 47 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 105 21 105 22
+let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 105 41 105 42
+let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 110 8 110 30
+let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 110 33 110 34
+let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 110 8 110 34
+let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 31
+let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 111 34 111 35
+let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 35
+let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 108 27 112 5
+let%span sappend'8 = "/workspace/crates/verified/src/composition/append.rs" 108 27 112 6
+let%span sappend'9 = "/workspace/crates/verified/src/composition/append.rs" 113 16 113 57
+let%span sappend'10 = "/workspace/crates/verified/src/composition/append.rs" 113 16 113 58
+let%span sappend'11 = "/workspace/crates/verified/src/composition/append.rs" 114 17 114 60
+let%span sappend'12 = "/workspace/crates/verified/src/composition/append.rs" 114 17 114 61
+let%span sappend'13 = "/workspace/crates/verified/src/composition/append.rs" 115 18 115 82
+let%span sappend'14 = "/workspace/crates/verified/src/composition/append.rs" 80 10 82 65
+let%span sappend'15 = "/workspace/crates/verified/src/composition/append.rs" 83 10 99 1
+let%span sappend'16 = "/workspace/crates/verified/src/composition/append.rs" 52 10 54 61
+let%span sappend'17 = "/workspace/crates/verified/src/composition/append.rs" 55 10 63 1
+let%span sappend'18 = "/workspace/crates/verified/src/composition/append.rs" 20 10 21 69
+let%span sappend'19 = "/workspace/crates/verified/src/composition/append.rs" 22 10 33 1
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_AppendFrontiers = {
+  append: tup2_i64_i64;
+  reservation: tup2_i64_i64;
+  recovery: tup2_i64_i64;
+  acknowledgement: Int64.t;
+  scan: Int64.t }
+
+type tup2_AppendFrontiers_AppendFrontiers = { f0'0: t_AppendFrontiers; f1'0: t_AppendFrontiers }
+
+type t_Option_tup2_AppendFrontiers_AppendFrontiers = None | Some tup2_AppendFrontiers_AppendFrontiers
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+type tup3_i64_i64_i64 = { f0'1: Int64.t; f1'1: Int64.t; f2'1: Int64.t }
+
+type t_Option_tup3_i64_i64_i64 = None'0 | Some'0 tup3_i64_i64_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let reservations_do_not_overlap (base: Int64.t) (first_count: Int64.t) (second_count: Int64.t)
+  (return (x: t_Option_tup3_i64_i64_i64)) = any
+  [ return (result: t_Option_tup3_i64_i64_i64) ->
+  {[@stop_split] [@expl:reservations_do_not_overlap ensures] ([@stop_split] [@expl:reservations_do_not_overlap ensures #0] [%#sappend'16] match result with
+          | Some'0 _ -> true
+          | None'0 -> false
+          end
+      = (ge_log_Int (Int64.to_int base) 0
+      /\ gt_log_Int (Int64.to_int first_count) 0
+      /\ gt_log_Int (Int64.to_int second_count) 0
+      /\ Int64.to_int base + Int64.to_int first_count + Int64.to_int second_count <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reservations_do_not_overlap ensures #1] [%#sappend'17] match result with
+      | None'0 -> true
+      | Some'0 {f0'1 = start; f1'1 = split; f2'1 = end'} -> Int64.to_int start = Int64.to_int base
+      /\ Int64.to_int split = Int64.to_int base + Int64.to_int first_count
+      /\ Int64.to_int end' = Int64.to_int split + Int64.to_int second_count
+      /\ Int64.to_int start < Int64.to_int split
+      /\ Int64.to_int split < Int64.to_int end'
+      /\ (forall offset: int. Int64.to_int start <= offset /\ offset < Int64.to_int split
+        -> not (Int64.to_int split <= offset /\ offset < Int64.to_int end'))
+      end)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_tup3_i64_i64_i64 = Continue tup3_i64_i64_i64 | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0'2 -> inv_Infallible f0'2
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup3_i64_i64_i64 (_1: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64 [inv_ControlFlow_Option_Infallible_tup3_i64_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup3_i64_i64_i64 x
+    = match x with
+      | Continue f0'2 -> true
+      | Break f0'2 -> inv_Option_Infallible f0'2
+      end
+
+let branch_Option_tup3_i64_i64_i64 (self_: t_Option_tup3_i64_i64_i64)
+  (return (x: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64) ->
+  {[@stop_split] [@expl:branch_Option_tup3_i64_i64_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup3_i64_i64_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'0 v -> result = Continue v
+      | None'0 -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64) (return (f0'2: t_Option_Infallible)) = any
+  [ _k (f0'2: t_Option_Infallible) -> {Break f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_residual_Option_tup2_AppendFrontiers_AppendFrontiers (residual: t_Option_Infallible)
+  (return (x: t_Option_tup2_AppendFrontiers_AppendFrontiers)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_AppendFrontiers_AppendFrontiers) ->
+  {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64) (return (f0'2: tup3_i64_i64_i64)) = any
+  [ _k (f0'2: tup3_i64_i64_i64) -> {Continue f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_AppendFrontiers = None'2 | Some'2 t_AppendFrontiers
+
+let append_frontiers_agree (base: Int64.t) (delta: Int32.t) (return (x: t_Option_AppendFrontiers)) = any
+  [ return (result: t_Option_AppendFrontiers) ->
+  {[@stop_split] [@expl:append_frontiers_agree ensures] ([@stop_split] [@expl:append_frontiers_agree ensures #0] [%#sappend'18] match result with
+          | Some'2 _ -> true
+          | None'2 -> false
+          end
+      = (ge_log_Int (Int64.to_int base) 0
+      /\ ge_log_Int (Int32.to_int delta) 0 /\ Int64.to_int base + Int32.to_int delta + 1 <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:append_frontiers_agree ensures #1] [%#sappend'19] match result with
+      | None'2 -> true
+      | Some'2 w -> Int64.to_int w.append.f0 = Int64.to_int base + Int32.to_int delta
+      /\ Int64.to_int w.append.f1 = Int64.to_int base + Int32.to_int delta + 1
+      /\ Int64.to_int w.reservation.f0 = Int64.to_int base
+      /\ Int64.to_int w.reservation.f1 = Int64.to_int w.append.f1
+      /\ Int64.to_int w.recovery.f0 = Int64.to_int w.append.f0
+      /\ Int64.to_int w.recovery.f1 = Int64.to_int w.append.f1
+      /\ Int64.to_int w.acknowledgement = Int64.to_int w.append.f1
+      /\ Int64.to_int w.scan = Int64.to_int w.append.f1
+      /\ Int64.to_int base <= Int64.to_int w.append.f0 /\ Int64.to_int w.append.f0 < Int64.to_int w.append.f1
+      end)}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_AppendFrontiers = Continue'0 t_AppendFrontiers | Break'0 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_AppendFrontiers (_1: t_ControlFlow_Option_Infallible_AppendFrontiers)
+
+axiom inv_axiom'1 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_AppendFrontiers [inv_ControlFlow_Option_Infallible_AppendFrontiers x]. inv_ControlFlow_Option_Infallible_AppendFrontiers x
+    = match x with
+      | Continue'0 f0'2 -> true
+      | Break'0 f0'2 -> inv_Option_Infallible f0'2
+      end
+
+let branch_Option_AppendFrontiers (self_: t_Option_AppendFrontiers)
+  (return (x: t_ControlFlow_Option_Infallible_AppendFrontiers)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_AppendFrontiers) ->
+  {[@stop_split] [@expl:branch_Option_AppendFrontiers ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_AppendFrontiers result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'2 v -> result = Continue'0 v
+      | None'2 -> result = Break'0 (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_AppendFrontiers) (return (f0'2: t_Option_Infallible)) = any
+  [ _k (f0'2: t_Option_Infallible) -> {Break'0 f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_AppendFrontiers) (return (f0'2: t_AppendFrontiers)) = any
+  [ _k (f0'2: t_AppendFrontiers) -> {Continue'0 f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reserved_pair_preserves_recovery_and_ack_order [#"/workspace/crates/verified/src/composition/append.rs" 100 0 104 47]
+  (base: Int64.t) (first_delta: Int32.t) (second_delta: Int32.t)
+  (return (x: t_Option_tup2_AppendFrontiers_AppendFrontiers)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_13 <- Int32.lt first_delta ([%#sappend] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb2) | br1 -> {_13} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_15 <- Int32.lt second_delta ([%#sappend'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb5) | br1 -> {_15} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = from_i64 [%#sappend'1] {first_delta} (fun (_x: Int64.t) -> [ &_25 <- _x ] s1)
+    | s1 = Int64.add [%#sappend'3] {_25} {[%#sappend'2] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_24 <- _x ] s2)
+    | s2 = from_i64 [%#sappend'4] {second_delta} (fun (_x: Int64.t) -> [ &_28 <- _x ] s3)
+    | s3 = Int64.add [%#sappend'6] {_28} {[%#sappend'5] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_27 <- _x ] s4)
+    | s4 = reservations_do_not_overlap [%#sappend'7] {base} {_24} {_27}
+        (fun (_x: t_Option_tup3_i64_i64_i64) -> [ &_22 <- _x ] s5)
+    | s5 = branch_Option_tup3_i64_i64_i64 [%#sappend'8] {_22}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64) -> [ &_21 <- _x ] s6)
+    | s6 = any
+      [ br0 (x0: tup3_i64_i64_i64) -> {_21 = Continue x0} (! bb12)
+      | br1 (x0: t_Option_Infallible) -> {_21 = Break x0} (! bb13) ] ]
+  | bb13 = s0
+    [ s0 = elim_Break {_21} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_AppendFrontiers_AppendFrontiers [%#sappend'8] {residual}
+        (fun (_x: t_Option_tup2_AppendFrontiers_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = elim_Continue {_21} (fun (r0: tup3_i64_i64_i64) -> [ &val' <- r0 ] s1)
+    | s1 = [ &_20 <- val' ] s2
+    | s2 = [ &split <- _20.f1'1 ] s3
+    | s3 = [ &_end <- _20.f2'1 ] s4
+    | s4 = append_frontiers_agree [%#sappend'9] {base} {first_delta}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_37 <- _x ] s5)
+    | s5 = branch_Option_AppendFrontiers [%#sappend'10] {_37}
+        (fun (_x: t_ControlFlow_Option_Infallible_AppendFrontiers) -> [ &_36 <- _x ] s6)
+    | s6 = any
+      [ br0 (x0: t_AppendFrontiers) -> {_36 = Continue'0 x0} (! bb19)
+      | br1 (x0: t_Option_Infallible) -> {_36 = Break'0 x0} (! bb20) ] ]
+  | bb20 = s0
+    [ s0 = elim_Break'0 {_36} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_AppendFrontiers_AppendFrontiers [%#sappend'10] {residual'0}
+        (fun (_x: t_Option_tup2_AppendFrontiers_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb19 = s0
+    [ s0 = elim_Continue'0 {_36} (fun (r0: t_AppendFrontiers) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &first <- val''0 ] s2
+    | s2 = append_frontiers_agree [%#sappend'11] {split} {second_delta}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_47 <- _x ] s3)
+    | s3 = branch_Option_AppendFrontiers [%#sappend'12] {_47}
+        (fun (_x: t_ControlFlow_Option_Infallible_AppendFrontiers) -> [ &_46 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: t_AppendFrontiers) -> {_46 = Continue'0 x0} (! bb26)
+      | br1 (x0: t_Option_Infallible) -> {_46 = Break'0 x0} (! bb27) ] ]
+  | bb27 = s0
+    [ s0 = elim_Break'0 {_46} (fun (r0: t_Option_Infallible) -> [ &residual'1 <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_AppendFrontiers_AppendFrontiers [%#sappend'12] {residual'1}
+        (fun (_x: t_Option_tup2_AppendFrontiers_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb26 = s0
+    [ s0 = elim_Continue'0 {_46} (fun (r0: t_AppendFrontiers) -> [ &val''1 <- r0 ] s1)
+    | s1 = [ &second <- val''1 ] s2
+    | s2 = {[@expl:assertion] [%#sappend'13] first.acknowledgement = split /\ second.acknowledgement = _end} s3
+    | s3 = [ &_61 <- { f0'0 = first; f1'0 = second } ] s4
+    | s4 = [ &_ret <- Some _61 ] s5
+    | s5 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_AppendFrontiers_AppendFrontiers = Any.any_l ()
+  | & base: Int64.t = base
+  | & first_delta: Int32.t = first_delta
+  | & second_delta: Int32.t = second_delta
+  | & _13: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & split: Int64.t = Any.any_l ()
+  | & _end: Int64.t = Any.any_l ()
+  | & _20: tup3_i64_i64_i64 = Any.any_l ()
+  | & _21: t_ControlFlow_Option_Infallible_tup3_i64_i64_i64 = Any.any_l ()
+  | & _22: t_Option_tup3_i64_i64_i64 = Any.any_l ()
+  | & _24: Int64.t = Any.any_l ()
+  | & _25: Int64.t = Any.any_l ()
+  | & _27: Int64.t = Any.any_l ()
+  | & _28: Int64.t = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup3_i64_i64_i64 = Any.any_l ()
+  | & first: t_AppendFrontiers = Any.any_l ()
+  | & _36: t_ControlFlow_Option_Infallible_AppendFrontiers = Any.any_l ()
+  | & _37: t_Option_AppendFrontiers = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: t_AppendFrontiers = Any.any_l ()
+  | & second: t_AppendFrontiers = Any.any_l ()
+  | & _46: t_ControlFlow_Option_Infallible_AppendFrontiers = Any.any_l ()
+  | & _47: t_Option_AppendFrontiers = Any.any_l ()
+  | & residual'1: t_Option_Infallible = Any.any_l ()
+  | & val''1: t_AppendFrontiers = Any.any_l ()
+  | & _61: tup2_AppendFrontiers_AppendFrontiers = Any.any_l () ])
+  [ return (result: t_Option_tup2_AppendFrontiers_AppendFrontiers) ->
+  {[@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures] ([@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures #0] [%#sappend'14] match result with
+          | Some _ -> true
+          | None -> false
+          end
+      = (ge_log_Int (Int64.to_int base) 0
+      /\ ge_log_Int (Int32.to_int first_delta) 0
+      /\ ge_log_Int (Int32.to_int second_delta) 0
+      /\ Int64.to_int base + Int32.to_int first_delta + Int32.to_int second_delta + 2 <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures #1] [%#sappend'15] match result with
+      | None -> true
+      | Some {f0'0 = first; f1'0 = second} -> Int64.to_int first.reservation.f0 = Int64.to_int base
+      /\ Int64.to_int first.append.f0 = Int64.to_int base + Int32.to_int first_delta
+      /\ Int64.to_int first.append.f1 = Int64.to_int first.append.f0 + 1
+      /\ Int64.to_int first.reservation.f1 = Int64.to_int first.append.f1
+      /\ Int64.to_int first.recovery.f0 = Int64.to_int first.append.f0
+      /\ Int64.to_int first.recovery.f1 = Int64.to_int first.append.f1
+      /\ Int64.to_int first.acknowledgement = Int64.to_int first.append.f1
+      /\ Int64.to_int first.scan = Int64.to_int first.append.f1
+      /\ Int64.to_int second.reservation.f0 = Int64.to_int first.acknowledgement
+      /\ Int64.to_int second.append.f0 = Int64.to_int second.reservation.f0 + Int32.to_int second_delta
+      /\ Int64.to_int second.append.f1 = Int64.to_int second.append.f0 + 1
+      /\ Int64.to_int second.reservation.f1 = Int64.to_int second.append.f1
+      /\ Int64.to_int second.recovery.f0 = Int64.to_int second.append.f0
+      /\ Int64.to_int second.recovery.f1 = Int64.to_int second.append.f1
+      /\ Int64.to_int second.acknowledgement = Int64.to_int second.append.f1
+      /\ Int64.to_int second.scan = Int64.to_int second.append.f1
+      /\ Int64.to_int first.acknowledgement < Int64.to_int second.acknowledgement
+      /\ Int64.to_int first.append.f0 < Int64.to_int second.reservation.f0
+      end)}
+    (! return {result}) ]

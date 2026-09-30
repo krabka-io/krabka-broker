@@ -24,8 +24,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_AclOperationKind [#"/workspace/crates/verified/src/authz.rs" 30 27 30 32] (self: t_AclOperationKind)
-  (return (x: t_AclOperationKind)) = (! bb0
+let clone_AclOperationKind [#"/workspace/crates/verified/src/authz.rs" 30 27 30 32]
+  (self: t_AclOperationKind) (return (x: t_AclOperationKind)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_AclOperationKind = Any.any_l () | & self: t_AclOperationKind = self ])
   [ return (result: t_AclOperationKind) -> (! return {result}) ]

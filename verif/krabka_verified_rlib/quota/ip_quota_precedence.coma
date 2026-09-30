@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/quota.rs" 157 0 157 75 *)
+(* #"/workspace/crates/verified/src/quota.rs" 213 0 213 75 *)
 
-let%span squota = "/workspace/crates/verified/src/quota.rs" 153 10 153 55
-let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 154 10 154 71
-let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 155 10 155 69
+let%span squota = "/workspace/crates/verified/src/quota.rs" 209 10 209 55
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 210 10 210 71
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 211 10 211 69
 
 use creusot.prelude.Any
 
@@ -12,8 +12,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let ip_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 157 0 157 75] (exact: bool) (default: bool)
-  (return (x: t_IpQuotaPrecedence)) = (! bb0
+let ip_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 213 0 213 75] (exact: bool)
+  (default: bool) (return (x: t_IpQuotaPrecedence)) = (! bb0
   [ bb0 = any [ br0 -> {exact = false} (! bb2) | br1 -> {exact} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Exact ] s1 | s1 = return {_ret} ]
   | bb2 = any [ br0 -> {default = false} (! bb4) | br1 -> {default} (! bb3) ]

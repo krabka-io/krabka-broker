@@ -1,0 +1,17 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_homogeneous_member_quotas": { "prover": "z3", "time": 0.369 },
+      "vc_len_usize": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_new_HomogeneousMemberQuota": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_push_HomogeneousMemberQuota": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      }
+    }
+  }
+}

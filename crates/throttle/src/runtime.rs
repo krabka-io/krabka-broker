@@ -129,6 +129,8 @@ struct BucketState {
     micro_debt: u64,
     /// The clock reading up to which elapsed time has become tokens.
     last_refill_nanos: u64,
+    /// Fractional micro-token numerator, always below one billion.
+    micro_refill_fraction: u64,
 }
 
 pub struct TokenBucket {
@@ -153,6 +155,7 @@ impl std::fmt::Debug for TokenBucket {
             .field("micro_available", &state.micro_available)
             .field("micro_debt", &state.micro_debt)
             .field("last_refill_nanos", &state.last_refill_nanos)
+            .field("micro_refill_fraction", &state.micro_refill_fraction)
             .finish_non_exhaustive()
     }
 }
@@ -177,6 +180,7 @@ impl TokenBucket {
             micro_available: 0,
             micro_debt: 0,
             last_refill_nanos: clock_nanos(&*clock),
+            micro_refill_fraction: 0,
         };
         Self {
             state: Mutex::new(state),

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_lemma_site_load_at_most_first": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      }
+    }
+  }
+}

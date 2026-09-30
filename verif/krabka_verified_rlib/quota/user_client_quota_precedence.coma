@@ -1,14 +1,14 @@
-(* #"/workspace/crates/verified/src/quota.rs" 115 0 115 93 *)
+(* #"/workspace/crates/verified/src/quota.rs" 171 0 171 93 *)
 
-let%span squota = "/workspace/crates/verified/src/quota.rs" 61 10 62 60
-let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 63 10 65 78
-let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 66 10 69 63
-let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 70 10 74 78
-let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 75 10 80 65
-let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 81 10 87 65
-let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 88 10 95 65
-let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 96 10 104 67
-let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 105 10 113 67
+let%span squota = "/workspace/crates/verified/src/quota.rs" 117 10 118 60
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 119 10 121 78
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 122 10 125 63
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 126 10 130 78
+let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 131 10 136 65
+let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 137 10 143 65
+let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 144 10 151 65
+let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 152 10 160 67
+let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 161 10 169 67
 
 use creusot.prelude.Any
 
@@ -39,7 +39,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let user_client_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 115 0 115 93]
+let user_client_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 171 0 171 93]
   (facts: t_UserClientQuotaFacts) (return (x: t_UserClientQuotaPrecedence)) = (! bb0
   [ bb0 = any [ br0 -> {facts.exact_pair = Absent} (! bb1) | br1 -> {facts.exact_pair = Present} (! bb3) ]
   | bb1 = s0 [ s0 = [ &_55 <- false ] s1 | s1 = bb4 ]

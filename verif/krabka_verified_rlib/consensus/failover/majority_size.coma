@@ -1,0 +1,33 @@
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 7 0 7 55 *)
+
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 8 18 8 19
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 8 4 8 19
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 8 22 8 23
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 8 4 8 23
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 5 10 5 41
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let majority_size [#"/workspace/crates/verified/src/consensus/failover.rs" 7 0 7 55]
+  (voter_count: UInt64.t) (return (x: UInt64.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- ([%#sfailover] (2: UInt64.t)) = ([%#sfailover'0] (0: UInt64.t)) ] s1
+    | s1 = {[@expl:division by zero] [%#sfailover'0] not _6} s2
+    | s2 = UInt64.div [%#sfailover'0] {voter_count} {[%#sfailover] (2: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_4 <- _x ] s3)
+    | s3 = UInt64.add [%#sfailover'2] {_4} {[%#sfailover'1] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &_ret <- _x ] s4)
+    | s4 = return {_ret} ] ]
+  [ & _ret: UInt64.t = Any.any_l ()
+  | & voter_count: UInt64.t = voter_count
+  | & _4: UInt64.t = Any.any_l ()
+  | & _6: bool = Any.any_l () ])
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:majority_size ensures] [%#sfailover'3] UInt64.t'int result
+    = ComputerDivision.div (UInt64.t'int voter_count) 2 + 1}
+    (! return {result}) ]

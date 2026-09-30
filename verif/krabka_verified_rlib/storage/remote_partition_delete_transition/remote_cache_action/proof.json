@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_remote_cache_action": { "prover": "alt-ergo", "time": 0.045 }
+    }
+  }
+}

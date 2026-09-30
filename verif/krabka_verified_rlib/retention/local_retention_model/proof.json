@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_local_retention_model": { "prover": "alt-ergo", "time": 0.031 }
-    }
-  }
-}

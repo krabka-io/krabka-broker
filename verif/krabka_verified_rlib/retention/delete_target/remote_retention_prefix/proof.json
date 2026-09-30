@@ -1,0 +1,13 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_len_RemoteRetentionSegment": {
+        "prover": "alt-ergo",
+        "time": 0.004
+      },
+      "vc_remote_retention_prefix": { "prover": "alt-ergo", "time": 0.025 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.003 }
+    }
+  }
+}

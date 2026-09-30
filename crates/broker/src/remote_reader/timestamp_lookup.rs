@@ -16,7 +16,8 @@ use super::RemoteReader;
 
 impl RemoteReader {
     /// Returns the smallest absolute offset and its record timestamp where the
-    /// timestamp is `>= target_timestamp`, across the finished remote segments.
+    /// timestamp is `>= target_timestamp` and offset is `>= minimum_offset`,
+    /// across the finished remote segments.
     /// The sparse time index supplies a scan floor; the exact answer comes from
     /// decoding records from the corresponding offset-index position.
     ///
@@ -29,6 +30,7 @@ impl RemoteReader {
         &self,
         tp: &TopicIdPartition,
         target_timestamp: TimestampMs,
+        minimum_offset: LogOffset,
         max_record_body: Option<usize>,
     ) -> Result<Option<(LogOffset, TimestampMs)>, RemoteStorageError> {
         let mut listed = self.list_remote_log_segments_blocking(tp).await?;
@@ -40,7 +42,10 @@ impl RemoteReader {
             // `-1` is the persisted unknown-max sentinel for a sealed segment
             // opened without a tail scan. It must remain scan-eligible for a
             // positive timestamp lookup after broker restart.
-            .filter(|md| md.max_timestamp_ms() == -1 || md.max_timestamp_ms() >= target_timestamp)
+            .filter(|md| {
+                md.end_offset() >= minimum_offset
+                    && (md.max_timestamp_ms() == -1 || md.max_timestamp_ms() >= target_timestamp)
+            })
         {
             let (time_index_bytes, offset_index_bytes) = tokio::try_join!(
                 self.fetch_index_blocking(metadata.clone(), IndexType::Timestamp),
@@ -66,7 +71,7 @@ impl RemoteReader {
             // offset only, never on the time index's offset.
             if let Some(found) = first_record_at_or_after_timestamp(
                 &data,
-                metadata.start_offset(),
+                metadata.start_offset().max(minimum_offset),
                 target_timestamp,
                 max_record_body,
             )? {
@@ -82,10 +87,49 @@ mod tests {
     use assert2::assert;
 
     use crate::remote_reader::test_support::{
-        compressed_remote_segment_reader, populated_reader, sparse_remote_segment_reader,
-        sparse_remote_segment_reader_with_max_timestamp, tp,
+        append_time_remote_segment_reader, compressed_remote_segment_reader, populated_reader,
+        sparse_remote_segment_reader, sparse_remote_segment_reader_with_max_timestamp, tp,
         unordered_timestamps_remote_segment_reader,
     };
+
+    #[tokio::test]
+    async fn timestamp_lookup_excludes_records_before_the_logical_floor() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
+        let end = log.tierable_segments().last().unwrap().last_offset.0 + 1;
+        for minimum in [0, 1, 3, end - 1, end, i64::MAX] {
+            let expected = (minimum < end).then_some((minimum, 0));
+            assert!(
+                reader
+                    .offset_for_timestamp(&tp(), 0, minimum, None)
+                    .await
+                    .unwrap()
+                    == expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn timestamp_lookup_answers_in_append_time() {
+        let (reader, _dir) = append_time_remote_segment_reader();
+        for (floor, target, expected) in [
+            (0, 1_500, Some((10, 1_700))),
+            (11, 1_500, Some((11, 1_700))),
+            (0, 1_800, Some((14, 2_400))),
+            (15, 2_400, Some((15, 2_400))),
+            (0, 2_401, None),
+        ] {
+            assert!(
+                reader
+                    .offset_for_timestamp(&tp(), target, floor, None)
+                    .await
+                    .unwrap()
+                    == expected,
+                "floor {floor} target {target}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn offset_for_timestamp_locates_remote_segment() {
@@ -99,7 +143,7 @@ mod tests {
         // all 0. Target a timestamp <= 0 to match the first segment.
         let target_ts = 0_i64;
         let got = reader
-            .offset_for_timestamp(&tp(), target_ts, None)
+            .offset_for_timestamp(&tp(), target_ts, 0, None)
             .await
             .unwrap()
             .expect("first segment matches ts=0");
@@ -114,7 +158,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 1_500, None)
+            .offset_for_timestamp(&tp(), 1_500, 0, None)
             .await
             .unwrap()
             .expect("timestamp 1500 has a remote match");
@@ -127,7 +171,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000, None)
+            .offset_for_timestamp(&tp(), 2_000, 0, None)
             .await
             .unwrap()
             .expect("timestamp 2000 has an exact record match");
@@ -140,7 +184,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader_with_max_timestamp(-1);
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000, None)
+            .offset_for_timestamp(&tp(), 2_000, 0, None)
             .await
             .unwrap()
             .expect("the unknown max sentinel must not suppress an exact remote scan");
@@ -157,7 +201,7 @@ mod tests {
         let (reader, _remote_dir) = unordered_timestamps_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_400, None)
+            .offset_for_timestamp(&tp(), 2_400, 0, None)
             .await
             .unwrap()
             .expect("the newest record is the first of the second batch");
@@ -172,7 +216,10 @@ mod tests {
         let (reader, _log) = populated_reader(log_dir.path(), remote_dir.path());
         // All segments have max_ts=0 by construction (see test above); any
         // strictly-positive target is past every remote segment.
-        let got = reader.offset_for_timestamp(&tp(), 1, None).await.unwrap();
+        let got = reader
+            .offset_for_timestamp(&tp(), 1, 0, None)
+            .await
+            .unwrap();
         assert!(got == None);
     }
 
@@ -205,7 +252,7 @@ mod tests {
                 Ok(Some((14, 2_000))),
             ),
         ] {
-            let got = match reader.offset_for_timestamp(&tp(), target, limit).await {
+            let got = match reader.offset_for_timestamp(&tp(), target, 0, limit).await {
                 Ok(found) => Ok(found),
                 Err(RemoteStorageError::RecordTooLarge { size, limit: seen }) => {
                     assert!(Some(seen) == limit, "{name}");

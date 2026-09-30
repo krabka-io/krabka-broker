@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 322 27 322 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 111 27 111 32 *)
 
 (* <restore::RestoreLayout as std::clone::Clone> *)
 
@@ -12,8 +12,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreLayout [#"/workspace/crates/verified/src/restore.rs" 322 27 322 32] (self: t_RestoreLayout)
-  (return (x: t_RestoreLayout)) = (! bb0
+let clone_RestoreLayout [#"/workspace/crates/verified/src/restore.rs" 111 27 111 32]
+  (self: t_RestoreLayout) (return (x: t_RestoreLayout)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreLayout = Any.any_l () | & self: t_RestoreLayout = self ])
   [ return (result: t_RestoreLayout) -> (! return {result}) ]

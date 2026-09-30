@@ -1,0 +1,13 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_quorum_commit_bounds_fetch": {
+        "prover": "alt-ergo",
+        "time": 0.093
+      },
+      "vc_recompute_high_watermark": { "prover": "alt-ergo", "time": 0.006 }
+    }
+  }
+}

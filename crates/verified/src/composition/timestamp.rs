@@ -1,0 +1,166 @@
+use creusot_std::prelude::*;
+
+use super::{
+    earliest_max_timestamp_index, first_timestamp_index, remote_time_index_candidate_count,
+    restore_time_index_entry_valid, time_index_scan_start,
+};
+
+/// Construct a sparse row from the actual prefix maximum. The indexed record
+/// can be a batch base while `through` includes the batch's remaining records.
+#[requires(offsets@.len() == timestamps@.len())]
+#[requires(indexed@ <= through@ && through@ < timestamps@.len())]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
+    ==> offsets@[i]@ < offsets@[j]@)]
+#[ensures(result.1 == offsets@[indexed@])]
+#[ensures(exists<i: Int> 0 <= i && i <= through@ && timestamps@[i] == result.0)]
+#[ensures(forall<i: Int> 0 <= i && i <= through@ ==> timestamps@[i]@ <= result.0@)]
+#[ensures(forall<i: Int> 0 <= i && i < offsets@.len() && offsets@[i]@ <= result.1@
+    ==> timestamps@[i]@ <= result.0@)]
+pub(super) fn running_maximum_index_entry(
+    offsets: &[u32],
+    timestamps: &[i64],
+    indexed: usize,
+    through: usize,
+) -> (i64, u32) {
+    let prefix = &timestamps[..=through];
+    match earliest_max_timestamp_index(prefix) {
+        Some(index) => (prefix[index], offsets[indexed]),
+        None => unreachable!(),
+    }
+}
+
+/// A strict-predecessor sparse start followed by the existing record selector
+/// finds the global first match, even with nonmonotone timestamps and offset
+/// gaps. Each sparse timestamp must bound all records before its offset.
+#[requires(offsets@.len() == timestamps@.len())]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
+    ==> offsets@[i]@ < offsets@[j]@)]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
+    ==> entries@[i].0@ <= entries@[j].0@)]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
+    && 0 <= j && j < offsets@.len() && offsets@[j]@ < entries@[i].1@
+    ==> timestamps@[j]@ <= entries@[i].0@)]
+#[ensures(match result {
+    Some(index) => index@ < timestamps@.len() && timestamps@[index@]@ >= target@
+        && forall<i: Int> 0 <= i && i < index@ ==> timestamps@[i]@ < target@,
+    None => forall<i: Int> 0 <= i && i < timestamps@.len() ==> timestamps@[i]@ < target@,
+})]
+pub(super) fn indexed_timestamp_scan_finds_first(
+    entries: &[(i64, u32)],
+    offsets: &[u32],
+    timestamps: &[i64],
+    target: i64,
+) -> Option<usize> {
+    let relative = time_index_scan_start(entries, target);
+    let mut start = 0usize;
+    #[invariant(start@ <= offsets@.len())]
+    #[invariant(forall<i: Int> 0 <= i && i < start@ ==> timestamps@[i]@ < target@)]
+    #[variant(offsets@.len() - start@)]
+    while start < offsets.len() && offsets[start] < relative {
+        proof_assert!(timestamps@[start@]@ < target@);
+        start += 1;
+    }
+    let index = first_timestamp_index(&timestamps[start..], target)?;
+    Some(start + index)
+}
+
+/// The remote prefix selector and floor adapter preserve the global first
+/// record match. Unlike a binary search, this accepts unsorted index timestamps
+/// and offset padding. Index rows must bound earlier record timestamps; a
+/// zero-offset padding row has no earlier record to bound.
+#[requires(offsets@.len() == timestamps@.len())]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
+    ==> offsets@[i]@ < offsets@[j]@)]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
+    && 0 <= j && j < offsets@.len() && offsets@[j]@ < entries@[i].1@
+    ==> timestamps@[j]@ <= entries@[i].0@)]
+#[ensures(result)]
+pub(super) fn remote_timestamp_scan_preserves_first(
+    entries: &[(i64, u32)],
+    offsets: &[u32],
+    timestamps: &[i64],
+    target: i64,
+) -> bool {
+    let count = remote_time_index_candidate_count(entries, target);
+    let (relative, selected) = if count == 0 {
+        (0, &entries[..0])
+    } else {
+        (entries[count - 1].1, &entries[count - 1..count])
+    };
+    // A selected remote row is strictly below the target, so the one-row
+    // strict search starts at exactly the floor the remote adapter returns.
+    relative == time_index_scan_start(selected, target)
+        && indexed_timestamp_scan_finds_first(selected, offsets, timestamps, target)
+            == first_timestamp_index(timestamps, target)
+}
+
+/// Archive row validation makes the remote prefix floor and local binary
+/// scan start agree. Raw trailing padding must be excluded before validation;
+/// the separate remote scan theorem admits its zero-offset rows directly.
+#[ensures(result)]
+pub(super) fn validated_remote_and_local_time_starts_agree(
+    entries: &[(i64, u32)],
+    max_relative: i64,
+    target: i64,
+) -> bool {
+    let mut i = 0usize;
+    let mut previous = None;
+    #[invariant(i@ <= entries@.len())]
+    #[invariant(previous == if i@ == 0 { None } else { Some(entries@[i@ - 1]) })]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> entries@[j].1@ <= max_relative@)]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < i@
+        ==> entries@[j].0@ <= entries@[k].0@ && entries@[j].1@ < entries@[k].1@)]
+    #[variant(entries@.len() - i@)]
+    while i < entries.len() {
+        let (timestamp, relative) = entries[i];
+        if !restore_time_index_entry_valid(previous, timestamp, relative, max_relative) {
+            return true;
+        }
+        previous = Some((timestamp, relative));
+        i += 1;
+    }
+    let count = remote_time_index_candidate_count(entries, target);
+    let remote = if count == 0 { 0 } else { entries[count - 1].1 };
+    remote == time_index_scan_start(entries, target)
+}
+
+/// Build an arbitrary sparse index from real prefix maxima, then use it to
+/// search. No trusted upper-bound boolean or assumed timestamp ordering of
+/// records is needed; the indexed answer agrees with a full record scan.
+#[requires(offsets@.len() == timestamps@.len())]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
+    ==> offsets@[i]@ < offsets@[j]@)]
+#[requires(forall<i: Int> 0 <= i && i < rows@.len()
+    ==> rows@[i].0@ <= rows@[i].1@ && rows@[i].1@ < timestamps@.len())]
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len()
+    ==> rows@[i].0@ < rows@[j].0@ && rows@[i].1@ <= rows@[j].1@)]
+#[ensures(result)]
+pub(super) fn constructed_time_index_preserves_first(
+    offsets: &[u32],
+    timestamps: &[i64],
+    rows: &[(usize, usize)],
+    target: i64,
+) -> bool {
+    let mut entries: Vec<(i64, u32)> = Vec::new();
+    let mut i = 0usize;
+    #[invariant(i@ <= rows@.len() && entries@.len() == i@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> entries@[j].1 == offsets@[rows@[j].0@])]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
+        exists<k: Int> 0 <= k && k <= rows@[j].1@ && timestamps@[k] == entries@[j].0)]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < i@ && 0 <= k && k <= rows@[j].1@
+        ==> timestamps@[k]@ <= entries@[j].0@)]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < i@
+        ==> entries@[j].0@ <= entries@[k].0@)]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < i@ && 0 <= k && k < offsets@.len()
+        && offsets@[k]@ <= entries@[j].1@ ==> timestamps@[k]@ <= entries@[j].0@)]
+    #[variant(rows@.len() - i@)]
+    while i < rows.len() {
+        let (indexed, through) = rows[i];
+        entries.push(running_maximum_index_entry(
+            offsets, timestamps, indexed, through,
+        ));
+        i += 1;
+    }
+    indexed_timestamp_scan_finds_first(&entries, offsets, timestamps, target)
+        == first_timestamp_index(timestamps, target)
+}

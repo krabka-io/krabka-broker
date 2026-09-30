@@ -74,7 +74,7 @@ pub struct NewAvailable(pub u64);
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open)]
 pub fn capped(available: Int, refill: Int, burst: Int) -> Int {
     if available + refill <= burst {
         available + refill

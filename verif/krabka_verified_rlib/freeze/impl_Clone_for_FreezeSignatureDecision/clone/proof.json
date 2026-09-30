@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_FreezeSignatureDecision": {
         "prover": "alt-ergo",
-        "time": 0.02
+        "time": 0.008
       }
     }
   }

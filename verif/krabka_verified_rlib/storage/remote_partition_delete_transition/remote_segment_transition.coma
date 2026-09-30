@@ -1,0 +1,60 @@
+(* #"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 28 0 31 9 *)
+
+let%span sremote_partition_delete_transition = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 26 10 26 66
+let%span sremote_partition_delete_transition'0 = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 13 4 19 5
+
+use creusot.prelude.Any
+
+type t_RemoteSegmentLifecycle = CopyStarted | CopyFinished | DeleteStarted | DeleteFinished
+
+type tup2_RemoteSegmentLifecycle_RemoteSegmentLifecycle = { f0: t_RemoteSegmentLifecycle; f1: t_RemoteSegmentLifecycle }
+
+predicate segment_forward_edge [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 12 0 12 89] (from: t_RemoteSegmentLifecycle) (to': t_RemoteSegmentLifecycle) =
+  [%#sremote_partition_delete_transition'0] match { f0 = from; f1 = to' } with
+    | {f0 = CopyStarted; f1 = CopyFinished} | {f0 = CopyStarted; f1 = DeleteStarted} | {f0 = CopyFinished; f1 = DeleteStarted} | {f0 = DeleteStarted; f1 = DeleteFinished} -> true
+    | _ -> false
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_segment_transition [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 28 0 31 9]
+  (from: t_RemoteSegmentLifecycle) (to': t_RemoteSegmentLifecycle) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- { f0 = from; f1 = to' } ] s1
+    | s1 = any
+      [ br0 -> {_6.f0 = CopyStarted} (! bb2)
+      | br1 -> {_6.f0 = CopyFinished} (! bb3)
+      | br2 -> {_6.f0 = DeleteStarted} (! bb4)
+      | br3 -> {_6.f0 = DeleteFinished} (! bb5) ] ]
+  | bb5 = any
+    [ br0 -> {_6.f1 = CopyStarted} (! bb1)
+    | br1 -> {_6.f1 = CopyFinished} (! bb1)
+    | br2 -> {_6.f1 = DeleteStarted} (! bb1)
+    | br3 -> {_6.f1 = DeleteFinished} (! bb7) ]
+  | bb4 = any
+    [ br0 -> {_6.f1 = CopyStarted} (! bb1)
+    | br1 -> {_6.f1 = CopyFinished} (! bb1)
+    | br2 -> {_6.f1 = DeleteStarted} (! bb7)
+    | br3 -> {_6.f1 = DeleteFinished} (! bb7) ]
+  | bb3 = any
+    [ br0 -> {_6.f1 = CopyStarted} (! bb1)
+    | br1 -> {_6.f1 = CopyFinished} (! bb7)
+    | br2 -> {_6.f1 = DeleteStarted} (! bb7)
+    | br3 -> {_6.f1 = DeleteFinished} (! bb1) ]
+  | bb2 = any
+    [ br0 -> {_6.f1 = CopyStarted} (! bb7)
+    | br1 -> {_6.f1 = CopyFinished} (! bb7)
+    | br2 -> {_6.f1 = DeleteStarted} (! bb7)
+    | br3 -> {_6.f1 = DeleteFinished} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & from: t_RemoteSegmentLifecycle = from
+  | & to': t_RemoteSegmentLifecycle = to'
+  | & _6: tup2_RemoteSegmentLifecycle_RemoteSegmentLifecycle = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:remote_segment_transition ensures] [%#sremote_partition_delete_transition] result
+    = (from = to' \/ segment_forward_edge from to')}
+    (! return {result}) ]

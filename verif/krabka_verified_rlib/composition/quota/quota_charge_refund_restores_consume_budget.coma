@@ -1,0 +1,303 @@
+(* #"/workspace/crates/verified/src/composition/quota.rs" 35 0 42 28 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span squota = "/workspace/crates/verified/src/composition/quota.rs" 43 19 43 63
+let%span squota'0 = "/workspace/crates/verified/src/composition/quota.rs" 46 21 46 57
+let%span squota'1 = "/workspace/crates/verified/src/composition/quota.rs" 44 4 46 58
+let%span squota'2 = "/workspace/crates/verified/src/composition/quota.rs" 44 4 46 59
+let%span squota'3 = "/workspace/crates/verified/src/composition/quota.rs" 47 73 47 81
+let%span squota'4 = "/workspace/crates/verified/src/composition/quota.rs" 47 18 47 82
+let%span squota'5 = "/workspace/crates/verified/src/composition/quota.rs" 48 19 48 71
+let%span squota'6 = "/workspace/crates/verified/src/composition/quota.rs" 51 21 51 22
+let%span squota'7 = "/workspace/crates/verified/src/composition/quota.rs" 49 21 54 5
+let%span squota'8 = "/workspace/crates/verified/src/composition/quota.rs" 23 11 23 66
+let%span squota'9 = "/workspace/crates/verified/src/composition/quota.rs" 24 10 25 90
+let%span squota'10 = "/workspace/crates/verified/src/composition/quota.rs" 26 10 34 1
+let%span squota'11 = "/workspace/crates/verified/src/quota.rs" 21 10 21 29
+let%span squota'12 = "/workspace/crates/verified/src/quota.rs" 22 10 22 77
+let%span squota'13 = "/workspace/crates/verified/src/quota.rs" 23 10 24 69
+let%span squota'14 = "/workspace/crates/verified/src/quota.rs" 25 10 25 80
+let%span squota'15 = "/workspace/crates/verified/src/quota.rs" 41 10 43 12
+let%span squota'16 = "/workspace/crates/verified/src/quota.rs" 44 10 45 89
+let%span squota'17 = "/workspace/crates/verified/src/quota.rs" 46 10 46 55
+let%span squota'18 = "/workspace/crates/verified/src/quota.rs" 47 10 47 80
+let%span squota'19 = "/workspace/crates/verified/src/composition/quota.rs" 12 4 16 5
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+ = [%#sthrottle'3] if available + refill <= burst then available + refill else burst
+
+let quota_credit (available: UInt64.t) (debt: UInt64.t) (credit: UInt64.t) (burst: UInt64.t)
+  (return (x: tup2_u64_u64)) = any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:quota_credit ensures] ([@stop_split] [@expl:quota_credit ensures #0] [%#squota'11] UInt64.t'int result.f0
+      <= UInt64.t'int burst)
+    /\ ([@stop_split] [@expl:quota_credit ensures #1] [%#squota'12] UInt64.t'int result.f1
+      = UInt64.t'int debt
+      - (if UInt64.t'int debt <= UInt64.t'int credit then UInt64.t'int debt else UInt64.t'int credit))
+    /\ ([@stop_split] [@expl:quota_credit ensures #2] [%#squota'13] UInt64.t'int result.f0
+      = capped (UInt64.t'int available) (UInt64.t'int credit
+      - (if UInt64.t'int debt <= UInt64.t'int credit then
+        UInt64.t'int debt
+      else
+        UInt64.t'int credit
+      )) (UInt64.t'int burst))
+    /\ ([@stop_split] [@expl:quota_credit ensures #3] [%#squota'14] UInt64.t'int available = 0 \/ UInt64.t'int debt = 0
+    -> UInt64.t'int result.f0 = 0 \/ UInt64.t'int result.f1 = 0)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MIN: UInt64.t = (0: UInt64.t)
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_sub (self_: UInt64.t) (rhs: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:saturating_sub ensures] ([@stop_split] [@expl:saturating_sub ensures #0] [%#snum] ge_log_Int (UInt64.t'int self_
+          - UInt64.t'int rhs) (UInt64.t'int const_MIN)
+        /\ UInt64.t'int self_ - UInt64.t'int rhs <= UInt64.t'int const_MAX
+      -> UInt64.t'int result = UInt64.t'int self_ - UInt64.t'int rhs)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #1] [%#snum'0] UInt64.t'int self_ - UInt64.t'int rhs
+        < UInt64.t'int const_MIN -> UInt64.t'int result = UInt64.t'int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #2] [%#snum'1] gt_log_Int (UInt64.t'int self_
+      - UInt64.t'int rhs) (UInt64.t'int const_MAX) -> UInt64.t'int result = UInt64.t'int const_MAX)}
+    (! return {result}) ]
+
+type t_Option_u64 = None | Some UInt64.t
+
+let checked_add (self_: UInt64.t) (rhs: UInt64.t) (return (x: t_Option_u64)) = any
+  [ return (result: t_Option_u64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum'2] (result = None)
+      = (UInt64.t'int self_ + UInt64.t'int rhs < UInt64.t'int const_MIN
+      \/ gt_log_Int (UInt64.t'int self_ + UInt64.t'int rhs) (UInt64.t'int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'3] forall r: UInt64.t. result = Some r
+      -> UInt64.t'int r = UInt64.t'int self_ + UInt64.t'int rhs)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'0 | Some'0 ()
+
+type t_ControlFlow_Option_Infallible_u64 = Continue UInt64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'0 -> true
+      | Some'0 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_u64 (_1: t_ControlFlow_Option_Infallible_u64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_u64 [inv_ControlFlow_Option_Infallible_u64 x]. inv_ControlFlow_Option_Infallible_u64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_u64 (self_: t_Option_u64) (return (x: t_ControlFlow_Option_Infallible_u64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_u64) ->
+  {[@stop_split] [@expl:branch_Option_u64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_u64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup3_u64_u64_u64 = { f0'0: UInt64.t; f1'0: UInt64.t; f2'0: UInt64.t }
+
+type t_Option_tup3_u64_u64_u64 = None'1 | Some'1 tup3_u64_u64_u64
+
+let from_residual_Option_tup3_u64_u64_u64 (residual: t_Option_Infallible) (return (x: t_Option_tup3_u64_u64_u64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup3_u64_u64_u64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result
+    = None'1}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'1: UInt64.t)) = any
+  [ _k (f0'1: UInt64.t) -> {Continue f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let quota_charge (available: UInt64.t) (debt: UInt64.t) (requested: UInt64.t) (burst: UInt64.t) (debt_cap: UInt64.t)
+  (return (x: tup2_u64_u64)) = any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:quota_charge ensures] ([@stop_split] [@expl:quota_charge ensures #0] [%#squota'15] UInt64.t'int result.f0
+      = (if UInt64.t'int requested <= capped (UInt64.t'int available) 0 (UInt64.t'int burst) then
+        capped (UInt64.t'int available) 0 (UInt64.t'int burst) - UInt64.t'int requested
+      else
+        0
+      ))
+    /\ ([@stop_split] [@expl:quota_charge ensures #1] [%#squota'16] UInt64.t'int result.f1
+      = capped (UInt64.t'int debt) (UInt64.t'int requested
+      - (capped (UInt64.t'int available) 0 (UInt64.t'int burst) - UInt64.t'int result.f0)) (UInt64.t'int debt_cap))
+    /\ ([@stop_split] [@expl:quota_charge ensures #2] [%#squota'17] UInt64.t'int result.f0 <= UInt64.t'int burst
+      /\ UInt64.t'int result.f1 <= UInt64.t'int debt_cap)
+    /\ ([@stop_split] [@expl:quota_charge ensures #3] [%#squota'18] UInt64.t'int available = 0 \/ UInt64.t'int debt = 0
+    -> UInt64.t'int result.f0 = 0 \/ UInt64.t'int result.f1 = 0)}
+    (! return {result}) ]
+
+type t_AvailableTokens = { f0'1: UInt64.t }
+
+type t_RefillTokens = { f0'2: UInt64.t }
+
+type t_BurstCapacity = { f0'3: UInt64.t }
+
+type t_RequestedTokens = { f0'4: UInt64.t }
+
+type t_GrantedTokens = { f0'5: UInt64.t }
+
+type t_NewAvailable = { f0'6: UInt64.t }
+
+type tup2_GrantedTokens_NewAvailable = { f0'7: t_GrantedTokens; f1'7: t_NewAvailable }
+
+let plan_consume (available: t_AvailableTokens) (refill: t_RefillTokens) (burst: t_BurstCapacity)
+  (requested: t_RequestedTokens) (return (x: tup2_GrantedTokens_NewAvailable)) = any
+  [ return (result: tup2_GrantedTokens_NewAvailable) ->
+  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#sthrottle] UInt64.t'int result.f0'7.f0'5
+      <= UInt64.t'int requested.f0'4)
+    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#sthrottle'0] UInt64.t'int result.f1'7.f0'6
+      <= UInt64.t'int burst.f0'3)
+    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#sthrottle'1] UInt64.t'int result.f0'7.f0'5
+        + UInt64.t'int result.f1'7.f0'6
+      = capped (UInt64.t'int available.f0'1) (UInt64.t'int refill.f0'2) (UInt64.t'int burst.f0'3))
+    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#sthrottle'2] UInt64.t'int result.f0'7.f0'5
+    = (if UInt64.t'int requested.f0'4
+    <= capped (UInt64.t'int available.f0'1) (UInt64.t'int refill.f0'2) (UInt64.t'int burst.f0'3) then
+      UInt64.t'int requested.f0'4
+    else
+      capped (UInt64.t'int available.f0'1) (UInt64.t'int refill.f0'2) (UInt64.t'int burst.f0'3)
+    ))}
+    (! return {result}) ]
+
+function refilled_quota_balance [#"/workspace/crates/verified/src/composition/quota.rs" 11 0 11 84] (available: int) (debt: int) (refill: int) (burst: int) : int
+ = [%#squota'19] if available - debt + refill <= burst then available - debt + refill else burst
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let quota_charge_refund_restores_consume_budget [#"/workspace/crates/verified/src/composition/quota.rs" 35 0 42 28]
+  (available: UInt64.t) (debt: UInt64.t) (refill: UInt64.t) (burst: UInt64.t) (requested: UInt64.t) (probe: UInt64.t)
+  (return (x: t_Option_tup3_u64_u64_u64)) =
+{[@stop_split] [@expl:quota_charge_refund_restores_consume_budget requires] [%#squota'8] UInt64.t'int available
+    <= UInt64.t'int burst
+  /\ (UInt64.t'int available = 0 \/ UInt64.t'int debt = 0)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = quota_credit [%#squota] {available} {debt} {refill} {burst}
+        (fun (_x: tup2_u64_u64) -> [ &refilled <- _x ] s1)
+    | s1 = saturating_sub [%#squota'0] {requested} {refilled.f0} (fun (_x: UInt64.t) -> [ &_32 <- _x ] s2)
+    | s2 = checked_add [%#squota'1] {refilled.f1} {_32} (fun (_x: t_Option_u64) -> [ &_30 <- _x ] s3)
+    | s3 = branch_Option_u64 [%#squota'2] {_30} (fun (_x: t_ControlFlow_Option_Infallible_u64) -> [ &_29 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: UInt64.t) -> {_29 = Continue x0} (! bb7)
+      | br1 (x0: t_Option_Infallible) -> {_29 = Break x0} (! bb8) ] ]
+  | bb8 = s0
+    [ s0 = elim_Break {_29} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup3_u64_u64_u64 [%#squota'2] {residual}
+        (fun (_x: t_Option_tup3_u64_u64_u64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = elim_Continue {_29} (fun (r0: UInt64.t) -> [ &val' <- r0 ] s1)
+    | s1 = quota_charge [%#squota'4] {refilled.f0} {refilled.f1} {requested} {burst} {[%#squota'3] const_MAX}
+        (fun (_x: tup2_u64_u64) -> [ &charged <- _x ] s2)
+    | s2 = quota_credit [%#squota'5] {charged.f0} {charged.f1} {requested} {burst}
+        (fun (_x: tup2_u64_u64) -> [ &restored <- _x ] s3)
+    | s3 = [ &_52 <- { f0'1 = restored.f0 } ] s4
+    | s4 = [ &_54 <- { f0'2 = ([%#squota'6] (0: UInt64.t)) } ] s5
+    | s5 = [ &_55 <- { f0'3 = burst } ] s6
+    | s6 = [ &_57 <- { f0'4 = probe } ] s7
+    | s7 = plan_consume [%#squota'7] {_52} {_54} {_55} {_57}
+        (fun (_x: tup2_GrantedTokens_NewAvailable) -> [ &_51 <- _x ] s8)
+    | s8 = [ &grant <- _51.f0'7 ] s9
+    | s9 = [ &_59 <- { f0'0 = restored.f0; f1'0 = restored.f1; f2'0 = grant.f0'5 } ] s10
+    | s10 = [ &_ret <- Some'1 _59 ] s11
+    | s11 = return {_ret} ] ]
+  [ & _ret: t_Option_tup3_u64_u64_u64 = Any.any_l ()
+  | & available: UInt64.t = available
+  | & debt: UInt64.t = debt
+  | & refill: UInt64.t = refill
+  | & burst: UInt64.t = burst
+  | & requested: UInt64.t = requested
+  | & probe: UInt64.t = probe
+  | & refilled: tup2_u64_u64 = Any.any_l ()
+  | & _29: t_ControlFlow_Option_Infallible_u64 = Any.any_l ()
+  | & _30: t_Option_u64 = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': UInt64.t = Any.any_l ()
+  | & charged: tup2_u64_u64 = Any.any_l ()
+  | & restored: tup2_u64_u64 = Any.any_l ()
+  | & grant: t_GrantedTokens = Any.any_l ()
+  | & _51: tup2_GrantedTokens_NewAvailable = Any.any_l ()
+  | & _52: t_AvailableTokens = Any.any_l ()
+  | & _54: t_RefillTokens = Any.any_l ()
+  | & _55: t_BurstCapacity = Any.any_l ()
+  | & _57: t_RequestedTokens = Any.any_l ()
+  | & _59: tup3_u64_u64_u64 = Any.any_l () ])
+  [ return (result: t_Option_tup3_u64_u64_u64) ->
+  {[@stop_split] [@expl:quota_charge_refund_restores_consume_budget ensures] ([@stop_split] [@expl:quota_charge_refund_restores_consume_budget ensures #0] [%#squota'9] match result with
+          | Some'1 _ -> true
+          | None'1 -> false
+          end
+      = (UInt64.t'int requested
+        - refilled_quota_balance (UInt64.t'int available) (UInt64.t'int debt) (UInt64.t'int refill) (UInt64.t'int burst)
+      <= UInt64.t'int const_MAX))
+    /\ ([@stop_split] [@expl:quota_charge_refund_restores_consume_budget ensures #1] [%#squota'10] match result with
+      | None'1 -> true
+      | Some'1 {f0'0 = restored_available; f1'0 = restored_debt; f2'0 = grant} -> UInt64.t'int restored_available
+        <= UInt64.t'int burst
+      /\ (UInt64.t'int restored_available = 0 \/ UInt64.t'int restored_debt = 0)
+      /\ UInt64.t'int restored_available - UInt64.t'int restored_debt
+        = refilled_quota_balance (UInt64.t'int available) (UInt64.t'int debt) (UInt64.t'int refill) (UInt64.t'int burst)
+      /\ UInt64.t'int grant
+      = (if UInt64.t'int probe <= UInt64.t'int restored_available then
+        UInt64.t'int probe
+      else
+        UInt64.t'int restored_available
+      )
+      end)}
+    (! return {result}) ]

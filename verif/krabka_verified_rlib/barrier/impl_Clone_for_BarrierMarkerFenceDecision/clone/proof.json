@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_BarrierMarkerFenceDecision": {
         "prover": "alt-ergo",
-        "time": 0.023
+        "time": 0.007
       }
     }
   }
