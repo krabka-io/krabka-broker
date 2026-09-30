@@ -261,12 +261,30 @@ impl BrokerHandle {
     }
 
     /// Subscribe to the self-shutdown signal. Flips `true` when the broker
-    /// decides to stop on its own. Today the only such cause is that all log
-    /// dirs went offline (KIP-112). The embedding application should call
-    /// [`Self::shutdown`] or `controlled_shutdown` when this fires.
+    /// decides to stop on its own. There are two such causes: all log dirs
+    /// went offline (KIP-112), and the controller that this node hosts stopped
+    /// itself over a fatal fault ([`Self::fatal_fault`] gives the reason). The
+    /// embedding application should call [`Self::shutdown`] or
+    /// `controlled_shutdown` when this fires, and exit non-zero for a fatal
+    /// fault, as Kafka halts the process.
     #[must_use]
     pub fn should_shutdown_rx(&self) -> tokio::sync::watch::Receiver<bool> {
         self.broker.should_shutdown.subscribe()
+    }
+
+    /// The fatal fault that stopped this node's controller, or `None` when
+    /// there is none.
+    ///
+    /// Kafka's `ProcessTerminatingFaultHandler` halts the process with exit
+    /// status 1 on such a fault, for example when a controller replays a
+    /// `FeatureLevelRecord` above the range it supports. A library cannot halt
+    /// its host, so [`Self::should_shutdown_rx`] flips and this holds the
+    /// message to exit with. The flag is already latched, so a
+    /// `controlled_shutdown` after it skips the leadership drain, which a dead
+    /// controller could not serve, and stops the broker at once.
+    #[must_use]
+    pub fn fatal_fault(&self) -> Option<String> {
+        self.broker.controller.watch_fatal().borrow().clone()
     }
 
     /// Request a graceful, controlled shutdown of this broker.

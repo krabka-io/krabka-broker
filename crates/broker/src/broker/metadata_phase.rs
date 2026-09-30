@@ -296,8 +296,14 @@ async fn wait_for_metadata_leader(
     timeout: std::time::Duration,
 ) -> Result<(), BrokerError> {
     let mut leaders = controller.watch_leader();
+    let fatal = controller.watch_fatal();
     let deadline = std::time::Instant::now() + timeout;
     while leaders.borrow().is_none() {
+        // A controller that stopped itself never elects a leader, and its
+        // fault names the reason where the timeout below would only guess.
+        if let Some(fault) = fatal.borrow().clone() {
+            return Err(BrokerError::Startup(fault));
+        }
         if std::time::Instant::now() > deadline {
             return Err(BrokerError::Startup(format!(
                 "no leader elected within {timeout:?}"
@@ -380,7 +386,30 @@ pub(super) async fn start_metadata_phase(
     )
     .await?;
     spawn_auto_join(config, &controller.0, inter_broker_client);
-    wait_for_metadata_leader(&*controller.0, config.startup_leader_wait_timeout.to_std()).await?;
+    // A controller that stops itself over a fatal fault fails every later
+    // submit with a bare "controller shut down". Kafka's process halts on that
+    // fault with its message, so that message is what a failed start reports.
+    join_metadata_quorum(config, &controller.0, bootstrap_records)
+        .await
+        .map_err(|error| {
+            controller
+                .0
+                .watch_fatal()
+                .borrow()
+                .clone()
+                .map_or(error, BrokerError::Startup)
+        })?;
+    Ok((controller.0, controller.1, audit_cell))
+}
+
+/// Waits for the metadata leader, then seeds the log and registers this node
+/// with it.
+async fn join_metadata_quorum(
+    config: &mut BrokerConfig,
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
+) -> Result<(), BrokerError> {
+    wait_for_metadata_leader(&**controller, config.startup_leader_wait_timeout.to_std()).await?;
     if config.is_controller() || config.is_broker() {
         config.incarnation_id = crate::incarnation::load_or_generate(&config.log_dir);
         // Spend the clean-shutdown proof the last stop left, if it left one.
@@ -388,13 +417,13 @@ pub(super) async fn start_metadata_phase(
         // `register_broker` tell a graceful restart from a crash.
         config.previous_broker_epoch = crate::clean_shutdown::take(&config.log_dir);
     }
-    submit_bootstrap_records(config, &*controller.0, bootstrap_records).await?;
-    register_controller(config, &*controller.0).await?;
-    if let Some(epoch) = register_broker(config, &*controller.0).await? {
+    submit_bootstrap_records(config, &**controller, bootstrap_records).await?;
+    register_controller(config, &**controller).await?;
+    if let Some(epoch) = register_broker(config, &**controller).await? {
         config.broker_epoch = epoch;
     }
-    spawn_deferred_controller_registration(config, &controller.0);
-    Ok((controller.0, controller.1, audit_cell))
+    spawn_deferred_controller_registration(config, controller);
+    Ok(())
 }
 
 #[cfg(test)]

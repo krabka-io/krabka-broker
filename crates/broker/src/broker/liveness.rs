@@ -105,6 +105,40 @@ fn spawn_leadership_watcher(
     });
 }
 
+/// Latches `should_shutdown` when the controller this node hosts stops itself
+/// over a fatal fault, such as a replay of a feature level that it does not
+/// support. Kafka's `ProcessTerminatingFaultHandler` halts the process on that
+/// fault; a library cannot, so this is the seam that hands the decision to the
+/// embedder, the same one the KIP-112 all-log-dirs-offline stop uses. The
+/// binary reads the reason back through `BrokerHandle::fatal_fault` and exits
+/// non-zero. A fault that fired before this task started is still seen, since a
+/// `watch` channel keeps its last value.
+fn spawn_fatal_fault_watcher(
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    shutdown: CancellationToken,
+) {
+    let mut faults = controller.watch_fatal();
+    tokio::spawn(async move {
+        let fault = tokio::select! {
+            () = shutdown.cancelled() => return,
+            fault = async {
+                faults
+                    .wait_for(Option::is_some)
+                    .await
+                    .ok()
+                    .and_then(|fault| fault.clone())
+            } => fault,
+        };
+        // No fault: the source closed the channel, as a controller does when it
+        // stops in an orderly way, or as a source without a controller does at
+        // once.
+        let Some(fault) = fault else { return };
+        tracing::error!(%fault, "Encountered fatal fault: the metadata controller stopped; shutting the broker down");
+        let _ = should_shutdown.send(true);
+    });
+}
+
 pub(super) struct LivenessStartup {
     pub(super) liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
     pub(super) want_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
@@ -198,6 +232,11 @@ pub(super) fn start_liveness_services(
         Arc::clone(&liveness),
         config.node_id,
         metrics.clone(),
+        shutdown.child_token(),
+    );
+    spawn_fatal_fault_watcher(
+        controller,
+        Arc::clone(&should_shutdown),
         shutdown.child_token(),
     );
     LivenessStartup {
