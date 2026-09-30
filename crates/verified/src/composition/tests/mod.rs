@@ -77,3 +77,5 @@ mod wal_placement;
 mod epoch_replay;
 
 mod offset_seek;
+
+mod constructed_tiered_timestamp;

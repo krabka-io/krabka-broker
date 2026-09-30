@@ -200,3 +200,12 @@ use consume_trace::metered_consumes_conserve_elapsed_credit;
 
 mod stable_abort;
 use stable_abort::stable_abort_sources_cover_fetch;
+
+// Complete ordered relative offsets, decoded timestamps, sparse (indexed, through) rows.
+type SparseTimestampWindow<'a> = (&'a [u32], &'a [i64], &'a [(usize, usize)]);
+
+mod retained_timestamp;
+use retained_timestamp::constructed_index_retained_candidate;
+
+mod constructed_tiered_timestamp;
+use constructed_tiered_timestamp::constructed_tiered_timestamp_preserves_first;
