@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_isr_maintenance_selected": { "prover": "alt-ergo", "time": 0.029 }
-    }
-  }
-}

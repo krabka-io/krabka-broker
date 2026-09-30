@@ -1,0 +1,128 @@
+(* #"/workspace/crates/verified/src/quota.rs" 27 0 27 85 *)
+
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span squota = "/workspace/crates/verified/src/quota.rs" 28 17 28 33
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 31 21 31 36
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 33 24 33 25
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 29 29 34 5
+let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 35 22 35 35
+let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 21 10 21 29
+let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 22 10 22 77
+let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 23 10 24 69
+let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 25 10 25 80
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+let min_u64 (self_: UInt64.t) (o: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:min_u64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_u64 result
+      <= deep_model_u64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_u64 result <= deep_model_u64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_u64 self_ < deep_model_u64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_u64 o <= deep_model_u64 self_ -> result = o)}
+    (! return {result}) ]
+
+type t_AvailableTokens = { f0: UInt64.t }
+
+type t_RefillTokens = { f0'0: UInt64.t }
+
+type t_BurstCapacity = { f0'1: UInt64.t }
+
+type t_RequestedTokens = { f0'2: UInt64.t }
+
+type t_GrantedTokens = { f0'3: UInt64.t }
+
+type t_NewAvailable = { f0'4: UInt64.t }
+
+type tup2_GrantedTokens_NewAvailable = { f0'5: t_GrantedTokens; f1'5: t_NewAvailable }
+
+function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+ = [%#sthrottle'3] if available + refill <= burst then available + refill else burst
+
+let plan_consume (available: t_AvailableTokens) (refill: t_RefillTokens) (burst: t_BurstCapacity)
+  (requested: t_RequestedTokens) (return (x: tup2_GrantedTokens_NewAvailable)) = any
+  [ return (result: tup2_GrantedTokens_NewAvailable) ->
+  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#sthrottle] UInt64.t'int result.f0'5.f0'3
+      <= UInt64.t'int requested.f0'2)
+    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#sthrottle'0] UInt64.t'int result.f1'5.f0'4
+      <= UInt64.t'int burst.f0'1)
+    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#sthrottle'1] UInt64.t'int result.f0'5.f0'3
+        + UInt64.t'int result.f1'5.f0'4
+      = capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1))
+    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#sthrottle'2] UInt64.t'int result.f0'5.f0'3
+    = (if UInt64.t'int requested.f0'2
+    <= capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1) then
+      UInt64.t'int requested.f0'2
+    else
+      capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1)
+    ))}
+    (! return {result}) ]
+
+type tup2_u64_u64 = { f0'6: UInt64.t; f1'6: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let quota_credit [#"/workspace/crates/verified/src/quota.rs" 27 0 27 85] (available: UInt64.t)
+  (debt: UInt64.t) (credit: UInt64.t) (burst: UInt64.t) (return (x: tup2_u64_u64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = min_u64 [%#squota] {credit} {debt} (fun (_x: UInt64.t) -> [ &repaid <- _x ] s1)
+    | s1 = [ &_23 <- { f0 = available } ] s2
+    | s2 = UInt64.sub [%#squota'0] {credit} {repaid} (fun (_x: UInt64.t) -> [ &_26 <- _x ] s3)
+    | s3 = [ &_25 <- { f0'0 = _26 } ] s4
+    | s4 = [ &_29 <- { f0'1 = burst } ] s5
+    | s5 = [ &_31 <- { f0'2 = ([%#squota'1] (0: UInt64.t)) } ] s6
+    | s6 = plan_consume [%#squota'2] {_23} {_25} {_29} {_31}
+        (fun (_x: tup2_GrantedTokens_NewAvailable) -> [ &_22 <- _x ] s7)
+    | s7 = [ &new_available <- _22.f1'5 ] s8
+    | s8 = UInt64.sub [%#squota'3] {debt} {repaid} (fun (_x: UInt64.t) -> [ &_33 <- _x ] s9)
+    | s9 = [ &_ret <- { f0'6 = new_available.f0'4; f1'6 = _33 } ] s10
+    | s10 = return {_ret} ] ]
+  [ & _ret: tup2_u64_u64 = Any.any_l ()
+  | & available: UInt64.t = available
+  | & debt: UInt64.t = debt
+  | & credit: UInt64.t = credit
+  | & burst: UInt64.t = burst
+  | & repaid: UInt64.t = Any.any_l ()
+  | & new_available: t_NewAvailable = Any.any_l ()
+  | & _22: tup2_GrantedTokens_NewAvailable = Any.any_l ()
+  | & _23: t_AvailableTokens = Any.any_l ()
+  | & _25: t_RefillTokens = Any.any_l ()
+  | & _26: UInt64.t = Any.any_l ()
+  | & _29: t_BurstCapacity = Any.any_l ()
+  | & _31: t_RequestedTokens = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l () ])
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:quota_credit ensures] ([@stop_split] [@expl:quota_credit ensures #0] [%#squota'4] UInt64.t'int result.f0'6
+      <= UInt64.t'int burst)
+    /\ ([@stop_split] [@expl:quota_credit ensures #1] [%#squota'5] UInt64.t'int result.f1'6
+      = UInt64.t'int debt
+      - (if UInt64.t'int debt <= UInt64.t'int credit then UInt64.t'int debt else UInt64.t'int credit))
+    /\ ([@stop_split] [@expl:quota_credit ensures #2] [%#squota'6] UInt64.t'int result.f0'6
+      = capped (UInt64.t'int available) (UInt64.t'int credit
+      - (if UInt64.t'int debt <= UInt64.t'int credit then
+        UInt64.t'int debt
+      else
+        UInt64.t'int credit
+      )) (UInt64.t'int burst))
+    /\ ([@stop_split] [@expl:quota_credit ensures #3] [%#squota'7] UInt64.t'int available = 0 \/ UInt64.t'int debt = 0
+    -> UInt64.t'int result.f0'6 = 0 \/ UInt64.t'int result.f1'6 = 0)}
+    (! return {result}) ]

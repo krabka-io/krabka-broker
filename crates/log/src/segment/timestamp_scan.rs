@@ -67,6 +67,23 @@ impl Segment {
         scan_window: ByteSize,
         limit: Option<ByteSize>,
     ) -> Result<Option<(Offset, i64)>, LogError> {
+        self.offset_for_timestamp_with_window_from(target_ts, scan_window, limit, self.base_offset)
+    }
+
+    /// The bounded timestamp scan, excluding records below `minimum`, even
+    /// when the first decoded batch covers that floor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogError::RecordTooLarge`] when the scan reads a compressed
+    /// record above `limit`.
+    pub(crate) fn offset_for_timestamp_with_window_from(
+        &self,
+        target_ts: i64,
+        scan_window: ByteSize,
+        limit: Option<ByteSize>,
+        minimum: Offset,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
         let floor_rel = self.time_index.scan_start(target_ts);
         let Some(scan_from) = self
             .base_offset
@@ -76,7 +93,13 @@ impl Segment {
         else {
             return Ok(None);
         };
-        self.scan_from_floor_windowed(scan_from, scan_window, target_ts, limit)
+        self.scan_from_floor_windowed_from(
+            scan_from.max(minimum),
+            scan_window,
+            target_ts,
+            limit,
+            minimum,
+        )
     }
 
     /// [`Segment::offset_of_max_timestamp_with_window`] over the default window
@@ -159,7 +182,7 @@ impl Segment {
                 if let Some(index) = krabka_verified::earliest_max_timestamp_index(&timestamps) {
                     let candidate = records[index];
                     if best.is_none_or(|(_, best_timestamp)| candidate.1 > best_timestamp) {
-                        best = Some(candidate);
+                        best = Some((Offset(candidate.0), candidate.1));
                     }
                 }
             }
@@ -199,6 +222,23 @@ impl Segment {
         target_ts: i64,
         limit: Option<ByteSize>,
     ) -> Result<Option<(Offset, i64)>, LogError> {
+        self.scan_from_floor_windowed_from(
+            floor_offset,
+            window_size,
+            target_ts,
+            limit,
+            self.base_offset,
+        )
+    }
+
+    fn scan_from_floor_windowed_from(
+        &self,
+        floor_offset: Offset,
+        window_size: ByteSize,
+        target_ts: i64,
+        limit: Option<ByteSize>,
+        minimum: Offset,
+    ) -> Result<Option<(Offset, i64)>, LogError> {
         let mut cursor = floor_offset;
         let mut window = window_size.max(bytes(1));
         loop {
@@ -225,14 +265,15 @@ impl Segment {
                 let Some(records) = Self::timestamp_records(batch) else {
                     return Ok(None);
                 };
-                let timestamps: Vec<_> = records.iter().map(|(_, timestamp)| *timestamp).collect();
-                let found = krabka_verified::first_timestamp_index(&timestamps, target_ts);
+                let found = krabka_verified::timestamp::first_timestamp_record_index(
+                    &records, minimum.0, target_ts,
+                );
                 if batch.max_timestamp >= target_ts {
                     let read = found.map_or(batch.records.len(), |index| index + 1);
                     check_records_read(batch, read, limit)?;
                 }
                 if let Some(index) = found {
-                    return Ok(Some(records[index]));
+                    return Ok(Some((Offset(records[index].0), records[index].1)));
                 }
             }
             // No match in this window; resume just past the last batch
@@ -262,28 +303,24 @@ impl Segment {
     /// batch whenever the timestamp-type bit is set. A scan that read the
     /// deltas on such a batch would answer `ListOffsets` in producer time on a
     /// topic whose whole point is that it answers in append time.
-    fn timestamp_records(batch: &RecordBatch) -> Option<Vec<(Offset, i64)>> {
-        let log_append_time = batch.attributes.timestamp_type() == TimestampType::LogAppendTime;
+    fn timestamp_records(batch: &RecordBatch) -> Option<Vec<(i64, i64)>> {
+        let append_time = (batch.attributes.timestamp_type() == TimestampType::LogAppendTime)
+            .then_some(batch.max_timestamp);
         batch
             .records
             .iter()
             .map(|record| {
+                let timestamp = krabka_verified::timestamp::timestamp_record_time(
+                    batch.base_timestamp,
+                    record.timestamp_delta,
+                    append_time,
+                )?;
                 krabka_verified::timestamp_record_coordinates(
                     batch.base_offset,
                     record.offset_delta,
-                    batch.base_timestamp,
-                    record.timestamp_delta,
+                    timestamp,
+                    0,
                 )
-                .map(|(offset, timestamp)| {
-                    (
-                        Offset(offset),
-                        if log_append_time {
-                            batch.max_timestamp
-                        } else {
-                            timestamp
-                        },
-                    )
-                })
             })
             .collect()
     }
@@ -450,6 +487,15 @@ mod tests {
 
         assert2::assert!(Segment::timestamp_records(&offset_overflow).is_none());
         assert2::assert!(Segment::timestamp_records(&timestamp_overflow).is_none());
+        let mut append_time = timestamp_overflow;
+        append_time.attributes = append_time
+            .attributes
+            .with_timestamp_type(TimestampType::LogAppendTime);
+        append_time.max_timestamp = 2_400;
+        assert2::assert!(Segment::timestamp_records(&append_time) == Some(vec![(0, 2_400)]));
+        append_time.base_offset = i64::MAX;
+        append_time.records[0].offset_delta = 1;
+        assert2::assert!(Segment::timestamp_records(&append_time).is_none());
     }
 
     #[test]

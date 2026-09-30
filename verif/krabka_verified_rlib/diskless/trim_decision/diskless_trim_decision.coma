@@ -1,0 +1,139 @@
+(* #"/workspace/crates/verified/src/diskless/trim_decision.rs" 166 0 171 25 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span scmp'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span strim_decision = "/workspace/crates/verified/src/diskless/trim_decision.rs" 172 18 172 19
+let%span strim_decision'0 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 172 40 172 41
+let%span strim_decision'1 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 172 61 172 62
+let%span strim_decision'2 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 174 25 174 30
+let%span strim_decision'3 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 179 36 179 37
+let%span strim_decision'4 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 179 21 179 38
+let%span strim_decision'5 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 182 25 182 30
+let%span strim_decision'6 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 187 30 187 57
+let%span strim_decision'7 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 187 17 187 58
+let%span strim_decision'8 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 190 25 190 30
+let%span strim_decision'9 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 195 25 195 29
+let%span strim_decision'10 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 149 10 155 1
+let%span strim_decision'11 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 156 10 160 1
+let%span strim_decision'12 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 161 10 161 42
+let%span strim_decision'13 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 162 10 162 60
+let%span strim_decision'14 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 163 10 164 70
+let%span strim_decision'15 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 130 16 130 61
+let%span strim_decision'16 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 139 8 139 84
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_DisklessTrimDecision = { should_trim: bool; target: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let max_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:max_i64 ensures] ([@stop_split] [@expl:max ensures #0] [%#scmp] ge_log_Int (deep_model_i64 result) (deep_model_i64 self_))
+    /\ ([@stop_split] [@expl:max ensures #1] [%#scmp'0] ge_log_Int (deep_model_i64 result) (deep_model_i64 o))
+    /\ ([@stop_split] [@expl:max ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:max ensures #3] [%#scmp'2] deep_model_i64 self_ <= deep_model_i64 o -> result = o)
+    /\ ([@stop_split] [@expl:max ensures #4] [%#scmp'3] deep_model_i64 o < deep_model_i64 self_ -> result = self_)}
+    (! return {result}) ]
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp'4] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'5] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'6] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'7] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'8] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
+function effective_trim_lag [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 129 0 129 45] (safety_lag: Int64.t) : int
+ = [%#strim_decision'15] if Int64.to_int safety_lag < 0 then 0 else Int64.to_int safety_lag
+
+function trim_target [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 137 0 137 74] (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) : int
+ = [%#strim_decision'16] let high_watermark_floor = Int64.to_int high_watermark
+  - effective_trim_lag safety_lag in if Int64.to_int frontier < high_watermark_floor then
+    Int64.to_int frontier
+  else
+    high_watermark_floor
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let diskless_trim_decision [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 166 0 171 25]
+  (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) (current_start: Int64.t)
+  (return (x: t_DisklessTrimDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_23 <- Int64.lt frontier ([%#strim_decision] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_25 <- Int64.lt high_watermark ([%#strim_decision'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb4) | br1 -> {_25} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_27 <- Int64.lt current_start ([%#strim_decision'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb7) | br1 -> {_27} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#strim_decision'2] false); target = current_start } ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = max_i64 [%#strim_decision'4] {safety_lag} {[%#strim_decision'3] (0: Int64.t)}
+        (fun (_x: Int64.t) -> [ &safety_lag'0 <- _x ] s1)
+    | s1 = [ &_34 <- Int64.gt safety_lag'0 high_watermark ] s2
+    | s2 = any [ br0 -> {_34 = false} (! bb10) | br1 -> {_34} (! bb9) ] ]
+  | bb9 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#strim_decision'5] false); target = current_start } ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = Int64.sub [%#strim_decision'6] {high_watermark} {safety_lag'0} (fun (_x: Int64.t) -> [ &_41 <- _x ] s1)
+    | s1 = min_i64 [%#strim_decision'7] {frontier} {_41} (fun (_x: Int64.t) -> [ &target'0 <- _x ] s2)
+    | s2 = [ &_44 <- Int64.le target'0 current_start ] s3
+    | s3 = any [ br0 -> {_44 = false} (! bb13) | br1 -> {_44} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#strim_decision'8] false); target = current_start } ] s1 | s1 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#strim_decision'9] true); target = target'0 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DisklessTrimDecision = Any.any_l ()
+  | & frontier: Int64.t = frontier
+  | & high_watermark: Int64.t = high_watermark
+  | & safety_lag: Int64.t = safety_lag
+  | & current_start: Int64.t = current_start
+  | & _23: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & safety_lag'0: Int64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & target'0: Int64.t = Any.any_l ()
+  | & _41: Int64.t = Any.any_l ()
+  | & _44: bool = Any.any_l () ])
+  [ return (result: t_DisklessTrimDecision) ->
+  {[@stop_split] [@expl:diskless_trim_decision ensures] ([@stop_split] [@expl:diskless_trim_decision ensures #0] [%#strim_decision'10] result.should_trim
+      = (ge_log_Int (Int64.to_int frontier) 0
+      /\ ge_log_Int (Int64.to_int high_watermark) 0
+      /\ ge_log_Int (Int64.to_int current_start) 0
+      /\ effective_trim_lag safety_lag <= Int64.to_int high_watermark
+      /\ Int64.to_int current_start < trim_target frontier high_watermark safety_lag))
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #1] [%#strim_decision'11] Int64.to_int result.target
+      = (if result.should_trim then trim_target frontier high_watermark safety_lag else Int64.to_int current_start))
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #2] [%#strim_decision'12] ge_log_Int (Int64.to_int result.target) (Int64.to_int current_start))
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #3] [%#strim_decision'13] result.should_trim
+      -> Int64.to_int result.target <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #4] [%#strim_decision'14] result.should_trim
+    -> Int64.to_int result.target + effective_trim_lag safety_lag <= Int64.to_int high_watermark)}
+    (! return {result}) ]

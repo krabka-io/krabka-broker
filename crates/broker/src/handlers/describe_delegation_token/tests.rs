@@ -424,39 +424,76 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
 
 /// KIP-373: `DescribeTokens` on `User:<owner>` grants every token that owner
 /// holds, and nothing of another owner's (Kafka's `authorizeRequester`).
+/// `CreateTokens` grants no description access, deny wins, and a resource ACL
+/// for an unrelated principal suppresses the no-ACL default on that owner.
 #[tokio::test]
 async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
-    seed_token(&controller, "t-a1", kp("alice"), vec![]).await;
-    seed_token(&controller, "t-a2", kp("alice"), vec![]).await;
-    seed_token(&controller, "t-c", kp("carol"), vec![]).await;
-    seed_acl(
-        &controller,
-        AclEntry {
-            resource_type: ResourceType::User,
-            resource_name: "User:alice".into(),
-            pattern_type: PatternType::Literal,
-            principal: "User:bob".into(),
-            host: "*".into(),
-            operation: AclOperation::DescribeTokens,
-            permission_type: PermissionType::Allow,
-        },
-    )
-    .await;
-
-    let resp = handle(
-        &no_owner_filter(),
-        &authed("bob"),
-        Some(&secret),
-        &*controller,
-        &peer(),
-        &simple_authz(),
+    use AclOperation::{All, CreateTokens, DescribeTokens};
+    use PermissionType::{Allow, Deny};
+    type Case = (
+        &'static [(AclOperation, PermissionType)],
+        &'static str,
+        bool,
+        &'static [&'static str],
     );
-    assert!(resp.error_code == 0);
-    assert!(token_ids(&resp) == std::collections::HashSet::from(["t-a1", "t-a2"]));
-    controller.cancel().await;
+    let cases: &[Case] = &[
+        (&[(DescribeTokens, Allow)], "bob", false, &["t-a1", "t-a2"]),
+        (&[(CreateTokens, Allow)], "bob", false, &[]),
+        (
+            &[(CreateTokens, Deny), (DescribeTokens, Allow)],
+            "bob",
+            false,
+            &["t-a1", "t-a2"],
+        ),
+        (&[(All, Allow), (DescribeTokens, Deny)], "bob", false, &[]),
+        (&[(DescribeTokens, Allow)], "mallory", true, &["t-c"]),
+    ];
+    for &(operations, principal, default_allow, expected) in cases {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let secret = SecretBytes::new(b"k".to_vec());
+        seed_token(&controller, "t-a1", kp("alice"), vec![]).await;
+        seed_token(&controller, "t-a2", kp("alice"), vec![]).await;
+        seed_token(&controller, "t-c", kp("carol"), vec![]).await;
+        // Isolate the User-owner grant from the independent exact-token path.
+        let mut token_deny = describe_token_acl("*", "*");
+        token_deny.permission_type = Deny;
+        seed_acl(&controller, token_deny).await;
+        for &(operation, permission_type) in operations {
+            seed_acl(
+                &controller,
+                AclEntry {
+                    resource_type: ResourceType::User,
+                    resource_name: "User:alice".into(),
+                    pattern_type: PatternType::Literal,
+                    principal: format!("User:{principal}"),
+                    host: "*".into(),
+                    operation,
+                    permission_type,
+                },
+            )
+            .await;
+        }
+        let authorizer = simple_authz().with_allow_everyone_if_no_acl_found(default_allow);
+        let resp = handle(
+            &no_owner_filter(),
+            &authed("bob"),
+            Some(&secret),
+            &*controller,
+            &peer(),
+            &authorizer,
+        );
+        assert!(resp.error_code == 0);
+        assert!(
+            token_ids(&resp)
+                == expected
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>(),
+            "{operations:?}, {principal}, default={default_allow}"
+        );
+        controller.cancel().await;
+    }
 }
 
 /// A caller with no owner/renewer relationship and no matching ACL sees

@@ -1,0 +1,165 @@
+(* #"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 70 0 74 26 *)
+
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
+let%span soption'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 76 11 76 38
+let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 77 11 77 41
+let%span smetadata_record_offset_deltas'1 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 79 11 79 36
+let%span smetadata_record_offset_deltas'2 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 82 14 82 54
+let%span smetadata_record_offset_deltas'3 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 83 11 83 54
+let%span smetadata_record_offset_deltas'4 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 84 11 84 49
+let%span smetadata_record_offset_deltas'5 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 49 28 50 41
+let%span smetadata_record_offset_deltas'6 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 51 28 52 84
+let%span smetadata_record_offset_deltas'7 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 53 28 54 68
+let%span smetadata_record_offset_deltas'8 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 55 28 58 34
+let%span smetadata_record_offset_deltas'9 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 59 28 63 31
+let%span smetadata_record_offset_deltas'10 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 64 28 68 32
+let%span smetadata_record_offset_deltas'11 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 34 8 38 38
+let%span smetadata_record_offset_deltas'12 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 15 8 19 34
+
+use creusot.int.UInt64
+use creusot.int.UInt32
+use creusot.prelude.Any
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_FetchFence = {
+  discovering: bool;
+  role_leader: t_Option_u64;
+  current_leader: t_Option_u64;
+  current_epoch: UInt32.t }
+
+let is_none_u64 (self_: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_none ensures] [%#soption] result = (self_ = None)}
+    (! return {result}) ]
+
+type t_FetchResponseFacts = { from: UInt64.t; leader: t_Option_u64; epoch: UInt32.t; error_none: bool }
+
+let is_some_u64 (self_: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_some ensures] [%#soption'0] result = (self_ <> None)}
+    (! return {result}) ]
+
+type t_FetchResponseMutation = Reject | Discover | Snapshot | Truncate | Append | HighWatermark
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+function deep_model_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int = [%#soption'1] match self with
+    | Some t -> Some'0 (deep_model_u64 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_u64
+
+function deep_model_ref_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int =
+  [%#smodel] deep_model_Option_u64 self
+
+meta "rewrite_def" function deep_model_ref_Option_u64
+
+let ne_Option_u64 (self_: t_Option_u64) (rhs: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_u64 self_ <> deep_model_ref_Option_u64 rhs)}
+    (! return {result}) ]
+
+type t_FetchContent = { has_snapshot: bool; has_divergence: bool; has_records: bool }
+
+predicate discovery_applies [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 32 0 32 81] (fence: t_FetchFence) (response: t_FetchResponseFacts) =
+  [%#smetadata_record_offset_deltas'11] fence.discovering
+  /\ fence.role_leader = None
+  /\ fence.current_leader = None /\ response.epoch = fence.current_epoch /\ response.leader <> None
+
+predicate leader_fence_holds [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 13 0 13 82] (fence: t_FetchFence) (response: t_FetchResponseFacts) =
+  [%#smetadata_record_offset_deltas'12] fence.role_leader = Some (response.from)
+  /\ fence.current_leader = Some (response.from)
+  /\ response.leader = Some (response.from) /\ response.epoch = fence.current_epoch /\ response.error_none
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let fetch_response_mutation [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 70 0 74 26]
+  (fence: t_FetchFence) (response: t_FetchResponseFacts) (content: t_FetchContent)
+  (return (x: t_FetchResponseMutation)) = (! bb0
+  [ bb0 = any [ br0 -> {fence.discovering = false} (! bb13) | br1 -> {fence.discovering} (! bb1) ]
+  | bb1 = s0
+    [ s0 = is_none_u64 [%#smetadata_record_offset_deltas] {fence.role_leader} (fun (_x: bool) -> [ &_32 <- _x ] s1)
+    | s1 = any [ br0 -> {_32 = false} (! bb13) | br1 -> {_32} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = is_none_u64 [%#smetadata_record_offset_deltas'0] {fence.current_leader} (fun (_x: bool) -> [ &_34 <- _x ] s1)
+    | s1 = any [ br0 -> {_34 = false} (! bb13) | br1 -> {_34} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = [ &_36 <- response.epoch = fence.current_epoch ] s1
+    | s1 = any [ br0 -> {_36 = false} (! bb13) | br1 -> {_36} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = is_some_u64 [%#smetadata_record_offset_deltas'1] {response.leader} (fun (_x: bool) -> [ &_39 <- _x ] s1)
+    | s1 = any [ br0 -> {_39 = false} (! bb13) | br1 -> {_39} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Discover ] s1 | s1 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = [ &_44 <- Some (response.from) ] s1
+    | s1 = ne_Option_u64 [%#smetadata_record_offset_deltas'2] {fence.role_leader} {_44}
+        (fun (_x: bool) -> [ &_41 <- _x ] s2)
+    | s2 = any [ br0 -> {_41 = false} (! bb16) | br1 -> {_41} (! bb25) ] ]
+  | bb16 = s0
+    [ s0 = [ &_49 <- Some (response.from) ] s1
+    | s1 = ne_Option_u64 [%#smetadata_record_offset_deltas'3] {fence.current_leader} {_49}
+        (fun (_x: bool) -> [ &_46 <- _x ] s2)
+    | s2 = any [ br0 -> {_46 = false} (! bb19) | br1 -> {_46} (! bb25) ] ]
+  | bb19 = s0
+    [ s0 = [ &_54 <- Some (response.from) ] s1
+    | s1 = ne_Option_u64 [%#smetadata_record_offset_deltas'4] {response.leader} {_54}
+        (fun (_x: bool) -> [ &_51 <- _x ] s2)
+    | s2 = any [ br0 -> {_51 = false} (! bb22) | br1 -> {_51} (! bb25) ] ]
+  | bb22 = s0
+    [ s0 = [ &_56 <- response.epoch <> fence.current_epoch ] s1
+    | s1 = any [ br0 -> {_56 = false} (! bb24) | br1 -> {_56} (! bb25) ] ]
+  | bb24 = any [ br0 -> {response.error_none = false} (! bb25) | br1 -> {response.error_none} (! bb26) ]
+  | bb26 = any [ br0 -> {content.has_snapshot = false} (! bb28) | br1 -> {content.has_snapshot} (! bb27) ]
+  | bb27 = s0 [ s0 = [ &_ret <- Snapshot ] s1 | s1 = return {_ret} ]
+  | bb28 = any [ br0 -> {content.has_divergence = false} (! bb30) | br1 -> {content.has_divergence} (! bb29) ]
+  | bb29 = s0 [ s0 = [ &_ret <- Truncate ] s1 | s1 = return {_ret} ]
+  | bb30 = any [ br0 -> {content.has_records = false} (! bb32) | br1 -> {content.has_records} (! bb31) ]
+  | bb31 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb32 = s0 [ s0 = [ &_ret <- HighWatermark ] s1 | s1 = return {_ret} ]
+  | bb25 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FetchResponseMutation = Any.any_l ()
+  | & fence: t_FetchFence = fence
+  | & response: t_FetchResponseFacts = response
+  | & content: t_FetchContent = content
+  | & _32: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _44: t_Option_u64 = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _49: t_Option_u64 = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _54: t_Option_u64 = Any.any_l ()
+  | & _56: bool = Any.any_l () ])
+  [ return (result: t_FetchResponseMutation) ->
+  {[@stop_split] [@expl:fetch_response_mutation ensures] ([@stop_split] [@expl:fetch_response_mutation ensures #0] [%#smetadata_record_offset_deltas'5] (result
+        = Discover)
+      = discovery_applies fence response)
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #1] [%#smetadata_record_offset_deltas'6] (result = Reject)
+      = (not discovery_applies fence response /\ not leader_fence_holds fence response))
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #2] [%#smetadata_record_offset_deltas'7] (result
+        = Snapshot)
+      = (leader_fence_holds fence response /\ content.has_snapshot))
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #3] [%#smetadata_record_offset_deltas'8] (result
+        = Truncate)
+      = (leader_fence_holds fence response /\ not content.has_snapshot /\ content.has_divergence))
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #4] [%#smetadata_record_offset_deltas'9] (result = Append)
+      = (leader_fence_holds fence response
+      /\ not content.has_snapshot /\ not content.has_divergence /\ content.has_records))
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #5] [%#smetadata_record_offset_deltas'10] (result
+      = HighWatermark)
+    = (leader_fence_holds fence response
+    /\ not content.has_snapshot /\ not content.has_divergence /\ not content.has_records))}
+    (! return {result}) ]

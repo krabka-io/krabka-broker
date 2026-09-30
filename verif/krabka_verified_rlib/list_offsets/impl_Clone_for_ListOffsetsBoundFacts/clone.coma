@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/list_offsets.rs" 88 27 88 32 *)
+(* #"/workspace/crates/verified/src/list_offsets.rs" 34 27 34 32 *)
 
 (* <list_offsets::ListOffsetsBoundFacts as std::clone::Clone> *)
 
@@ -18,7 +18,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ListOffsetsBoundFacts [#"/workspace/crates/verified/src/list_offsets.rs" 88 27 88 32]
+let clone_ListOffsetsBoundFacts [#"/workspace/crates/verified/src/list_offsets.rs" 34 27 34 32]
   (self: t_ListOffsetsBoundFacts) (return (x: t_ListOffsetsBoundFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ListOffsetsBoundFacts = Any.any_l () | & self: t_ListOffsetsBoundFacts = self ])

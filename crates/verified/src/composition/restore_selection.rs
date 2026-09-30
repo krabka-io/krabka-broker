@@ -1,0 +1,97 @@
+use creusot_std::prelude::*;
+
+use super::{
+    RestoreBatchFrame, RestoreExclusions, RestoreFilterDecision, RestoreRecordDeltas,
+    local_append_coordinates, restore_batch_filter_decision, restore_record_coordinates,
+    restore_record_selected,
+};
+
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn selection_input_valid(
+    frame: RestoreBatchFrame,
+    records: Seq<(RestoreRecordDeltas, RestoreExclusions)>,
+) -> bool {
+    pearlite! { frame.base_offset@ >= 0 && frame.last_offset_delta@ >= 0
+    && frame.base_offset@ + frame.last_offset_delta@ + 1 <= i64::MAX@
+    && forall<i: Int> 0 <= i && i < records.len()
+        ==> crate::restore::restore_record_placeable(frame, records[i].0) }
+}
+
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn restore_source_selected(
+    frame: RestoreBatchFrame,
+    row: (RestoreRecordDeltas, RestoreExclusions),
+    offset_bound: Option<i64>,
+    timestamp_bound: Option<i64>,
+) -> bool {
+    pearlite! {
+        (match offset_bound { Some(bound) => frame.base_offset@ + row.0.offset_delta@ <= bound@, None => true })
+        && (match timestamp_bound { Some(bound) => crate::restore::kafka_record_timestamp(frame, row.0) < bound@, None => true })
+        && !(row.1.producer || row.1.offset || row.1.content.key || row.1.content.header)
+    }
+}
+
+/// Return the original indices of exactly every selected record, in source
+/// order, alongside the complete archived span and whole-batch decision.
+/// Invalid coordinates reject the complete input, including excluded rows.
+#[ensures(match result {
+    None => !selection_input_valid(frame, records@),
+    Some((next, decision, selected)) => selection_input_valid(frame, records@)
+        && next@ == frame.base_offset@ + frame.last_offset_delta@ + 1
+        && selected@.len() <= records@.len()
+        && (forall<i: Int> 0 <= i && i < selected@.len() ==> selected@[i]@ < records@.len())
+        && (forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len() ==> selected@[i]@ < selected@[j]@)
+        && (forall<i: Int> 0 <= i && i < records@.len() ==>
+            (exists<j: Int> 0 <= j && j < selected@.len() && selected@[j]@ == i)
+                == restore_source_selected(frame, records@[i], offset_bound, timestamp_bound))
+        && (forall<i: Int> 0 <= i && i < selected@.len() ==>
+            restore_source_selected(frame, records@[selected@[i]@], offset_bound, timestamp_bound)
+            && frame.base_offset@ <= frame.base_offset@ + records@[selected@[i]@].0.offset_delta@
+            && frame.base_offset@ + records@[selected@[i]@].0.offset_delta@ < next@)
+        && decision == if selected@.len() == records@.len() { RestoreFilterDecision::Keep }
+            else if selected@.len() == 0 { RestoreFilterDecision::Empty }
+            else { RestoreFilterDecision::Filter },
+})]
+pub(super) fn restore_selection_respects_batch_extent(
+    frame: RestoreBatchFrame,
+    records: &[(RestoreRecordDeltas, RestoreExclusions)],
+    offset_bound: Option<i64>,
+    timestamp_bound: Option<i64>,
+) -> Option<(i64, RestoreFilterDecision, Vec<usize>)> {
+    let (_, next) = local_append_coordinates(
+        frame.base_offset,
+        frame.base_offset,
+        frame.last_offset_delta,
+    )?;
+    let mut selected: Vec<usize> = Vec::new();
+    let mut i = 0usize;
+    #[invariant(i@ <= records@.len() && selected@.len() <= i@)]
+    #[invariant(selection_input_valid(frame, records@.subsequence(0, i@)))]
+    #[invariant(forall<j: Int> 0 <= j && j < selected@.len() ==> selected@[j]@ < i@)]
+    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < selected@.len() ==> selected@[j]@ < selected@[k]@)]
+    #[invariant(forall<j: Int> 0 <= j && j < selected@.len() ==>
+        restore_source_selected(frame, records@[selected@[j]@], offset_bound, timestamp_bound)
+        && frame.base_offset@ <= frame.base_offset@ + records@[selected@[j]@].0.offset_delta@
+        && frame.base_offset@ + records@[selected@[j]@].0.offset_delta@ < next@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
+        (exists<k: Int> 0 <= k && k < selected@.len() && selected@[k]@ == j)
+            == restore_source_selected(frame, records@[j], offset_bound, timestamp_bound))]
+    #[variant(records@.len() - i@)]
+    while i < records.len() {
+        let (record, exclusions) = records[i];
+        let (offset, timestamp) = restore_record_coordinates(frame, record)?;
+        if restore_record_selected(offset, offset_bound, timestamp, timestamp_bound, exclusions) {
+            selected.push(i);
+        }
+        i += 1;
+    }
+    let kept = selected.len();
+    let decision = restore_batch_filter_decision(kept > 0, kept < records.len());
+    Some((next, decision, selected))
+}

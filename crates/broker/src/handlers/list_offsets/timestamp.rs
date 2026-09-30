@@ -1,8 +1,8 @@
 //! The lookup for a positive request timestamp.
 //!
 //! KIP-405 puts the oldest records in the remote tier, so a by-timestamp
-//! lookup asks the remote tier first and falls back to the local log's time
-//! index (KIP-734) when the remote tier holds nothing for the timestamp.
+//! lookup asks the remote tier first, then compares overlapping local records
+//! so an upload gap cannot hide an earlier match.
 
 use std::{future::Future, time::Duration};
 
@@ -33,6 +33,12 @@ pub(super) async fn resolve_timestamp_offset(
     timestamp: i64,
     remote_timeout: Duration,
 ) -> Result<(i64, i64), i16> {
+    let minimum = partition
+        .log
+        .lock()
+        .expect("log mutex poisoned")
+        .log_start_offset()
+        .0;
     let remote = broker
         .remote_reader
         .as_ref()
@@ -45,7 +51,7 @@ pub(super) async fn resolve_timestamp_offset(
             );
             move |max_record_body| async move {
                 reader
-                    .offset_for_timestamp(&topic_partition, timestamp, max_record_body)
+                    .offset_for_timestamp(&topic_partition, timestamp, minimum, max_record_body)
                     .await
             }
         });
@@ -74,6 +80,7 @@ where
     Read: FnOnce(Option<usize>) -> Answer,
     Answer: Future<Output = Result<Option<(i64, i64)>, RemoteStorageError>>,
 {
+    let mut remote_found = None;
     if let Some(read) = remote {
         let max_record_body = partition
             .log
@@ -84,7 +91,7 @@ where
             .map(ByteSizeExt::bytes_usize);
         match await_remote(remote_timeout, read(max_record_body)).await {
             None => return Err(codes::REQUEST_TIMED_OUT),
-            Some(Ok(Some(offset_and_timestamp))) => return Ok(offset_and_timestamp),
+            Some(Ok(Some(offset_and_timestamp))) => remote_found = Some(offset_and_timestamp),
             Some(Ok(None)) => {}
             Some(Err(error @ RemoteStorageError::RecordTooLarge { .. })) => {
                 tracing::warn!(topic = topic_name, partition = partition_index,
@@ -95,17 +102,21 @@ where
                 error = %error, "list_offsets: remote offset_for_timestamp failed"),
         }
     }
-    let found = partition
-        .log
-        .lock()
-        .expect("log mutex poisoned")
-        .offset_for_timestamp_checked(timestamp);
+    let log = partition.log.lock().expect("log mutex poisoned");
+    if let Some(found) = remote_found
+        && found.0 < log.local_log_start_offset().0
+    {
+        // No local record can precede this remote hit. Overlapping tiers
+        // need both candidates: failed copies can leave holes in the tier.
+        return Ok(found);
+    }
+    let found = log.offset_for_timestamp_checked(timestamp);
     match found {
-        Ok(found) => Ok(
-            found.map_or((UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP), |(offset, matched)| {
-                (offset.0, matched)
-            }),
-        ),
+        Ok(found) => Ok(krabka_verified::list_offsets::earliest_timestamp_candidate(
+            remote_found,
+            found.map(|(offset, matched)| (offset.0, matched)),
+        )
+        .unwrap_or((UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP))),
         Err(error) => {
             tracing::warn!(topic = topic_name, partition = partition_index,
                 error = %error, "list_offsets: offset_for_timestamp refused a record");
@@ -122,6 +133,10 @@ mod tests {
         create_topics_request::CreatableTopicConfig,
         list_offsets_response::ListOffsetsPartitionResponse,
     };
+    use krabka_remote_storage::{
+        LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, TopicIdPartition,
+    };
 
     use super::*;
     use crate::{
@@ -130,7 +145,7 @@ mod tests {
     };
 
     /// The remote tier answers first, and what it answers decides the row: a
-    /// hit is the answer, a miss or a failure falls through to the local log,
+    /// hit competes with any earlier local match; a miss or a failure reads the local log,
     /// and a record it refused for `max.decompressed.message.bytes` is the
     /// row's `INVALID_RECORD`, as `InvalidRecordException` is in Kafka. The
     /// local log holds a match for the timestamp, so a refusal that fell
@@ -183,9 +198,9 @@ mod tests {
                 local,
             ),
             (
-                "a remote hit is the answer",
+                "a later remote hit cannot hide the earlier local match",
                 Some(Ok(Some((7, 7_000)))),
-                Ok((7, 7_000)),
+                local,
             ),
             ("no remote tier reads the local log", None, local),
         ] {
@@ -211,15 +226,54 @@ mod tests {
         }
     }
 
+    fn copy_timestamp_segment(
+        reader: &crate::remote_reader::RemoteReader,
+        topic_partition: TopicIdPartition,
+        bounds: (i64, i64),
+        size: usize,
+        event: i64,
+        data: &LogSegmentData,
+    ) -> RemoteLogSegmentId {
+        let id = RemoteLogSegmentId::new(topic_partition, uuid::Uuid::new_v4());
+        let metadata = RemoteLogSegmentMetadata::new(
+            id.clone(),
+            bounds.0,
+            bounds.1,
+            2_400,
+            1,
+            event,
+            RemoteLogSegmentDetails::new(
+                i32::try_from(size).expect("segment size"),
+                RemoteLogSegmentState::CopySegmentStarted,
+                maplit::btreemap! {krabka_ids::LeaderEpoch(0) => bounds.0},
+            ),
+        )
+        .expect("segment metadata");
+        reader
+            .rlmm
+            .add_remote_log_segment_metadata(metadata.clone())
+            .expect("add segment");
+        reader
+            .rsm
+            .copy_log_segment_data(&metadata, data)
+            .expect("copy segment");
+        reader
+            .rlmm
+            .update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
+                remote_log_segment_id: id.clone(),
+                event_timestamp_ms: event,
+                custom_metadata: None,
+                state: RemoteLogSegmentState::CopySegmentFinished,
+                broker_id: 1,
+            })
+            .expect("finish segment");
+        id
+    }
+
     #[tokio::test]
     async fn positive_timestamp_wire_response_returns_exact_remote_record() {
         use bytes::Bytes;
-        use krabka_ids::LeaderEpoch;
         use krabka_protocol::records::{Record, RecordBatch};
-        use krabka_remote_storage::{
-            LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-            RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, TopicIdPartition,
-        };
 
         const TOPIC: &str = "list-offsets-remote-timestamp";
 
@@ -257,6 +311,11 @@ mod tests {
         .await
         .expect("remote topic config propagated");
 
+        let broker_arc = broker.broker_arc_for_test();
+        let partition = broker_arc
+            .partitions
+            .get(TOPIC, krabka_ids::PartitionIndex(0))
+            .expect("partition");
         let source_dir = tempfile::tempdir().expect("source tempdir");
         let batches = [
             (0, &[1_000, 1_100][..]),
@@ -270,7 +329,7 @@ mod tests {
                 last_position = u32::try_from(log_bytes.len()).expect("segment position");
             }
             let base_timestamp = timestamps[0];
-            RecordBatch {
+            let batch = RecordBatch {
                 base_offset,
                 last_offset_delta: i32::try_from(timestamps.len() - 1).expect("record count"),
                 base_timestamp,
@@ -286,9 +345,16 @@ mod tests {
                     })
                     .collect(),
                 ..Default::default()
-            }
-            .encode(&mut log_bytes)
-            .expect("encode batch");
+            };
+            batch.encode(&mut log_bytes).expect("encode batch");
+            assert!(
+                partition
+                    .produce_batch(batch)
+                    .await
+                    .expect("local append")
+                    .0
+                    == base_offset
+            );
         }
         let log_path = source_dir.path().join("segment.log");
         let offset_index_path = source_dir.path().join("segment.index");
@@ -312,7 +378,6 @@ mod tests {
         time_index.extend_from_slice(&4_u32.to_be_bytes());
         std::fs::write(&time_index_path, time_index).expect("write time index");
 
-        let broker_arc = broker.broker_arc_for_test();
         let topic_id = broker_arc
             .controller
             .current_image()
@@ -321,63 +386,24 @@ mod tests {
             .topic_id;
         let topic_partition = TopicIdPartition::new(topic_id, TOPIC, 0);
         let reader = broker_arc.remote_reader.as_ref().expect("remote reader");
-        let segment_id = RemoteLogSegmentId::new(topic_partition, uuid::Uuid::new_v4());
-        let metadata = RemoteLogSegmentMetadata::new(
-            segment_id.clone(),
-            0,
-            6,
+        let segment_id = copy_timestamp_segment(
+            reader,
+            topic_partition.clone(),
+            (0, 6),
+            log_bytes.len(),
             2_400,
-            1,
-            2_400,
-            RemoteLogSegmentDetails::new(
-                i32::try_from(log_bytes.len()).expect("segment size"),
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => 0},
-            ),
-        )
-        .expect("segment metadata");
-        reader
-            .rlmm
-            .add_remote_log_segment_metadata(metadata.clone())
-            .expect("add segment metadata");
-        reader
-            .rsm
-            .copy_log_segment_data(
-                &metadata,
-                &LogSegmentData {
-                    log_segment: log_path,
-                    offset_index: offset_index_path,
-                    time_index: time_index_path,
-                    transaction_index: None,
-                    producer_snapshot_index: None,
-                    leader_epoch_index: Bytes::from_static(b"0\n1\n0 0\n"),
-                },
-            )
-            .expect("copy remote segment");
-        reader
-            .rlmm
-            .update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
-                remote_log_segment_id: segment_id,
-                event_timestamp_ms: 2_400,
-                custom_metadata: None,
-                state: RemoteLogSegmentState::CopySegmentFinished,
-                broker_id: 1,
-            })
-            .expect("finish segment");
+            &LogSegmentData {
+                log_segment: log_path.clone(),
+                offset_index: offset_index_path.clone(),
+                time_index: time_index_path.clone(),
+                transaction_index: None,
+                producer_snapshot_index: None,
+                leader_epoch_index: Bytes::from_static(b"0\n1\n0 0\n"),
+            },
+        );
 
-        // The tier now describes offsets 0..6, so the partition committed them
-        // before they were uploaded: a segment is only ever copied out of a log
-        // that already acknowledged it. `ListOffsets` bounds a client's answer
-        // at the high watermark, and writing the segment straight into remote
-        // storage above skipped the produce path that would have advanced it.
-        broker_arc
-            .partitions
-            .get(TOPIC, krabka_ids::PartitionIndex(0))
-            .expect("partition")
-            .replica_state
-            .lock()
-            .await
-            .hw = krabka_log::Offset(6);
+        // Publish the exclusive committed end of the seven produced records.
+        partition.replica_state.lock().await.hw = krabka_log::Offset(7);
 
         assert!(
             list_one(&client, TOPIC, 1_500).await
@@ -393,6 +419,70 @@ mod tests {
                     ..Default::default()
                 }
         );
+
+        // A failed earlier copy can leave only a later segment finished.
+        // Local records still cover the gap; the remote hit at 4 must not
+        // hide the earlier local match at 2.
+        reader
+            .rlmm
+            .update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
+                remote_log_segment_id: segment_id,
+                event_timestamp_ms: 2_500,
+                custom_metadata: None,
+                state: RemoteLogSegmentState::DeleteSegmentStarted,
+                broker_id: 1,
+            })
+            .expect("hide the full remote copy");
+        let suffix = &log_bytes[usize::try_from(last_position).expect("position")..];
+        std::fs::write(&log_path, suffix).expect("write suffix");
+        std::fs::write(&offset_index_path, [0_u8; 8]).expect("write suffix offset index");
+        std::fs::write(
+            &time_index_path,
+            [
+                2_400_i64.to_be_bytes().as_slice(),
+                0_u32.to_be_bytes().as_slice(),
+            ]
+            .concat(),
+        )
+        .expect("write suffix time index");
+        copy_timestamp_segment(
+            reader,
+            topic_partition,
+            (4, 6),
+            suffix.len(),
+            2_500,
+            &LogSegmentData {
+                log_segment: log_path,
+                offset_index: offset_index_path,
+                time_index: time_index_path,
+                transaction_index: None,
+                producer_snapshot_index: None,
+                leader_epoch_index: Bytes::from_static(b"0\n1\n0 4\n"),
+            },
+        );
+        let response = list_one(&client, TOPIC, 1_500).await;
+        assert!(
+            response.error_code == codes::NONE
+                && response.offset == 2
+                && response.timestamp == 1_600,
+            "{response:?}"
+        );
+
+        for (floor, expected_timestamp) in [(4, 2_000), (5, 2_200)] {
+            partition
+                .log
+                .lock()
+                .expect("log mutex")
+                .set_log_start_offset(krabka_ids::Offset(floor))
+                .expect("logical trim");
+            let response = list_one(&client, TOPIC, 1_500).await;
+            assert!(
+                response.error_code == codes::NONE
+                    && response.offset == floor
+                    && response.timestamp == expected_timestamp,
+                "{response:?}"
+            );
+        }
 
         drop(client);
         broker.shutdown().await;

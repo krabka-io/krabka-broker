@@ -1,0 +1,81 @@
+(* #"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 38 0 38 55 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
+let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 39 4 39 35
+let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 39 46 39 54
+let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 39 4 39 55
+let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 36 11 36 28
+let%span stoken_is_active'3 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 37 10 37 57
+let%span stoken_is_active'4 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 10 8 10 89
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+predicate resolve_i64 [@inline:trivial] (_1: Int64.t) = true
+
+meta "rewrite_def" predicate resolve_i64
+
+let unwrap_or_i64 (self_: t_Option_i64) (default: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:unwrap_or_i64 ensures] ([@stop_split] [@expl:unwrap_or ensures #0] [%#soption] self_ = None
+      -> result = default)
+    /\ ([@stop_split] [@expl:unwrap_or ensures #1] [%#soption'0] self_ = None
+    \/ self_ = Some result /\ resolve_i64 default)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function deadline_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 8 0 8 55] (now_ms: Int64.t) (duration_ms: int) : int
+ = [%#stoken_is_active'4] if gt_log_Int (Int64.to_int now_ms + duration_ms) (Int64.to_int const_MAX) then
+    Int64.to_int const_MAX
+  else
+    Int64.to_int now_ms + duration_ms
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let token_deadline [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 38 0 38 55]
+  (now_ms: Int64.t) (duration_ms: Int64.t) (return (x: Int64.t)) =
+{[@stop_split] [@expl:token_deadline requires] [%#stoken_is_active'2] ge_log_Int (Int64.to_int duration_ms) 0}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = checked_add [%#stoken_is_active] {now_ms} {duration_ms} (fun (_x: t_Option_i64) -> [ &_8 <- _x ] s1)
+    | s1 = unwrap_or_i64 [%#stoken_is_active'1] {_8} {[%#stoken_is_active'0] const_MAX}
+        (fun (_x: Int64.t) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & now_ms: Int64.t = now_ms
+  | & duration_ms: Int64.t = duration_ms
+  | & _8: t_Option_i64 = Any.any_l () ])
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:token_deadline ensures] [%#stoken_is_active'3] Int64.to_int result
+    = deadline_model now_ms (Int64.to_int duration_ms)}
+    (! return {result}) ]

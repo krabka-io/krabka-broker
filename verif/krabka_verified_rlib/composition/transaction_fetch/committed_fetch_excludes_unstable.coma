@@ -1,0 +1,258 @@
+(* #"/workspace/crates/verified/src/composition/transaction_fetch.rs" 35 0 38 50 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 178 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 179 10 179 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 182 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 188 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 189 10 189 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 126 16 126 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 141 8 147 9
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 9 10 17 1
+let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 39 14 39 54
+let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 39 14 39 55
+let%span stransaction_fetch'1 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 40 38 40 43
+let%span stransaction_fetch'2 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 40 45 40 49
+let%span stransaction_fetch'3 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 40 21 40 93
+let%span stransaction_fetch'4 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 11 10 27 1
+let%span stransaction_fetch'5 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 28 10 34 1
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use seq.Seq
+use creusot.prelude.Any
+use int.MinMax
+use int.Int
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let first_unstable_offset (starts: Slice64.slice Int64.t) (log_end'0: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:first_unstable_offset ensures] [%#snext_producer_identity] match result with
+      | Some lso'0 -> Int64.to_int lso'0 <= Int64.to_int log_end'0
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+          -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int log_end'0)
+      /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso'0 = Int64.to_int log_end'0
+      \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
+      /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts)
+          /\ Int64.to_int lso'0 = Int64.to_int (Seq.get (Slice64.view starts) i))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+        -> Int64.to_int lso'0 <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+      | None -> exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view starts)
+        /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int log_end'0)
+      end}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'0 | Some'0 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'0 -> true
+      | Some'0 f0 -> inv_Infallible f0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0 -> true
+      | Break f0 -> inv_Option_Infallible f0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0: t_Option_Infallible)) = any
+  [ _k (f0: t_Option_Infallible) -> {Break f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+type tup2_i64_FetchVisibility = { f0: Int64.t; f1: t_FetchVisibility }
+
+type t_Option_tup2_i64_FetchVisibility = None'1 | Some'1 tup2_i64_FetchVisibility
+
+let from_residual_Option_tup2_i64_FetchVisibility (residual: t_Option_Infallible)
+  (return (x: t_Option_tup2_i64_FetchVisibility)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_i64_FetchVisibility) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result
+    = None'1}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 125 0 125 40] (a: int) (b: int) : int
+ = [%#sfetch'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 139 0 139 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sfetch'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sfetch] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sfetch'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sfetch'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sfetch'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sfetch'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sfetch'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sfetch'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sfetch'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let committed_fetch_excludes_unstable [#"/workspace/crates/verified/src/composition/transaction_fetch.rs" 35 0 38 50]
+  (starts: Slice64.slice Int64.t) (w: t_FetchWatermarks) (return (x: t_Option_tup2_i64_FetchVisibility)) = (! bb0
+  [ bb0 = s0
+    [ s0 = first_unstable_offset [%#stransaction_fetch] {starts} {w.log_end}
+        (fun (_x: t_Option_i64) -> [ &_16 <- _x ] s1)
+    | s1 = branch_Option_i64 [%#stransaction_fetch'0] {_16}
+        (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_15 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: Int64.t) -> {_15 = Continue x0} (! bb5) | br1 (x0: t_Option_Infallible) -> {_15 = Break x0} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = elim_Break {_15} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_FetchVisibility [%#stransaction_fetch'0] {residual}
+        (fun (_x: t_Option_tup2_i64_FetchVisibility) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = elim_Continue {_15} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &lso'0 <- val' ] s2
+    | s2 = [ &_25 <- { log_start = w.log_start;
+                       hw = w.hw;
+                       lso = lso'0;
+                       log_end = w.log_end;
+                       deliverable = w.deliverable } ] s3
+    | s3 = fetch_visibility [%#stransaction_fetch'3] {[%#stransaction_fetch'1] false} {[%#stransaction_fetch'2] true}
+        {_25} {w.log_start} (fun (_x: t_FetchVisibility) -> [ &visibility <- _x ] s4)
+    | s4 = [ &_28 <- { f0 = lso'0; f1 = visibility } ] s5
+    | s5 = [ &_ret <- Some'1 _28 ] s6
+    | s6 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i64_FetchVisibility = Any.any_l ()
+  | & starts: Slice64.slice Int64.t = starts
+  | & w: t_FetchWatermarks = w
+  | & lso'0: Int64.t = Any.any_l ()
+  | & _15: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _16: t_Option_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
+  | & visibility: t_FetchVisibility = Any.any_l ()
+  | & _25: t_FetchWatermarks = Any.any_l ()
+  | & _28: tup2_i64_FetchVisibility = Any.any_l () ])
+  [ return (result: t_Option_tup2_i64_FetchVisibility) ->
+  {[@stop_split] [@expl:committed_fetch_excludes_unstable ensures] ([@stop_split] [@expl:committed_fetch_excludes_unstable ensures #0] [%#stransaction_fetch'4] match result with
+        | None'1 -> exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts)
+          /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int w.log_end)
+        | Some'1 {f0 = lso'0; f1 = visibility} -> Int64.to_int lso'0 <= Int64.to_int w.log_end
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+            -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int w.log_end)
+        /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso'0 = Int64.to_int w.log_end
+          \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
+          /\ (exists i: int. 0 <= i
+              /\ i < Seq.length (Slice64.view starts)
+              /\ Int64.to_int lso'0 = Int64.to_int (Seq.get (Slice64.view starts) i))
+          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+            -> Int64.to_int lso'0 <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+        /\ Int64.to_int visibility.limit_offset
+          = MinMax.min (MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)) (Int64.to_int w.deliverable)
+        /\ Int64.to_int visibility.effective_lso = MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)
+        /\ Int64.to_int visibility.response_lso = MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)
+        /\ Int64.to_int visibility.response_hw = Int64.to_int w.hw
+        /\ visibility.read_committed_aborts
+        /\ not visibility.out_of_range
+        /\ visibility.empty
+          = ge_log_Int (Int64.to_int w.log_start) (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.deliverable))
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+          -> Int64.to_int visibility.limit_offset <= Int64.to_int (Seq.get (Slice64.view starts) i))
+        end)
+    /\ ([@stop_split] [@expl:committed_fetch_excludes_unstable ensures #1] [%#stransaction_fetch'5] match result with
+      | None'1 -> true
+      | Some'1 {f1 = visibility} -> forall v: int. v <= Int64.to_int w.log_end
+          /\ v <= Int64.to_int w.hw
+          /\ v <= Int64.to_int w.deliverable
+          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+            -> v <= Int64.to_int (Seq.get (Slice64.view starts) i)) -> v <= Int64.to_int visibility.limit_offset
+      end)}
+    (! return {result}) ]

@@ -1,0 +1,215 @@
+(* #"/workspace/crates/verified/src/composition/timestamp.rs" 100 0 104 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 105 16 105 22
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 112 14 112 33
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 113 14 113 27
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 110 16 111 79
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 109 16 109 83
+let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 108 16 108 79
+let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 107 16 107 36
+let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 114 36 114 46
+let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 114 13 114 22
+let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 114 24 114 32
+let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 115 12 115 87
+let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 119 13 119 14
+let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 119 8 119 14
+let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 116 19 116 23
+let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 121 16 121 66
+let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 122 29 122 30
+let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 122 33 122 34
+let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 122 60 122 61
+let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 122 52 122 61
+let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 122 44 122 62
+let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 122 44 122 64
+let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 123 14 123 52
+let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 99 10 99 16
+let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 71 10 76 6
+let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 85 11 86 40
+let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 87 10 92 52
+let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 93 10 94 20
+let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 177 10 177 35
+let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 178 10 179 42
+let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 180 10 181 43
+let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 182 10 184 52
+
+use creusot.int.UInt64
+use creusot.int.Int64
+use creusot.int.UInt32
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_u32 = { f0: Int64.t; f1: UInt32.t }
+
+type t_Option_tup2_i64_u32 = None | Some tup2_i64_u32
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_tup2_i64_u32 (self_: Slice64.slice tup2_i64_u32) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let restore_time_index_entry_valid (previous: t_Option_tup2_i64_u32) (timestamp: Int64.t) (relative_offset: UInt32.t)
+  (max_relative: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:restore_time_index_entry_valid ensures] [%#srestore_producer_ids_strict] result
+    = (UInt32.t'int relative_offset <= Int64.to_int max_relative
+    /\ match previous with
+      | Some {f0 = previous_timestamp; f1 = previous_relative} -> Int64.to_int previous_timestamp
+        <= Int64.to_int timestamp
+      /\ UInt32.t'int previous_relative < UInt32.t'int relative_offset
+      | None -> true
+      end)}
+    (! return {result}) ]
+
+let remote_time_index_candidate_count (entries: Slice64.slice tup2_i64_u32) (target_timestamp: Int64.t)
+  (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:remote_time_index_candidate_count ensures] ([@stop_split] [@expl:remote_time_index_candidate_count ensures #0] [%#sremote_time_index_candidate_count] UInt64.t'int result
+      <= Seq.length (Slice64.view entries))
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #1] [%#sremote_time_index_candidate_count'0] forall i: int. 0
+            <= i
+          /\ i < UInt64.t'int result
+        -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp)
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #2] [%#sremote_time_index_candidate_count'1] forall i: int. 1
+            <= i
+          /\ i < UInt64.t'int result
+        -> UInt32.t'int (Seq.get (Slice64.view entries) (i - 1)).f1
+        < UInt32.t'int (Seq.get (Slice64.view entries) i).f1)
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #3] [%#sremote_time_index_candidate_count'2] UInt64.t'int result
+      < Seq.length (Slice64.view entries)
+    -> gt_log_Int (UInt64.t'int result) 0
+      /\ UInt32.t'int (Seq.get (Slice64.view entries) (UInt64.t'int result)).f1
+      <= UInt32.t'int (Seq.get (Slice64.view entries) (UInt64.t'int result - 1)).f1
+    \/ ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int result)).f0) (Int64.to_int target_timestamp))}
+    (! return {result}) ]
+
+let time_index_scan_start (entries: Slice64.slice tup2_i64_u32) (target_timestamp: Int64.t) (return (x: UInt32.t)) =
+{[@stop_split] [@expl:time_index_scan_start requires] [%#slog_index] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view entries)
+    -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0}
+  any
+  [ return (result: UInt32.t) ->
+  {[@stop_split] [@expl:time_index_scan_start ensures] ([@stop_split] [@expl:time_index_scan_start ensures #0] [%#slog_index'0] (exists i: int. 0
+            <= i
+          /\ i < Seq.length (Slice64.view entries)
+          /\ Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp)
+      -> (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view entries)
+        /\ Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp
+        /\ UInt32.t'int result = UInt32.t'int (Seq.get (Slice64.view entries) i).f1
+        /\ (forall j: int. i < j /\ j < Seq.length (Slice64.view entries)
+          -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) j).f0) (Int64.to_int target_timestamp))))
+    /\ ([@stop_split] [@expl:time_index_scan_start ensures #1] [%#slog_index'1] (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view entries)
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) i).f0) (Int64.to_int target_timestamp))
+    -> UInt32.t'int result = 0)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let validated_remote_and_local_time_starts_agree [#"/workspace/crates/verified/src/composition/timestamp.rs" 100 0 104 9]
+  (entries: Slice64.slice tup2_i64_u32) (max_relative: Int64.t) (target: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &i <- [%#stimestamp] (0: UInt64.t) ] s1 | s1 = [ &previous <- None ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#stimestamp'0] Seq.length (Slice64.view entries)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#stimestamp'5] UInt64.t'int i <= Seq.length (Slice64.view entries)}
+      {[@expl:loop invariant #1] [%#stimestamp'4] previous
+      = (if UInt64.t'int i = 0 then None else Some (Seq.get (Slice64.view entries) (UInt64.t'int i - 1)))}
+      {[@expl:loop invariant #2] [%#stimestamp'3] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> UInt32.t'int (Seq.get (Slice64.view entries) j).f1 <= Int64.to_int max_relative}
+      {[@expl:loop invariant #3] [%#stimestamp'2] forall j: int, k: int. 0 <= j /\ j < k /\ k < UInt64.t'int i
+        -> Int64.to_int (Seq.get (Slice64.view entries) j).f0 <= Int64.to_int (Seq.get (Slice64.view entries) k).f0
+        /\ UInt32.t'int (Seq.get (Slice64.view entries) j).f1 < UInt32.t'int (Seq.get (Slice64.view entries) k).f1}
+      (! [ &variant_old_bb1 <- [%#stimestamp'0] Seq.length (Slice64.view entries) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_i64_u32 [%#stimestamp'1] {entries} (fun (_x: UInt64.t) -> [ &_29 <- _x ] s1)
+      | s1 = [ &_27 <- UInt64.lt i _29 ] s2
+      | s2 = any [ br0 -> {_27 = false} (! bb9) | br1 -> {_27} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_33 <- i ] s1
+        | s1 = [ &_34 <- Slice64.length entries ] s2
+        | s2 = [ &_35 <- UInt64.lt _33 _34 ] s3
+        | s3 = {[@expl:index in bounds] [%#stimestamp'6] _35} s4
+        | s4 = Slice64.get [%#stimestamp'7] <tup2_i64_u32> {entries} {_33}
+            (fun (r: tup2_i64_u32) -> [ &timestamp <- r.f0 ] s5)
+        | s5 = Slice64.get [%#stimestamp'8] <tup2_i64_u32> {entries} {_33}
+            (fun (r: tup2_i64_u32) -> [ &relative <- r.f1 ] s6)
+        | s6 = restore_time_index_entry_valid [%#stimestamp'9] {previous} {timestamp} {relative} {max_relative}
+            (fun (_x: bool) -> [ &_37 <- _x ] s7)
+        | s7 = any [ br0 -> {_37 = false} (! bb8) | br1 -> {_37} (! bb7) ] ]
+      | bb7 = s0
+        [ s0 = [ &_44 <- { f0 = timestamp; f1 = relative } ] s1
+        | s1 = [ &_43 <- Some _44 ] s2
+        | s2 = [ &previous <- _43 ] s3
+        | s3 = UInt64.add [%#stimestamp'11] {i} {[%#stimestamp'10] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s4)
+        | s4 = bb1 ] ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- [%#stimestamp'12] true ] s1 | s1 = return {_ret} ]
+  | bb9 = s0
+    [ s0 = remote_time_index_candidate_count [%#stimestamp'13] {entries} {target}
+        (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
+    | s1 = [ &_52 <- count = ([%#stimestamp'14] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_52 = false} (! bb12) | br1 -> {_52} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &remote <- [%#stimestamp'15] (0: UInt32.t) ] s1 | s1 = bb14 ]
+  | bb12 = s0
+    [ s0 = UInt64.sub [%#stimestamp'17] {count} {[%#stimestamp'16] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_54 <- _x ] s1)
+    | s1 = [ &_56 <- Slice64.length entries ] s2
+    | s2 = [ &_57 <- UInt64.lt _54 _56 ] s3
+    | s3 = {[@expl:index in bounds] [%#stimestamp'18] _57} s4
+    | s4 = Slice64.get [%#stimestamp'19] <tup2_i64_u32> {entries} {_54}
+        (fun (r: tup2_i64_u32) -> [ &remote <- r.f1 ] s5)
+    | s5 = bb14 ]
+  | bb14 = s0
+    [ s0 = time_index_scan_start [%#stimestamp'20] {entries} {target} (fun (_x: UInt32.t) -> [ &_59 <- _x ] s1)
+    | s1 = [ &_ret <- remote = _59 ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & entries: Slice64.slice tup2_i64_u32 = entries
+  | & max_relative: Int64.t = max_relative
+  | & target: Int64.t = target
+  | & i: UInt64.t = Any.any_l ()
+  | & previous: t_Option_tup2_i64_u32 = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: UInt64.t = Any.any_l ()
+  | & timestamp: Int64.t = Any.any_l ()
+  | & relative: UInt32.t = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _43: t_Option_tup2_i64_u32 = Any.any_l ()
+  | & _44: tup2_i64_u32 = Any.any_l ()
+  | & count: UInt64.t = Any.any_l ()
+  | & remote: UInt32.t = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _56: UInt64.t = Any.any_l ()
+  | & _57: bool = Any.any_l ()
+  | & _59: UInt32.t = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:validated_remote_and_local_time_starts_agree ensures] [%#stimestamp'21] result}
+    (! return {result}) ]

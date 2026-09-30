@@ -1,9 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_majority_watermark": { "prover": "alt-ergo", "time": 0.049 },
-      "vc_recompute_high_watermark": { "prover": "alt-ergo", "time": 0.025 }
-    }
-  }
-}

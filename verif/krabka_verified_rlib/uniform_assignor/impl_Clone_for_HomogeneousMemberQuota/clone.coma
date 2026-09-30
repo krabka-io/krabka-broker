@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/uniform_assignor.rs" 48 27 48 32 *)
+(* #"/workspace/crates/verified/src/uniform_assignor.rs" 31 27 31 32 *)
 
 (* <uniform_assignor::HomogeneousMemberQuota as std::clone::Clone> *)
 
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_HomogeneousMemberQuota [#"/workspace/crates/verified/src/uniform_assignor.rs" 48 27 48 32]
+let clone_HomogeneousMemberQuota [#"/workspace/crates/verified/src/uniform_assignor.rs" 31 27 31 32]
   (self: t_HomogeneousMemberQuota) (return (x: t_HomogeneousMemberQuota)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_HomogeneousMemberQuota = Any.any_l () | & self: t_HomogeneousMemberQuota = self ])

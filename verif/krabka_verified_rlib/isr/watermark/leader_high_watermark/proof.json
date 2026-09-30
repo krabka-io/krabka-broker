@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_leader_high_watermark": { "prover": "alt-ergo", "time": 0.054 },
+      "vc_len_HwmReplica": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_replica_isr_eligible": { "prover": "alt-ergo", "time": 0.005 }
+    }
+  }
+}

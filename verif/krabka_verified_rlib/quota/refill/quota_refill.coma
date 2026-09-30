@@ -1,0 +1,210 @@
+(* #"/workspace/crates/verified/src/quota/refill.rs" 30 0 37 20 *)
+
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span squota = "/workspace/crates/verified/src/quota.rs" 21 10 21 29
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 22 10 22 77
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 23 10 24 69
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 25 10 25 80
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span srefill = "/workspace/crates/verified/src/quota/refill.rs" 38 20 38 39
+let%span srefill'0 = "/workspace/crates/verified/src/quota/refill.rs" 38 42 38 58
+let%span srefill'1 = "/workspace/crates/verified/src/quota/refill.rs" 38 20 38 58
+let%span srefill'2 = "/workspace/crates/verified/src/quota/refill.rs" 38 61 38 81
+let%span srefill'3 = "/workspace/crates/verified/src/quota/refill.rs" 38 20 38 81
+let%span srefill'4 = "/workspace/crates/verified/src/quota/refill.rs" 39 29 39 42
+let%span srefill'5 = "/workspace/crates/verified/src/quota/refill.rs" 39 17 39 42
+let%span srefill'6 = "/workspace/crates/verified/src/quota/refill.rs" 41 26 41 42
+let%span srefill'7 = "/workspace/crates/verified/src/quota/refill.rs" 41 15 41 43
+let%span srefill'8 = "/workspace/crates/verified/src/quota/refill.rs" 41 48 41 74
+let%span srefill'9 = "/workspace/crates/verified/src/quota/refill.rs" 41 15 41 75
+let%span srefill'10 = "/workspace/crates/verified/src/quota/refill.rs" 42 27 42 43
+let%span srefill'11 = "/workspace/crates/verified/src/quota/refill.rs" 42 17 42 44
+let%span srefill'12 = "/workspace/crates/verified/src/quota/refill.rs" 43 13 43 30
+let%span srefill'13 = "/workspace/crates/verified/src/quota/refill.rs" 42 17 43 31
+let%span srefill'14 = "/workspace/crates/verified/src/quota/refill.rs" 44 13 44 39
+let%span srefill'15 = "/workspace/crates/verified/src/quota/refill.rs" 42 17 44 40
+let%span srefill'16 = "/workspace/crates/verified/src/quota/refill.rs" 45 17 45 59
+let%span srefill'17 = "/workspace/crates/verified/src/quota/refill.rs" 46 17 46 64
+let%span srefill'18 = "/workspace/crates/verified/src/quota/refill.rs" 47 55 47 56
+let%span srefill'19 = "/workspace/crates/verified/src/quota/refill.rs" 48 8 48 9
+let%span srefill'20 = "/workspace/crates/verified/src/quota/refill.rs" 50 21 50 34
+let%span srefill'21 = "/workspace/crates/verified/src/quota/refill.rs" 50 8 50 35
+let%span srefill'22 = "/workspace/crates/verified/src/quota/refill.rs" 9 11 9 36
+let%span srefill'23 = "/workspace/crates/verified/src/quota/refill.rs" 10 11 10 66
+let%span srefill'24 = "/workspace/crates/verified/src/quota/refill.rs" 11 10 11 67
+let%span srefill'25 = "/workspace/crates/verified/src/quota/refill.rs" 12 10 12 35
+let%span srefill'26 = "/workspace/crates/verified/src/quota/refill.rs" 14 4 14 64
+let%span srefill'27 = "/workspace/crates/verified/src/quota/refill.rs" 18 4 18 64
+let%span srefill'28 = "/workspace/crates/verified/src/quota/refill.rs" 22 10 23 59
+let%span srefill'29 = "/workspace/crates/verified/src/quota/refill.rs" 25 4 25 86
+
+use creusot.int.UInt64
+use creusot.int.UInt128
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+let from_u128 (small: UInt64.t) (return (x: UInt128.t)) = any
+  [ return (result: UInt128.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = UInt128.of_int (UInt64.t'int small)}
+    (! return {result}) ]
+
+function deep_model_u128 [@inline:trivial] (self: UInt128.t) : int = [%#snum] UInt128.t'int self
+
+meta "rewrite_def" function deep_model_u128
+
+let min_u128 (self_: UInt128.t) (o: UInt128.t) (return (x: UInt128.t)) = any
+  [ return (result: UInt128.t) ->
+  {[@stop_split] [@expl:min_u128 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_u128 result
+      <= deep_model_u128 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_u128 result <= deep_model_u128 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_u128 self_ < deep_model_u128 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_u128 o <= deep_model_u128 self_ -> result = o)}
+    (! return {result}) ]
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+ = [%#sthrottle] if available + refill <= burst then available + refill else burst
+
+let quota_credit (available: UInt64.t) (debt: UInt64.t) (credit: UInt64.t) (burst: UInt64.t)
+  (return (x: tup2_u64_u64)) = any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:quota_credit ensures] ([@stop_split] [@expl:quota_credit ensures #0] [%#squota] UInt64.t'int result.f0
+      <= UInt64.t'int burst)
+    /\ ([@stop_split] [@expl:quota_credit ensures #1] [%#squota'0] UInt64.t'int result.f1
+      = UInt64.t'int debt
+      - (if UInt64.t'int debt <= UInt64.t'int credit then UInt64.t'int debt else UInt64.t'int credit))
+    /\ ([@stop_split] [@expl:quota_credit ensures #2] [%#squota'1] UInt64.t'int result.f0
+      = capped (UInt64.t'int available) (UInt64.t'int credit
+      - (if UInt64.t'int debt <= UInt64.t'int credit then
+        UInt64.t'int debt
+      else
+        UInt64.t'int credit
+      )) (UInt64.t'int burst))
+    /\ ([@stop_split] [@expl:quota_credit ensures #3] [%#squota'2] UInt64.t'int available = 0 \/ UInt64.t'int debt = 0
+    -> UInt64.t'int result.f0 = 0 \/ UInt64.t'int result.f1 = 0)}
+    (! return {result}) ]
+
+type tup3_u64_u64_u64 = { f0'0: UInt64.t; f1'0: UInt64.t; f2'0: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let quota_refill [#"/workspace/crates/verified/src/quota/refill.rs" 30 0 37 20] (available: UInt64.t)
+  (debt: UInt64.t) (fraction: UInt64.t) (elapsed: UInt64.t) (rate: UInt64.t) (burst: UInt64.t)
+  (return (x: tup3_u64_u64_u64)) =
+{[@stop_split] [@expl:quota_refill requires] ([@stop_split] [@expl:quota_refill requires #0] [%#srefill'22] UInt64.t'int fraction
+    < 1000000000)
+  /\ ([@stop_split] [@expl:quota_refill requires #1] [%#srefill'23] UInt64.t'int available <= UInt64.t'int burst
+  /\ (UInt64.t'int available = 0 \/ UInt64.t'int debt = 0))}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = from_u128 [%#srefill] {elapsed} (fun (_x: UInt128.t) -> [ &_42 <- _x ] s1)
+    | s1 = from_u128 [%#srefill'0] {rate} (fun (_x: UInt128.t) -> [ &_44 <- _x ] s2)
+    | s2 = UInt128.mul [%#srefill'1] {_42} {_44} (fun (_x: UInt128.t) -> [ &_41 <- _x ] s3)
+    | s3 = from_u128 [%#srefill'2] {fraction} (fun (_x: UInt128.t) -> [ &_46 <- _x ] s4)
+    | s4 = UInt128.add [%#srefill'3] {_41} {_46} (fun (_x: UInt128.t) -> [ &numerator <- _x ] s5)
+    | s5 = [ &_50 <- ([%#srefill'4] (1000000000: UInt128.t)) = ([%#srefill'5] (0: UInt128.t)) ] s6
+    | s6 = {[@expl:division by zero] [%#srefill'5] not _50} s7
+    | s7 = UInt128.div [%#srefill'5] {numerator} {[%#srefill'4] (1000000000: UInt128.t)}
+        (fun (_x: UInt128.t) -> [ &credit <- _x ] s8)
+    | s8 = from_u128 [%#srefill'6] {debt} (fun (_x: UInt128.t) -> [ &_55 <- _x ] s9)
+    | s9 = min_u128 [%#srefill'7] {credit} {_55} (fun (_x: UInt128.t) -> [ &_53 <- _x ] s10)
+    | s10 = min_u128 [%#srefill'9] {_53} {[%#srefill'8] (18446744073709551615: UInt128.t)}
+        (fun (_x: UInt128.t) -> [ &_52 <- _x ] s11)
+    | s11 = [ &paid <- UInt64.of_int (UInt128.t'int _52) ] s12
+    | s12 = from_u128 [%#srefill'10] {paid} (fun (_x: UInt128.t) -> [ &_62 <- _x ] s13)
+    | s13 = UInt128.sub [%#srefill'11] {credit} {_62} (fun (_x: UInt128.t) -> [ &_60 <- _x ] s14)
+    | s14 = from_u128 [%#srefill'12] {burst} (fun (_x: UInt128.t) -> [ &_64 <- _x ] s15)
+    | s15 = min_u128 [%#srefill'13] {_60} {_64} (fun (_x: UInt128.t) -> [ &_59 <- _x ] s16)
+    | s16 = min_u128 [%#srefill'15] {_59} {[%#srefill'14] (18446744073709551615: UInt128.t)}
+        (fun (_x: UInt128.t) -> [ &_58 <- _x ] s17)
+    | s17 = [ &excess <- UInt64.of_int (UInt128.t'int _58) ] s18
+    | s18 = quota_credit [%#srefill'16] {available} {debt} {paid} {burst}
+        (fun (_x: tup2_u64_u64) -> [ &repaid <- _x ] s19)
+    | s19 = quota_credit [%#srefill'17] {repaid.f0} {repaid.f1} {excess} {burst}
+        (fun (_x: tup2_u64_u64) -> [ &filled <- _x ] s20)
+    | s20 = [ &_77 <- filled.f0 = burst ] s21
+    | s21 = any [ br0 -> {_77 = false} (! bb18) | br1 -> {_77} (! bb14) ] ]
+  | bb14 = s0
+    [ s0 = [ &_80 <- filled.f1 = ([%#srefill'18] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_80 = false} (! bb18) | br1 -> {_80} (! bb15) ] ]
+  | bb15 = s0 [ s0 = [ &fraction'0 <- [%#srefill'19] (0: UInt64.t) ] s1 | s1 = bb20 ]
+  | bb18 = s0
+    [ s0 = [ &_84 <- ([%#srefill'20] (1000000000: UInt128.t)) = ([%#srefill'21] (0: UInt128.t)) ] s1
+    | s1 = {[@expl:remainder by zero] [%#srefill'21] not _84} s2
+    | s2 = UInt128.rem [%#srefill'21] {numerator} {[%#srefill'20] (1000000000: UInt128.t)}
+        (fun (_x: UInt128.t) -> [ &_82 <- _x ] s3)
+    | s3 = [ &fraction'0 <- UInt64.of_int (UInt128.t'int _82) ] s4
+    | s4 = bb20 ]
+  | bb20 = s0 [ s0 = [ &_ret <- { f0'0 = filled.f0; f1'0 = filled.f1; f2'0 = fraction'0 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: tup3_u64_u64_u64 = Any.any_l ()
+  | & available: UInt64.t = available
+  | & debt: UInt64.t = debt
+  | & fraction: UInt64.t = fraction
+  | & elapsed: UInt64.t = elapsed
+  | & rate: UInt64.t = rate
+  | & burst: UInt64.t = burst
+  | & numerator: UInt128.t = Any.any_l ()
+  | & _41: UInt128.t = Any.any_l ()
+  | & _42: UInt128.t = Any.any_l ()
+  | & _44: UInt128.t = Any.any_l ()
+  | & _46: UInt128.t = Any.any_l ()
+  | & credit: UInt128.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & paid: UInt64.t = Any.any_l ()
+  | & _52: UInt128.t = Any.any_l ()
+  | & _53: UInt128.t = Any.any_l ()
+  | & _55: UInt128.t = Any.any_l ()
+  | & excess: UInt64.t = Any.any_l ()
+  | & _58: UInt128.t = Any.any_l ()
+  | & _59: UInt128.t = Any.any_l ()
+  | & _60: UInt128.t = Any.any_l ()
+  | & _62: UInt128.t = Any.any_l ()
+  | & _64: UInt128.t = Any.any_l ()
+  | & repaid: tup2_u64_u64 = Any.any_l ()
+  | & filled: tup2_u64_u64 = Any.any_l ()
+  | & fraction'0: UInt64.t = Any.any_l ()
+  | & _77: bool = Any.any_l ()
+  | & _80: bool = Any.any_l ()
+  | & _82: UInt128.t = Any.any_l ()
+  | & _84: bool = Any.any_l () ])
+  [ return (result: tup3_u64_u64_u64) ->
+  {[@stop_split] [@expl:quota_refill ensures] ([@stop_split] [@expl:quota_refill ensures #0] [%#srefill'24] UInt64.t'int result.f0'0
+        <= UInt64.t'int burst
+      /\ (UInt64.t'int result.f0'0 = 0 \/ UInt64.t'int result.f1'0 = 0))
+    /\ ([@stop_split] [@expl:quota_refill ensures #1] [%#srefill'25] UInt64.t'int result.f2'0 < 1000000000)
+    /\ ([@stop_split] [@expl:quota_refill ensures #2] [%#srefill'26] let credit = ComputerDivision.div (UInt64.t'int elapsed
+        * UInt64.t'int rate
+      + UInt64.t'int fraction) 1000000000 in UInt64.t'int result.f1'0
+      = (if credit <= UInt64.t'int debt then UInt64.t'int debt - credit else 0))
+    /\ ([@stop_split] [@expl:quota_refill ensures #3] [%#srefill'27] let credit = ComputerDivision.div (UInt64.t'int elapsed
+        * UInt64.t'int rate
+      + UInt64.t'int fraction) 1000000000 in let paid = if credit <= UInt64.t'int debt then
+        credit
+      else
+        UInt64.t'int debt
+       in UInt64.t'int result.f0'0 = capped (UInt64.t'int available) (credit - paid) (UInt64.t'int burst))
+    /\ ([@stop_split] [@expl:quota_refill ensures #4] [%#srefill'28] UInt64.t'int result.f2'0
+      = (if UInt64.t'int result.f0'0 = UInt64.t'int burst /\ UInt64.t'int result.f1'0 = 0 then
+        0
+      else
+        ComputerDivision.mod (UInt64.t'int elapsed * UInt64.t'int rate + UInt64.t'int fraction) 1000000000
+      ))
+    /\ ([@stop_split] [@expl:quota_refill ensures #5] [%#srefill'29] let balance = (UInt64.t'int available
+          - UInt64.t'int debt)
+        * 1000000000
+      + UInt64.t'int fraction
+    + UInt64.t'int elapsed * UInt64.t'int rate in (UInt64.t'int result.f0'0 - UInt64.t'int result.f1'0) * 1000000000
+      + UInt64.t'int result.f2'0
+    = (if balance <= UInt64.t'int burst * 1000000000 then balance else UInt64.t'int burst * 1000000000))}
+    (! return {result}) ]

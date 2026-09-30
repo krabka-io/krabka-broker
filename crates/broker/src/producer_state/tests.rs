@@ -400,12 +400,114 @@ async fn a_marker_mirror_keeps_the_earlier_batches_only_at_the_same_epoch() {
 
 /// #981: after a reopen, the tracker dedups a retry of any batch that Kafka's
 /// `UnifiedLog.rebuildProducerState` retains: the snapshot's batch and the
-/// replayed tail, up to five. Six single-record batches; the stop leaves only
+/// replayed tail, up to five. Six batches; the stop leaves only
 /// the snapshot a segment roll wrote before the last four. Batches 1 to 5
 /// answer as duplicates at their own offsets, and batch 0, which left the
-/// five, is out of order.
+/// five, is out of order. Multi-record batches, sequence wrap, and anonymous
+/// offset gaps must preserve each duplicate's own acknowledgement frontier.
 #[tokio::test]
 async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
+    use krabka_protocol::records::{Record, RecordBatch};
+
+    for (initial_sequence, widths) in [(0, [1; 6]), (i32::MAX - 1, [1, 3, 2, 1, 4, 2])] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = krabka_log::LogConfig {
+            segment_size: krabka_units::prelude::bytes(1),
+            ..krabka_log::LogConfig::default()
+        };
+        let mut log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+        let mut sequence = initial_sequence;
+        let mut expected = Vec::new();
+        for (index, width) in widths.into_iter().enumerate() {
+            let base = log.log_end_offset().0;
+            let timestamp = 100 + i64::try_from(index).unwrap();
+            log.append(&mut RecordBatch {
+                producer_id: 42,
+                producer_epoch: 0,
+                base_sequence: sequence,
+                last_offset_delta: width - 1,
+                base_timestamp: timestamp,
+                max_timestamp: timestamp,
+                records: (0..width)
+                    .map(|offset_delta| Record {
+                        offset_delta,
+                        value: Some(bytes::Bytes::from_static(b"v")),
+                        ..Record::default()
+                    })
+                    .collect(),
+                ..RecordBatch::default()
+            })
+            .unwrap();
+            expected.push((
+                sequence,
+                width - 1,
+                base,
+                base + i64::from(width),
+                timestamp,
+            ));
+            sequence =
+                i32::try_from((i64::from(sequence) + i64::from(width)) % (1i64 << 31)).unwrap();
+            // Anonymous data separates physical offsets from producer sequences
+            // and writes a roll snapshot at the producer batch's end.
+            log.append(&mut RecordBatch {
+                records: vec![Record::default()],
+                ..RecordBatch::default()
+            })
+            .unwrap();
+        }
+        let end = log.log_end_offset().0;
+        let seed = expected[1].3;
+        assert!(krabka_log::name::producer_snapshot_path(dir.path(), seed).exists());
+        drop(log);
+        for offset in (seed + 1)..=end {
+            let path = krabka_log::name::producer_snapshot_path(dir.path(), offset);
+            if path.exists() {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let log = krabka_log::Log::open(dir.path(), config).unwrap();
+        assert!(log.recovered_producers()[0].earlier.len() == 4);
+        let s = ProducerState::new();
+        s.rebuild_from_log("t", PartitionIndex(0), &log)
+            .await
+            .unwrap();
+        for (index, &(sequence, delta, base, frontier, timestamp)) in expected.iter().enumerate() {
+            let checked = s
+                .check_batch(
+                    "t",
+                    PartitionIndex(0),
+                    SequenceContext::RELEASED,
+                    (42, 0),
+                    (sequence, delta),
+                )
+                .await;
+            if index == 0 {
+                assert!(checked.decision == Decision::OutOfOrder && checked.duplicate == None);
+            } else {
+                assert!(checked.decision == Decision::Duplicate { base_offset: base });
+                let duplicate = checked.duplicate.unwrap();
+                assert!(
+                    duplicate.base_offset == base
+                        && duplicate.last_offset == frontier - 1
+                        && duplicate.timestamp == timestamp
+                        && duplicate.base_sequence == sequence
+                );
+                assert!(
+                    krabka_verified::produce_durability_frontier(duplicate.base_offset, delta)
+                        == Some(frontier)
+                        && frontier < end
+                );
+            }
+        }
+        assert!(s.check("t", PartitionIndex(0), 42, 0, sequence, 0).await == Decision::Append);
+    }
+}
+
+/// Sparse batches can span an entire sequence wrap without allocating that
+/// many records. A retry names the first matching retained batch, including
+/// when its sequence key also matches the last batch after replay.
+#[tokio::test]
+async fn replay_chooses_first_retained_alias_after_sequence_wrap() {
     use krabka_protocol::records::{Record, RecordBatch};
 
     let dir = tempfile::tempdir().unwrap();
@@ -414,36 +516,145 @@ async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
         ..krabka_log::LogConfig::default()
     };
     let mut log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
-    for sequence in 0..6 {
+    for (index, (sequence, delta)) in [(0, 0), (1, i32::MAX - 1), (0, 0)].into_iter().enumerate() {
+        let timestamp = 100 + i64::try_from(index).unwrap();
         log.append(&mut RecordBatch {
             producer_id: 42,
-            producer_epoch: 0,
+            producer_epoch: 7,
             base_sequence: sequence,
+            last_offset_delta: delta,
+            base_timestamp: timestamp,
+            max_timestamp: timestamp,
             records: vec![Record {
-                value: Some(bytes::Bytes::from_static(b"v")),
+                offset_delta: delta,
                 ..Record::default()
             }],
             ..RecordBatch::default()
         })
         .unwrap();
     }
+    assert!(krabka_log::name::producer_snapshot_path(dir.path(), 1).exists());
+    log.sync().unwrap();
     drop(log);
-    for offset in 3..=6 {
-        let _ = std::fs::remove_file(krabka_log::name::producer_snapshot_path(dir.path(), offset));
+    for offset in [i64::from(i32::MAX) + 1, i64::from(i32::MAX) + 2] {
+        let path = krabka_log::name::producer_snapshot_path(dir.path(), offset);
+        if path.exists() {
+            std::fs::remove_file(path).unwrap();
+        }
     }
     let log = krabka_log::Log::open(dir.path(), config).unwrap();
-    let s = ProducerState::new();
-    s.rebuild_from_log("t", PartitionIndex(0), &log)
+    assert!(log.recovered_producers()[0].earlier.len() == 2);
+    let state = ProducerState::new();
+    state
+        .rebuild_from_log("t", PartitionIndex(0), &log)
         .await
         .unwrap();
-
-    let mut answers = Vec::new();
-    for sequence in 0..6 {
-        answers.push(s.check("t", PartitionIndex(0), 42, 0, sequence, 0).await);
+    for (sequence, delta, base, frontier, timestamp) in [
+        (0, 0, 0, 1, 100),
+        (1, i32::MAX - 1, 1, i64::from(i32::MAX) + 1, 101),
+    ] {
+        let checked = state
+            .check_batch(
+                "t",
+                PartitionIndex(0),
+                SequenceContext::RELEASED,
+                (42, 7),
+                (sequence, delta),
+            )
+            .await;
+        assert!(checked.decision == Decision::Duplicate { base_offset: base });
+        let duplicate = checked.duplicate.unwrap();
+        assert!(
+            duplicate.base_offset == base
+                && duplicate.last_offset + 1 == frontier
+                && duplicate.timestamp == timestamp
+        );
+        assert!(
+            krabka_verified::produce_durability_frontier(duplicate.base_offset, delta)
+                == Some(frontier)
+        );
     }
-    let mut expected = vec![Decision::OutOfOrder];
-    expected.extend((1..6).map(|offset| Decision::Duplicate {
-        base_offset: offset,
-    }));
-    check!(answers == expected);
+}
+
+/// A snapshot-only reopen reconstructs a multi-record batch's original span,
+/// including sequence wraparound, before the producer tracker accepts requests.
+#[tokio::test]
+async fn snapshot_reload_preserves_retry_frontiers_and_epoch_fencing() {
+    use krabka_protocol::records::{Record, RecordBatch};
+
+    for sequence in [0, 1, i32::MAX - 1, i32::MAX] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = krabka_log::LogConfig::default();
+        let mut log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+        for _ in 0..3 {
+            log.append(&mut RecordBatch {
+                records: vec![Record::default()],
+                ..RecordBatch::default()
+            })
+            .unwrap();
+        }
+        log.append(&mut RecordBatch {
+            producer_id: 42,
+            producer_epoch: 7,
+            base_sequence: sequence,
+            last_offset_delta: 2,
+            base_timestamp: 44,
+            max_timestamp: 44,
+            records: (0..3)
+                .map(|offset_delta| Record {
+                    offset_delta,
+                    ..Record::default()
+                })
+                .collect(),
+            ..RecordBatch::default()
+        })
+        .unwrap();
+        log.sync().unwrap();
+        log.take_producer_snapshot().unwrap();
+        assert!(krabka_log::name::producer_snapshot_path(dir.path(), 6).exists());
+        drop(log);
+        let log = krabka_log::Log::open(dir.path(), config).unwrap();
+        let recovered = log.recovered_producers();
+        assert!(recovered.len() == 1 && recovered[0].earlier.is_empty());
+        let state = ProducerState::new();
+        state
+            .rebuild_from_log("t", PartitionIndex(0), &log)
+            .await
+            .unwrap();
+        let checked = state
+            .check_batch(
+                "t",
+                PartitionIndex(0),
+                SequenceContext::RELEASED,
+                (42, 7),
+                (sequence, 2),
+            )
+            .await;
+        assert!(checked.decision == Decision::Duplicate { base_offset: 3 });
+        let retained = checked.duplicate.unwrap();
+        assert!(
+            retained.base_sequence == sequence
+                && retained.base_offset == 3
+                && retained.last_offset == 5
+                && retained.timestamp == 44
+        );
+        assert!(
+            krabka_verified::produce_durability_frontier(retained.base_offset, 2)
+                == Some(log.log_end_offset().0)
+        );
+        assert!(
+            state
+                .check("t", PartitionIndex(0), 42, 6, sequence, 2)
+                .await
+                == Decision::Fenced
+        );
+        assert!(!matches!(
+            state
+                .check("t", PartitionIndex(0), 42, 8, sequence, 2)
+                .await,
+            Decision::Duplicate { .. }
+        ));
+        let next = i32::try_from((i64::from(sequence) + 3) % (1i64 << 31)).unwrap();
+        assert!(state.check("t", PartitionIndex(0), 42, 7, next, 0).await == Decision::Append);
+    }
 }

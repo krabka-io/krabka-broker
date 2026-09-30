@@ -558,6 +558,8 @@ pub(super) async fn resolve_partition(
 
 #[cfg(test)]
 mod tests {
+    mod timestamp_visibility;
+
     use assert2::assert;
     use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 

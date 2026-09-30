@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_finalize_decision": { "prover": "alt-ergo", "time": 0.033 }
-    }
-  }
-}

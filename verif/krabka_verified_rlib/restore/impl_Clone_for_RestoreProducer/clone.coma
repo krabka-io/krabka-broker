@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 309 27 309 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 98 27 98 32 *)
 
 (* <restore::RestoreProducer as std::clone::Clone> *)
 
@@ -18,8 +18,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreProducer [#"/workspace/crates/verified/src/restore.rs" 309 27 309 32] (self: t_RestoreProducer)
-  (return (x: t_RestoreProducer)) = (! bb0
+let clone_RestoreProducer [#"/workspace/crates/verified/src/restore.rs" 98 27 98 32]
+  (self: t_RestoreProducer) (return (x: t_RestoreProducer)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreProducer = Any.any_l () | & self: t_RestoreProducer = self ])
   [ return (result: t_RestoreProducer) -> (! return {result}) ]

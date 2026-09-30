@@ -205,6 +205,8 @@ fn bytes_len(len: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    mod retry;
+
     use assert2::check;
     use krabka_protocol::records::{Attributes, RecordBatch};
 

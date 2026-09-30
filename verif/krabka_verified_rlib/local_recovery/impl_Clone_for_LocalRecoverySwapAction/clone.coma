@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/local_recovery.rs" 39 27 39 32 *)
+(* #"/workspace/crates/verified/src/local_recovery.rs" 38 27 38 32 *)
 
 (* <local_recovery::LocalRecoverySwapAction as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_LocalRecoverySwapAction [#"/workspace/crates/verified/src/local_recovery.rs" 39 27 39 32]
+let clone_LocalRecoverySwapAction [#"/workspace/crates/verified/src/local_recovery.rs" 38 27 38 32]
   (self: t_LocalRecoverySwapAction) (return (x: t_LocalRecoverySwapAction)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_LocalRecoverySwapAction = Any.any_l () | & self: t_LocalRecoverySwapAction = self ])

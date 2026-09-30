@@ -1,0 +1,336 @@
+(* #"/workspace/crates/verified/src/composition/token_description.rs" 47 0 52 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 20 10 23 2
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 8 10 8 39
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 41 10 49 59
+let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 122 10 130 1
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span stoken_description = "/workspace/crates/verified/src/composition/token_description.rs" 54 8 54 71
+let%span stoken_description'0 = "/workspace/crates/verified/src/composition/token_description.rs" 57 15 57 20
+let%span stoken_description'1 = "/workspace/crates/verified/src/composition/token_description.rs" 59 32 59 37
+let%span stoken_description'2 = "/workspace/crates/verified/src/composition/token_description.rs" 60 24 60 29
+let%span stoken_description'3 = "/workspace/crates/verified/src/composition/token_description.rs" 61 23 61 28
+let%span stoken_description'4 = "/workspace/crates/verified/src/composition/token_description.rs" 62 16 62 22
+let%span stoken_description'5 = "/workspace/crates/verified/src/composition/token_description.rs" 70 14 70 30
+let%span stoken_description'6 = "/workspace/crates/verified/src/composition/token_description.rs" 71 14 71 24
+let%span stoken_description'7 = "/workspace/crates/verified/src/composition/token_description.rs" 68 16 69 77
+let%span stoken_description'8 = "/workspace/crates/verified/src/composition/token_description.rs" 66 16 67 76
+let%span stoken_description'9 = "/workspace/crates/verified/src/composition/token_description.rs" 64 16 65 56
+let%span stoken_description'10 = "/workspace/crates/verified/src/composition/token_description.rs" 63 16 63 33
+let%span stoken_description'11 = "/workspace/crates/verified/src/composition/token_description.rs" 72 18 72 25
+let%span stoken_description'12 = "/workspace/crates/verified/src/composition/token_description.rs" 73 11 73 56
+let%span stoken_description'13 = "/workspace/crates/verified/src/composition/token_description.rs" 74 32 74 36
+let%span stoken_description'14 = "/workspace/crates/verified/src/composition/token_description.rs" 75 15 75 67
+let%span stoken_description'15 = "/workspace/crates/verified/src/composition/token_description.rs" 76 20 76 62
+let%span stoken_description'16 = "/workspace/crates/verified/src/composition/token_description.rs" 77 19 77 98
+let%span stoken_description'17 = "/workspace/crates/verified/src/composition/token_description.rs" 80 32 80 36
+let%span stoken_description'18 = "/workspace/crates/verified/src/composition/token_description.rs" 82 31 82 35
+let%span stoken_description'19 = "/workspace/crates/verified/src/composition/token_description.rs" 86 13 86 14
+let%span stoken_description'20 = "/workspace/crates/verified/src/composition/token_description.rs" 86 8 86 14
+let%span stoken_description'21 = "/workspace/crates/verified/src/composition/token_description.rs" 89 8 98 10
+let%span stoken_description'22 = "/workspace/crates/verified/src/composition/token_description.rs" 106 8 106 30
+let%span stoken_description'23 = "/workspace/crates/verified/src/composition/token_description.rs" 101 4 107 5
+let%span stoken_description'24 = "/workspace/crates/verified/src/composition/token_description.rs" 39 10 46 73
+let%span stoken_description'25 = "/workspace/crates/verified/src/composition/token_description.rs" 26 16 29 100
+let%span stoken_description'26 = "/workspace/crates/verified/src/composition/token_description.rs" 15 16 18 5
+let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 83 10 85 1
+let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 86 10 88 1
+let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 55 10 56 83
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+type t_TokenApi = Create | Renew | Expire | Describe
+
+type tup2_bool_bool = { f0: bool; f1: bool }
+
+type t_TokenApiAdmission = Reject | Allow
+
+let token_api_admission (has_authenticated_identity: bool) (authenticated_via_token: bool) (_api: t_TokenApi)
+  (return (x: t_TokenApiAdmission)) = any
+  [ return (result: t_TokenApiAdmission) ->
+  {[@stop_split] [@expl:token_api_admission ensures] ([@stop_split] [@expl:token_api_admission ensures #0] [%#stoken_mutation_decision] (result
+        = Allow)
+      = (has_authenticated_identity /\ not authenticated_via_token))
+    /\ ([@stop_split] [@expl:token_api_admission ensures #1] [%#stoken_mutation_decision'0] (result = Reject)
+    = (not has_authenticated_identity \/ authenticated_via_token))}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_AclResourceTypeMatch = Same | Different
+
+type t_AclResourceFacts = {
+  resource_type: t_AclResourceTypeMatch;
+  exact_name: bool;
+  wildcard_name: bool;
+  name_has_prefix: bool }
+
+type t_AclPatternKind = Literal | Prefixed
+
+type t_AclOperationKind =
+  | All'0
+  | Read'0
+  | Write'0
+  | Create'0
+  | Delete'0
+  | Alter'0
+  | Describe'0
+  | ClusterAction'0
+  | DescribeConfigs'0
+  | AlterConfigs'0
+  | IdempotentWrite'0
+  | TwoPhaseCommit'0
+  | CreateTokens'0
+  | DescribeTokens'0
+
+type tup3_bool_bool_bool = { f0'0: bool; f1'0: bool; f2'0: bool }
+
+type t_TokenDescriptionAcl = {
+  resource: t_AclResourceFacts;
+  pattern: t_AclPatternKind;
+  operation: t_AclOperationKind;
+  allow: bool;
+  principal: tup2_bool_bool;
+  host: tup3_bool_bool_bool }
+
+let len_TokenDescriptionAcl (self_: Slice64.slice t_TokenDescriptionAcl) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate token_description_resource_matches [#"/workspace/crates/verified/src/composition/token_description.rs" 14 0 14 71] (row: t_TokenDescriptionAcl) =
+  [%#stoken_description'26] row.resource.resource_type = Same
+  /\ match row.pattern with
+    | Literal -> row.resource.exact_name \/ row.resource.wildcard_name
+    | Prefixed -> row.resource.name_has_prefix
+    end
+
+predicate token_description_permission_matches [#"/workspace/crates/verified/src/composition/token_description.rs" 25 0 25 73] (row: t_TokenDescriptionAcl) =
+  [%#stoken_description'25] token_description_resource_matches row
+  /\ (row.principal.f0 \/ row.principal.f1)
+  /\ (row.host.f0'0 \/ row.host.f1'0 \/ row.host.f2'0) /\ (row.operation = All'0 \/ row.operation = DescribeTokens'0)
+
+let acl_resource_match (pattern'0: t_AclPatternKind) (facts: t_AclResourceFacts) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_resource_match ensures] [%#sacl_decision] result
+    = (facts.resource_type = Same
+    /\ match pattern'0 with
+      | Literal -> facts.exact_name \/ facts.wildcard_name
+      | Prefixed -> facts.name_has_prefix
+      end)}
+    (! return {result}) ]
+
+let acl_identity_match (wildcard: bool) (exact: bool) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_identity_match ensures] [%#sacl_decision'0] result
+    = (wildcard \/ exact)}
+    (! return {result}) ]
+
+let acl_operation_match (stored: t_AclOperationKind) (requested: t_AclOperationKind) (is_allow: bool)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_operation_match ensures] [%#sacl_decision'1] result
+    = (stored = requested
+    \/ stored = All'0
+    \/ is_allow /\ stored = Read'0 /\ requested = Describe'0
+    \/ is_allow /\ stored = Write'0 /\ requested = Describe'0
+    \/ is_allow /\ stored = Delete'0 /\ requested = Describe'0
+    \/ is_allow /\ stored = Alter'0 /\ requested = Describe'0
+    \/ is_allow /\ stored = AlterConfigs'0 /\ requested = DescribeConfigs'0)}
+    (! return {result}) ]
+
+type t_AclDefault = Deny'0 | Allow'0
+
+type t_AclFacts = { super_user: bool; saw_allow: bool; saw_deny: bool; default_decision: t_AclDefault }
+
+type t_AclDecision = AllowSuperuser | AllowAcl | AllowNoAcl | DenyExplicit | DenyDefault
+
+let acl_decision (facts: t_AclFacts) (return (x: t_AclDecision)) = any
+  [ return (result: t_AclDecision) -> {[@stop_split] [@expl:acl_decision ensures] [%#sacl_decision'2] match result with
+      | AllowSuperuser -> facts.super_user
+      | DenyExplicit -> not facts.super_user /\ facts.saw_deny
+      | AllowAcl -> not facts.super_user /\ not facts.saw_deny /\ facts.saw_allow
+      | AllowNoAcl -> not facts.super_user
+      /\ not facts.saw_deny /\ not facts.saw_allow /\ facts.default_decision = Allow'0
+      | DenyDefault -> not facts.super_user
+      /\ not facts.saw_deny /\ not facts.saw_allow /\ facts.default_decision = Deny'0
+      end}
+    (! return {result}) ]
+
+type tup4_bool_bool_bool_bool = { f0'1: bool; f1'1: bool; f2'1: bool; f3'1: bool }
+
+let token_describe_visible (owner_filter_matches: bool) (caller_is_owner: bool) (caller_is_requester: bool)
+  (caller_is_renewer: bool) (acl_allows: bool) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:token_describe_visible ensures] [%#stoken_mutation_decision'1] result
+    = (owner_filter_matches /\ (caller_is_owner \/ caller_is_requester \/ caller_is_renewer \/ acl_allows))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let token_description_preserves_authentication_and_acl_isolation [#"/workspace/crates/verified/src/composition/token_description.rs" 47 0 52 9]
+  (identity: tup2_bool_bool) (relationships: tup4_bool_bool_bool_bool) (rows: Slice64.slice t_TokenDescriptionAcl)
+  (policy: tup3_bool_bool_bool) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_21 <- Describe ] s1
+    | s1 = token_api_admission [%#stoken_description] {identity.f0} {identity.f1} {_21}
+        (fun (_x: t_TokenApiAdmission) -> [ &_18 <- _x ] s2)
+    | s2 = any [ br0 -> {_18 = Reject} (! bb4) | br1 -> {_18 = Allow} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_17 <- false ] s1 | s1 = bb5 ]
+  | bb4 = s0 [ s0 = [ &_17 <- true ] s1 | s1 = bb5 ]
+  | bb5 = any [ br0 -> {_17 = false} (! bb7) | br1 -> {_17} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#stoken_description'0] false ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &has_resource_acls <- [%#stoken_description'1] false ] s1
+    | s1 = [ &saw_allow'0 <- [%#stoken_description'2] false ] s2
+    | s2 = [ &saw_deny'0 <- [%#stoken_description'3] false ] s3
+    | s3 = [ &i <- [%#stoken_description'4] (0: UInt64.t) ] s4
+    | s4 = bb8 ]
+  | bb8 = bb8invariant
+    [ bb8 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb8 ([%#stoken_description'5] Seq.length (Slice64.view rows)
+      - UInt64.t'int i)}
+      bb8invariant
+    | bb8invariant = {[@expl:loop invariant #0] [%#stoken_description'10] UInt64.t'int i
+      <= Seq.length (Slice64.view rows)}
+      {[@expl:loop invariant #1] [%#stoken_description'9] has_resource_acls
+      = (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i /\ token_description_resource_matches (Seq.get (Slice64.view rows) j))}
+      {[@expl:loop invariant #2] [%#stoken_description'8] saw_allow'0
+      = (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i
+        /\ (Seq.get (Slice64.view rows) j).allow
+        /\ token_description_permission_matches (Seq.get (Slice64.view rows) j))}
+      {[@expl:loop invariant #3] [%#stoken_description'7] saw_deny'0
+      = (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i
+        /\ not (Seq.get (Slice64.view rows) j).allow
+        /\ token_description_permission_matches (Seq.get (Slice64.view rows) j))}
+      (! [ &variant_old_bb8 <- [%#stoken_description'5] Seq.length (Slice64.view rows) - UInt64.t'int i ] s0)
+      [ s0 = len_TokenDescriptionAcl [%#stoken_description'6] {rows} (fun (_x: UInt64.t) -> [ &_51 <- _x ] s1)
+      | s1 = [ &_49 <- UInt64.lt i _51 ] s2
+      | s2 = any [ br0 -> {_49 = false} (! bb32) | br1 -> {_49} (! bb11) ] ]
+      [ bb11 = s0
+        [ s0 = [ &_54 <- i ] s1
+        | s1 = [ &_55 <- Slice64.length rows ] s2
+        | s2 = [ &_56 <- UInt64.lt _54 _55 ] s3
+        | s3 = {[@expl:index in bounds] [%#stoken_description'11] _56} s4
+        | s4 = Slice64.get [%#stoken_description'11] <t_TokenDescriptionAcl> {rows} {_54}
+            (fun (r: t_TokenDescriptionAcl) -> [ &row <- r ] s5)
+        | s5 = acl_resource_match [%#stoken_description'12] {row.pattern} {row.resource}
+            (fun (_x: bool) -> [ &_58 <- _x ] s6)
+        | s6 = any [ br0 -> {_58 = false} (! bb31) | br1 -> {_58} (! bb14) ] ]
+      | bb14 = s0
+        [ s0 = [ &has_resource_acls <- [%#stoken_description'13] true ] s1
+        | s1 = acl_identity_match [%#stoken_description'14] {row.principal.f0} {row.principal.f1}
+            (fun (_x: bool) -> [ &_61 <- _x ] s2)
+        | s2 = any [ br0 -> {_61 = false} (! bb31) | br1 -> {_61} (! bb16) ] ]
+      | bb16 = s0
+        [ s0 = acl_identity_match [%#stoken_description'15] {row.host.f0'0} {row.host.f1'0}
+            (fun (_x: bool) -> [ &_64 <- _x ] s1)
+        | s1 = any [ br0 -> {_64 = false} (! bb19) | br1 -> {_64} (! bb20) ] ]
+      | bb19 = any [ br0 -> {row.host.f2'0 = false} (! bb31) | br1 -> {row.host.f2'0} (! bb20) ]
+      | bb20 = s0
+        [ s0 = [ &_70 <- DescribeTokens'0 ] s1
+        | s1 = acl_operation_match [%#stoken_description'16] {row.operation} {_70} {row.allow}
+            (fun (_x: bool) -> [ &_68 <- _x ] s2)
+        | s2 = any [ br0 -> {_68 = false} (! bb31) | br1 -> {_68} (! bb22) ] ]
+      | bb22 = any [ br0 -> {row.allow = false} (! bb24) | br1 -> {row.allow} (! bb23) ]
+      | bb23 = s0 [ s0 = [ &saw_allow'0 <- [%#stoken_description'17] true ] s1 | s1 = bb31 ]
+      | bb24 = s0 [ s0 = [ &saw_deny'0 <- [%#stoken_description'18] true ] s1 | s1 = bb31 ]
+      | bb31 = s0
+        [ s0 = UInt64.add [%#stoken_description'20] {i} {[%#stoken_description'19] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb8 ] ] ]
+  | bb32 = any [ br0 -> {policy.f1'0 = false} (! bb35) | br1 -> {policy.f1'0} (! bb33) ]
+  | bb33 = any [ br0 -> {has_resource_acls = false} (! bb34) | br1 -> {has_resource_acls} (! bb35) ]
+  | bb34 = s0 [ s0 = [ &_80 <- Allow'0 ] s1 | s1 = bb36 ]
+  | bb35 = s0 [ s0 = [ &_80 <- Deny'0 ] s1 | s1 = bb36 ]
+  | bb36 = s0
+    [ s0 = [ &_76 <- { super_user = policy.f0'0;
+                       saw_allow = saw_allow'0;
+                       saw_deny = saw_deny'0;
+                       default_decision = _80 } ] s1
+    | s1 = acl_decision [%#stoken_description'21] {_76} (fun (_x: t_AclDecision) -> [ &_75 <- _x ] s2)
+    | s2 = any
+      [ br0 -> {_75 = AllowSuperuser} (! bb40)
+      | br1 -> {_75 = AllowAcl} (! bb40)
+      | br2 -> {_75 = AllowNoAcl} (! bb40)
+      | br3 -> {_75 = DenyExplicit} (! bb38)
+      | br4 -> {_75 = DenyDefault} (! bb38) ] ]
+  | bb38 = s0 [ s0 = [ &user_grant <- false ] s1 | s1 = bb41 ]
+  | bb40 = s0 [ s0 = [ &user_grant <- true ] s1 | s1 = bb41 ]
+  | bb41 = any [ br0 -> {policy.f2'0 = false} (! bb43) | br1 -> {policy.f2'0} (! bb42) ]
+  | bb42 = s0 [ s0 = [ &_88 <- [%#stoken_description'22] true ] s1 | s1 = bb44 ]
+  | bb43 = s0 [ s0 = [ &_88 <- user_grant ] s1 | s1 = bb44 ]
+  | bb44 = s0
+    [ s0 = token_describe_visible [%#stoken_description'23] {relationships.f0'1} {relationships.f1'1}
+        {relationships.f2'1} {relationships.f3'1} {_88} (fun (_x: bool) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & identity: tup2_bool_bool = identity
+  | & relationships: tup4_bool_bool_bool_bool = relationships
+  | & rows: Slice64.slice t_TokenDescriptionAcl = rows
+  | & policy: tup3_bool_bool_bool = policy
+  | & _17: bool = Any.any_l ()
+  | & _18: t_TokenApiAdmission = Any.any_l ()
+  | & _21: t_TokenApi = Any.any_l ()
+  | & has_resource_acls: bool = Any.any_l ()
+  | & saw_allow'0: bool = Any.any_l ()
+  | & saw_deny'0: bool = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _49: bool = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & row: t_TokenDescriptionAcl = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _68: bool = Any.any_l ()
+  | & _70: t_AclOperationKind = Any.any_l ()
+  | & user_grant: bool = Any.any_l ()
+  | & _75: t_AclDecision = Any.any_l ()
+  | & _76: t_AclFacts = Any.any_l ()
+  | & _80: t_AclDefault = Any.any_l ()
+  | & _88: bool = Any.any_l ()
+  | & variant_old_bb8: int = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:token_description_preserves_authentication_and_acl_isolation ensures] [%#stoken_description'24] result
+    = (identity.f0
+    /\ not identity.f1
+    /\ relationships.f0'1
+    /\ (relationships.f1'1
+    \/ relationships.f2'1
+    \/ relationships.f3'1
+    \/ policy.f2'0
+    \/ policy.f0'0
+    \/ not (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view rows)
+        /\ not (Seq.get (Slice64.view rows) i).allow
+        /\ token_description_permission_matches (Seq.get (Slice64.view rows) i))
+    /\ ((exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view rows)
+        /\ (Seq.get (Slice64.view rows) i).allow
+        /\ token_description_permission_matches (Seq.get (Slice64.view rows) i))
+    \/ policy.f1'0
+    /\ not (exists i: int. 0 <= i
+      /\ i < Seq.length (Slice64.view rows) /\ token_description_resource_matches (Seq.get (Slice64.view rows) i)))))}
+    (! return {result}) ]

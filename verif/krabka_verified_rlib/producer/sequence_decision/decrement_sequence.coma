@@ -1,0 +1,109 @@
+(* #"/workspace/crates/verified/src/producer/sequence_decision.rs" 42 0 42 63 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 44 10 44 41
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 45 42 45 43
+let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 46 41 46 49
+let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 46 28 46 49
+let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 48 28 48 29
+let%span ssequence_decision'4 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 48 45 48 53
+let%span ssequence_decision'5 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 48 44 48 66
+let%span ssequence_decision'6 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 48 33 48 66
+let%span ssequence_decision'7 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 50 28 50 36
+let%span ssequence_decision'8 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 50 16 50 37
+let%span ssequence_decision'9 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 50 53 50 61
+let%span ssequence_decision'10 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 50 40 50 62
+let%span ssequence_decision'11 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 50 16 50 62
+let%span ssequence_decision'12 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 40 10 40 65
+let%span ssequence_decision'13 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 10 16 10 47
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.EuclideanDivision
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+constant const_MIN: Int32.t = (-2147483648: Int32.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+let checked_sub (self_: Int32.t) (rhs: Int32.t) (return (x: t_Option_i32)) = any
+  [ return (result: t_Option_i32) ->
+  {[@stop_split] [@expl:checked_sub ensures] ([@stop_split] [@expl:checked_sub ensures #0] [%#snum] (result = None)
+      = (Int32.to_int self_ - Int32.to_int rhs < Int32.to_int const_MIN
+      \/ gt_log_Int (Int32.to_int self_ - Int32.to_int rhs) (Int32.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_sub ensures #1] [%#snum'0] forall r: Int32.t. result = Some r
+      -> Int32.to_int r = Int32.to_int self_ - Int32.to_int rhs)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i32) (return (f0: Int32.t)) = any
+  [ _k (f0: Int32.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 9 0 9 49] (sequence: int) : int
+ = [%#ssequence_decision'13] EuclideanDivision.mod sequence 2147483648
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let decrement_sequence [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 42 0 42 63]
+  (sequence: Int32.t) (decrement: Int32.t) (return (x: Int32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = checked_sub [%#ssequence_decision] {sequence} {decrement} (fun (_x: t_Option_i32) -> [ &_6 <- _x ] s1)
+    | s1 = any [ br0 -> {_6 = None} (! bb7) | br1 (x0: Int32.t) -> {_6 = Some x0} (! bb9) ] ]
+  | bb9 = s0
+    [ s0 = elim_Some {_6} (fun (r0: Int32.t) -> [ &difference'0 <- r0 ] s1)
+    | s1 = [ &_13 <- Int32.ge difference'0 ([%#ssequence_decision'0] (0: Int32.t)) ] s2
+    | s2 = any [ br0 -> {_13 = false} (! bb8) | br1 -> {_13} (! bb10) ] ]
+  | bb10 = s0
+    [ s0 = elim_Some {_6} (fun (r0: Int32.t) -> [ &difference <- r0 ] s1)
+    | s1 = [ &_ret <- difference ] s2
+    | s2 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = elim_Some {_6} (fun (r0: Int32.t) -> [ &difference'1 <- r0 ] s1)
+    | s1 = Int32.sub [%#ssequence_decision'2] {difference'1} {[%#ssequence_decision'1] const_MIN}
+        (fun (_x: Int32.t) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_17 <- Int32.lt decrement ([%#ssequence_decision'3] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb6) | br1 -> {_17} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = Int32.sub [%#ssequence_decision'5] {[%#ssequence_decision'4] const_MIN} {decrement}
+        (fun (_x: Int32.t) -> [ &_20 <- _x ] s1)
+    | s1 = Int32.add [%#ssequence_decision'6] {sequence} {_20} (fun (_x: Int32.t) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = Int32.sub [%#ssequence_decision'8] {sequence} {[%#ssequence_decision'7] const_MIN}
+        (fun (_x: Int32.t) -> [ &_22 <- _x ] s1)
+    | s1 = Int32.add [%#ssequence_decision'10] {decrement} {[%#ssequence_decision'9] const_MIN}
+        (fun (_x: Int32.t) -> [ &_24 <- _x ] s2)
+    | s2 = Int32.sub [%#ssequence_decision'11] {_22} {_24} (fun (_x: Int32.t) -> [ &_ret <- _x ] s3)
+    | s3 = return {_ret} ] ]
+  [ & _ret: Int32.t = Any.any_l ()
+  | & sequence: Int32.t = sequence
+  | & decrement: Int32.t = decrement
+  | & _6: t_Option_i32 = Any.any_l ()
+  | & difference: Int32.t = Any.any_l ()
+  | & difference'0: Int32.t = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & difference'1: Int32.t = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _20: Int32.t = Any.any_l ()
+  | & _22: Int32.t = Any.any_l ()
+  | & _24: Int32.t = Any.any_l () ])
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:decrement_sequence ensures] [%#ssequence_decision'12] Int32.to_int result
+    = sequence_modulo_2_31 (Int32.to_int sequence - Int32.to_int decrement)}
+    (! return {result}) ]

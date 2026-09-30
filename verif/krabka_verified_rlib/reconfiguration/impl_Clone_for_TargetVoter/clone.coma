@@ -12,8 +12,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TargetVoter [#"/workspace/crates/verified/src/reconfiguration.rs" 78 27 78 32] (self: t_TargetVoter)
-  (return (x: t_TargetVoter)) = (! bb0
+let clone_TargetVoter [#"/workspace/crates/verified/src/reconfiguration.rs" 78 27 78 32]
+  (self: t_TargetVoter) (return (x: t_TargetVoter)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TargetVoter = Any.any_l () | & self: t_TargetVoter = self ])
   [ return (result: t_TargetVoter) -> (! return {result}) ]

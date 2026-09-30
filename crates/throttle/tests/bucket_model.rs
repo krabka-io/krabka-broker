@@ -13,7 +13,8 @@
 //!
 //! Two algorithms are modeled:
 //!
-//! * [`Algorithm::Locked`] is production. A consumer reads the rate mirror
+//! * [`Algorithm::Locked`] follows production locking with whole-credit clocks.
+//!   A consumer reads the rate mirror
 //!   without the lock and grants a rate-0 request there. Otherwise it takes the
 //!   lock, reads the clock, stores the claimed `last_refill`, stores
 //!   `available`, and releases. A reset takes the lock, reads the clock, refills
@@ -74,7 +75,9 @@
 //! never creates it, and `record` differs from a consume only in what it does
 //! with the part it cannot grant, which it keeps as debt, at most what the
 //! refill repays in `max_wait` for `record_bounded`. The unit tests in
-//! `src/runtime/consume.rs` cover both.
+//! `src/runtime/consume.rs` cover both. Fractional micro-token numerators and
+//! nanosecond clock claims are also outside this bounded model; the production
+//! adapter tests and the verified refill-partition composition cover them.
 //!
 //! # Runs
 //!

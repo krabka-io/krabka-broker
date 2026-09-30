@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/freeze.rs" 200 27 200 32 *)
+(* #"/workspace/crates/verified/src/freeze.rs" 66 27 66 32 *)
 
 (* <freeze::FreezeMutationKind as std::clone::Clone> *)
 
@@ -23,8 +23,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FreezeMutationKind [#"/workspace/crates/verified/src/freeze.rs" 200 27 200 32] (self: t_FreezeMutationKind)
-  (return (x: t_FreezeMutationKind)) = (! bb0
+let clone_FreezeMutationKind [#"/workspace/crates/verified/src/freeze.rs" 66 27 66 32]
+  (self: t_FreezeMutationKind) (return (x: t_FreezeMutationKind)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FreezeMutationKind = Any.any_l () | & self: t_FreezeMutationKind = self ])
   [ return (result: t_FreezeMutationKind) -> (! return {result}) ]

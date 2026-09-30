@@ -1,0 +1,94 @@
+(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 205 0 205 81 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 206 20 206 50
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 209 23 209 37
+let%span smin_insync_is_site_loss_safe'1 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 210 4 210 56
+let%span smin_insync_is_site_loss_safe'2 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 196 11 196 34
+let%span smin_insync_is_site_loss_safe'3 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 197 11 197 40
+let%span smin_insync_is_site_loss_safe'4 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 198 10 203 1
+let%span smin_insync_is_site_loss_safe'5 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 133 11 133 34
+let%span smin_insync_is_site_loss_safe'6 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 134 11 134 40
+let%span smin_insync_is_site_loss_safe'7 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 135 10 135 59
+let%span smin_insync_is_site_loss_safe'8 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 136 10 137 60
+let%span smin_insync_is_site_loss_safe'9 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 138 10 138 22
+let%span smin_insync_is_site_loss_safe'10 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 139 10 139 23
+let%span smin_insync_is_site_loss_safe'11 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 140 10 140 38
+let%span smin_insync_is_site_loss_safe'12 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 11 10 11 12
+let%span smin_insync_is_site_loss_safe'13 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 14 8 19 9
+
+use creusot.int.Int64
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function round_robin_load [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 12 0 12 62] (rf: int) (sites: int) (site: int) : int
+
+axiom round_robin_load_def:
+  forall rf: int, sites: int, site: int [round_robin_load rf sites site]. round_robin_load rf sites site
+    = ([%#smin_insync_is_site_loss_safe'13] if rf <= 0 then
+      0
+    else
+      round_robin_load (rf - 1) sites site + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)
+    )
+
+let site_loss_survivors (rf: Int64.t) (sites: Int64.t) (return (x: Int64.t)) =
+{[@stop_split] [@expl:site_loss_survivors requires] ([@stop_split] [@expl:site_loss_survivors requires #0] [%#smin_insync_is_site_loss_safe'5] ge_log_Int (Int64.to_int rf) 1
+    /\ Int64.to_int rf <= 1024)
+  /\ ([@stop_split] [@expl:site_loss_survivors requires #1] [%#smin_insync_is_site_loss_safe'6] ge_log_Int (Int64.to_int sites) 1
+  /\ Int64.to_int sites <= 1024)}
+  any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:site_loss_survivors ensures] ([@stop_split] [@expl:site_loss_survivors ensures #0] [%#smin_insync_is_site_loss_safe'7] Int64.to_int result
+      = Int64.to_int rf - round_robin_load (Int64.to_int rf) (Int64.to_int sites) 0)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #1] [%#smin_insync_is_site_loss_safe'8] forall site: int. 0
+            <= site
+          /\ site < Int64.to_int sites
+        -> ge_log_Int (Int64.to_int rf
+        - round_robin_load (Int64.to_int rf) (Int64.to_int sites) site) (Int64.to_int result))
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #2] [%#smin_insync_is_site_loss_safe'9] ge_log_Int (Int64.to_int result) 0)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #3] [%#smin_insync_is_site_loss_safe'10] Int64.to_int result
+      < Int64.to_int rf)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #4] [%#smin_insync_is_site_loss_safe'11] Int64.to_int sites = 1
+    -> Int64.to_int result = 0)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let min_insync_is_site_loss_safe [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 205 0 205 81]
+  (rf: Int64.t) (sites: Int64.t) (min_insync: Int64.t) (return (x: bool)) =
+{[@stop_split] [@expl:min_insync_is_site_loss_safe requires] ([@stop_split] [@expl:min_insync_is_site_loss_safe requires #0] [%#smin_insync_is_site_loss_safe'2] ge_log_Int (Int64.to_int rf) 1
+    /\ Int64.to_int rf <= 1024)
+  /\ ([@stop_split] [@expl:min_insync_is_site_loss_safe requires #1] [%#smin_insync_is_site_loss_safe'3] ge_log_Int (Int64.to_int sites) 1
+  /\ Int64.to_int sites <= 1024)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = site_loss_survivors [%#smin_insync_is_site_loss_safe] {rf} {sites}
+        (fun (_x: Int64.t) -> [ &survivors <- _x ] s1)
+    | s1 = Int64.sub [%#smin_insync_is_site_loss_safe'0] {rf} {survivors}
+        (fun (_x: Int64.t) -> [ &largest_site <- _x ] s2)
+    | s2 = [ &_18 <- Int64.gt min_insync largest_site ] s3
+    | s3 = any [ br0 -> {_18 = false} (! bb3) | br1 -> {_18} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- Int64.le min_insync survivors ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#smin_insync_is_site_loss_safe'1] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & rf: Int64.t = rf
+  | & sites: Int64.t = sites
+  | & min_insync: Int64.t = min_insync
+  | & survivors: Int64.t = Any.any_l ()
+  | & largest_site: Int64.t = Any.any_l ()
+  | & _18: bool = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:min_insync_is_site_loss_safe ensures] [%#smin_insync_is_site_loss_safe'4] result
+    = ((forall site: int. 0 <= site /\ site < Int64.to_int sites
+        -> round_robin_load (Int64.to_int rf) (Int64.to_int sites) site < Int64.to_int min_insync)
+    /\ (forall site: int. 0 <= site /\ site < Int64.to_int sites
+      -> ge_log_Int (Int64.to_int rf
+      - round_robin_load (Int64.to_int rf) (Int64.to_int sites) site) (Int64.to_int min_insync)))}
+    (! return {result}) ]

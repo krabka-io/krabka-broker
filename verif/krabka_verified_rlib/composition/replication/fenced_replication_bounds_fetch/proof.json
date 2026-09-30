@@ -1,0 +1,17 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_advance_high_watermark": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_fenced_replication_bounds_fetch": {
+        "prover": "alt-ergo",
+        "time": 0.044
+      },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_local_append_coordinates": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_replica_fetch_mutation": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.012 }
+    }
+  }
+}

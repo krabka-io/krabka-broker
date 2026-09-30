@@ -211,6 +211,26 @@ pub fn sparse_remote_segment_reader_with_max_timestamp(
     )
 }
 
+/// The sparse fixture as stored on a `LogAppendTime` topic: producer time
+/// remains in record deltas, while the batch maximum is the reader's time.
+pub fn append_time_remote_segment_reader() -> (RemoteReader, tempfile::TempDir) {
+    let stamped = |mut batch: krabka_protocol::records::RecordBatch| {
+        batch.attributes = batch
+            .attributes
+            .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime);
+        batch
+    };
+    remote_segment_reader(
+        &stamped(timestamped_batch_at(
+            10,
+            &[1_000, 1_100, 1_600, 1_700],
+            b'a',
+        )),
+        &stamped(timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b')),
+        2_400,
+    )
+}
+
 /// The encoded length of the second batch of the sparse fixture, which is the
 /// smallest byte budget that still holds a batch read from its own start.
 pub fn sparse_fixture_second_batch_len() -> usize {

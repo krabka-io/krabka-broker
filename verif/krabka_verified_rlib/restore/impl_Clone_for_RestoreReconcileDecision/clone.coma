@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 131 27 131 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 58 27 58 32 *)
 
 (* <restore::RestoreReconcileDecision as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreReconcileDecision [#"/workspace/crates/verified/src/restore.rs" 131 27 131 32]
+let clone_RestoreReconcileDecision [#"/workspace/crates/verified/src/restore.rs" 58 27 58 32]
   (self: t_RestoreReconcileDecision) (return (x: t_RestoreReconcileDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreReconcileDecision = Any.any_l () | & self: t_RestoreReconcileDecision = self ])

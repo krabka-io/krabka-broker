@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_acl_resource_match": { "prover": "alt-ergo", "time": 0.015 }
-    }
-  }
-}

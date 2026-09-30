@@ -1,0 +1,16 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_deref_Vec_u64_Global": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_new_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_new_u64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_push_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_push_u64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_select_wal_voter_index": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_select_wal_voters": { "prover": "alt-ergo", "time": 0.173 }
+    }
+  }
+}

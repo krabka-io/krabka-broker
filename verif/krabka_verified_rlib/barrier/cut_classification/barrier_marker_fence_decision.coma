@@ -1,0 +1,86 @@
+(* #"/workspace/crates/verified/src/barrier/cut_classification.rs" 70 0 70 98 *)
+
+let%span scut_classification = "/workspace/crates/verified/src/barrier/cut_classification.rs" 72 34 72 35
+let%span scut_classification'0 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 73 31 73 32
+let%span scut_classification'1 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 74 33 74 34
+let%span scut_classification'2 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 68 10 68 53
+let%span scut_classification'3 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 44 8 60 9
+
+use creusot.int.UInt64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_BarrierMarkerFenceFacts = {
+  image_present: bool;
+  expected_leader: UInt64.t;
+  expected_epoch: Int32.t;
+  image_leader: UInt64.t;
+  image_epoch: Int32.t;
+  current_leader: UInt64.t;
+  current_epoch: Int32.t }
+
+type t_BarrierMarkerFenceDecision = Malformed | NotLeader | FencedEpoch | Append
+
+function barrier_marker_fence_model [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 42 0 42 91] (facts: t_BarrierMarkerFenceFacts) : t_BarrierMarkerFenceDecision
+ = [%#scut_classification'3] if not facts.image_present
+  \/ Int32.to_int facts.expected_epoch < 0
+  \/ Int32.to_int facts.image_epoch < 0 \/ Int32.to_int facts.current_epoch < 0 then
+    Malformed
+  else
+    if facts.image_leader <> facts.expected_leader \/ facts.current_leader <> facts.expected_leader then
+      NotLeader
+    else
+      if facts.image_epoch <> facts.expected_epoch \/ facts.current_epoch <> facts.expected_epoch then
+        FencedEpoch
+      else
+        Append
+
+
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_marker_fence_decision [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 70 0 70 98]
+  (facts: t_BarrierMarkerFenceFacts) (return (x: t_BarrierMarkerFenceDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.image_present = false} (! bb7) | br1 -> {facts.image_present} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_6 <- Int32.lt facts.expected_epoch ([%#scut_classification] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_6 = false} (! bb3) | br1 -> {_6} (! bb7) ] ]
+  | bb3 = s0
+    [ s0 = [ &_8 <- Int32.lt facts.image_epoch ([%#scut_classification'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_8 = false} (! bb5) | br1 -> {_8} (! bb7) ] ]
+  | bb5 = s0
+    [ s0 = [ &_10 <- Int32.lt facts.current_epoch ([%#scut_classification'1] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb8) | br1 -> {_10} (! bb7) ] ]
+  | bb8 = s0
+    [ s0 = [ &_14 <- facts.image_leader <> facts.expected_leader ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb10) | br1 -> {_14} (! bb13) ] ]
+  | bb10 = s0
+    [ s0 = [ &_17 <- facts.current_leader <> facts.expected_leader ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb12) | br1 -> {_17} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- NotLeader ] s1 | s1 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = [ &_22 <- facts.image_epoch <> facts.expected_epoch ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb15) | br1 -> {_22} (! bb18) ] ]
+  | bb15 = s0
+    [ s0 = [ &_25 <- facts.current_epoch <> facts.expected_epoch ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb17) | br1 -> {_25} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- FencedEpoch ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- Malformed ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierMarkerFenceDecision = Any.any_l ()
+  | & facts: t_BarrierMarkerFenceFacts = facts
+  | & _6: bool = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _25: bool = Any.any_l () ])
+  [ return (result: t_BarrierMarkerFenceDecision) ->
+  {[@stop_split] [@expl:barrier_marker_fence_decision ensures] [%#scut_classification'2] result
+    = barrier_marker_fence_model facts}
+    (! return {result}) ]

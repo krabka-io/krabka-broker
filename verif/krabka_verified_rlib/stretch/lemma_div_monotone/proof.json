@@ -1,6 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": { "vc_lemma_div_monotone": { "prover": "cvc5", "time": 0.105 } }
-  }
-}

@@ -1,0 +1,109 @@
+(* #"/workspace/crates/verified/src/quota/request.rs" 18 0 18 83 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span srequest = "/workspace/crates/verified/src/quota/request.rs" 19 4 20 40
+let%span srequest'0 = "/workspace/crates/verified/src/quota/request.rs" 21 21 21 44
+let%span srequest'1 = "/workspace/crates/verified/src/quota/request.rs" 21 13 21 44
+let%span srequest'2 = "/workspace/crates/verified/src/quota/request.rs" 19 4 21 45
+let%span srequest'3 = "/workspace/crates/verified/src/quota/request.rs" 9 11 9 31
+let%span srequest'4 = "/workspace/crates/verified/src/quota/request.rs" 10 10 10 62
+let%span srequest'5 = "/workspace/crates/verified/src/quota/request.rs" 11 10 13 36
+let%span srequest'6 = "/workspace/crates/verified/src/quota/request.rs" 14 10 16 56
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MIN: UInt64.t = (0: UInt64.t)
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_mul (self_: UInt64.t) (rhs: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:saturating_mul ensures] ([@stop_split] [@expl:saturating_mul ensures #0] [%#snum] ge_log_Int (UInt64.t'int self_
+          * UInt64.t'int rhs) (UInt64.t'int const_MIN)
+        /\ UInt64.t'int self_ * UInt64.t'int rhs <= UInt64.t'int const_MAX
+      -> UInt64.t'int result = UInt64.t'int self_ * UInt64.t'int rhs)
+    /\ ([@stop_split] [@expl:saturating_mul ensures #1] [%#snum'0] UInt64.t'int self_ * UInt64.t'int rhs
+        < UInt64.t'int const_MIN -> UInt64.t'int result = UInt64.t'int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_mul ensures #2] [%#snum'1] gt_log_Int (UInt64.t'int self_
+      * UInt64.t'int rhs) (UInt64.t'int const_MAX) -> UInt64.t'int result = UInt64.t'int const_MAX)}
+    (! return {result}) ]
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum'2] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+let min_u64 (self_: UInt64.t) (o: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:min_u64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_u64 result
+      <= deep_model_u64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_u64 result <= deep_model_u64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_u64 self_ < deep_model_u64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_u64 o <= deep_model_u64 self_ -> result = o)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let quota_whole_request [#"/workspace/crates/verified/src/quota/request.rs" 18 0 18 83]
+  (requested: UInt64.t) (total: UInt64.t) (units_per_token: UInt64.t) (return (x: UInt64.t)) =
+{[@stop_split] [@expl:quota_whole_request requires] [%#srequest'3] gt_log_Int (UInt64.t'int units_per_token) 0}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = saturating_mul [%#srequest] {requested} {units_per_token} (fun (_x: UInt64.t) -> [ &_17 <- _x ] s1)
+    | s1 = [ &_24 <- units_per_token ] s2
+    | s2 = [ &_25 <- _24 = ([%#srequest'0] (0: UInt64.t)) ] s3
+    | s3 = {[@expl:remainder by zero] [%#srequest'0] not _25} s4
+    | s4 = UInt64.rem [%#srequest'0] {total} {_24} (fun (_x: UInt64.t) -> [ &_22 <- _x ] s5)
+    | s5 = UInt64.sub [%#srequest'1] {total} {_22} (fun (_x: UInt64.t) -> [ &_20 <- _x ] s6)
+    | s6 = min_u64 [%#srequest'2] {_17} {_20} (fun (_x: UInt64.t) -> [ &_ret <- _x ] s7)
+    | s7 = return {_ret} ] ]
+  [ & _ret: UInt64.t = Any.any_l ()
+  | & requested: UInt64.t = requested
+  | & total: UInt64.t = total
+  | & units_per_token: UInt64.t = units_per_token
+  | & _17: UInt64.t = Any.any_l ()
+  | & _20: UInt64.t = Any.any_l ()
+  | & _22: UInt64.t = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _25: bool = Any.any_l () ])
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:quota_whole_request ensures] ([@stop_split] [@expl:quota_whole_request ensures #0] [%#srequest'4] UInt64.t'int result
+        <= UInt64.t'int total
+      /\ ComputerDivision.mod (UInt64.t'int result) (UInt64.t'int units_per_token) = 0)
+    /\ ([@stop_split] [@expl:quota_whole_request ensures #1] [%#srequest'5] ComputerDivision.div (UInt64.t'int result) (UInt64.t'int units_per_token)
+      = (if UInt64.t'int requested <= ComputerDivision.div (UInt64.t'int total) (UInt64.t'int units_per_token) then
+        UInt64.t'int requested
+      else
+        ComputerDivision.div (UInt64.t'int total) (UInt64.t'int units_per_token)
+      ))
+    /\ ([@stop_split] [@expl:quota_whole_request ensures #2] [%#srequest'6] UInt64.t'int result
+    = (if UInt64.t'int requested <= ComputerDivision.div (UInt64.t'int total) (UInt64.t'int units_per_token) then
+        UInt64.t'int requested
+      else
+        ComputerDivision.div (UInt64.t'int total) (UInt64.t'int units_per_token)
+      )
+    * UInt64.t'int units_per_token)}
+    (! return {result}) ]

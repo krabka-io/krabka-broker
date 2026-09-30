@@ -1,0 +1,20 @@
+(* #"/workspace/crates/verified/src/diskless/logical_range.rs" 173 0 173 87 *)
+
+let%span slogical_range = "/workspace/crates/verified/src/diskless/logical_range.rs" 174 4 174 32
+let%span slogical_range'0 = "/workspace/crates/verified/src/diskless/logical_range.rs" 171 10 171 50
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let diskless_object_reclaimable [#"/workspace/crates/verified/src/diskless/logical_range.rs" 173 0 173 87]
+  (referenced: bool) (grace_elapsed: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {referenced = false} (! bb1) | br1 -> {referenced} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#slogical_range] false ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- grace_elapsed ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & referenced: bool = referenced | & grace_elapsed: bool = grace_elapsed ])
+  [ return (result: bool) -> {[@stop_split] [@expl:diskless_object_reclaimable ensures] [%#slogical_range'0] result
+    = (not referenced /\ grace_elapsed)}
+    (! return {result}) ]

@@ -1,0 +1,488 @@
+(* #"/workspace/crates/verified/src/composition/producer_replay.rs" 35 0 39 64 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 8 10 21 1
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
+let%span sproducer_replay = "/workspace/crates/verified/src/composition/producer_replay.rs" 40 8 40 54
+let%span sproducer_replay'0 = "/workspace/crates/verified/src/composition/producer_replay.rs" 40 78 40 79
+let%span sproducer_replay'1 = "/workspace/crates/verified/src/composition/producer_replay.rs" 43 35 43 64
+let%span sproducer_replay'2 = "/workspace/crates/verified/src/composition/producer_replay.rs" 43 15 43 64
+let%span sproducer_replay'3 = "/workspace/crates/verified/src/composition/producer_replay.rs" 44 19 44 78
+let%span sproducer_replay'4 = "/workspace/crates/verified/src/composition/producer_replay.rs" 65 8 65 13
+let%span sproducer_replay'5 = "/workspace/crates/verified/src/composition/producer_replay.rs" 66 8 66 12
+let%span sproducer_replay'6 = "/workspace/crates/verified/src/composition/producer_replay.rs" 59 16 67 5
+let%span sproducer_replay'7 = "/workspace/crates/verified/src/composition/producer_replay.rs" 72 48 72 49
+let%span sproducer_replay'8 = "/workspace/crates/verified/src/composition/producer_replay.rs" 72 8 72 50
+let%span sproducer_replay'9 = "/workspace/crates/verified/src/composition/producer_replay.rs" 73 8 73 9
+let%span sproducer_replay'10 = "/workspace/crates/verified/src/composition/producer_replay.rs" 74 8 74 13
+let%span sproducer_replay'11 = "/workspace/crates/verified/src/composition/producer_replay.rs" 75 8 75 12
+let%span sproducer_replay'12 = "/workspace/crates/verified/src/composition/producer_replay.rs" 68 20 76 5
+let%span sproducer_replay'13 = "/workspace/crates/verified/src/composition/producer_replay.rs" 77 23 77 79
+let%span sproducer_replay'14 = "/workspace/crates/verified/src/composition/producer_replay.rs" 77 23 77 80
+let%span sproducer_replay'15 = "/workspace/crates/verified/src/composition/producer_replay.rs" 78 19 78 72
+let%span sproducer_replay'16 = "/workspace/crates/verified/src/composition/producer_replay.rs" 78 19 78 73
+let%span sproducer_replay'17 = "/workspace/crates/verified/src/composition/producer_replay.rs" 14 10 21 65
+let%span sproducer_replay'18 = "/workspace/crates/verified/src/composition/producer_replay.rs" 22 10 34 1
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 29 10 29 71
+let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 18 8 23 65
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 40 10 40 65
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 19 10 19 65
+let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 10 16 10 47
+let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 107 8 114 9
+let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 85 8 90 9
+let%span ssequence_decision'4 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 130 8 145 9
+let%span ssequence_decision'5 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 64 8 69 9
+let%span sdecision = "/workspace/crates/verified/src/producer/decision.rs" 37 10 44 1
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 202 8 207 56
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 219 8 222 73
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use int.EuclideanDivision
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_ProducerSnapshotEntryFacts = {
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  last_sequence: Int32.t;
+  last_offset: Int64.t;
+  offset_delta: Int32.t;
+  coordinator_epoch: Int32.t;
+  current_txn_first_offset: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 200 0 200 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+  [%#ssnapshot_transaction_valid] Int64.to_int entry.last_offset = - 1
+    /\ Int32.to_int entry.last_sequence = - 1 /\ Int32.to_int entry.offset_delta = 0
+  \/ ge_log_Int (Int64.to_int entry.last_offset) 0
+  /\ ge_log_Int (Int32.to_int entry.last_sequence) 0
+  /\ ge_log_Int (Int32.to_int entry.offset_delta) 0
+  /\ ge_log_Int (Int64.to_int entry.last_offset) (Int32.to_int entry.offset_delta)
+  /\ Int64.to_int entry.last_offset < snapshot_offset
+
+predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 217 0 217 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+  [%#ssnapshot_transaction_valid'0] Int64.to_int entry.current_txn_first_offset = - 1
+  \/ ge_log_Int (Int64.to_int entry.current_txn_first_offset) 0
+  /\ Int64.to_int entry.current_txn_first_offset < snapshot_offset
+  /\ Int64.to_int entry.current_txn_first_offset <= Int64.to_int entry.last_offset
+
+predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 16 0 16 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+  [%#sreplay_start'0] ge_log_Int snapshot_offset 0
+  /\ ge_log_Int (Int64.to_int entry.producer_id) 0
+  /\ ge_log_Int (Int16.to_int entry.producer_epoch) 0
+  /\ ge_log_Int (Int32.to_int entry.coordinator_epoch) (- 1)
+  /\ snapshot_last_record_valid snapshot_offset entry /\ snapshot_transaction_valid snapshot_offset entry
+
+let producer_snapshot_entry_valid (snapshot_offset: Int64.t) (entry: t_ProducerSnapshotEntryFacts) (return (x: bool)) =
+any
+  [ return (result: bool) -> {[@stop_split] [@expl:producer_snapshot_entry_valid ensures] [%#sreplay_start] result
+    = snapshot_entry_valid_model (Int64.to_int snapshot_offset) entry}
+    (! return {result}) ]
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 9 0 9 49] (sequence: int) : int
+ = [%#ssequence_decision'1] EuclideanDivision.mod sequence 2147483648
+
+let decrement_sequence (sequence: Int32.t) (decrement: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:decrement_sequence ensures] [%#ssequence_decision] Int32.to_int result
+    = sequence_modulo_2_31 (Int32.to_int sequence - Int32.to_int decrement)}
+    (! return {result}) ]
+
+type t_RetainedSequenceRange = { base_sequence'0: Int32.t; last_sequence'0: Int32.t }
+
+type t_Option_RetainedSequenceRange = None | Some t_RetainedSequenceRange
+
+type t_ProducerEntryFacts = { epoch'1: Int16.t; last_sequence'1: Int32.t }
+
+type t_Option_ProducerEntryFacts = None'0 | Some'0 t_ProducerEntryFacts
+
+type t_ProducerDecision = Append | Duplicate UInt64.t | OutOfOrder | Fenced
+
+predicate retained_matches [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 58 0 62 9] (slot: t_Option_RetainedSequenceRange) (base_sequence: Int32.t) (last_offset_delta: Int32.t) =
+  [%#ssequence_decision'5] match slot with
+    | Some range -> Int32.to_int range.base_sequence'0 = Int32.to_int base_sequence
+    /\ Int32.to_int range.last_sequence'0
+    = sequence_modulo_2_31 (Int32.to_int base_sequence + Int32.to_int last_offset_delta)
+    | None -> false
+    end
+
+predicate first_retained_duplicate [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 98 0 105 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch'0: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) (index: int) =
+  [%#ssequence_decision'2] match entry with
+    | Some'0 tracked -> Int16.to_int tracked.epoch'1 = Int16.to_int producer_epoch'0
+    /\ 0 <= index
+    /\ index < Seq.length retained
+    /\ retained_matches (Seq.get retained index) base_sequence last_offset_delta
+    /\ (forall j: int. 0 <= j /\ j < index -> not retained_matches (Seq.get retained j) base_sequence last_offset_delta)
+    | None'0 -> false
+    end
+
+predicate retained_duplicate_exists [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 77 0 83 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch'0: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) =
+  [%#ssequence_decision'3] match entry with
+    | Some'0 tracked -> Int16.to_int tracked.epoch'1 = Int16.to_int producer_epoch'0
+    /\ (exists i: int. 0 <= i
+      /\ i < Seq.length retained /\ retained_matches (Seq.get retained i) base_sequence last_offset_delta)
+    | None'0 -> false
+    end
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function sequence_decision [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 122 0 128 21] (entry: t_Option_ProducerEntryFacts) (producer_epoch'0: Int16.t) (base_sequence: Int32.t) (log_empty: bool) (trunk_rules: bool) : t_ProducerDecision
+ = [%#ssequence_decision'4] match entry with
+    | None'0 -> if trunk_rules /\ log_empty /\ Int32.to_int base_sequence <> 0 then OutOfOrder else Append
+    | Some'0 tracked -> if Int16.to_int producer_epoch'0 < Int16.to_int tracked.epoch'1 then
+      Fenced
+    else
+      if gt_log_Int (Int16.to_int producer_epoch'0) (Int16.to_int tracked.epoch'1) then
+        if Int32.to_int base_sequence = 0 then Append else OutOfOrder
+      else
+        if Int32.to_int base_sequence = sequence_modulo_2_31 (Int32.to_int tracked.last_sequence'1 + 1) then
+          Append
+        else
+          OutOfOrder
+
+
+
+    end
+
+let producer_decision (entry: t_Option_ProducerEntryFacts) (retained: Slice64.slice t_Option_RetainedSequenceRange)
+  (producer_epoch'0: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) (log_empty: bool)
+  (trunk_rules: bool) (return (x: t_ProducerDecision)) = any
+  [ return (result: t_ProducerDecision) ->
+  {[@stop_split] [@expl:producer_decision ensures] [%#sdecision] match result with
+      | Duplicate index -> first_retained_duplicate entry (Slice64.view retained) producer_epoch'0 base_sequence last_offset_delta (UInt64.t'int index)
+      | _ -> not retained_duplicate_exists entry (Slice64.view retained) producer_epoch'0 base_sequence last_offset_delta
+      /\ result = sequence_decision entry producer_epoch'0 base_sequence log_empty trunk_rules
+      end}
+    (! return {result}) ]
+
+let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:increment_sequence ensures] [%#ssequence_decision'0] Int32.to_int result
+    = sequence_modulo_2_31 (Int32.to_int sequence + Int32.to_int increment)}
+    (! return {result}) ]
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None'1 | Some'1 tup2_i64_i64
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sfuture_log_swap_admission] match result with
+      | Some'1 {f0 = last; f1 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ ge_log_Int (Int64.to_int supplied_base) (Int64.to_int expected_base)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None'1 -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base < Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'2 | Some'2 ()
+
+type t_ControlFlow_Option_Infallible_tup2_i64_i64 = Continue tup2_i64_i64 | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'2 -> true
+      | Some'2 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup2_i64_i64 (_1: t_ControlFlow_Option_Infallible_tup2_i64_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_i64_i64 [inv_ControlFlow_Option_Infallible_tup2_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_i64_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_i64_i64) ->
+  {[@stop_split] [@expl:branch_Option_tup2_i64_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_i64_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'1 v -> result = Continue v
+      | None'1 -> result = Break (None'2)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup5_i64_i32_i64_ProducerDecision_ProducerDecision = {
+  f0'0: Int64.t;
+  f1'0: Int32.t;
+  f2'0: Int64.t;
+  f3'0: t_ProducerDecision;
+  f4'0: t_ProducerDecision }
+
+type t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision =
+  | None'3
+  | Some'3 tup5_i64_i32_i64_ProducerDecision_ProducerDecision
+
+let from_residual_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision (residual: t_Option_Infallible)
+  (return (x: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) ->
+  {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None'3}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'1: tup2_i64_i64)) = any
+  [ _k (f0'1: tup2_i64_i64) -> {Continue f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_i64 = None'4 | Some'4 Int64.t
+
+let produce_durability_frontier (base_offset: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:produce_durability_frontier ensures] [%#sproduce] match result with
+      | Some'4 frontier -> ge_log_Int (Int64.to_int base_offset) 0
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int frontier = Int64.to_int base_offset + Int32.to_int last_offset_delta + 1
+      /\ Int64.to_int base_offset < Int64.to_int frontier
+      | None'4 -> Int64.to_int base_offset < 0
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int base_offset + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_i64 = Continue'0 Int64.t | Break'0 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'1 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue'0 f0'1 -> true
+      | Break'0 f0'1 -> inv_Option_Infallible f0'1
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'4 v -> result = Continue'0 v
+      | None'4 -> result = Break'0 (None'2)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'1: t_Option_Infallible)) = any
+  [ _k (f0'1: t_Option_Infallible) -> {Break'0 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'1: Int64.t)) = any
+  [ _k (f0'1: Int64.t) -> {Continue'0 f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+constant const_MAX'0: Int32.t = (2147483647: Int32.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reloaded_snapshot_preserves_last_batch_retry [#"/workspace/crates/verified/src/composition/producer_replay.rs" 35 0 39 64]
+  (snapshot: Int64.t) (entry: t_ProducerSnapshotEntryFacts) (request_epoch: Int16.t)
+  (return (x: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = producer_snapshot_entry_valid [%#sproducer_replay] {snapshot} {entry} (fun (_x: bool) -> [ &_21 <- _x ] s1)
+    | s1 = any [ br0 -> {_21 = false} (! bb6) | br1 -> {_21} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_24 <- Int64.lt entry.last_offset ([%#sproducer_replay'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb5) | br1 -> {_24} (! bb6) ] ]
+  | bb5 = s0
+    [ s0 = from_i64 [%#sproducer_replay'1] {entry.offset_delta} (fun (_x: Int64.t) -> [ &_29 <- _x ] s1)
+    | s1 = Int64.sub [%#sproducer_replay'2] {entry.last_offset} {_29} (fun (_x: Int64.t) -> [ &base <- _x ] s2)
+    | s2 = decrement_sequence [%#sproducer_replay'3] {entry.last_sequence} {entry.offset_delta}
+        (fun (_x: Int32.t) -> [ &sequence <- _x ] s3)
+    | s3 = [ &_35 <- None ] s4
+    | s4 = [ &_36 <- None ] s5
+    | s5 = [ &_37 <- None ] s6
+    | s6 = [ &_38 <- None ] s7
+    | s7 = [ &_40 <- { base_sequence'0 = sequence; last_sequence'0 = entry.last_sequence } ] s8
+    | s8 = [ &_39 <- Some _40 ] s9
+    | s9 = any
+      [ any_ (__arr_temp: Slice64.array t_Option_RetainedSequenceRange) -> (! -{Seq.get __arr_temp.Slice64.elts 0 = _35
+        /\ Seq.get __arr_temp.Slice64.elts 1 = _36
+        /\ Seq.get __arr_temp.Slice64.elts 2 = _37
+        /\ Seq.get __arr_temp.Slice64.elts 3 = _38
+        /\ Seq.get __arr_temp.Slice64.elts 4 = _39 /\ Seq.length __arr_temp.Slice64.elts = 5}-
+        [ &retained <- __arr_temp ] s10) ]
+    | s10 = [ &_44 <- { epoch'1 = entry.producer_epoch; last_sequence'1 = entry.last_sequence } ] s11
+    | s11 = [ &tracked <- Some'0 _44 ] s12
+    | s12 = [ &_51 <- retained ] s13
+    | s13 = producer_decision [%#sproducer_replay'6] {tracked} {_51} {request_epoch} {sequence} {entry.offset_delta}
+        {[%#sproducer_replay'4] false} {[%#sproducer_replay'5] true}
+        (fun (_x: t_ProducerDecision) -> [ &retry <- _x ] s14)
+    | s14 = [ &_59 <- retained ] s15
+    | s15 = increment_sequence [%#sproducer_replay'8] {entry.last_sequence} {[%#sproducer_replay'7] (1: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_61 <- _x ] s16)
+    | s16 = producer_decision [%#sproducer_replay'12] {tracked} {_59} {entry.producer_epoch} {_61}
+        {[%#sproducer_replay'9] (0: Int32.t)} {[%#sproducer_replay'10] false} {[%#sproducer_replay'11] true}
+        (fun (_x: t_ProducerDecision) -> [ &successor <- _x ] s17)
+    | s17 = local_append_coordinates [%#sproducer_replay'13] {base} {base} {entry.offset_delta}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_67 <- _x ] s18)
+    | s18 = branch_Option_tup2_i64_i64 [%#sproducer_replay'14] {_67}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_66 <- _x ] s19)
+    | s19 = any
+      [ br0 (x0: tup2_i64_i64) -> {_66 = Continue x0} (! bb16)
+      | br1 (x0: t_Option_Infallible) -> {_66 = Break x0} (! bb17) ] ]
+  | bb17 = s0
+    [ s0 = elim_Break {_66} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision [%#sproducer_replay'14] {residual}
+        (fun (_x: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb16 = s0
+    [ s0 = elim_Continue {_66} (fun (r0: tup2_i64_i64) -> [ &val' <- r0 ] s1)
+    | s1 = [ &_65 <- val' ] s2
+    | s2 = [ &last <- _65.f0 ] s3
+    | s3 = [ &next <- _65.f1 ] s4
+    | s4 = produce_durability_frontier [%#sproducer_replay'15] {base} {entry.offset_delta}
+        (fun (_x: t_Option_i64) -> [ &_78 <- _x ] s5)
+    | s5 = branch_Option_i64 [%#sproducer_replay'16] {_78}
+        (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_77 <- _x ] s6)
+    | s6 = any
+      [ br0 (x0: Int64.t) -> {_77 = Continue'0 x0} (! bb23)
+      | br1 (x0: t_Option_Infallible) -> {_77 = Break'0 x0} (! bb24) ] ]
+  | bb24 = s0
+    [ s0 = elim_Break'0 {_77} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision [%#sproducer_replay'16] {residual'0}
+        (fun (_x: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb23 = s0
+    [ s0 = elim_Continue'0 {_77} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &frontier <- val''0 ] s2
+    | s2 = [ &_87 <- last <> entry.last_offset ] s3
+    | s3 = any [ br0 -> {_87 = false} (! bb27) | br1 -> {_87} (! bb30) ] ]
+  | bb27 = s0
+    [ s0 = [ &_90 <- next <> frontier ] s1 | s1 = any [ br0 -> {_90 = false} (! bb29) | br1 -> {_90} (! bb30) ] ]
+  | bb30 = s0 [ s0 = [ &_ret <- None'3 ] s1 | s1 = return {_ret} ]
+  | bb29 = s0
+    [ s0 = [ &_94 <- { f0'0 = base; f1'0 = sequence; f2'0 = frontier; f3'0 = retry; f4'0 = successor } ] s1
+    | s1 = [ &_ret <- Some'3 _94 ] s2
+    | s2 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- None'3 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision = Any.any_l ()
+  | & snapshot: Int64.t = snapshot
+  | & entry: t_ProducerSnapshotEntryFacts = entry
+  | & request_epoch: Int16.t = request_epoch
+  | & _21: bool = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & base: Int64.t = Any.any_l ()
+  | & _29: Int64.t = Any.any_l ()
+  | & sequence: Int32.t = Any.any_l ()
+  | & retained: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _35: t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _36: t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _37: t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _38: t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _39: t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _40: t_RetainedSequenceRange = Any.any_l ()
+  | & tracked: t_Option_ProducerEntryFacts = Any.any_l ()
+  | & _44: t_ProducerEntryFacts = Any.any_l ()
+  | & retry: t_ProducerDecision = Any.any_l ()
+  | & _51: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+  | & successor: t_ProducerDecision = Any.any_l ()
+  | & _59: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _61: Int32.t = Any.any_l ()
+  | & last: Int64.t = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _65: tup2_i64_i64 = Any.any_l ()
+  | & _66: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _67: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup2_i64_i64 = Any.any_l ()
+  | & frontier: Int64.t = Any.any_l ()
+  | & _77: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _78: t_Option_i64 = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l ()
+  | & _87: bool = Any.any_l ()
+  | & _90: bool = Any.any_l ()
+  | & _94: tup5_i64_i32_i64_ProducerDecision_ProducerDecision = Any.any_l () ])
+  [ return (result: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) ->
+  {[@stop_split] [@expl:reloaded_snapshot_preserves_last_batch_retry ensures] ([@stop_split] [@expl:reloaded_snapshot_preserves_last_batch_retry ensures #0] [%#sproducer_replay'17] match result with
+          | Some'3 _ -> true
+          | None'3 -> false
+          end
+      = (ge_log_Int (Int64.to_int snapshot) 0
+      /\ ge_log_Int (Int64.to_int entry.producer_id) 0
+      /\ ge_log_Int (Int16.to_int entry.producer_epoch) 0
+      /\ ge_log_Int (Int32.to_int entry.coordinator_epoch) (- 1)
+      /\ ge_log_Int (Int32.to_int entry.last_sequence) 0
+      /\ ge_log_Int (Int32.to_int entry.offset_delta) 0
+      /\ Int32.to_int entry.offset_delta <= Int64.to_int entry.last_offset
+      /\ Int64.to_int entry.last_offset < Int64.to_int snapshot
+      /\ (Int64.to_int entry.current_txn_first_offset = - 1
+      \/ 0 <= Int64.to_int entry.current_txn_first_offset
+      /\ Int64.to_int entry.current_txn_first_offset <= Int64.to_int entry.last_offset
+      /\ Int64.to_int entry.current_txn_first_offset < Int64.to_int snapshot)))
+    /\ ([@stop_split] [@expl:reloaded_snapshot_preserves_last_batch_retry ensures #1] [%#sproducer_replay'18] match result with
+      | None'3 -> true
+      | Some'3 {f0'0 = base; f1'0 = sequence; f2'0 = frontier; f3'0 = retry; f4'0 = successor} -> 0 <= Int64.to_int base
+      /\ Int64.to_int base = Int64.to_int entry.last_offset - Int32.to_int entry.offset_delta
+      /\ 0 <= Int32.to_int sequence
+      /\ Int32.to_int sequence <= Int32.to_int const_MAX'0
+      /\ Int32.to_int sequence
+        = sequence_modulo_2_31 (Int32.to_int entry.last_sequence - Int32.to_int entry.offset_delta)
+      /\ Int64.to_int frontier = Int64.to_int entry.last_offset + 1
+      /\ Int64.to_int base < Int64.to_int frontier
+      /\ Int64.to_int frontier <= Int64.to_int snapshot
+      /\ (request_epoch = entry.producer_epoch -> retry = Duplicate (4: UInt64.t))
+      /\ (Int16.to_int request_epoch < Int16.to_int entry.producer_epoch -> retry = Fenced)
+      /\ (gt_log_Int (Int16.to_int request_epoch) (Int16.to_int entry.producer_epoch)
+        -> retry = (if Int32.to_int sequence = 0 then Append else OutOfOrder))
+      /\ successor = Append
+      end)}
+    (! return {result}) ]

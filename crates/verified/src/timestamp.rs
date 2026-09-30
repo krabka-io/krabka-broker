@@ -113,6 +113,59 @@ pub fn timestamp_scan_window(window: u32) -> Option<u32> {
     window.checked_mul(2)
 }
 
+/// First matching decoded record at or above the logical retention floor.
+/// A sparse byte read may start inside a batch that still contains discarded
+/// records; those records cannot satisfy the lookup.
+#[ensures(match result {
+    Some(index) => index@ < records@.len()
+        && records@[index@].0@ >= minimum@ && records@[index@].1@ >= target@
+        && forall<i: Int> 0 <= i && i < index@
+            ==> records@[i].0@ < minimum@ || records@[i].1@ < target@,
+    None => forall<i: Int> 0 <= i && i < records@.len()
+        ==> records@[i].0@ < minimum@ || records@[i].1@ < target@,
+})]
+#[must_use]
+pub fn first_timestamp_record_index(
+    records: &[(i64, i64)],
+    minimum: i64,
+    target: i64,
+) -> Option<usize> {
+    let mut index = 0usize;
+    #[invariant(index@ <= records@.len())]
+    #[invariant(forall<i: Int> 0 <= i && i < index@
+        ==> records@[i].0@ < minimum@ || records@[i].1@ < target@)]
+    #[variant(records@.len() - index@)]
+    while index < records.len() {
+        if records[index].0 >= minimum && records[index].1 >= target {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Decode record time according to the batch timestamp type. Append time
+/// replaces producer fields entirely, including producer arithmetic overflow.
+#[ensures(match result {
+    Some(timestamp) => timestamp@ == match append_time {
+        Some(stamp) => stamp@,
+        None => batch_timestamp@ + timestamp_delta@,
+    },
+    None => append_time == None && (batch_timestamp@ + timestamp_delta@ < i64::MIN@
+        || batch_timestamp@ + timestamp_delta@ > i64::MAX@),
+})]
+#[must_use]
+pub fn timestamp_record_time(
+    batch_timestamp: i64,
+    timestamp_delta: i64,
+    append_time: Option<i64>,
+) -> Option<i64> {
+    match append_time {
+        Some(stamp) => Some(stamp),
+        None => batch_timestamp.checked_add(timestamp_delta),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

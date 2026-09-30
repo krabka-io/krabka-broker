@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/barrier.rs" 122 27 122 32 *)
+(* #"/workspace/crates/verified/src/barrier.rs" 42 27 42 32 *)
 
 (* <barrier::BarrierPlacementDecision as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_BarrierPlacementDecision [#"/workspace/crates/verified/src/barrier.rs" 122 27 122 32]
+let clone_BarrierPlacementDecision [#"/workspace/crates/verified/src/barrier.rs" 42 27 42 32]
   (self: t_BarrierPlacementDecision) (return (x: t_BarrierPlacementDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BarrierPlacementDecision = Any.any_l () | & self: t_BarrierPlacementDecision = self ])

@@ -1,6 +1,6 @@
 //! The rate and burst side of [`TokenBucket`]: the typed setters, the
 //! accessors that read the configuration back, and the reset that publishes
-//! the `{rate, burst, available, last_refill}` group as one unit.
+//! the `{rate, burst, available, fraction, last_refill}` group as one unit.
 //!
 //! The bucket stores micro-tokens, so every dimensioned quantity narrows here.
 //! A byte rate and a byte burst keep their fractional part, so a rate of half
@@ -91,26 +91,33 @@ impl TokenBucket {
     /// Updates the rate and the burst, both in micro-tokens, as
     /// [`Self::set_token_rate_with_burst`] does.
     ///
-    /// It stores the whole `{rate, burst, available, debt, last_refill}` group
+    /// It stores the whole `{rate, burst, available, debt, fraction, last_refill}` group
     /// in one critical section, so a concurrent [`Self::try_consume`] runs
     /// either wholly before the reset or wholly after it. No consume can
     /// commit a balance it computed under the old configuration.
     fn set_micro_rate_with_burst(&self, micro_rate_per_sec: u64, micro_burst: u64) {
         let mut state = self.lock_state();
         let now = self.now_nanos();
-        let (micro_available, micro_debt) =
+        let (micro_available, micro_debt, micro_refill_fraction) =
             if state.micro_rate_per_sec == 0 || micro_rate_per_sec == 0 {
-                (micro_burst, 0)
+                (micro_burst, 0, 0)
             } else {
                 let refilled = state.refilled(now);
-                (refilled.available.min(micro_burst), refilled.debt)
+                let available = refilled.available.min(micro_burst);
+                let fraction = if available == micro_burst && refilled.debt == 0 {
+                    0
+                } else {
+                    refilled.fraction
+                };
+                (available, refilled.debt, fraction)
             };
         *state = BucketState {
             micro_rate_per_sec,
             micro_burst,
             micro_available,
             micro_debt,
-            last_refill_nanos: now,
+            last_refill_nanos: now.max(state.last_refill_nanos),
+            micro_refill_fraction,
         };
         self.micro_rate_per_sec.store(micro_rate_per_sec, Relaxed);
     }

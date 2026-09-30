@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_DisklessBatchStep [#"/workspace/crates/verified/src/diskless.rs" 17 27 17 32] (self: t_DisklessBatchStep)
-  (return (x: t_DisklessBatchStep)) = (! bb0
+let clone_DisklessBatchStep [#"/workspace/crates/verified/src/diskless.rs" 17 27 17 32]
+  (self: t_DisklessBatchStep) (return (x: t_DisklessBatchStep)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_DisklessBatchStep = Any.any_l () | & self: t_DisklessBatchStep = self ])
   [ return (result: t_DisklessBatchStep) -> (! return {result}) ]

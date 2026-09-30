@@ -1,0 +1,143 @@
+(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 194 0 194 74 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 195 16 195 32
+let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 196 16 196 17
+let%span sselect_least_loaded'1 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 199 19 199 25
+let%span sselect_least_loaded'2 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 200 16 200 22
+let%span sselect_least_loaded'3 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 207 14 207 36
+let%span sselect_least_loaded'4 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 205 16 206 61
+let%span sselect_least_loaded'5 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 203 16 204 62
+let%span sselect_least_loaded'6 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 202 16 202 26
+let%span sselect_least_loaded'7 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 201 16 201 50
+let%span sselect_least_loaded'8 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 209 24 209 37
+let%span sselect_least_loaded'9 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 210 22 210 38
+let%span sselect_least_loaded'10 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 217 13 217 14
+let%span sselect_least_loaded'11 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 217 8 217 14
+let%span sselect_least_loaded'12 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 187 10 187 54
+let%span sselect_least_loaded'13 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 188 10 192 64
+let%span sselect_least_loaded'14 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 175 8 176 102
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_SubscriberLoad = { assigned: UInt64.t; assigned_at_topic_start: UInt64.t }
+
+let len_SubscriberLoad (self_: Slice64.slice t_SubscriberLoad) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+predicate load_precedes [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 173 0 173 66] (a: t_SubscriberLoad) (b: t_SubscriberLoad) =
+  [%#sselect_least_loaded'14] UInt64.t'int a.assigned < UInt64.t'int b.assigned
+  \/ UInt64.t'int a.assigned = UInt64.t'int b.assigned
+  /\ UInt64.t'int a.assigned_at_topic_start < UInt64.t'int b.assigned_at_topic_start
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_least_loaded [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 194 0 194 74]
+  (candidates: Slice64.slice t_SubscriberLoad) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0
+    [ s0 = len_SubscriberLoad [%#sselect_least_loaded] {candidates} (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
+    | s1 = [ &_9 <- count = ([%#sselect_least_loaded'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_9 = false} (! bb3) | br1 -> {_9} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = [ &best <- [%#sselect_least_loaded'1] (0: UInt64.t) ] s1
+    | s1 = [ &i <- [%#sselect_least_loaded'2] (1: UInt64.t) ] s2
+    | s2 = bb4 ]
+  | bb4 = bb4invariant
+    [ bb4 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb4 ([%#sselect_least_loaded'3] Seq.length (Slice64.view candidates)
+      - UInt64.t'int i)}
+      bb4invariant
+    | bb4invariant = {[@expl:loop invariant #0] [%#sselect_least_loaded'7] 1 <= UInt64.t'int i
+      /\ UInt64.t'int i <= Seq.length (Slice64.view candidates)}
+      {[@expl:loop invariant #1] [%#sselect_least_loaded'6] UInt64.t'int best < UInt64.t'int i}
+      {[@expl:loop invariant #2] [%#sselect_least_loaded'5] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> not load_precedes (Seq.get (Slice64.view candidates) j) (Seq.get (Slice64.view candidates) (UInt64.t'int best))}
+      {[@expl:loop invariant #3] [%#sselect_least_loaded'4] forall j: int. 0 <= j /\ j < UInt64.t'int best
+        -> load_precedes (Seq.get (Slice64.view candidates) (UInt64.t'int best)) (Seq.get (Slice64.view candidates) j)}
+      (! [ &variant_old_bb4 <- [%#sselect_least_loaded'3] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
+      [ s0 = [ &_33 <- UInt64.lt i count ] s1 | s1 = any [ br0 -> {_33 = false} (! bb18) | br1 -> {_33} (! bb6) ] ]
+      [ bb6 = s0
+        [ s0 = [ &_37 <- i ] s1
+        | s1 = [ &_38 <- Slice64.length candidates ] s2
+        | s2 = [ &_39 <- UInt64.lt _37 _38 ] s3
+        | s3 = {[@expl:index in bounds] [%#sselect_least_loaded'8] _39} s4
+        | s4 = Slice64.get [%#sselect_least_loaded'8] <t_SubscriberLoad> {candidates} {_37}
+            (fun (r: t_SubscriberLoad) -> [ &candidate <- r ] s5)
+        | s5 = [ &_41 <- best ] s6
+        | s6 = [ &_42 <- Slice64.length candidates ] s7
+        | s7 = [ &_43 <- UInt64.lt _41 _42 ] s8
+        | s8 = {[@expl:index in bounds] [%#sselect_least_loaded'9] _43} s9
+        | s9 = Slice64.get [%#sselect_least_loaded'9] <t_SubscriberLoad> {candidates} {_41}
+            (fun (r: t_SubscriberLoad) -> [ &current' <- r ] s10)
+        | s10 = [ &_45 <- UInt64.lt candidate.assigned current'.assigned ] s11
+        | s11 = any [ br0 -> {_45 = false} (! bb10) | br1 -> {_45} (! bb13) ] ]
+      | bb10 = s0
+        [ s0 = [ &_48 <- candidate.assigned = current'.assigned ] s1
+        | s1 = any [ br0 -> {_48 = false} (! bb17) | br1 -> {_48} (! bb11) ] ]
+      | bb11 = s0
+        [ s0 = [ &_51 <- UInt64.lt candidate.assigned_at_topic_start current'.assigned_at_topic_start ] s1
+        | s1 = any [ br0 -> {_51 = false} (! bb17) | br1 -> {_51} (! bb13) ] ]
+      | bb13 = s0 [ s0 = [ &best <- i ] s1 | s1 = bb17 ]
+      | bb17 = s0
+        [ s0 = UInt64.add [%#sselect_least_loaded'11] {i} {[%#sselect_least_loaded'10] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb4 ] ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- Some best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & candidates: Slice64.slice t_SubscriberLoad = candidates
+  | & count: UInt64.t = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & best: UInt64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & candidate: t_SubscriberLoad = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & current': t_SubscriberLoad = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & variant_old_bb4: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_least_loaded ensures] ([@stop_split] [@expl:select_least_loaded ensures #0] [%#sselect_least_loaded'12] (result
+        = None)
+      = (Seq.length (Slice64.view candidates) = 0))
+    /\ ([@stop_split] [@expl:select_least_loaded ensures #1] [%#sselect_least_loaded'13] forall chosen: UInt64.t. result
+        = Some chosen
+      -> UInt64.t'int chosen < Seq.length (Slice64.view candidates)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view candidates)
+          -> not load_precedes (Seq.get (Slice64.view candidates) j) (Seq.get (Slice64.view candidates) (UInt64.t'int chosen)))
+      /\ (forall j: int. 0 <= j /\ j < UInt64.t'int chosen
+        -> load_precedes (Seq.get (Slice64.view candidates) (UInt64.t'int chosen)) (Seq.get (Slice64.view candidates) j)))}
+    (! return {result}) ]

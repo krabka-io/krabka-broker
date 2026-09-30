@@ -1,0 +1,648 @@
+(* #"/workspace/crates/verified/src/composition/restore_retry.rs" 39 0 44 57 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sproducer_replay = "/workspace/crates/verified/src/composition/producer_replay.rs" 14 10 21 65
+let%span sproducer_replay'0 = "/workspace/crates/verified/src/composition/producer_replay.rs" 22 10 34 1
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 19 10 19 65
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 10 16 10 47
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 160 8 163 9
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 175 8 180 65
+let%span srestore_retry = "/workspace/crates/verified/src/composition/restore_retry.rs" 46 8 46 83
+let%span srestore_retry'0 = "/workspace/crates/verified/src/composition/restore_retry.rs" 47 20 47 49
+let%span srestore_retry'1 = "/workspace/crates/verified/src/composition/restore_retry.rs" 46 8 47 50
+let%span srestore_retry'2 = "/workspace/crates/verified/src/composition/restore_retry.rs" 50 26 50 40
+let%span srestore_retry'3 = "/workspace/crates/verified/src/composition/restore_retry.rs" 50 50 50 61
+let%span srestore_retry'4 = "/workspace/crates/verified/src/composition/restore_retry.rs" 50 25 50 62
+let%span srestore_retry'5 = "/workspace/crates/verified/src/composition/restore_retry.rs" 58 21 58 26
+let%span srestore_retry'6 = "/workspace/crates/verified/src/composition/restore_retry.rs" 59 27 59 32
+let%span srestore_retry'7 = "/workspace/crates/verified/src/composition/restore_retry.rs" 51 14 64 5
+let%span srestore_retry'8 = "/workspace/crates/verified/src/composition/restore_retry.rs" 65 12 65 32
+let%span srestore_retry'9 = "/workspace/crates/verified/src/composition/restore_retry.rs" 51 14 65 33
+let%span srestore_retry'10 = "/workspace/crates/verified/src/composition/restore_retry.rs" 66 47 66 57
+let%span srestore_retry'11 = "/workspace/crates/verified/src/composition/restore_retry.rs" 67 16 67 22
+let%span srestore_retry'12 = "/workspace/crates/verified/src/composition/restore_retry.rs" 75 14 75 34
+let%span srestore_retry'13 = "/workspace/crates/verified/src/composition/restore_retry.rs" 76 14 76 28
+let%span srestore_retry'14 = "/workspace/crates/verified/src/composition/restore_retry.rs" 74 16 74 106
+let%span srestore_retry'15 = "/workspace/crates/verified/src/composition/restore_retry.rs" 70 16 73 102
+let%span srestore_retry'16 = "/workspace/crates/verified/src/composition/restore_retry.rs" 69 16 69 62
+let%span srestore_retry'17 = "/workspace/crates/verified/src/composition/restore_retry.rs" 77 37 77 40
+let%span srestore_retry'18 = "/workspace/crates/verified/src/composition/restore_retry.rs" 77 21 77 41
+let%span srestore_retry'19 = "/workspace/crates/verified/src/composition/restore_retry.rs" 77 21 77 43
+let%span srestore_retry'20 = "/workspace/crates/verified/src/composition/restore_retry.rs" 79 12 79 61
+let%span srestore_retry'21 = "/workspace/crates/verified/src/composition/restore_retry.rs" 79 69 79 85
+let%span srestore_retry'22 = "/workspace/crates/verified/src/composition/restore_retry.rs" 79 12 79 86
+let%span srestore_retry'23 = "/workspace/crates/verified/src/composition/restore_retry.rs" 80 22 81 86
+let%span srestore_retry'24 = "/workspace/crates/verified/src/composition/restore_retry.rs" 82 31 82 34
+let%span srestore_retry'25 = "/workspace/crates/verified/src/composition/restore_retry.rs" 82 8 82 66
+let%span srestore_retry'26 = "/workspace/crates/verified/src/composition/restore_retry.rs" 84 13 84 14
+let%span srestore_retry'27 = "/workspace/crates/verified/src/composition/restore_retry.rs" 84 8 84 14
+let%span srestore_retry'28 = "/workspace/crates/verified/src/composition/restore_retry.rs" 89 23 89 78
+let%span srestore_retry'29 = "/workspace/crates/verified/src/composition/restore_retry.rs" 90 27 90 28
+let%span srestore_retry'30 = "/workspace/crates/verified/src/composition/restore_retry.rs" 90 21 90 28
+let%span srestore_retry'31 = "/workspace/crates/verified/src/composition/restore_retry.rs" 92 27 92 29
+let%span srestore_retry'32 = "/workspace/crates/verified/src/composition/restore_retry.rs" 93 34 93 36
+let%span srestore_retry'33 = "/workspace/crates/verified/src/composition/restore_retry.rs" 96 8 96 76
+let%span srestore_retry'34 = "/workspace/crates/verified/src/composition/restore_retry.rs" 97 20 97 51
+let%span srestore_retry'35 = "/workspace/crates/verified/src/composition/restore_retry.rs" 96 8 97 52
+let%span srestore_retry'36 = "/workspace/crates/verified/src/composition/restore_retry.rs" 98 18 98 86
+let%span srestore_retry'37 = "/workspace/crates/verified/src/composition/restore_retry.rs" 20 11 20 76
+let%span srestore_retry'38 = "/workspace/crates/verified/src/composition/restore_retry.rs" 21 11 21 38
+let%span srestore_retry'39 = "/workspace/crates/verified/src/composition/restore_retry.rs" 22 11 22 67
+let%span srestore_retry'40 = "/workspace/crates/verified/src/composition/restore_retry.rs" 23 11 24 92
+let%span srestore_retry'41 = "/workspace/crates/verified/src/composition/restore_retry.rs" 25 11 26 65
+let%span srestore_retry'42 = "/workspace/crates/verified/src/composition/restore_retry.rs" 27 10 27 72
+let%span srestore_retry'43 = "/workspace/crates/verified/src/composition/restore_retry.rs" 28 10 28 96
+let%span srestore_retry'44 = "/workspace/crates/verified/src/composition/restore_retry.rs" 29 10 38 79
+let%span srestore_selection = "/workspace/crates/verified/src/composition/restore_selection.rs" 42 10 59 1
+let%span srestore_selection'0 = "/workspace/crates/verified/src/composition/restore_selection.rs" 16 16 19 73
+let%span srestore_selection'1 = "/workspace/crates/verified/src/composition/restore_selection.rs" 33 8 35 89
+let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 75 10 80 1
+let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 143 10 148 1
+let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 65 8 69 79
+let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 24 8 35 9
+let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 132 8 137 76
+let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 46 8 49 44
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.slice.Slice64
+use seq.Seq
+use creusot.int.UInt64
+use creusot.int.Int16
+use creusot.prelude.MutBorrow
+use int.EuclideanDivision
+use creusot.prelude.Any
+use int.Int
+
+type t_RestoreTimestampType = CreateTime | LogAppendTime
+
+type t_RestoreBatchFrame = {
+  base_offset: Int64.t;
+  last_offset_delta: Int32.t;
+  timestamp_type: t_RestoreTimestampType;
+  base_timestamp: Int64.t;
+  max_timestamp: Int64.t }
+
+type t_RestoreRecordDeltas = { offset_delta: Int32.t; timestamp_delta: Int64.t }
+
+type t_RestoreContentExclusions = { key: bool; header: bool }
+
+type t_RestoreExclusions = { producer: bool; offset: bool; content: t_RestoreContentExclusions }
+
+type tup2_RestoreRecordDeltas_RestoreExclusions = { f0: t_RestoreRecordDeltas; f1: t_RestoreExclusions }
+
+type t_Option_i64 = None | Some Int64.t
+
+type tup2_Option_i64_Option_i64 = { f0'0: t_Option_i64; f1'0: t_Option_i64 }
+
+type t_RestoreFilterDecision = Keep | Empty | Filter
+
+type t_Vec_usize_Global
+
+type tup3_i64_RestoreFilterDecision_Vec_usize_Global = {
+  f0'1: Int64.t;
+  f1'1: t_RestoreFilterDecision;
+  f2'1: t_Vec_usize_Global }
+
+type t_Option_tup3_i64_RestoreFilterDecision_Vec_usize_Global =
+  | None'0
+  | Some'0 tup3_i64_RestoreFilterDecision_Vec_usize_Global
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 158 0 158 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+ = [%#srecord_coordinates] match frame.timestamp_type with
+    | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
+    | LogAppendTime -> Int64.to_int frame.max_timestamp
+    end
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 173 0 173 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+  [%#srecord_coordinates'0] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
+  /\ ge_log_Int (Int32.to_int record.offset_delta) 0
+  /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
+  /\ Int64.to_int frame.base_offset + Int32.to_int record.offset_delta <= Int64.to_int const_MAX
+  /\ ge_log_Int (kafka_record_timestamp frame record) (Int64.to_int const_MIN)
+  /\ kafka_record_timestamp frame record <= Int64.to_int const_MAX
+
+predicate selection_input_valid [#"/workspace/crates/verified/src/composition/restore_selection.rs" 12 0 15 9] (frame: t_RestoreBatchFrame) (records: Seq.seq tup2_RestoreRecordDeltas_RestoreExclusions) =
+  [%#srestore_selection'0] ge_log_Int (Int64.to_int frame.base_offset) 0
+  /\ ge_log_Int (Int32.to_int frame.last_offset_delta) 0
+  /\ Int64.to_int frame.base_offset + Int32.to_int frame.last_offset_delta + 1 <= Int64.to_int const_MAX
+  /\ (forall i: int. 0 <= i /\ i < Seq.length records -> restore_record_placeable frame (Seq.get records i).f0)
+
+constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_usize_Global (self: t_Vec_usize_Global) : Seq.seq UInt64.t
+
+axiom view_Vec_usize_Global_spec:
+  forall self: t_Vec_usize_Global [view_Vec_usize_Global self]. [%#svec'1] Seq.length (view_Vec_usize_Global self)
+    <= UInt64.t'int const_MAX'0
+
+predicate restore_source_selected [#"/workspace/crates/verified/src/composition/restore_selection.rs" 26 0 31 9] (frame: t_RestoreBatchFrame) (row: tup2_RestoreRecordDeltas_RestoreExclusions) (offset_bound: t_Option_i64) (timestamp_bound: t_Option_i64) =
+  [%#srestore_selection'1] match offset_bound with
+      | Some bound -> Int64.to_int frame.base_offset + Int32.to_int row.f0.offset_delta <= Int64.to_int bound
+      | None -> true
+      end
+  /\ match timestamp_bound with
+      | Some bound -> kafka_record_timestamp frame row.f0 < Int64.to_int bound
+      | None -> true
+      end
+  /\ not (row.f1.producer \/ row.f1.offset \/ row.f1.content.key \/ row.f1.content.header)
+
+let restore_selection_respects_batch_extent (frame: t_RestoreBatchFrame)
+  (records: Slice64.slice tup2_RestoreRecordDeltas_RestoreExclusions) (offset_bound: t_Option_i64)
+  (timestamp_bound: t_Option_i64) (return (x: t_Option_tup3_i64_RestoreFilterDecision_Vec_usize_Global)) = any
+  [ return (result: t_Option_tup3_i64_RestoreFilterDecision_Vec_usize_Global) ->
+  {[@stop_split] [@expl:restore_selection_respects_batch_extent ensures] [%#srestore_selection] match result with
+      | None'0 -> not selection_input_valid frame (Slice64.view records)
+      | Some'0 {f0'1 = next; f1'1 = decision; f2'1 = selected} -> selection_input_valid frame (Slice64.view records)
+      /\ Int64.to_int next = Int64.to_int frame.base_offset + Int32.to_int frame.last_offset_delta + 1
+      /\ Seq.length (view_Vec_usize_Global selected) <= Seq.length (Slice64.view records)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_usize_Global selected)
+          -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i) < Seq.length (Slice64.view records))
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_usize_Global selected)
+          -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i)
+          < UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view records)
+          -> (exists j: int. 0 <= j
+              /\ j < Seq.length (view_Vec_usize_Global selected)
+              /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j) = i)
+          = restore_source_selected frame (Seq.get (Slice64.view records) i) offset_bound timestamp_bound)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_usize_Global selected)
+          -> restore_source_selected frame (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))) offset_bound timestamp_bound
+          /\ Int64.to_int frame.base_offset
+            <= Int64.to_int frame.base_offset
+            + Int32.to_int (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))).f0.offset_delta
+          /\ Int64.to_int frame.base_offset
+            + Int32.to_int (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))).f0.offset_delta
+          < Int64.to_int next)
+      /\ decision
+      = (if Seq.length (view_Vec_usize_Global selected) = Seq.length (Slice64.view records) then
+        Keep
+      else
+        if Seq.length (view_Vec_usize_Global selected) = 0 then Empty else Filter
+      )
+      end}
+    (! return {result}) ]
+
+let expect_tup3_i64_RestoreFilterDecision_Vec_usize_Global
+  (self_: t_Option_tup3_i64_RestoreFilterDecision_Vec_usize_Global) (msg: string)
+  (return (x: tup3_i64_RestoreFilterDecision_Vec_usize_Global)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None'0}
+  any
+  [ return (result: tup3_i64_RestoreFilterDecision_Vec_usize_Global) ->
+  {[@stop_split] [@expl:expect ensures] [%#soption'0] Some'0 result = self_}
+    (! return {result}) ]
+
+let len_usize (self_: t_Vec_usize_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#svec] UInt64.t'int result
+    = Seq.length (view_Vec_usize_Global self_)}
+    (! return {result}) ]
+
+type t_RestoreLayout = { base_offset'0: Int64.t; last_offset_delta'0: Int32.t; records_count'0: Int32.t }
+
+type tup3_i64_i16_i32 = { f0'2: Int64.t; f1'2: Int16.t; f2'2: Int32.t }
+
+type t_RestoreProducer = {
+  control: bool;
+  transactional: bool;
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  base_sequence: Int32.t }
+
+predicate legal_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 63 0 63 65] (layout: t_RestoreLayout) (control'0: bool) =
+  [%#srewritten_record'1] ge_log_Int (Int64.to_int layout.base_offset'0) 0
+  /\ ge_log_Int (Int32.to_int layout.last_offset_delta'0) 0
+  /\ ge_log_Int (Int32.to_int layout.records_count'0) 0
+  /\ (control'0 -> Int32.to_int layout.last_offset_delta'0 = 0 /\ Int32.to_int layout.records_count'0 <= 1)
+  /\ Int64.to_int layout.base_offset'0 + Int32.to_int layout.last_offset_delta'0 + 1 <= Int64.to_int const_MAX
+
+predicate non_idempotent_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 44 0 44 65] (producer'0: t_RestoreProducer) =
+  [%#srewritten_record'4] not producer'0.transactional
+  /\ Int64.to_int producer'0.producer_id = - 1
+  /\ Int16.to_int producer'0.producer_epoch = - 1 /\ Int32.to_int producer'0.base_sequence = - 1
+
+predicate legal_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 22 0 22 56] (producer'0: t_RestoreProducer) =
+  [%#srewritten_record'2] if producer'0.control then
+    non_idempotent_producer producer'0
+    \/ producer'0.transactional
+    /\ ge_log_Int (Int64.to_int producer'0.producer_id) 0
+    /\ ge_log_Int (Int16.to_int producer'0.producer_epoch) 0 /\ Int32.to_int producer'0.base_sequence = - 1
+  else
+    non_idempotent_producer producer'0
+    \/ ge_log_Int (Int64.to_int producer'0.producer_id) 0
+    /\ ge_log_Int (Int16.to_int producer'0.producer_epoch) 0 /\ ge_log_Int (Int32.to_int producer'0.base_sequence) 0
+
+
+let restore_rewritten_batch_header (layout: t_RestoreLayout) (producer'0: t_RestoreProducer)
+  (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:restore_rewritten_batch_header ensures] [%#srewritten_record] match result with
+      | Some frontier -> legal_header layout producer'0.control
+      /\ legal_producer producer'0
+      /\ Int64.to_int frontier = Int64.to_int layout.base_offset'0 + Int32.to_int layout.last_offset_delta'0 + 1
+      | None -> not (legal_header layout producer'0.control /\ legal_producer producer'0)
+      end}
+    (! return {result}) ]
+
+let expect_i64 (self_: t_Option_i64) (msg: string) (return (x: Int64.t)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None}
+  any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:expect ensures] [%#soption'0] Some result = self_}
+    (! return {result}) ]
+
+type t_Vec_tup3_usize_i64_i64_Global
+
+type tup3_usize_i64_i64 = { f0'3: UInt64.t; f1'3: Int64.t; f2'3: Int64.t }
+
+function view_Vec_tup3_usize_i64_i64_Global (self: t_Vec_tup3_usize_i64_i64_Global) : Seq.seq tup3_usize_i64_i64
+
+axiom view_Vec_tup3_usize_i64_i64_Global_spec:
+  forall self: t_Vec_tup3_usize_i64_i64_Global [view_Vec_tup3_usize_i64_i64_Global self]. [%#svec'1] Seq.length (view_Vec_tup3_usize_i64_i64_Global self)
+    <= UInt64.t'int const_MAX'0
+
+let new_tup3_usize_i64_i64 (return (x: t_Vec_tup3_usize_i64_i64_Global)) = any
+  [ return (result: t_Vec_tup3_usize_i64_i64_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec'0] Seq.length (view_Vec_tup3_usize_i64_i64_Global result) = 0}
+    (! return {result}) ]
+
+type t_Option_i32 = None'1 | Some'1 Int32.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+predicate in_bounds_usize [@inline:trivial] (self: UInt64.t) (seq: Seq.seq UInt64.t) =
+  [%#sslice] UInt64.t'int self < Seq.length seq
+
+meta "rewrite_def" predicate in_bounds_usize
+
+predicate has_value_usize [@inline:trivial] (self: UInt64.t) (seq: Seq.seq UInt64.t) (out: UInt64.t) =
+  [%#sslice'0] Seq.get seq (UInt64.t'int self) = out
+
+meta "rewrite_def" predicate has_value_usize
+
+let index_Vec_usize_Global (self_: t_Vec_usize_Global) (ix: UInt64.t) (return (x: UInt64.t)) =
+{[@stop_split] [@expl:index requires] [%#svec'2] in_bounds_usize ix (view_Vec_usize_Global self_)}
+  any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:index ensures] [%#svec'3] has_value_usize ix (view_Vec_usize_Global self_) result}
+    (! return {result}) ]
+
+type tup2_i64_i64 = { f0'4: Int64.t; f1'4: Int64.t }
+
+type t_Option_tup2_i64_i64 = None'2 | Some'2 tup2_i64_i64
+
+predicate restore_rewrite_record_legal [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 126 0 130 9] (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+  [%#srewritten_record'3] restore_record_placeable frame record
+  /\ match previous_offset_delta with
+      | Some'1 previous -> Int32.to_int previous < Int32.to_int record.offset_delta
+      | None'1 -> true
+      end
+  /\ kafka_record_timestamp frame record <= Int64.to_int frame.max_timestamp
+
+let restore_rewritten_record (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame)
+  (record: t_RestoreRecordDeltas) (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:restore_rewritten_record ensures] [%#srewritten_record'0] match result with
+      | Some'2 {f0'4 = offset'0; f1'4 = timestamp} -> restore_rewrite_record_legal previous_offset_delta frame record
+      /\ Int64.to_int offset'0 = Int64.to_int frame.base_offset + Int32.to_int record.offset_delta
+      /\ Int64.to_int timestamp = kafka_record_timestamp frame record
+      | None'2 -> not restore_rewrite_record_legal previous_offset_delta frame record
+      end}
+    (! return {result}) ]
+
+let expect_tup2_i64_i64 (self_: t_Option_tup2_i64_i64) (msg: string) (return (x: tup2_i64_i64)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None'2}
+  any
+  [ return (result: tup2_i64_i64) -> {[@stop_split] [@expl:expect ensures] [%#soption'0] Some'2 result = self_}
+    (! return {result}) ]
+
+let push_tup3_usize_i64_i64 (self_: MutBorrow.t t_Vec_tup3_usize_i64_i64_Global) (v: tup3_usize_i64_i64)
+  (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'4] view_Vec_tup3_usize_i64_i64_Global self_.final
+    = Seq.snoc (view_Vec_tup3_usize_i64_i64_Global self_.current) v}
+    (! return {result}) ]
+
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 9 0 9 49] (sequence: int) : int
+ = [%#ssequence_decision'0] EuclideanDivision.mod sequence 2147483648
+
+let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:increment_sequence ensures] [%#ssequence_decision] Int32.to_int result
+    = sequence_modulo_2_31 (Int32.to_int sequence + Int32.to_int increment)}
+    (! return {result}) ]
+
+type t_ProducerSnapshotEntryFacts = {
+  producer_id'0: Int64.t;
+  producer_epoch'0: Int16.t;
+  last_sequence'0: Int32.t;
+  last_offset'0: Int64.t;
+  offset_delta'0: Int32.t;
+  coordinator_epoch'0: Int32.t;
+  current_txn_first_offset'0: Int64.t }
+
+type t_ProducerDecision = Append | Duplicate UInt64.t | OutOfOrder | Fenced
+
+type tup5_i64_i32_i64_ProducerDecision_ProducerDecision = {
+  f0'5: Int64.t;
+  f1'5: Int32.t;
+  f2'5: Int64.t;
+  f3'5: t_ProducerDecision;
+  f4'5: t_ProducerDecision }
+
+type t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision =
+  | None'3
+  | Some'3 tup5_i64_i32_i64_ProducerDecision_ProducerDecision
+
+constant const_MAX'1: Int32.t = (2147483647: Int32.t)
+
+let reloaded_snapshot_preserves_last_batch_retry (snapshot: Int64.t) (entry: t_ProducerSnapshotEntryFacts)
+  (request_epoch: Int16.t) (return (x: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision)) = any
+  [ return (result: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) ->
+  {[@stop_split] [@expl:reloaded_snapshot_preserves_last_batch_retry ensures] ([@stop_split] [@expl:reloaded_snapshot_preserves_last_batch_retry ensures #0] [%#sproducer_replay] match result with
+          | Some'3 _ -> true
+          | None'3 -> false
+          end
+      = (ge_log_Int (Int64.to_int snapshot) 0
+      /\ ge_log_Int (Int64.to_int entry.producer_id'0) 0
+      /\ ge_log_Int (Int16.to_int entry.producer_epoch'0) 0
+      /\ ge_log_Int (Int32.to_int entry.coordinator_epoch'0) (- 1)
+      /\ ge_log_Int (Int32.to_int entry.last_sequence'0) 0
+      /\ ge_log_Int (Int32.to_int entry.offset_delta'0) 0
+      /\ Int32.to_int entry.offset_delta'0 <= Int64.to_int entry.last_offset'0
+      /\ Int64.to_int entry.last_offset'0 < Int64.to_int snapshot
+      /\ (Int64.to_int entry.current_txn_first_offset'0 = - 1
+      \/ 0 <= Int64.to_int entry.current_txn_first_offset'0
+      /\ Int64.to_int entry.current_txn_first_offset'0 <= Int64.to_int entry.last_offset'0
+      /\ Int64.to_int entry.current_txn_first_offset'0 < Int64.to_int snapshot)))
+    /\ ([@stop_split] [@expl:reloaded_snapshot_preserves_last_batch_retry ensures #1] [%#sproducer_replay'0] match result with
+      | None'3 -> true
+      | Some'3 {f0'5 = base; f1'5 = sequence; f2'5 = frontier; f3'5 = retry; f4'5 = successor} -> 0 <= Int64.to_int base
+      /\ Int64.to_int base = Int64.to_int entry.last_offset'0 - Int32.to_int entry.offset_delta'0
+      /\ 0 <= Int32.to_int sequence
+      /\ Int32.to_int sequence <= Int32.to_int const_MAX'1
+      /\ Int32.to_int sequence
+        = sequence_modulo_2_31 (Int32.to_int entry.last_sequence'0 - Int32.to_int entry.offset_delta'0)
+      /\ Int64.to_int frontier = Int64.to_int entry.last_offset'0 + 1
+      /\ Int64.to_int base < Int64.to_int frontier
+      /\ Int64.to_int frontier <= Int64.to_int snapshot
+      /\ (request_epoch = entry.producer_epoch'0 -> retry = Duplicate (4: UInt64.t))
+      /\ (Int16.to_int request_epoch < Int16.to_int entry.producer_epoch'0 -> retry = Fenced)
+      /\ (gt_log_Int (Int16.to_int request_epoch) (Int16.to_int entry.producer_epoch'0)
+        -> retry = (if Int32.to_int sequence = 0 then Append else OutOfOrder))
+      /\ successor = Append
+      end)}
+    (! return {result}) ]
+
+let expect_tup5_i64_i32_i64_ProducerDecision_ProducerDecision
+  (self_: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) (msg: string)
+  (return (x: tup5_i64_i32_i64_ProducerDecision_ProducerDecision)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None'3}
+  any
+  [ return (result: tup5_i64_i32_i64_ProducerDecision_ProducerDecision) ->
+  {[@stop_split] [@expl:expect ensures] [%#soption'0] Some'3 result = self_}
+    (! return {result}) ]
+
+type tup4_Vec_tup3_usize_i64_i64_Global_i64_i32_ProducerDecision = {
+  f0'6: t_Vec_tup3_usize_i64_i64_Global;
+  f1'6: Int64.t;
+  f2'6: Int32.t;
+  f3'6: t_ProducerDecision }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let filtered_restore_preserves_producer_retry [#"/workspace/crates/verified/src/composition/restore_retry.rs" 39 0 44 57]
+  (frame: t_RestoreBatchFrame) (records: Slice64.slice tup2_RestoreRecordDeltas_RestoreExclusions)
+  (bounds: tup2_Option_i64_Option_i64) (producer'0: tup3_i64_i16_i32)
+  (return (x: tup4_Vec_tup3_usize_i64_i64_Global_i64_i32_ProducerDecision)) =
+{[@stop_split] [@expl:filtered_restore_preserves_producer_retry requires] ([@stop_split] [@expl:filtered_restore_preserves_producer_retry requires #0] [%#srestore_retry'37] ge_log_Int (Int64.to_int frame.base_offset) 0
+    /\ selection_input_valid frame (Slice64.view records))
+  /\ ([@stop_split] [@expl:filtered_restore_preserves_producer_retry requires #1] [%#srestore_retry'38] Seq.length (Slice64.view records)
+    <= Int32.to_int const_MAX'1)
+  /\ ([@stop_split] [@expl:filtered_restore_preserves_producer_retry requires #2] [%#srestore_retry'39] ge_log_Int (Int64.to_int producer'0.f0'2) 0
+    /\ ge_log_Int (Int16.to_int producer'0.f1'2) 0 /\ ge_log_Int (Int32.to_int producer'0.f2'2) 0)
+  /\ ([@stop_split] [@expl:filtered_restore_preserves_producer_retry requires #3] [%#srestore_retry'40] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view records)
+      -> kafka_record_timestamp frame (Seq.get (Slice64.view records) i).f0 <= Int64.to_int frame.max_timestamp)
+  /\ ([@stop_split] [@expl:filtered_restore_preserves_producer_retry requires #4] [%#srestore_retry'41] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view records)
+    -> Int32.to_int (Seq.get (Slice64.view records) i).f0.offset_delta
+    < Int32.to_int (Seq.get (Slice64.view records) j).f0.offset_delta)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = restore_selection_respects_batch_extent [%#srestore_retry] {frame} {records} {bounds.f0'0} {bounds.f1'0}
+        (fun (_x: t_Option_tup3_i64_RestoreFilterDecision_Vec_usize_Global) -> [ &_31 <- _x ] s1)
+    | s1 = [ &_37 <- [%#srestore_retry'0] "admitted source coordinates" ] s2
+    | s2 = expect_tup3_i64_RestoreFilterDecision_Vec_usize_Global [%#srestore_retry'1] {_31} {_37}
+        (fun (_x: tup3_i64_RestoreFilterDecision_Vec_usize_Global) -> [ &_30 <- _x ] s3)
+    | s3 = [ &selected <- _30.f2'1 ] s4
+    | s4 = len_usize [%#srestore_retry'2] {selected} (fun (_x: UInt64.t) -> [ &_41 <- _x ] s5)
+    | s5 = [ &_40 <- _41 ] s6
+    | s6 = [ &_43 <- ([%#srestore_retry'3] (2147483648: UInt64.t)) = ([%#srestore_retry'4] (0: UInt64.t)) ] s7
+    | s7 = {[@expl:remainder by zero] [%#srestore_retry'4] not _43} s8
+    | s8 = UInt64.rem [%#srestore_retry'4] {_40} {[%#srestore_retry'3] (2147483648: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_39 <- _x ] s9)
+    | s9 = [ &retained_count <- Int32.of_int (UInt64.t'int _39) ] s10
+    | s10 = [ &_46 <- { base_offset'0 = frame.base_offset;
+                        last_offset_delta'0 = frame.last_offset_delta;
+                        records_count'0 = retained_count } ] s11
+    | s11 = [ &_50 <- { control = ([%#srestore_retry'5] false);
+                        transactional = ([%#srestore_retry'6] false);
+                        producer_id = producer'0.f0'2;
+                        producer_epoch = producer'0.f1'2;
+                        base_sequence = producer'0.f2'2 } ] s12
+    | s12 = restore_rewritten_batch_header [%#srestore_retry'7] {_46} {_50}
+        (fun (_x: t_Option_i64) -> [ &_45 <- _x ] s13)
+    | s13 = [ &_55 <- [%#srestore_retry'8] "legal data rewrite" ] s14
+    | s14 = expect_i64 [%#srestore_retry'9] {_45} {_55} (fun (_x: Int64.t) -> [ &end' <- _x ] s15)
+    | s15 = new_tup3_usize_i64_i64 [%#srestore_retry'10]
+        (fun (_x: t_Vec_tup3_usize_i64_i64_Global) -> [ &retained <- _x ] s16)
+    | s16 = [ &i <- [%#srestore_retry'11] (0: UInt64.t) ] s17
+    | s17 = [ &previous <- None'1 ] s18
+    | s18 = bb9 ]
+  | bb9 = bb9invariant
+    [ bb9 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb9 ([%#srestore_retry'12] Seq.length (view_Vec_usize_Global selected)
+      - UInt64.t'int i)}
+      bb9invariant
+    | bb9invariant = {[@expl:loop invariant #0] [%#srestore_retry'16] UInt64.t'int i
+        <= Seq.length (view_Vec_usize_Global selected)
+      /\ Seq.length (view_Vec_tup3_usize_i64_i64_Global retained) = UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#srestore_retry'15] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (Seq.get (view_Vec_tup3_usize_i64_i64_Global retained) j).f0'3 = Seq.get (view_Vec_usize_Global selected) j
+        /\ Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global retained) j).f1'3
+          = Int64.to_int frame.base_offset
+          + Int32.to_int (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j))).f0.offset_delta
+        /\ Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global retained) j).f2'3
+        = kafka_record_timestamp frame (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j))).f0}
+      {[@expl:loop invariant #2] [%#srestore_retry'14] previous
+      = (if UInt64.t'int i = 0 then
+        None'1
+      else
+        Some'1 ((Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) (UInt64.t'int i
+        - 1)))).f0.offset_delta)
+      )}
+      (! [ &variant_old_bb9 <- [%#srestore_retry'12] Seq.length (view_Vec_usize_Global selected) - UInt64.t'int i ] s0)
+      [ s0 = len_usize [%#srestore_retry'13] {selected} (fun (_x: UInt64.t) -> [ &_82 <- _x ] s1)
+      | s1 = [ &_80 <- UInt64.lt i _82 ] s2
+      | s2 = any [ br0 -> {_80 = false} (! bb19) | br1 -> {_80} (! bb12) ] ]
+      [ bb12 = s0
+        [ s0 = index_Vec_usize_Global [%#srestore_retry'17] {selected} {i} (fun (_x: UInt64.t) -> [ &_86 <- _x ] s1)
+        | s1 = [ &_85 <- _86 ] s2
+        | s2 = [ &_89 <- Slice64.length records ] s3
+        | s3 = [ &_90 <- UInt64.lt _85 _89 ] s4
+        | s4 = {[@expl:index in bounds] [%#srestore_retry'18] _90} s5
+        | s5 = Slice64.get [%#srestore_retry'19] <tup2_RestoreRecordDeltas_RestoreExclusions> {records} {_85}
+            (fun (r: tup2_RestoreRecordDeltas_RestoreExclusions) -> [ &record <- r.f0 ] s6)
+        | s6 = restore_rewritten_record [%#srestore_retry'20] {previous} {frame} {record}
+            (fun (_x: t_Option_tup2_i64_i64) -> [ &_92 <- _x ] s7)
+        | s7 = [ &_97 <- [%#srestore_retry'21] "legal survivor" ] s8
+        | s8 = expect_tup2_i64_i64 [%#srestore_retry'22] {_92} {_97}
+            (fun (_x: tup2_i64_i64) -> [ &coordinates <- _x ] s9)
+        | s9 = {[@expl:assertion] [%#srestore_retry'23] Int64.to_int coordinates.f0'4
+            = Int64.to_int frame.base_offset + Int32.to_int record.offset_delta
+          /\ Int64.to_int coordinates.f1'4 = kafka_record_timestamp frame record}
+          s10
+        | s10 = index_Vec_usize_Global [%#srestore_retry'24] {selected} {i} (fun (_x: UInt64.t) -> [ &_108 <- _x ] s11)
+        | s11 = [ &_106 <- { f0'3 = _108; f1'3 = coordinates.f0'4; f2'3 = coordinates.f1'4 } ] s12
+        | s12 = MutBorrow.borrow_mut <t_Vec_tup3_usize_i64_i64_Global> {retained}
+            (fun (_bor: MutBorrow.t t_Vec_tup3_usize_i64_i64_Global) ->
+              [ &_105 <- _bor ] [ &retained <- _bor.final ] s13)
+        | s13 = push_tup3_usize_i64_i64 [%#srestore_retry'25] {_105} {_106} (fun (_x: ()) -> [ &_104 <- _x ] s14)
+        | s14 = [ &_113 <- Some'1 (record.offset_delta) ] s15
+        | s15 = [ &previous <- _113 ] s16
+        | s16 = UInt64.add [%#srestore_retry'27] {i} {[%#srestore_retry'26] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s17)
+        | s17 = bb9 ] ] ]
+  | bb19 = s0
+    [ s0 = increment_sequence [%#srestore_retry'28] {producer'0.f2'2} {frame.last_offset_delta}
+        (fun (_x: Int32.t) -> [ &_119 <- _x ] s1)
+    | s1 = Int64.sub [%#srestore_retry'30] {end'} {[%#srestore_retry'29] (1: Int64.t)}
+        (fun (_x: Int64.t) -> [ &_122 <- _x ] s2)
+    | s2 = [ &entry <- { producer_id'0 = producer'0.f0'2;
+                         producer_epoch'0 = producer'0.f1'2;
+                         last_sequence'0 = _119;
+                         last_offset'0 = _122;
+                         offset_delta'0 = frame.last_offset_delta;
+                         coordinator_epoch'0 = ([%#srestore_retry'31] (-1: Int32.t));
+                         current_txn_first_offset'0 = ([%#srestore_retry'32] (-1: Int64.t)) } ] s3
+    | s3 = reloaded_snapshot_preserves_last_batch_retry [%#srestore_retry'33] {end'} {entry} {producer'0.f1'2}
+        (fun (_x: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision) -> [ &_130 <- _x ] s4)
+    | s4 = [ &_135 <- [%#srestore_retry'34] "faithful rewritten last batch" ] s5
+    | s5 = expect_tup5_i64_i32_i64_ProducerDecision_ProducerDecision [%#srestore_retry'35] {_130} {_135}
+        (fun (_x: tup5_i64_i32_i64_ProducerDecision_ProducerDecision) -> [ &_129 <- _x ] s6)
+    | s6 = [ &_base <- _129.f0'5 ] s7
+    | s7 = [ &first <- _129.f1'5 ] s8
+    | s8 = [ &frontier <- _129.f2'5 ] s9
+    | s9 = [ &retry <- _129.f3'5 ] s10
+    | s10 = {[@expl:assertion] [%#srestore_retry'36] _base = frame.base_offset
+      /\ first = producer'0.f2'2 /\ frontier = end'}
+      s11
+    | s11 = [ &_ret <- { f0'6 = retained; f1'6 = frontier; f2'6 = first; f3'6 = retry } ] s12
+    | s12 = return {_ret} ] ]
+  [ & _ret: tup4_Vec_tup3_usize_i64_i64_Global_i64_i32_ProducerDecision = Any.any_l ()
+  | & frame: t_RestoreBatchFrame = frame
+  | & records: Slice64.slice tup2_RestoreRecordDeltas_RestoreExclusions = records
+  | & bounds: tup2_Option_i64_Option_i64 = bounds
+  | & producer'0: tup3_i64_i16_i32 = producer'0
+  | & selected: t_Vec_usize_Global = Any.any_l ()
+  | & _30: tup3_i64_RestoreFilterDecision_Vec_usize_Global = Any.any_l ()
+  | & _31: t_Option_tup3_i64_RestoreFilterDecision_Vec_usize_Global = Any.any_l ()
+  | & _37: string = Any.any_l ()
+  | & retained_count: Int32.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & end': Int64.t = Any.any_l ()
+  | & _45: t_Option_i64 = Any.any_l ()
+  | & _46: t_RestoreLayout = Any.any_l ()
+  | & _50: t_RestoreProducer = Any.any_l ()
+  | & _55: string = Any.any_l ()
+  | & retained: t_Vec_tup3_usize_i64_i64_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & previous: t_Option_i32 = Any.any_l ()
+  | & _80: bool = Any.any_l ()
+  | & _82: UInt64.t = Any.any_l ()
+  | & record: t_RestoreRecordDeltas = Any.any_l ()
+  | & _85: UInt64.t = Any.any_l ()
+  | & _86: UInt64.t = Any.any_l ()
+  | & _89: UInt64.t = Any.any_l ()
+  | & _90: bool = Any.any_l ()
+  | & coordinates: tup2_i64_i64 = Any.any_l ()
+  | & _92: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _97: string = Any.any_l ()
+  | & _104: () = Any.any_l ()
+  | & _105: MutBorrow.t t_Vec_tup3_usize_i64_i64_Global = Any.any_l ()
+  | & _106: tup3_usize_i64_i64 = Any.any_l ()
+  | & _108: UInt64.t = Any.any_l ()
+  | & _113: t_Option_i32 = Any.any_l ()
+  | & entry: t_ProducerSnapshotEntryFacts = Any.any_l ()
+  | & _119: Int32.t = Any.any_l ()
+  | & _122: Int64.t = Any.any_l ()
+  | & _base: Int64.t = Any.any_l ()
+  | & first: Int32.t = Any.any_l ()
+  | & frontier: Int64.t = Any.any_l ()
+  | & retry: t_ProducerDecision = Any.any_l ()
+  | & _129: tup5_i64_i32_i64_ProducerDecision_ProducerDecision = Any.any_l ()
+  | & _130: t_Option_tup5_i64_i32_i64_ProducerDecision_ProducerDecision = Any.any_l ()
+  | & _135: string = Any.any_l ()
+  | & variant_old_bb9: int = Any.any_l () ])
+  [ return (result: tup4_Vec_tup3_usize_i64_i64_Global_i64_i32_ProducerDecision) ->
+  {[@stop_split] [@expl:filtered_restore_preserves_producer_retry ensures] ([@stop_split] [@expl:filtered_restore_preserves_producer_retry ensures #0] [%#srestore_retry'42] Int64.to_int result.f1'6
+      = Int64.to_int frame.base_offset + Int32.to_int frame.last_offset_delta + 1)
+    /\ ([@stop_split] [@expl:filtered_restore_preserves_producer_retry ensures #1] [%#srestore_retry'43] result.f2'6
+        = producer'0.f2'2
+      /\ result.f3'6 = Duplicate (4: UInt64.t))
+    /\ ([@stop_split] [@expl:filtered_restore_preserves_producer_retry ensures #2] [%#srestore_retry'44] Seq.length (view_Vec_tup3_usize_i64_i64_Global result.f0'6)
+      <= Seq.length (Slice64.view records)
+    /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_tup3_usize_i64_i64_Global result.f0'6)
+        -> UInt64.t'int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f0'3
+          < Seq.length (Slice64.view records)
+        /\ Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f1'3
+          = Int64.to_int frame.base_offset
+          + Int32.to_int (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f0'3)).f0.offset_delta
+        /\ Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f2'3
+          = kafka_record_timestamp frame (Seq.get (Slice64.view records) (UInt64.t'int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f0'3)).f0
+        /\ Int64.to_int frame.base_offset
+          <= Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f1'3
+        /\ Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f1'3 < Int64.to_int result.f1'6
+        /\ Int64.to_int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f2'3
+        <= Int64.to_int frame.max_timestamp)
+    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_tup3_usize_i64_i64_Global result.f0'6)
+        -> UInt64.t'int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) i).f0'3
+        < UInt64.t'int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) j).f0'3)
+    /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view records)
+      -> (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_tup3_usize_i64_i64_Global result.f0'6)
+          /\ UInt64.t'int (Seq.get (view_Vec_tup3_usize_i64_i64_Global result.f0'6) j).f0'3 = i)
+      = restore_source_selected frame (Seq.get (Slice64.view records) i) bounds.f0'0 bounds.f1'0))}
+    (! return {result}) ]

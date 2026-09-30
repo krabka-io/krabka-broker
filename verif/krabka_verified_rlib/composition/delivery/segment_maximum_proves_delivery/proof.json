@@ -1,0 +1,20 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_earliest_max_timestamp_index": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_scheduled_delivery_visible": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_segment_maximum_proves_delivery": {
+        "prover": "alt-ergo",
+        "time": 0.019
+      }
+    }
+  }
+}

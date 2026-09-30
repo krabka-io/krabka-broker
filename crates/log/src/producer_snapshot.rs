@@ -533,16 +533,27 @@ mod tests {
 
     #[test]
     fn corrupt_latest_snapshot_is_removed_and_previous_snapshot_is_loaded() {
-        let dir = tempfile::tempdir().unwrap();
-        let previous = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
-        let corrupt = write(&FileIo, dir.path(), Offset(103), &sample()).unwrap();
-        fs::write(&corrupt, b"broken").unwrap();
-
-        let (offset, entries) = reload(dir.path(), range(0, 103)).unwrap().unwrap();
-        assert2::assert!(offset == Offset(102));
-        assert2::assert!(entries == sample());
-        assert2::assert!(previous.exists());
-        assert2::assert!(!corrupt.exists());
+        for corrupt_count in 0..=4 {
+            let dir = tempfile::tempdir().unwrap();
+            for offset in 102..=105 {
+                write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
+            }
+            for offset in (106 - corrupt_count)..=105 {
+                fs::write(path(dir.path(), Offset(offset)), b"broken").unwrap();
+            }
+            let loaded = reload(dir.path(), range(0, 105)).unwrap();
+            if corrupt_count == 4 {
+                assert2::assert!(loaded == None);
+            } else {
+                let (offset, entries) = loaded.unwrap();
+                assert2::assert!(offset == Offset(105 - corrupt_count));
+                assert2::assert!(entries == sample());
+                assert2::assert!(path(dir.path(), offset).exists());
+            }
+            for offset in (106 - corrupt_count)..=105 {
+                assert2::assert!(!path(dir.path(), Offset(offset)).exists());
+            }
+        }
     }
 
     #[test]
@@ -594,12 +605,18 @@ mod tests {
     #[test]
     fn snapshot_read_io_failure_is_not_treated_as_corruption() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir(path(dir.path(), Offset(102))).unwrap();
+        let previous = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let unreadable = path(dir.path(), Offset(103));
+        fs::create_dir(&unreadable).unwrap();
+        let corrupt = write(&FileIo, dir.path(), Offset(104), &sample()).unwrap();
+        fs::write(&corrupt, b"broken").unwrap();
 
         assert2::assert!(matches!(
-            reload(dir.path(), range(0, 102)),
+            reload(dir.path(), range(0, 104)),
             Err(LogError::Io(_))
         ));
+        assert2::assert!(previous.exists() && unreadable.exists());
+        assert2::assert!(!corrupt.exists());
     }
 
     #[test]

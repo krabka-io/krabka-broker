@@ -1,0 +1,383 @@
+(* #"/workspace/crates/verified/src/composition/restored_aborts.rs" 53 0 59 23 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 177 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 178 10 179 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 180 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 181 10 183 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 184 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 185 10 189 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 191 10 191 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 127 16 127 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 142 8 148 9
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 53 10 61 1
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 80 10 83 35
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
+let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 105 10 114 6
+let%span srestored_aborts = "/workspace/crates/verified/src/composition/restored_aborts.rs" 60 38 60 43
+let%span srestored_aborts'0 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 60 45 60 49
+let%span srestored_aborts'1 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 60 21 60 66
+let%span srestored_aborts'2 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 61 19 61 68
+let%span srestored_aborts'3 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 62 35 62 45
+let%span srestored_aborts'4 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 63 16 63 22
+let%span srestored_aborts'5 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 74 14 74 33
+let%span srestored_aborts'6 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 75 14 75 27
+let%span srestored_aborts'7 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 71 16 73 75
+let%span srestored_aborts'8 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 69 16 70 41
+let%span srestored_aborts'9 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 68 16 68 83
+let%span srestored_aborts'10 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 67 16 67 80
+let%span srestored_aborts'11 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 66 16 66 96
+let%span srestored_aborts'12 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 65 16 65 61
+let%span srestored_aborts'13 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 76 20 76 30
+let%span srestored_aborts'14 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 77 12 77 72
+let%span srestored_aborts'15 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 80 28 84 9
+let%span srestored_aborts'16 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 85 16 85 35
+let%span srestored_aborts'17 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 80 28 85 36
+let%span srestored_aborts'18 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 86 11 86 75
+let%span srestored_aborts'19 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 87 12 87 28
+let%span srestored_aborts'20 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 13 90 14
+let%span srestored_aborts'21 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 8 90 14
+let%span srestored_aborts'22 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 93 18 93 38
+let%span srestored_aborts'23 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 94 18 94 57
+let%span srestored_aborts'24 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 35 10 52 1
+let%span srestored_aborts'25 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 29 16 29 85
+let%span srestored_aborts'26 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 17 16 21 76
+
+use creusot.int.Int64
+use seq.Seq
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.MinMax
+use int.Int
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 126 0 126 40] (a: int) (b: int) : int
+ = [%#sfetch'7] if a <= b then a else b
+
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 140 0 140 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+ = [%#sfetch'8] if is_follower then
+    Int64.to_int w.log_end
+  else
+    if read_committed then
+      offset_min (offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)) (Int64.to_int w.lso)
+    else
+      offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+
+
+
+let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) (fetch_offset: Int64.t)
+  (return (x: t_FetchVisibility)) = any
+  [ return (result: t_FetchVisibility) ->
+  {[@stop_split] [@expl:fetch_visibility ensures] ([@stop_split] [@expl:fetch_visibility ensures #0] [%#sfetch] result.out_of_range
+      = (Int64.to_int fetch_offset < Int64.to_int w.log_start))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #1] [%#sfetch'0] result.empty
+      = (not result.out_of_range
+      /\ ge_log_Int (Int64.to_int fetch_offset) (if is_follower then
+        Int64.to_int w.log_end
+      else
+        offset_min (Int64.to_int w.hw) (Int64.to_int w.deliverable)
+      )))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #2] [%#sfetch'1] Int64.to_int result.limit_offset
+      = fetch_limit_model is_follower read_committed w)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #3] [%#sfetch'2] not is_follower
+      -> Int64.to_int result.limit_offset <= Int64.to_int w.hw
+      /\ Int64.to_int result.limit_offset <= Int64.to_int w.deliverable
+      /\ (read_committed -> Int64.to_int result.limit_offset <= Int64.to_int w.lso))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #4] [%#sfetch'3] result.read_committed_aborts
+      = (read_committed /\ not is_follower))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #5] [%#sfetch'4] Int64.to_int result.effective_lso
+      = (if result.read_committed_aborts then
+        offset_min (Int64.to_int w.lso) (Int64.to_int w.hw)
+      else
+        Int64.to_int w.lso
+      ))
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #6] [%#sfetch'5] result.response_hw = w.hw)
+    /\ ([@stop_split] [@expl:fetch_visibility ensures #7] [%#sfetch'6] Int64.to_int result.response_lso
+    = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
+    (! return {result}) ]
+
+let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sfuture_log_swap_admission] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sfuture_log_swap_admission'0] Int64.to_int result
+      <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sfuture_log_swap_admission'1] Int64.to_int result
+      = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]
+
+type t_Vec_usize_Global
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_usize_Global (self: t_Vec_usize_Global) : Seq.seq UInt64.t
+
+axiom view_Vec_usize_Global_spec:
+  forall self: t_Vec_usize_Global [view_Vec_usize_Global self]. [%#svec'0] Seq.length (view_Vec_usize_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_usize (return (x: t_Vec_usize_Global)) = any
+  [ return (result: t_Vec_usize_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_usize_Global result) = 0}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_RestoreAbortedTxn = { producer_id: Int64.t; start_offset: Int64.t; last_offset: Int64.t }
+
+let len_RestoreAbortedTxn (self_: Slice64.slice t_RestoreAbortedTxn) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate abort_intersects_fetch [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 28 0 28 91] (entry: t_RestoreAbortedTxn) (from: int) (end': int) =
+  [%#srestored_aborts'25] from < end'
+  /\ Int64.to_int entry.start_offset < end' /\ ge_log_Int (Int64.to_int entry.last_offset) from
+
+type t_RestoreSegmentExtent = { base_offset'0: Int64.t; last_offset'0: Int64.t }
+
+predicate restored_abort_index_valid [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 13 0 16 9] (entries: Seq.seq t_RestoreAbortedTxn) (owner: t_RestoreSegmentExtent) =
+  [%#srestored_aborts'26] forall i: int. 0 <= i /\ i < Seq.length entries
+    -> ge_log_Int (Int64.to_int (Seq.get entries i).producer_id) 0
+    /\ ge_log_Int (Int64.to_int owner.base_offset'0) 0
+    /\ 0 <= Int64.to_int (Seq.get entries i).start_offset
+    /\ Int64.to_int (Seq.get entries i).start_offset <= Int64.to_int (Seq.get entries i).last_offset
+    /\ Int64.to_int owner.base_offset'0 <= Int64.to_int (Seq.get entries i).last_offset
+    /\ Int64.to_int (Seq.get entries i).last_offset <= Int64.to_int owner.last_offset'0
+    /\ (gt_log_Int i 0
+    -> Int64.to_int (Seq.get entries (i - 1)).last_offset < Int64.to_int (Seq.get entries i).last_offset)
+
+let restore_txn_index_entry_valid (previous_last: t_Option_i64) (entry: t_RestoreAbortedTxn)
+  (segment: t_RestoreSegmentExtent) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:restore_txn_index_entry_valid ensures] [%#srestore_producer_ids_strict] result
+    = (ge_log_Int (Int64.to_int entry.producer_id) 0
+    /\ ge_log_Int (Int64.to_int segment.base_offset'0) 0
+    /\ ge_log_Int (Int64.to_int entry.start_offset) 0
+    /\ Int64.to_int entry.start_offset <= Int64.to_int entry.last_offset
+    /\ Int64.to_int segment.base_offset'0 <= Int64.to_int entry.last_offset
+    /\ Int64.to_int entry.last_offset <= Int64.to_int segment.last_offset'0
+    /\ match previous_last with
+      | Some previous -> Int64.to_int previous < Int64.to_int entry.last_offset
+      | None -> true
+      end)}
+    (! return {result}) ]
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None'0 | Some'0 tup2_i64_i64
+
+let aborted_transaction_interval (pending_start: t_Option_i64) (marker_last: Int64.t) (producer_id'0: Int64.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:aborted_transaction_interval ensures] [%#snext_producer_identity] match result with
+      | Some'0 {f0 = start; f1 = last} -> ge_log_Int (Int64.to_int producer_id'0) 0
+      /\ pending_start = Some start
+      /\ Int64.to_int last = Int64.to_int marker_last /\ Int64.to_int start <= Int64.to_int last
+      | None'0 -> Int64.to_int producer_id'0 < 0
+      \/ pending_start = None
+      \/ match pending_start with
+        | Some start -> gt_log_Int (Int64.to_int start) (Int64.to_int marker_last)
+        | None -> false
+        end
+      end}
+    (! return {result}) ]
+
+let expect_tup2_i64_i64 (self_: t_Option_tup2_i64_i64) (msg: string) (return (x: tup2_i64_i64)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None'0}
+  any
+  [ return (result: tup2_i64_i64) -> {[@stop_split] [@expl:expect ensures] [%#soption'0] Some'0 result = self_}
+    (! return {result}) ]
+
+let aborted_transaction_overlaps (entry_start: Int64.t) (entry_last: Int64.t) (query_start: Int64.t)
+  (query_end: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:aborted_transaction_overlaps ensures] [%#snext_producer_identity'0] result
+    = (Int64.to_int entry_start <= Int64.to_int entry_last
+    /\ Int64.to_int query_start < Int64.to_int query_end
+    /\ Int64.to_int entry_start < Int64.to_int query_end
+    /\ ge_log_Int (Int64.to_int entry_last) (Int64.to_int query_start))}
+    (! return {result}) ]
+
+let push_usize (self_: MutBorrow.t t_Vec_usize_Global) (v: UInt64.t) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_usize_Global self_.final
+    = Seq.snoc (view_Vec_usize_Global self_.current) v}
+    (! return {result}) ]
+
+type t_Option_Vec_usize_Global = None'1 | Some'1 t_Vec_usize_Global
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restored_aborts_remain_bounded_when_fetch_shrinks [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 53 0 59 23]
+  (entries: Slice64.slice t_RestoreAbortedTxn) (segment: t_RestoreSegmentExtent) (w: t_FetchWatermarks)
+  (fetch_start: Int64.t) (cut: Int64.t) (return (x: t_Option_Vec_usize_Global)) = (! bb0
+  [ bb0 = s0
+    [ s0 = fetch_visibility [%#srestored_aborts'1] {[%#srestored_aborts] false} {[%#srestored_aborts'0] true} {w}
+        {fetch_start} (fun (_x: t_FetchVisibility) -> [ &visibility <- _x ] s1)
+    | s1 = truncation_frontier [%#srestored_aborts'2] {visibility.limit_offset} {cut}
+        (fun (_x: Int64.t) -> [ &narrowed <- _x ] s2)
+    | s2 = new_usize [%#srestored_aborts'3] (fun (_x: t_Vec_usize_Global) -> [ &selected <- _x ] s3)
+    | s3 = [ &i <- [%#srestored_aborts'4] (0: UInt64.t) ] s4
+    | s4 = [ &previous_last <- None ] s5
+    | s5 = bb4 ]
+  | bb4 = bb4invariant
+    [ bb4 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb4 ([%#srestored_aborts'5] Seq.length (Slice64.view entries)
+      - UInt64.t'int i)}
+      bb4invariant
+    | bb4invariant = {[@expl:loop invariant #0] [%#srestored_aborts'12] UInt64.t'int i
+        <= Seq.length (Slice64.view entries)
+      /\ Seq.length (view_Vec_usize_Global selected) <= UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#srestored_aborts'11] previous_last
+      = (if UInt64.t'int i = 0 then None else Some ((Seq.get (Slice64.view entries) (UInt64.t'int i - 1)).last_offset))}
+      {[@expl:loop invariant #2] [%#srestored_aborts'10] restored_abort_index_valid (Seq.([..]) (Slice64.view entries) 0 (UInt64.t'int i)) segment}
+      {[@expl:loop invariant #3] [%#srestored_aborts'9] forall j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_usize_Global selected)
+        -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j) < UInt64.t'int i}
+      {[@expl:loop invariant #4] [%#srestored_aborts'8] forall j: int, k: int. 0 <= j
+          /\ j < k /\ k < Seq.length (view_Vec_usize_Global selected)
+        -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j)
+        < UInt64.t'int (Seq.get (view_Vec_usize_Global selected) k)}
+      {[@expl:loop invariant #5] [%#srestored_aborts'7] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (exists k: int. 0 <= k
+            /\ k < Seq.length (view_Vec_usize_Global selected)
+            /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) k) = j)
+        = abort_intersects_fetch (Seq.get (Slice64.view entries) j) (Int64.to_int fetch_start) (Int64.to_int narrowed)}
+      (! [ &variant_old_bb4 <- [%#srestored_aborts'5] Seq.length (Slice64.view entries) - UInt64.t'int i ] s0)
+      [ s0 = len_RestoreAbortedTxn [%#srestored_aborts'6] {entries} (fun (_x: UInt64.t) -> [ &_54 <- _x ] s1)
+      | s1 = [ &_52 <- UInt64.lt i _54 ] s2
+      | s2 = any [ br0 -> {_52 = false} (! bb19) | br1 -> {_52} (! bb7) ] ]
+      [ bb7 = s0
+        [ s0 = [ &_57 <- i ] s1
+        | s1 = [ &_58 <- Slice64.length entries ] s2
+        | s2 = [ &_59 <- UInt64.lt _57 _58 ] s3
+        | s3 = {[@expl:index in bounds] [%#srestored_aborts'13] _59} s4
+        | s4 = Slice64.get [%#srestored_aborts'13] <t_RestoreAbortedTxn> {entries} {_57}
+            (fun (r: t_RestoreAbortedTxn) -> [ &entry <- r ] s5)
+        | s5 = restore_txn_index_entry_valid [%#srestored_aborts'14] {previous_last} {entry} {segment}
+            (fun (_x: bool) -> [ &_61 <- _x ] s6)
+        | s6 = any [ br0 -> {_61 = false} (! bb11) | br1 -> {_61} (! bb10) ] ]
+      | bb10 = s0
+        [ s0 = [ &_70 <- Some (entry.start_offset) ] s1
+        | s1 = aborted_transaction_interval [%#srestored_aborts'15] {_70} {entry.last_offset} {entry.producer_id}
+            (fun (_x: t_Option_tup2_i64_i64) -> [ &_69 <- _x ] s2)
+        | s2 = [ &_75 <- [%#srestored_aborts'16] "admitted interval" ] s3
+        | s3 = expect_tup2_i64_i64 [%#srestored_aborts'17] {_69} {_75} (fun (_x: tup2_i64_i64) -> [ &_68 <- _x ] s4)
+        | s4 = [ &start <- _68.f0 ] s5
+        | s5 = [ &last <- _68.f1 ] s6
+        | s6 = aborted_transaction_overlaps [%#srestored_aborts'18] {start} {last} {fetch_start} {narrowed}
+            (fun (_x: bool) -> [ &_77 <- _x ] s7)
+        | s7 = any [ br0 -> {_77 = false} (! bb18) | br1 -> {_77} (! bb15) ] ]
+      | bb15 = s0
+        [ s0 = MutBorrow.borrow_mut <t_Vec_usize_Global> {selected}
+            (fun (_bor: MutBorrow.t t_Vec_usize_Global) -> [ &_83 <- _bor ] [ &selected <- _bor.final ] s1)
+        | s1 = push_usize [%#srestored_aborts'19] {_83} {i} (fun (_x: ()) -> [ &_82 <- _x ] s2)
+        | s2 = bb18 ]
+      | bb18 = s0
+        [ s0 = [ &_85 <- Some (entry.last_offset) ] s1
+        | s1 = [ &previous_last <- _85 ] s2
+        | s2 = UInt64.add [%#srestored_aborts'21] {i} {[%#srestored_aborts'20] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s3)
+        | s3 = bb4 ] ] ]
+  | bb11 = s0 [ s0 = [ &_ret <- None'1 ] s1 | s1 = return {_ret} ]
+  | bb19 = s0
+    [ s0 = {[@expl:assertion] [%#srestored_aborts'22] UInt64.t'int i = Seq.length (Slice64.view entries)} s1
+    | s1 = {[@expl:assertion] [%#srestored_aborts'23] Seq.([..]) (Slice64.view entries) 0 (UInt64.t'int i)
+      = Slice64.view entries}
+      s2
+    | s2 = [ &_ret <- Some'1 selected ] s3
+    | s3 = return {_ret} ] ]
+  [ & _ret: t_Option_Vec_usize_Global = Any.any_l ()
+  | & entries: Slice64.slice t_RestoreAbortedTxn = entries
+  | & segment: t_RestoreSegmentExtent = segment
+  | & w: t_FetchWatermarks = w
+  | & fetch_start: Int64.t = fetch_start
+  | & cut: Int64.t = cut
+  | & visibility: t_FetchVisibility = Any.any_l ()
+  | & narrowed: Int64.t = Any.any_l ()
+  | & selected: t_Vec_usize_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & previous_last: t_Option_i64 = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & entry: t_RestoreAbortedTxn = Any.any_l ()
+  | & _57: UInt64.t = Any.any_l ()
+  | & _58: UInt64.t = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & start: Int64.t = Any.any_l ()
+  | & last: Int64.t = Any.any_l ()
+  | & _68: tup2_i64_i64 = Any.any_l ()
+  | & _69: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _70: t_Option_i64 = Any.any_l ()
+  | & _75: string = Any.any_l ()
+  | & _77: bool = Any.any_l ()
+  | & _82: () = Any.any_l ()
+  | & _83: MutBorrow.t t_Vec_usize_Global = Any.any_l ()
+  | & _85: t_Option_i64 = Any.any_l ()
+  | & variant_old_bb4: int = Any.any_l () ])
+  [ return (result: t_Option_Vec_usize_Global) ->
+  {[@stop_split] [@expl:restored_aborts_remain_bounded_when_fetch_shrinks ensures] [%#srestored_aborts'24] match result with
+      | None'1 -> not restored_abort_index_valid (Slice64.view entries) segment
+      | Some'1 selected -> restored_abort_index_valid (Slice64.view entries) segment
+      /\ Seq.length (view_Vec_usize_Global selected) <= Seq.length (Slice64.view entries)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_usize_Global selected)
+          -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i) < Seq.length (Slice64.view entries))
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_usize_Global selected)
+          -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i)
+          < UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view entries)
+          -> (exists j: int. 0 <= j
+              /\ j < Seq.length (view_Vec_usize_Global selected)
+              /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j) = i)
+          = abort_intersects_fetch (Seq.get (Slice64.view entries) i) (Int64.to_int fetch_start) (MinMax.min (MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)) (Int64.to_int w.deliverable)) (Int64.to_int cut)))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_usize_Global selected)
+        -> abort_intersects_fetch (Seq.get (Slice64.view entries) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))) (Int64.to_int fetch_start) (MinMax.min (MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)) (Int64.to_int w.deliverable)) (Int64.to_int cut))
+        /\ abort_intersects_fetch (Seq.get (Slice64.view entries) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))) (Int64.to_int fetch_start) (MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)) (Int64.to_int w.deliverable))
+        /\ Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))).start_offset
+          < Int64.to_int w.hw
+        /\ Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))).start_offset
+          < Int64.to_int w.lso
+        /\ Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))).start_offset
+        < Int64.to_int w.deliverable)
+      end}
+    (! return {result}) ]

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 20 27 20 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 32 27 32 32 *)
 
 (* <transaction::TransactionMarkerMaterializationDecision as std::clone::Clone> *)
 
@@ -16,7 +16,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TransactionMarkerMaterializationDecision [#"/workspace/crates/verified/src/transaction.rs" 20 27 20 32]
+let clone_TransactionMarkerMaterializationDecision [#"/workspace/crates/verified/src/transaction.rs" 32 27 32 32]
   (self: t_TransactionMarkerMaterializationDecision) (return (x: t_TransactionMarkerMaterializationDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TransactionMarkerMaterializationDecision = Any.any_l ()

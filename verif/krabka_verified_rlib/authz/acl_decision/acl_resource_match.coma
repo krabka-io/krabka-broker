@@ -1,0 +1,46 @@
+(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 25 0 25 83 *)
+
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 27 48 27 53
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 29 12 29 51
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 20 10 23 2
+
+use creusot.prelude.Any
+
+type t_AclResourceTypeMatch = Same | Different
+
+type t_AclPatternKind = Literal | Prefixed
+
+type tup2_AclResourceTypeMatch_AclPatternKind = { f0: t_AclResourceTypeMatch; f1: t_AclPatternKind }
+
+type t_AclResourceFacts = {
+  resource_type: t_AclResourceTypeMatch;
+  exact_name: bool;
+  wildcard_name: bool;
+  name_has_prefix: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let acl_resource_match [#"/workspace/crates/verified/src/authz/acl_decision.rs" 25 0 25 83]
+  (pattern: t_AclPatternKind) (facts: t_AclResourceFacts) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- { f0 = facts.resource_type; f1 = pattern } ] s1
+    | s1 = any [ br0 -> {_9.f0 = Same} (! bb3) | br1 -> {_9.f0 = Different} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#sacl_decision] false ] s1 | s1 = return {_ret} ]
+  | bb3 = any [ br0 -> {_9.f1 = Literal} (! bb6) | br1 -> {_9.f1 = Prefixed} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- facts.name_has_prefix ] s1 | s1 = return {_ret} ]
+  | bb6 = any [ br0 -> {facts.exact_name = false} (! bb9) | br1 -> {facts.exact_name} (! bb8) ]
+  | bb8 = s0 [ s0 = [ &_ret <- [%#sacl_decision'0] true ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- facts.wildcard_name ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & pattern: t_AclPatternKind = pattern
+  | & facts: t_AclResourceFacts = facts
+  | & _9: tup2_AclResourceTypeMatch_AclPatternKind = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_resource_match ensures] [%#sacl_decision'1] result
+    = (facts.resource_type = Same
+    /\ match pattern with
+      | Literal -> facts.exact_name \/ facts.wildcard_name
+      | Prefixed -> facts.name_has_prefix
+      end)}
+    (! return {result}) ]

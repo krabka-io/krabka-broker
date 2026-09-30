@@ -1,0 +1,33 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_append_frontiers_agree": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_branch_Option_AppendFrontiers": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      },
+      "vc_branch_Option_tup3_i64_i64_i64": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_from_residual_Option_tup2_AppendFrontiers_AppendFrontiers": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_reservations_do_not_overlap": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_reserved_pair_preserves_recovery_and_ack_order": {
+        "prover": "alt-ergo",
+        "time": 0.184
+      }
+    }
+  }
+}

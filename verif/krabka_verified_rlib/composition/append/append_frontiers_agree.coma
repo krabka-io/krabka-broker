@@ -1,0 +1,422 @@
+(* #"/workspace/crates/verified/src/composition/append.rs" 34 0 34 86 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 84 10 90 1
+let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 35 17 35 60
+let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 35 17 35 61
+let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 36 26 36 66
+let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 36 26 36 67
+let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 37 44 37 60
+let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 37 63 37 64
+let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 37 44 37 64
+let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 37 22 37 65
+let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 37 22 37 66
+let%span sappend'8 = "/workspace/crates/verified/src/composition/append.rs" 38 45 38 46
+let%span sappend'9 = "/workspace/crates/verified/src/composition/append.rs" 38 48 38 49
+let%span sappend'10 = "/workspace/crates/verified/src/composition/append.rs" 38 70 38 71
+let%span sappend'11 = "/workspace/crates/verified/src/composition/append.rs" 38 19 38 72
+let%span sappend'12 = "/workspace/crates/verified/src/composition/append.rs" 38 19 38 73
+let%span sappend'13 = "/workspace/crates/verified/src/composition/append.rs" 39 15 39 53
+let%span sappend'14 = "/workspace/crates/verified/src/composition/append.rs" 39 15 39 54
+let%span sappend'15 = "/workspace/crates/verified/src/composition/append.rs" 20 10 21 69
+let%span sappend'16 = "/workspace/crates/verified/src/composition/append.rs" 22 10 33 1
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 8 10 21 1
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 94 10 94 87
+let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 95 10 96 55
+let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 101 10 119 1
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sfuture_log_swap_admission] match result with
+      | Some {f0 = last; f1 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ ge_log_Int (Int64.to_int supplied_base) (Int64.to_int expected_base)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base < Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'0 | Some'0 ()
+
+type t_ControlFlow_Option_Infallible_tup2_i64_i64 = Continue tup2_i64_i64 | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'0 -> true
+      | Some'0 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup2_i64_i64 (_1: t_ControlFlow_Option_Infallible_tup2_i64_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_i64_i64 [inv_ControlFlow_Option_Infallible_tup2_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_i64_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_i64_i64) ->
+  {[@stop_split] [@expl:branch_Option_tup2_i64_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_i64_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_AppendFrontiers = {
+  append: tup2_i64_i64;
+  reservation: tup2_i64_i64;
+  recovery: tup2_i64_i64;
+  acknowledgement: Int64.t;
+  scan: Int64.t }
+
+type t_Option_AppendFrontiers = None'1 | Some'1 t_AppendFrontiers
+
+let from_residual_Option_AppendFrontiers (residual: t_Option_Infallible) (return (x: t_Option_AppendFrontiers)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_AppendFrontiers) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result
+    = None'1}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'0: tup2_i64_i64)) = any
+  [ _k (f0'0: tup2_i64_i64) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_i64 = None'2 | Some'2 Int64.t
+
+let produce_durability_frontier (base_offset: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:produce_durability_frontier ensures] [%#sproduce] match result with
+      | Some'2 frontier -> ge_log_Int (Int64.to_int base_offset) 0
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int frontier = Int64.to_int base_offset + Int32.to_int last_offset_delta + 1
+      /\ Int64.to_int base_offset < Int64.to_int frontier
+      | None'2 -> Int64.to_int base_offset < 0
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int base_offset + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_i64 = Continue'0 Int64.t | Break'0 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'1 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue'0 f0'0 -> true
+      | Break'0 f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'2 v -> result = Continue'0 v
+      | None'2 -> result = Break'0 (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break'0 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue'0 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+let reserve_offsets (next: Int64.t) (count: Int64.t) (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator] (result
+        <> None)
+      = (ge_log_Int (Int64.to_int next) 0
+      /\ gt_log_Int (Int64.to_int count) 0 /\ Int64.to_int next + Int64.to_int count <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'0] forall base: Int64.t, next_after: Int64.t. result
+        = Some { f0 = base; f1 = next_after }
+      -> Int64.to_int base = Int64.to_int next /\ Int64.to_int next_after = Int64.to_int next + Int64.to_int count)}
+    (! return {result}) ]
+
+type t_LocalRecoveryStep = { valid_end: UInt64.t; last_offset: Int64.t; next_offset: Int64.t }
+
+type t_Option_LocalRecoveryStep = None'3 | Some'3 t_LocalRecoveryStep
+
+constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
+
+let local_recovery_batch_step (position: UInt64.t) (file_end: UInt64.t) (expected_offset: Int64.t) (batch_base: Int64.t)
+  (last_offset_delta: Int32.t) (encoded_len: UInt64.t) (return (x: t_Option_LocalRecoveryStep)) = any
+  [ return (result: t_Option_LocalRecoveryStep) ->
+  {[@stop_split] [@expl:local_recovery_batch_step ensures] [%#sindex_frontier] match result with
+      | Some'3 step -> UInt64.t'int position <= UInt64.t'int file_end
+      /\ gt_log_Int (UInt64.t'int encoded_len) 0
+      /\ UInt64.t'int step.valid_end = UInt64.t'int position + UInt64.t'int encoded_len
+      /\ UInt64.t'int step.valid_end <= UInt64.t'int file_end
+      /\ ge_log_Int (Int64.to_int batch_base) (Int64.to_int expected_offset)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int step.last_offset = Int64.to_int batch_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int step.next_offset = Int64.to_int step.last_offset + 1
+      /\ gt_log_Int (Int64.to_int step.next_offset) (Int64.to_int expected_offset)
+      | None'3 -> gt_log_Int (UInt64.t'int position) (UInt64.t'int file_end)
+      \/ UInt64.t'int encoded_len = 0
+      \/ gt_log_Int (UInt64.t'int position + UInt64.t'int encoded_len) (UInt64.t'int const_MAX'0)
+      \/ gt_log_Int (UInt64.t'int position + UInt64.t'int encoded_len) (UInt64.t'int file_end)
+      \/ Int64.to_int batch_base < Int64.to_int expected_offset
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX)
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_LocalRecoveryStep = Continue'1 t_LocalRecoveryStep | Break'1 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_LocalRecoveryStep (_1: t_ControlFlow_Option_Infallible_LocalRecoveryStep)
+
+axiom inv_axiom'2 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_LocalRecoveryStep [inv_ControlFlow_Option_Infallible_LocalRecoveryStep x]. inv_ControlFlow_Option_Infallible_LocalRecoveryStep x
+    = match x with
+      | Continue'1 f0'0 -> true
+      | Break'1 f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_LocalRecoveryStep (self_: t_Option_LocalRecoveryStep)
+  (return (x: t_ControlFlow_Option_Infallible_LocalRecoveryStep)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_LocalRecoveryStep) ->
+  {[@stop_split] [@expl:branch_Option_LocalRecoveryStep ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_LocalRecoveryStep result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'3 v -> result = Continue'1 v
+      | None'3 -> result = Break'1 (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'1 (_x: t_ControlFlow_Option_Infallible_LocalRecoveryStep) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break'1 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'1 (_x: t_ControlFlow_Option_Infallible_LocalRecoveryStep) (return (f0'0: t_LocalRecoveryStep)) = any
+  [ _k (f0'0: t_LocalRecoveryStep) -> {Continue'1 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let timestamp_scan_next (cursor: Int64.t) (batch_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:timestamp_scan_next ensures] [%#stimestamp] match result with
+      | Some'2 next -> gt_log_Int (Int64.to_int next) (Int64.to_int cursor)
+      /\ Int64.to_int next = Int64.to_int batch_base + Int32.to_int last_offset_delta + 1
+      | None'2 -> Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX)
+      \/ Int64.to_int batch_base + Int32.to_int last_offset_delta < Int64.to_int cursor
+      end}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let append_frontiers_agree [#"/workspace/crates/verified/src/composition/append.rs" 34 0 34 86]
+  (base: Int64.t) (delta: Int32.t) (return (x: t_Option_AppendFrontiers)) = (! bb0
+  [ bb0 = s0
+    [ s0 = local_append_coordinates [%#sappend] {base} {base} {delta}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_11 <- _x ] s1)
+    | s1 = branch_Option_tup2_i64_i64 [%#sappend'0] {_11}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_10 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: tup2_i64_i64) -> {_10 = Continue x0} (! bb5)
+      | br1 (x0: t_Option_Infallible) -> {_10 = Break x0} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = elim_Break {_10} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_AppendFrontiers [%#sappend'0] {residual}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = elim_Continue {_10} (fun (r0: tup2_i64_i64) -> [ &val' <- r0 ] s1)
+    | s1 = [ &append'0 <- val' ] s2
+    | s2 = produce_durability_frontier [%#sappend'1] {base} {delta} (fun (_x: t_Option_i64) -> [ &_22 <- _x ] s3)
+    | s3 = branch_Option_i64 [%#sappend'2] {_22} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_21 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: Int64.t) -> {_21 = Continue'0 x0} (! bb12)
+      | br1 (x0: t_Option_Infallible) -> {_21 = Break'0 x0} (! bb13) ] ]
+  | bb13 = s0
+    [ s0 = elim_Break'0 {_21} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_AppendFrontiers [%#sappend'2] {residual'0}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = elim_Continue'0 {_21} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &acknowledgement'0 <- val''0 ] s2
+    | s2 = from_i64 [%#sappend'3] {delta} (fun (_x: Int64.t) -> [ &_35 <- _x ] s3)
+    | s3 = Int64.add [%#sappend'5] {_35} {[%#sappend'4] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_34 <- _x ] s4)
+    | s4 = reserve_offsets [%#sappend'6] {base} {_34} (fun (_x: t_Option_tup2_i64_i64) -> [ &_32 <- _x ] s5)
+    | s5 = branch_Option_tup2_i64_i64 [%#sappend'7] {_32}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_31 <- _x ] s6)
+    | s6 = any
+      [ br0 (x0: tup2_i64_i64) -> {_31 = Continue x0} (! bb20)
+      | br1 (x0: t_Option_Infallible) -> {_31 = Break x0} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = elim_Break {_31} (fun (r0: t_Option_Infallible) -> [ &residual'1 <- r0 ] s1)
+    | s1 = from_residual_Option_AppendFrontiers [%#sappend'7] {residual'1}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb20 = s0
+    [ s0 = elim_Continue {_31} (fun (r0: tup2_i64_i64) -> [ &val''1 <- r0 ] s1)
+    | s1 = [ &reservation'0 <- val''1 ] s2
+    | s2 = local_recovery_batch_step [%#sappend'11] {[%#sappend'8] (0: UInt64.t)} {[%#sappend'9] (1: UInt64.t)} {base}
+        {base} {delta} {[%#sappend'10] (1: UInt64.t)} (fun (_x: t_Option_LocalRecoveryStep) -> [ &_44 <- _x ] s3)
+    | s3 = branch_Option_LocalRecoveryStep [%#sappend'12] {_44}
+        (fun (_x: t_ControlFlow_Option_Infallible_LocalRecoveryStep) -> [ &_43 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: t_LocalRecoveryStep) -> {_43 = Continue'1 x0} (! bb27)
+      | br1 (x0: t_Option_Infallible) -> {_43 = Break'1 x0} (! bb28) ] ]
+  | bb28 = s0
+    [ s0 = elim_Break'1 {_43} (fun (r0: t_Option_Infallible) -> [ &residual'2 <- r0 ] s1)
+    | s1 = from_residual_Option_AppendFrontiers [%#sappend'12] {residual'2}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb27 = s0
+    [ s0 = elim_Continue'1 {_43} (fun (r0: t_LocalRecoveryStep) -> [ &val''2 <- r0 ] s1)
+    | s1 = [ &recovery'0 <- val''2 ] s2
+    | s2 = timestamp_scan_next [%#sappend'13] {base} {base} {delta} (fun (_x: t_Option_i64) -> [ &_55 <- _x ] s3)
+    | s3 = branch_Option_i64 [%#sappend'14] {_55} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_54 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: Int64.t) -> {_54 = Continue'0 x0} (! bb34)
+      | br1 (x0: t_Option_Infallible) -> {_54 = Break'0 x0} (! bb35) ] ]
+  | bb35 = s0
+    [ s0 = elim_Break'0 {_54} (fun (r0: t_Option_Infallible) -> [ &residual'3 <- r0 ] s1)
+    | s1 = from_residual_Option_AppendFrontiers [%#sappend'14] {residual'3}
+        (fun (_x: t_Option_AppendFrontiers) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb34 = s0
+    [ s0 = elim_Continue'0 {_54} (fun (r0: Int64.t) -> [ &val''3 <- r0 ] s1)
+    | s1 = [ &scan'0 <- val''3 ] s2
+    | s2 = [ &_67 <- { f0 = recovery'0.last_offset; f1 = recovery'0.next_offset } ] s3
+    | s3 = [ &_64 <- { append = append'0;
+                       reservation = reservation'0;
+                       recovery = _67;
+                       acknowledgement = acknowledgement'0;
+                       scan = scan'0 } ] s4
+    | s4 = [ &_ret <- Some'1 _64 ] s5
+    | s5 = return {_ret} ] ]
+  [ & _ret: t_Option_AppendFrontiers = Any.any_l ()
+  | & base: Int64.t = base
+  | & delta: Int32.t = delta
+  | & append'0: tup2_i64_i64 = Any.any_l ()
+  | & _10: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _11: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup2_i64_i64 = Any.any_l ()
+  | & acknowledgement'0: Int64.t = Any.any_l ()
+  | & _21: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _22: t_Option_i64 = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l ()
+  | & reservation'0: tup2_i64_i64 = Any.any_l ()
+  | & _31: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _32: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _34: Int64.t = Any.any_l ()
+  | & _35: Int64.t = Any.any_l ()
+  | & residual'1: t_Option_Infallible = Any.any_l ()
+  | & val''1: tup2_i64_i64 = Any.any_l ()
+  | & recovery'0: t_LocalRecoveryStep = Any.any_l ()
+  | & _43: t_ControlFlow_Option_Infallible_LocalRecoveryStep = Any.any_l ()
+  | & _44: t_Option_LocalRecoveryStep = Any.any_l ()
+  | & residual'2: t_Option_Infallible = Any.any_l ()
+  | & val''2: t_LocalRecoveryStep = Any.any_l ()
+  | & scan'0: Int64.t = Any.any_l ()
+  | & _54: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _55: t_Option_i64 = Any.any_l ()
+  | & residual'3: t_Option_Infallible = Any.any_l ()
+  | & val''3: Int64.t = Any.any_l ()
+  | & _64: t_AppendFrontiers = Any.any_l ()
+  | & _67: tup2_i64_i64 = Any.any_l () ])
+  [ return (result: t_Option_AppendFrontiers) ->
+  {[@stop_split] [@expl:append_frontiers_agree ensures] ([@stop_split] [@expl:append_frontiers_agree ensures #0] [%#sappend'15] match result with
+          | Some'1 _ -> true
+          | None'1 -> false
+          end
+      = (ge_log_Int (Int64.to_int base) 0
+      /\ ge_log_Int (Int32.to_int delta) 0 /\ Int64.to_int base + Int32.to_int delta + 1 <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:append_frontiers_agree ensures #1] [%#sappend'16] match result with
+      | None'1 -> true
+      | Some'1 w -> Int64.to_int w.append.f0 = Int64.to_int base + Int32.to_int delta
+      /\ Int64.to_int w.append.f1 = Int64.to_int base + Int32.to_int delta + 1
+      /\ Int64.to_int w.reservation.f0 = Int64.to_int base
+      /\ Int64.to_int w.reservation.f1 = Int64.to_int w.append.f1
+      /\ Int64.to_int w.recovery.f0 = Int64.to_int w.append.f0
+      /\ Int64.to_int w.recovery.f1 = Int64.to_int w.append.f1
+      /\ Int64.to_int w.acknowledgement = Int64.to_int w.append.f1
+      /\ Int64.to_int w.scan = Int64.to_int w.append.f1
+      /\ Int64.to_int base <= Int64.to_int w.append.f0 /\ Int64.to_int w.append.f0 < Int64.to_int w.append.f1
+      end)}
+    (! return {result}) ]

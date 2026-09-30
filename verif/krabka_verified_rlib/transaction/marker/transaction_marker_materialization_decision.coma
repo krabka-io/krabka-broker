@@ -1,0 +1,163 @@
+(* #"/workspace/crates/verified/src/transaction/marker.rs" 128 0 131 45 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 132 29 132 30
+let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 133 36 133 37
+let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 134 39 134 41
+let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 135 36 135 38
+let%span smarker'3 = "/workspace/crates/verified/src/transaction/marker.rs" 136 39 136 41
+let%span smarker'4 = "/workspace/crates/verified/src/transaction/marker.rs" 137 73 137 75
+let%span smarker'5 = "/workspace/crates/verified/src/transaction/marker.rs" 107 10 108 44
+let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 109 10 111 61
+let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 112 10 115 67
+let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 116 10 117 89
+let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 118 10 121 54
+let%span smarker'10 = "/workspace/crates/verified/src/transaction/marker.rs" 122 10 126 55
+let%span smarker'11 = "/workspace/crates/verified/src/transaction/marker.rs" 46 8 51 81
+let%span smarker'12 = "/workspace/crates/verified/src/transaction/marker.rs" 83 8 85 71
+let%span smarker'13 = "/workspace/crates/verified/src/transaction/marker.rs" 67 8 68 71
+let%span smarker'14 = "/workspace/crates/verified/src/transaction/marker.rs" 100 8 100 92
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_TransactionMarkerRequest = {
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  coordinator_epoch: Int32.t;
+  is_commit: bool;
+  is_offsets_partition: bool }
+
+type t_TransactionMarkerPartitionState = {
+  producer_epoch'0: Int16.t;
+  coordinator_epoch'0: Int32.t;
+  has_pending_transaction'0: bool }
+
+type t_TransactionMarkerMaterializationDecision =
+  | RejectMalformed
+  | RejectProducerEpoch
+  | RejectCoordinatorEpoch
+  | Retry
+  | AppendWithoutOffsetPublication
+  | AppendAndPublishOffsets
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate marker_well_formed [#"/workspace/crates/verified/src/transaction/marker.rs" 41 0 44 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'11] ge_log_Int (Int64.to_int request.producer_id) 0
+  /\ ge_log_Int (Int16.to_int request.producer_epoch) 0
+  /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (- 1)
+  /\ ge_log_Int (Int16.to_int current'.producer_epoch'0) (- 1)
+  /\ ge_log_Int (Int32.to_int current'.coordinator_epoch'0) (- 1)
+  /\ (not current'.has_pending_transaction'0 \/ ge_log_Int (Int16.to_int current'.producer_epoch'0) 0)
+
+predicate marker_completed_retry [#"/workspace/crates/verified/src/transaction/marker.rs" 78 0 81 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'12] not current'.has_pending_transaction'0
+  /\ Int16.to_int request.producer_epoch = Int16.to_int current'.producer_epoch'0
+  /\ Int32.to_int request.coordinator_epoch = Int32.to_int current'.coordinator_epoch'0
+
+predicate marker_generation_current [#"/workspace/crates/verified/src/transaction/marker.rs" 62 0 65 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'13] ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
+  /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (Int32.to_int current'.coordinator_epoch'0)
+
+predicate marker_publishes_offsets [#"/workspace/crates/verified/src/transaction/marker.rs" 95 0 98 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'14] current'.has_pending_transaction'0 /\ request.is_commit /\ request.is_offsets_partition
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_marker_materialization_decision [#"/workspace/crates/verified/src/transaction/marker.rs" 128 0 131 45]
+  (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState)
+  (return (x: t_TransactionMarkerMaterializationDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_21 <- Int64.lt request.producer_id ([%#smarker] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb2) | br1 -> {_21} (! bb13) ] ]
+  | bb2 = s0
+    [ s0 = [ &_23 <- Int16.lt request.producer_epoch ([%#smarker'0] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb4) | br1 -> {_23} (! bb13) ] ]
+  | bb4 = s0
+    [ s0 = [ &_25 <- Int32.lt request.coordinator_epoch ([%#smarker'1] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb6) | br1 -> {_25} (! bb13) ] ]
+  | bb6 = s0
+    [ s0 = [ &_27 <- Int16.lt current'.producer_epoch'0 ([%#smarker'2] (-1: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb8) | br1 -> {_27} (! bb13) ] ]
+  | bb8 = s0
+    [ s0 = [ &_29 <- Int32.lt current'.coordinator_epoch'0 ([%#smarker'3] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb10) | br1 -> {_29} (! bb13) ] ]
+  | bb10 = any
+    [ br0 -> {current'.has_pending_transaction'0 = false} (! bb15)
+    | br1 -> {current'.has_pending_transaction'0} (! bb11) ]
+  | bb11 = s0
+    [ s0 = [ &_32 <- current'.producer_epoch'0 = ([%#smarker'4] (-1: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb15) | br1 -> {_32} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_34 <- Int16.lt request.producer_epoch current'.producer_epoch'0 ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb17) | br1 -> {_34} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- RejectProducerEpoch ] s1 | s1 = return {_ret} ]
+  | bb17 = s0
+    [ s0 = [ &_37 <- Int32.lt request.coordinator_epoch current'.coordinator_epoch'0 ] s1
+    | s1 = any [ br0 -> {_37 = false} (! bb19) | br1 -> {_37} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- RejectCoordinatorEpoch ] s1 | s1 = return {_ret} ]
+  | bb19 = any
+    [ br0 -> {current'.has_pending_transaction'0 = false} (! bb20)
+    | br1 -> {current'.has_pending_transaction'0} (! bb25) ]
+  | bb20 = s0
+    [ s0 = [ &_41 <- request.producer_epoch = current'.producer_epoch'0 ] s1
+    | s1 = any [ br0 -> {_41 = false} (! bb25) | br1 -> {_41} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = [ &_44 <- request.coordinator_epoch = current'.coordinator_epoch'0 ] s1
+    | s1 = any [ br0 -> {_44 = false} (! bb25) | br1 -> {_44} (! bb22) ] ]
+  | bb22 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb25 = any
+    [ br0 -> {current'.has_pending_transaction'0 = false} (! bb29)
+    | br1 -> {current'.has_pending_transaction'0} (! bb26) ]
+  | bb26 = any [ br0 -> {request.is_commit = false} (! bb29) | br1 -> {request.is_commit} (! bb27) ]
+  | bb27 = any
+    [ br0 -> {request.is_offsets_partition = false} (! bb29) | br1 -> {request.is_offsets_partition} (! bb28) ]
+  | bb28 = s0 [ s0 = [ &_ret <- AppendAndPublishOffsets ] s1 | s1 = return {_ret} ]
+  | bb29 = s0 [ s0 = [ &_ret <- AppendWithoutOffsetPublication ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionMarkerMaterializationDecision = Any.any_l ()
+  | & request: t_TransactionMarkerRequest = request
+  | & current': t_TransactionMarkerPartitionState = current'
+  | & _21: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _44: bool = Any.any_l () ])
+  [ return (result: t_TransactionMarkerMaterializationDecision) ->
+  {[@stop_split] [@expl:transaction_marker_materialization_decision ensures] ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #0] [%#smarker'5] (result
+        = RejectMalformed)
+      = (not marker_well_formed request current'))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #1] [%#smarker'6] (result
+        = RejectProducerEpoch)
+      = (marker_well_formed request current'
+      /\ Int16.to_int request.producer_epoch < Int16.to_int current'.producer_epoch'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #2] [%#smarker'7] (result
+        = RejectCoordinatorEpoch)
+      = (marker_well_formed request current'
+      /\ ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
+      /\ Int32.to_int request.coordinator_epoch < Int32.to_int current'.coordinator_epoch'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #3] [%#smarker'8] (result = Retry)
+      = (marker_well_formed request current' /\ marker_completed_retry request current'))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #4] [%#smarker'9] (result
+        = AppendAndPublishOffsets)
+      = (marker_well_formed request current'
+      /\ marker_generation_current request current' /\ marker_publishes_offsets request current'))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #5] [%#smarker'10] (result
+      = AppendWithoutOffsetPublication)
+    = (marker_well_formed request current'
+    /\ marker_generation_current request current'
+    /\ not marker_completed_retry request current' /\ not marker_publishes_offsets request current'))}
+    (! return {result}) ]

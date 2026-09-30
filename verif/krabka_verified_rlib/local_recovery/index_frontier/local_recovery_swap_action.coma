@@ -1,0 +1,42 @@
+(* #"/workspace/crates/verified/src/local_recovery/index_frontier.rs" 32 0 32 97 *)
+
+let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 25 10 25 84
+let%span sindex_frontier'0 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 26 10 26 84
+let%span sindex_frontier'1 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 27 10 28 86
+let%span sindex_frontier'2 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 29 10 30 87
+let%span sindex_frontier'3 = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 16 16 16 66
+
+use creusot.prelude.Any
+
+type t_LocalRecoverySwapFacts = { log_cleaned_exists: bool; log_swap_exists: bool; final_log_exists: bool }
+
+type t_LocalRecoverySwapAction = AbortSwap | CompleteSwap | PromoteSidecars | Reject
+
+predicate swap_committed [#"/workspace/crates/verified/src/local_recovery/index_frontier.rs" 15 0 15 60] (facts: t_LocalRecoverySwapFacts) =
+  [%#sindex_frontier'3] facts.log_swap_exists /\ not facts.log_cleaned_exists
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let local_recovery_swap_action [#"/workspace/crates/verified/src/local_recovery/index_frontier.rs" 32 0 32 97]
+  (facts: t_LocalRecoverySwapFacts) (return (x: t_LocalRecoverySwapAction)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.log_cleaned_exists = false} (! bb2) | br1 -> {facts.log_cleaned_exists} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- AbortSwap ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {facts.log_swap_exists = false} (! bb4) | br1 -> {facts.log_swap_exists} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- CompleteSwap ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {facts.final_log_exists = false} (! bb6) | br1 -> {facts.final_log_exists} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- PromoteSidecars ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LocalRecoverySwapAction = Any.any_l () | & facts: t_LocalRecoverySwapFacts = facts ])
+  [ return (result: t_LocalRecoverySwapAction) ->
+  {[@stop_split] [@expl:local_recovery_swap_action ensures] ([@stop_split] [@expl:local_recovery_swap_action ensures #0] [%#sindex_frontier] (result
+        = AbortSwap)
+      = facts.log_cleaned_exists)
+    /\ ([@stop_split] [@expl:local_recovery_swap_action ensures #1] [%#sindex_frontier'0] (result = CompleteSwap)
+      = swap_committed facts)
+    /\ ([@stop_split] [@expl:local_recovery_swap_action ensures #2] [%#sindex_frontier'1] (result = PromoteSidecars)
+      = (not facts.log_cleaned_exists /\ not facts.log_swap_exists /\ facts.final_log_exists))
+    /\ ([@stop_split] [@expl:local_recovery_swap_action ensures #3] [%#sindex_frontier'2] (result = Reject)
+    = (not facts.log_cleaned_exists /\ not facts.log_swap_exists /\ not facts.final_log_exists))}
+    (! return {result}) ]

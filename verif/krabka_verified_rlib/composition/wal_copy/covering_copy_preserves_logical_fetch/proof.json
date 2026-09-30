@@ -1,0 +1,56 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_branch_Option_tup2_i64_i64": {
+        "prover": "alt-ergo",
+        "time": 0.004
+      },
+      "vc_branch_Option_tup2_i64_u64": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      },
+      "vc_checked_wal_copy_replays_exactly": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      },
+      "vc_covering_copy_preserves_logical_fetch": {
+        "prover": "z3",
+        "time": 0.091
+      },
+      "vc_delete_records_trim_application": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      },
+      "vc_deref_Vec_i64_Global": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Break'1": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Complete": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Continue'1": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_elim_TrimLocal": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_TrimWal": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_from_residual_Option_tup3_i64_u64_Option_usize": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      },
+      "vc_in_half_open_window": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_len_tup3_i64_i32_Vec_u8_Global": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      },
+      "vc_local_append_coordinates": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_new_i64": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_produce_durability_frontier": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      },
+      "vc_push_i64": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_wal_covering_batch_range": { "prover": "alt-ergo", "time": 0.005 }
+    }
+  }
+}

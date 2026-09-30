@@ -1,0 +1,402 @@
+(* #"/workspace/crates/verified/src/composition/list_offsets.rs" 48 0 56 33 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span slist_offsets = "/workspace/crates/verified/src/composition/list_offsets.rs" 57 14 57 56
+let%span slist_offsets'0 = "/workspace/crates/verified/src/composition/list_offsets.rs" 57 64 57 89
+let%span slist_offsets'1 = "/workspace/crates/verified/src/composition/list_offsets.rs" 57 14 57 90
+let%span slist_offsets'2 = "/workspace/crates/verified/src/composition/list_offsets.rs" 58 22 64 6
+let%span slist_offsets'3 = "/workspace/crates/verified/src/composition/list_offsets.rs" 71 14 71 89
+let%span slist_offsets'4 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 52 72 66
+let%span slist_offsets'5 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 42 72 67
+let%span slist_offsets'6 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 28 72 67
+let%span slist_offsets'7 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 69 72 86
+let%span slist_offsets'8 = "/workspace/crates/verified/src/composition/list_offsets.rs" 73 21 73 23
+let%span slist_offsets'9 = "/workspace/crates/verified/src/composition/list_offsets.rs" 73 25 73 27
+let%span slist_offsets'10 = "/workspace/crates/verified/src/composition/list_offsets.rs" 76 43 76 45
+let%span slist_offsets'11 = "/workspace/crates/verified/src/composition/list_offsets.rs" 76 14 76 46
+let%span slist_offsets'12 = "/workspace/crates/verified/src/composition/list_offsets.rs" 75 4 81 6
+let%span slist_offsets'13 = "/workspace/crates/verified/src/composition/list_offsets.rs" 14 11 14 46
+let%span slist_offsets'14 = "/workspace/crates/verified/src/composition/list_offsets.rs" 15 11 16 56
+let%span slist_offsets'15 = "/workspace/crates/verified/src/composition/list_offsets.rs" 17 11 17 52
+let%span slist_offsets'16 = "/workspace/crates/verified/src/composition/list_offsets.rs" 18 11 19 50
+let%span slist_offsets'17 = "/workspace/crates/verified/src/composition/list_offsets.rs" 20 11 21 35
+let%span slist_offsets'18 = "/workspace/crates/verified/src/composition/list_offsets.rs" 22 11 23 55
+let%span slist_offsets'19 = "/workspace/crates/verified/src/composition/list_offsets.rs" 24 11 25 40
+let%span slist_offsets'20 = "/workspace/crates/verified/src/composition/list_offsets.rs" 26 11 28 41
+let%span slist_offsets'21 = "/workspace/crates/verified/src/composition/list_offsets.rs" 29 10 47 1
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 9 10 17 1
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 65 10 84 1
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 11 10 24 1
+let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 160 8 194 9
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 34 11 34 46
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 35 11 36 35
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 37 11 38 40
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 39 11 41 41
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 42 10 46 1
+let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 11 10 11 55
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use seq.Seq
+use creusot.int.Int32
+use creusot.int.Int8
+use creusot.int.UInt32
+use creusot.int.UInt64
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type tup3_i64_i64_i64 = { f0: Int64.t; f1: Int64.t; f2: Int64.t }
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let first_unstable_offset (starts: Slice64.slice Int64.t) (log_end: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:first_unstable_offset ensures] [%#snext_producer_identity] match result with
+      | Some lso -> Int64.to_int lso <= Int64.to_int log_end
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+          -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int log_end)
+      /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso = Int64.to_int log_end
+      \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
+      /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts) /\ Int64.to_int lso = Int64.to_int (Seq.get (Slice64.view starts) i))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+        -> Int64.to_int lso <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+      | None -> exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view starts)
+        /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int log_end)
+      end}
+    (! return {result}) ]
+
+let expect_i64 (self_: t_Option_i64) (msg: string) (return (x: Int64.t)) =
+{[@stop_split] [@expl:expect requires] [%#soption] self_ <> None}
+  any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:expect ensures] [%#soption'0] Some result = self_}
+    (! return {result}) ]
+
+type tup3_i32_i8_i64 = { f0'0: Int32.t; f1'0: Int8.t; f2'0: Int64.t }
+
+type t_ListOffsetsBoundFacts = {
+  replica_id: Int32.t;
+  isolation_level: Int8.t;
+  log_end: Int64.t;
+  high_watermark: Int64.t;
+  last_stable: Int64.t }
+
+type t_ListOffsetsBoundDecision = RejectMalformed | Bound Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let list_offsets_bound_decision (facts: t_ListOffsetsBoundFacts) (return (x: t_ListOffsetsBoundDecision)) = any
+  [ return (result: t_ListOffsetsBoundDecision) ->
+  {[@stop_split] [@expl:list_offsets_bound_decision ensures] [%#sselection_model] match result with
+      | RejectMalformed -> Int32.to_int facts.replica_id <> - 1 /\ Int64.to_int facts.log_end < 0
+      \/ Int32.to_int facts.replica_id = - 1 /\ Int64.to_int facts.high_watermark < 0
+      \/ Int32.to_int facts.replica_id = - 1
+      /\ Int8.to_int facts.isolation_level = 1 /\ Int64.to_int facts.last_stable < 0
+      | Bound offset -> ge_log_Int (Int64.to_int offset) 0
+      /\ (Int32.to_int facts.replica_id <> - 1 -> Int64.to_int offset = Int64.to_int facts.log_end)
+      /\ (Int32.to_int facts.replica_id = - 1 /\ Int8.to_int facts.isolation_level <> 1
+        -> Int64.to_int offset = Int64.to_int facts.high_watermark)
+      /\ (Int32.to_int facts.replica_id = - 1 /\ Int8.to_int facts.isolation_level = 1
+      -> Int64.to_int offset
+      = (if Int64.to_int facts.last_stable < Int64.to_int facts.high_watermark then
+        Int64.to_int facts.last_stable
+      else
+        Int64.to_int facts.high_watermark
+      ))
+      end}
+    (! return {result}) ]
+
+let elim_Bound (_x: t_ListOffsetsBoundDecision) (return (offset: Int64.t)) = any
+  [ _k (offset: Int64.t) -> {Bound offset = _x} (! return {offset})
+  | _chk -> (! {[@expl:elim Bound] match _x with
+      | Bound _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_i64_u32 = { f0'1: Int64.t; f1'1: UInt32.t }
+
+type t_Option_usize = None'0 | Some'0 UInt64.t
+
+let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t)
+  (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) =
+{[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp] Seq.length (Slice64.view offsets)
+    = Seq.length (Slice64.view timestamps))
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'0] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view offsets)
+      -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'1] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view entries)
+      -> Int64.to_int (Seq.get (Slice64.view entries) i).f0'1 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0'1)
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #3] [%#stimestamp'2] forall i: int, j: int. 0
+        <= i
+      /\ i < Seq.length (Slice64.view entries)
+      /\ 0 <= j
+      /\ j < Seq.length (Slice64.view offsets)
+      /\ UInt32.t'int (Seq.get (Slice64.view offsets) j) < UInt32.t'int (Seq.get (Slice64.view entries) i).f1'1
+    -> Int64.to_int (Seq.get (Slice64.view timestamps) j) <= Int64.to_int (Seq.get (Slice64.view entries) i).f0'1)}
+  any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'3] match result with
+      | Some'0 index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
+      | None'0 -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
+        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
+      end}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0'2: UInt64.t)) = any
+  [ _k (f0'2: UInt64.t) -> {Some'0 f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_i64 (small: UInt32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (UInt32.t'int small)}
+    (! return {result}) ]
+
+type tup2_i64_i64 = { f0'2: Int64.t; f1'2: Int64.t }
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+let list_offsets_kind (timestamp: Int64.t) (version: Int16.t) (return (x: t_ListOffsetsKind)) = any
+  [ return (result: t_ListOffsetsKind) ->
+  {[@stop_split] [@expl:list_offsets_kind ensures] [%#sselection_model'0] match result with
+      | Earliest -> Int64.to_int timestamp = - 2
+      | Latest -> Int64.to_int timestamp = - 1
+      | MaxTimestamp -> Int64.to_int timestamp = - 3 /\ ge_log_Int (Int16.to_int version) 7
+      | EarliestLocal -> Int64.to_int timestamp = - 4 /\ ge_log_Int (Int16.to_int version) 8
+      | LatestTiered -> Int64.to_int timestamp = - 5 /\ ge_log_Int (Int16.to_int version) 9
+      | EarliestPendingUpload -> Int64.to_int timestamp = - 6 /\ ge_log_Int (Int16.to_int version) 11
+      | Timestamp -> ge_log_Int (Int64.to_int timestamp) 0
+      | Unsupported -> Int64.to_int timestamp < - 6
+      \/ Int64.to_int timestamp = - 6 /\ Int16.to_int version < 11
+      \/ Int64.to_int timestamp = - 5 /\ Int16.to_int version < 9
+      \/ Int64.to_int timestamp = - 4 /\ Int16.to_int version < 8
+      \/ Int64.to_int timestamp = - 3 /\ Int16.to_int version < 7
+      end}
+    (! return {result}) ]
+
+type t_ListOffsetsSelectionFacts = {
+  kind: t_ListOffsetsKind;
+  candidate_offset: Int64.t;
+  candidate_timestamp: Int64.t;
+  candidate_epoch: Int32.t;
+  last_fetchable: Int64.t }
+
+type t_ListOffsetsSelectionDecision = RejectMalformed'0 | Unknown'0 | Resolved'0 Int64.t Int64.t Int32.t
+
+function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 156 0 158 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
+ = [%#sselection_model'1] if facts.kind = Unsupported
+  \/ Int64.to_int facts.candidate_offset < - 1
+  \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0 then
+    RejectMalformed'0
+  else
+    if Int64.to_int facts.candidate_offset = - 1 then
+      Unknown'0
+    else
+      if facts.kind = Earliest \/ facts.kind = EarliestLocal then
+        Resolved'0 (facts.candidate_offset) (facts.candidate_timestamp) (facts.candidate_epoch)
+      else
+        if facts.kind = Latest then
+          Resolved'0 (if Int64.to_int facts.last_fetchable < Int64.to_int facts.candidate_offset then
+            facts.last_fetchable
+          else
+            facts.candidate_offset
+          ) (facts.candidate_timestamp) (facts.candidate_epoch)
+        else
+          if Int64.to_int facts.candidate_offset < Int64.to_int facts.last_fetchable then
+            Resolved'0 (facts.candidate_offset) (facts.candidate_timestamp) (facts.candidate_epoch)
+          else
+            Unknown'0
+
+
+
+
+
+
+let list_offsets_selection_decision (facts: t_ListOffsetsSelectionFacts) (return (x: t_ListOffsetsSelectionDecision)) =
+any
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:list_offsets_selection_decision ensures] [%#sselection_decision] result
+    = list_offsets_selection_model facts}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let timestamp_list_offsets_finds_first_visible [#"/workspace/crates/verified/src/composition/list_offsets.rs" 48 0 56 33]
+  (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t)
+  (starts: Slice64.slice Int64.t) (frontiers: tup3_i64_i64_i64) (request: tup3_i32_i8_i64) (candidate_epoch'0: Int32.t)
+  (return (x: t_ListOffsetsSelectionDecision)) =
+{[@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires] ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #0] [%#slist_offsets'13] Seq.length (Slice64.view offsets)
+    = Seq.length (Slice64.view timestamps))
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #1] [%#slist_offsets'14] 0
+      <= Int64.to_int frontiers.f0
+    /\ Int64.to_int frontiers.f0 <= Int64.to_int frontiers.f1
+    /\ 0 <= Int64.to_int frontiers.f2 /\ Int64.to_int frontiers.f2 <= Int64.to_int frontiers.f1)
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #2] [%#slist_offsets'15] ge_log_Int (Int64.to_int request.f2'0) 0
+    /\ ge_log_Int (Int32.to_int candidate_epoch'0) (- 1))
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #3] [%#slist_offsets'16] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view offsets)
+      -> Int64.to_int frontiers.f0 + UInt32.t'int (Seq.get (Slice64.view offsets) i) < Int64.to_int frontiers.f1)
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #4] [%#slist_offsets'17] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view offsets)
+      -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #5] [%#slist_offsets'18] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view starts)
+      -> 0 <= Int64.to_int (Seq.get (Slice64.view starts) i)
+      /\ Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int frontiers.f1)
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #6] [%#slist_offsets'19] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view entries)
+      -> Int64.to_int (Seq.get (Slice64.view entries) i).f0'1 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0'1)
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #7] [%#slist_offsets'20] forall i: int, j: int. 0
+        <= i
+      /\ i < Seq.length (Slice64.view entries)
+      /\ 0 <= j
+      /\ j < Seq.length (Slice64.view offsets)
+      /\ UInt32.t'int (Seq.get (Slice64.view offsets) j) < UInt32.t'int (Seq.get (Slice64.view entries) i).f1'1
+    -> Int64.to_int (Seq.get (Slice64.view timestamps) j) <= Int64.to_int (Seq.get (Slice64.view entries) i).f0'1)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = first_unstable_offset [%#slist_offsets] {starts} {frontiers.f1} (fun (_x: t_Option_i64) -> [ &_45 <- _x ] s1)
+    | s1 = [ &_49 <- [%#slist_offsets'0] "coherent pending starts" ] s2
+    | s2 = expect_i64 [%#slist_offsets'1] {_45} {_49} (fun (_x: Int64.t) -> [ &lso <- _x ] s3)
+    | s3 = [ &_52 <- { replica_id = request.f0'0;
+                       isolation_level = request.f1'0;
+                       log_end = frontiers.f1;
+                       high_watermark = frontiers.f2;
+                       last_stable = lso } ] s4
+    | s4 = list_offsets_bound_decision [%#slist_offsets'2] {_52}
+        (fun (_x: t_ListOffsetsBoundDecision) -> [ &_51 <- _x ] s5)
+    | s5 = any [ br0 -> {_51 = RejectMalformed} (! bb6) | br1 (x0: Int64.t) -> {_51 = Bound x0} (! bb7) ] ]
+  | bb7 = s0
+    [ s0 = elim_Bound {_51} (fun (roffset: Int64.t) -> [ &offset <- roffset ] s1)
+    | s1 = [ &bound <- offset ] s2
+    | s2 = indexed_timestamp_scan_finds_first [%#slist_offsets'3] {entries} {offsets} {timestamps} {request.f2'0}
+        (fun (_x: t_Option_usize) -> [ &_64 <- _x ] s3)
+    | s3 = any [ br0 -> {_64 = None'0} (! bb11) | br1 (x0: UInt64.t) -> {_64 = Some'0 x0} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = elim_Some {_64} (fun (r0: UInt64.t) -> [ &index <- r0 ] s1)
+    | s1 = [ &_75 <- index ] s2
+    | s2 = [ &_76 <- Slice64.length offsets ] s3
+    | s3 = [ &_77 <- UInt64.lt _75 _76 ] s4
+    | s4 = {[@expl:index in bounds] [%#slist_offsets'4] _77} s5
+    | s5 = Slice64.get [%#slist_offsets'4] <UInt32.t> {offsets} {_75} (fun (r: UInt32.t) -> [ &_74 <- r ] s6)
+    | s6 = from_i64 [%#slist_offsets'5] {_74} (fun (_x: Int64.t) -> [ &_73 <- _x ] s7)
+    | s7 = Int64.add [%#slist_offsets'6] {frontiers.f0} {_73} (fun (_x: Int64.t) -> [ &_71 <- _x ] s8)
+    | s8 = [ &_79 <- index ] s9
+    | s9 = [ &_80 <- Slice64.length timestamps ] s10
+    | s10 = [ &_81 <- UInt64.lt _79 _80 ] s11
+    | s11 = {[@expl:index in bounds] [%#slist_offsets'7] _81} s12
+    | s12 = Slice64.get [%#slist_offsets'7] <Int64.t> {timestamps} {_79} (fun (r: Int64.t) -> [ &_78 <- r ] s13)
+    | s13 = [ &_63 <- { f0'2 = _71; f1'2 = _78 } ] s14
+    | s14 = bb16 ]
+  | bb11 = s0
+    [ s0 = [ &_63 <- { f0'2 = ([%#slist_offsets'8] (-1: Int64.t)); f1'2 = ([%#slist_offsets'9] (-1: Int64.t)) } ] s1
+    | s1 = bb16 ]
+  | bb16 = s0
+    [ s0 = [ &offset'0 <- _63.f0'2 ] s1
+    | s1 = [ &timestamp <- _63.f1'2 ] s2
+    | s2 = list_offsets_kind [%#slist_offsets'11] {request.f2'0} {[%#slist_offsets'10] (11: Int16.t)}
+        (fun (_x: t_ListOffsetsKind) -> [ &_83 <- _x ] s3)
+    | s3 = [ &_82 <- { kind = _83;
+                       candidate_offset = offset'0;
+                       candidate_timestamp = timestamp;
+                       candidate_epoch = candidate_epoch'0;
+                       last_fetchable = bound } ] s4
+    | s4 = list_offsets_selection_decision [%#slist_offsets'12] {_82}
+        (fun (_x: t_ListOffsetsSelectionDecision) -> [ &_ret <- _x ] s5)
+    | s5 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- RejectMalformed'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionDecision = Any.any_l ()
+  | & entries: Slice64.slice tup2_i64_u32 = entries
+  | & offsets: Slice64.slice UInt32.t = offsets
+  | & timestamps: Slice64.slice Int64.t = timestamps
+  | & starts: Slice64.slice Int64.t = starts
+  | & frontiers: tup3_i64_i64_i64 = frontiers
+  | & request: tup3_i32_i8_i64 = request
+  | & candidate_epoch'0: Int32.t = candidate_epoch'0
+  | & lso: Int64.t = Any.any_l ()
+  | & _45: t_Option_i64 = Any.any_l ()
+  | & _49: string = Any.any_l ()
+  | & bound: Int64.t = Any.any_l ()
+  | & _51: t_ListOffsetsBoundDecision = Any.any_l ()
+  | & _52: t_ListOffsetsBoundFacts = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & offset'0: Int64.t = Any.any_l ()
+  | & timestamp: Int64.t = Any.any_l ()
+  | & _63: tup2_i64_i64 = Any.any_l ()
+  | & _64: t_Option_usize = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _71: Int64.t = Any.any_l ()
+  | & _73: Int64.t = Any.any_l ()
+  | & _74: UInt32.t = Any.any_l ()
+  | & _75: UInt64.t = Any.any_l ()
+  | & _76: UInt64.t = Any.any_l ()
+  | & _77: bool = Any.any_l ()
+  | & _78: Int64.t = Any.any_l ()
+  | & _79: UInt64.t = Any.any_l ()
+  | & _80: UInt64.t = Any.any_l ()
+  | & _81: bool = Any.any_l ()
+  | & _82: t_ListOffsetsSelectionFacts = Any.any_l ()
+  | & _83: t_ListOffsetsKind = Any.any_l () ])
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:timestamp_list_offsets_finds_first_visible ensures] [%#slist_offsets'21] match result with
+      | RejectMalformed'0 -> false
+      | Resolved'0 offset timestamp leader_epoch -> leader_epoch = candidate_epoch'0
+      /\ (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view offsets)
+        /\ Int64.to_int offset = Int64.to_int frontiers.f0 + UInt32.t'int (Seq.get (Slice64.view offsets) i)
+        /\ timestamp = Seq.get (Slice64.view timestamps) i
+        /\ ge_log_Int (Int64.to_int timestamp) (Int64.to_int request.f2'0)
+        /\ (forall j: int. 0 <= j /\ j < i
+            -> Int64.to_int (Seq.get (Slice64.view timestamps) j) < Int64.to_int request.f2'0)
+        /\ Int64.to_int offset
+          < (if Int32.to_int request.f0'0 = - 1 then Int64.to_int frontiers.f2 else Int64.to_int frontiers.f1)
+        /\ (Int32.to_int request.f0'0 = - 1 /\ Int8.to_int request.f1'0 = 1
+        -> (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view starts)
+          -> Int64.to_int offset < Int64.to_int (Seq.get (Slice64.view starts) j))))
+      | Unknown'0 -> not (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view offsets)
+        /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) i)) (Int64.to_int request.f2'0)
+        /\ Int64.to_int frontiers.f0 + UInt32.t'int (Seq.get (Slice64.view offsets) i)
+          < (if Int32.to_int request.f0'0 = - 1 then Int64.to_int frontiers.f2 else Int64.to_int frontiers.f1)
+        /\ (Int32.to_int request.f0'0 = - 1 /\ Int8.to_int request.f1'0 = 1
+        -> (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view starts)
+          -> Int64.to_int frontiers.f0 + UInt32.t'int (Seq.get (Slice64.view offsets) i)
+          < Int64.to_int (Seq.get (Slice64.view starts) j))))
+      end}
+    (! return {result}) ]

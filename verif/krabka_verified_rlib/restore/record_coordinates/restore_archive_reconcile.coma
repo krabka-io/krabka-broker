@@ -1,0 +1,43 @@
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 96 0 99 29 *)
+
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 86 10 87 64
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 88 10 90 78
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 91 10 94 72
+
+use creusot.prelude.Any
+
+type t_RestoreSnapshotState = Missing | Live | DeleteStarted | DeleteFinished
+
+type t_RestoreReconcileDecision = Keep | Exclude | Disagree
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_archive_reconcile [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 96 0 99 29]
+  (scanned: bool) (snapshot_state: t_RestoreSnapshotState) (return (x: t_RestoreReconcileDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {snapshot_state = Missing} (! bb4)
+    | br1 -> {snapshot_state = Live} (! bb6)
+    | br2 -> {snapshot_state = DeleteStarted} (! bb5)
+    | br3 -> {snapshot_state = DeleteFinished} (! bb4) ]
+  | bb5 = s0 [ s0 = [ &_ret <- Exclude ] s1 | s1 = return {_ret} ]
+  | bb6 = any [ br0 -> {scanned = false} (! bb8) | br1 -> {scanned} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- Keep ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- Disagree ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {scanned = false} (! bb11) | br1 -> {scanned} (! bb10) ]
+  | bb10 = s0 [ s0 = [ &_ret <- Disagree ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Exclude ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreReconcileDecision = Any.any_l ()
+  | & scanned: bool = scanned
+  | & snapshot_state: t_RestoreSnapshotState = snapshot_state ])
+  [ return (result: t_RestoreReconcileDecision) ->
+  {[@stop_split] [@expl:restore_archive_reconcile ensures] ([@stop_split] [@expl:restore_archive_reconcile ensures #0] [%#srecord_coordinates] (result
+        = Keep)
+      = (scanned /\ snapshot_state = Live))
+    /\ ([@stop_split] [@expl:restore_archive_reconcile ensures #1] [%#srecord_coordinates'0] (result = Exclude)
+      = (not scanned /\ snapshot_state <> Live \/ scanned /\ snapshot_state = DeleteStarted))
+    /\ ([@stop_split] [@expl:restore_archive_reconcile ensures #2] [%#srecord_coordinates'1] (result = Disagree)
+    = (not scanned /\ snapshot_state = Live
+    \/ scanned /\ (snapshot_state = Missing \/ snapshot_state = DeleteFinished)))}
+    (! return {result}) ]

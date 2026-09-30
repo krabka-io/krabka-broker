@@ -1,0 +1,80 @@
+(* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 107 0 113 34 *)
+
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 171 16 171 80
+let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 94 11 94 42
+let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 95 10 96 77
+let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 97 10 99 44
+let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 100 10 103 42
+let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 104 10 105 74
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int8
+use creusot.prelude.Any
+
+type t_TransactionSnapshot = { pid: Int64.t; epoch: Int16.t; state: Int8.t }
+
+type t_TransactionIdentity = { pid'0: Int64.t; epoch'0: Int16.t }
+
+type t_TransactionCompletionDecision = Proceed | AlreadyComplete | RejectStaleIdentity | RejectState
+
+predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 170 0 170 89] (snapshot: t_TransactionSnapshot) (identity: t_TransactionIdentity) =
+  [%#smarker] snapshot.pid = identity.pid'0 /\ snapshot.epoch = identity.epoch'0
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_completion_decision [#"/workspace/crates/verified/src/transaction/producer_identity.rs" 107 0 113 34]
+  (current': t_TransactionSnapshot) (expected: t_TransactionIdentity) (completion: t_TransactionIdentity)
+  (prepare_state: Int8.t) (complete_state: Int8.t) (return (x: t_TransactionCompletionDecision)) =
+{[@stop_split] [@expl:transaction_completion_decision requires] [%#sproducer_identity] prepare_state <> complete_state}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_29 <- current'.pid = completion.pid'0 ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb7) | br1 -> {_29} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_32 <- current'.epoch = completion.epoch'0 ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb7) | br1 -> {_32} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_35 <- current'.state = complete_state ] s1
+    | s1 = any [ br0 -> {_35 = false} (! bb7) | br1 -> {_35} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- AlreadyComplete ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_40 <- current'.pid <> expected.pid'0 ] s1
+    | s1 = any [ br0 -> {_40 = false} (! bb9) | br1 -> {_40} (! bb12) ] ]
+  | bb9 = s0
+    [ s0 = [ &_43 <- current'.epoch <> expected.epoch'0 ] s1
+    | s1 = any [ br0 -> {_43 = false} (! bb11) | br1 -> {_43} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- RejectStaleIdentity ] s1 | s1 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = [ &_47 <- current'.state = prepare_state ] s1
+    | s1 = any [ br0 -> {_47 = false} (! bb14) | br1 -> {_47} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- Proceed ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectState ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionCompletionDecision = Any.any_l ()
+  | & current': t_TransactionSnapshot = current'
+  | & expected: t_TransactionIdentity = expected
+  | & completion: t_TransactionIdentity = completion
+  | & prepare_state: Int8.t = prepare_state
+  | & complete_state: Int8.t = complete_state
+  | & _29: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _47: bool = Any.any_l () ])
+  [ return (result: t_TransactionCompletionDecision) ->
+  {[@stop_split] [@expl:transaction_completion_decision ensures] ([@stop_split] [@expl:transaction_completion_decision ensures #0] [%#sproducer_identity'0] (result
+        = AlreadyComplete)
+      = (has_identity current' completion /\ current'.state = complete_state))
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #1] [%#sproducer_identity'1] (result
+        = RejectStaleIdentity)
+      = (not (has_identity current' completion /\ current'.state = complete_state)
+      /\ not has_identity current' expected))
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #2] [%#sproducer_identity'2] (result = RejectState)
+      = (not (has_identity current' completion /\ current'.state = complete_state)
+      /\ has_identity current' expected /\ current'.state <> prepare_state))
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #3] [%#sproducer_identity'3] (result = Proceed)
+    = (has_identity current' expected /\ current'.state = prepare_state))}
+    (! return {result}) ]

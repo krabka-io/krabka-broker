@@ -1,9 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_len_SubscriberLoad": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_select_least_loaded": { "prover": "z3", "time": 0.019 }
-    }
-  }
-}

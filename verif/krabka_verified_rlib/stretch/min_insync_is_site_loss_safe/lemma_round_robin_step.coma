@@ -1,0 +1,345 @@
+(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 64 0 64 61 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 61 11 61 61
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 62 10 63 89
+let%span smin_insync_is_site_loss_safe'1 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 46 11 46 81
+let%span smin_insync_is_site_loss_safe'2 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 10 47 64
+let%span smin_insync_is_site_loss_safe'3 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 51 4 51 95
+
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function lemma_div_exact [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 48 0 48 67] (divisor: int) (quotient: int) (remainder: int) : ()
+ = [%#smin_insync_is_site_loss_safe'3] ()
+
+axiom lemma_div_exact_spec:
+  forall divisor: int, quotient: int, remainder: int. ([%#smin_insync_is_site_loss_safe'1] ge_log_Int divisor 1
+      /\ ge_log_Int quotient 0 /\ 0 <= remainder /\ remainder < divisor)
+    -> ([%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (divisor * quotient + remainder) divisor = quotient)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant rf : int
+
+constant sites : int
+
+constant site : int
+
+function lemma_round_robin_step [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 64 0 64 61] (rf: int) (sites: int) (site: int) : ()
+
+goal vc_lemma_round_robin_step: ([%#smin_insync_is_site_loss_safe] ge_log_Int rf 1
+    /\ ge_log_Int sites 1 /\ 0 <= site /\ site < sites)
+  -> (let q = ComputerDivision.div (rf - 1) sites in let r = ComputerDivision.mod (rf - 1) sites in if rf - 1
+  = sites * q + r then
+    if 0 <= r then
+      if r < sites then
+        ge_log_Int q 0
+        && (if r = site then
+          rf - site + sites - 1 = sites * (q + 1) + 0
+          && rf - 1 - site + sites - 1 = sites * q + (sites - 1)
+          && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int (q + 1) 0 /\ 0 <= 0 /\ 0 < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * (q + 1)
+              + 0) sites
+            = q + 1)
+          -> (let _ = lemma_div_exact sites (q
+          + 1) 0 in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int q 0 /\ 0 <= sites - 1 /\ sites - 1 < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * q
+              + (sites - 1)) sites
+            = q)
+          -> (let _ = lemma_div_exact sites q (sites
+          - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                - site
+              + sites
+            - 1) sites
+          = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+          + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+        else
+          if gt_log_Int r site then
+            rf - site + sites - 1 = sites * (q + 1) + (r - site)
+            && rf - 1 - site + sites - 1 = sites * (q + 1) + (r - site - 1)
+            && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site /\ r - site < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * (q + 1)
+                + (r - site)) sites
+              = q + 1)
+            -> (let _ = lemma_div_exact sites (q + 1) (r
+            - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site - 1 /\ r - site - 1 < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * (q + 1)
+                + (r - site - 1)) sites
+              = q + 1)
+            -> (let _ = lemma_div_exact sites (q + 1) (r - site
+            - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                  - site
+                + sites
+              - 1) sites
+            = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+            + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+          else
+            rf - site + sites - 1 = sites * q + (sites + r - site)
+            && rf - 1 - site + sites - 1 = sites * q + (sites + r - site - 1)
+            && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int q 0 /\ 0 <= sites + r - site /\ sites + r - site < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * q
+                + (sites + r - site)) sites
+              = q)
+            -> (let _ = lemma_div_exact sites q (sites + r
+            - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int q 0 /\ 0 <= sites + r - site - 1 /\ sites + r - site - 1 < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * q
+                + (sites + r - site - 1)) sites
+              = q)
+            -> (let _ = lemma_div_exact sites q (sites + r - site
+            - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                  - site
+                + sites
+              - 1) sites
+            = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+            + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+
+        )
+      else
+        false
+        && (if r = site then
+          rf - site + sites - 1 = sites * (q + 1) + 0
+          && rf - 1 - site + sites - 1 = sites * q + (sites - 1)
+          && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int (q + 1) 0 /\ 0 <= 0 /\ 0 < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * (q + 1)
+              + 0) sites
+            = q + 1)
+          -> (let _ = lemma_div_exact sites (q
+          + 1) 0 in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int q 0 /\ 0 <= sites - 1 /\ sites - 1 < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * q
+              + (sites - 1)) sites
+            = q)
+          -> (let _ = lemma_div_exact sites q (sites
+          - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                - site
+              + sites
+            - 1) sites
+          = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+          + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+        else
+          if gt_log_Int r site then
+            rf - site + sites - 1 = sites * (q + 1) + (r - site)
+            && rf - 1 - site + sites - 1 = sites * (q + 1) + (r - site - 1)
+            && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site /\ r - site < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * (q + 1)
+                + (r - site)) sites
+              = q + 1)
+            -> (let _ = lemma_div_exact sites (q + 1) (r
+            - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site - 1 /\ r - site - 1 < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * (q + 1)
+                + (r - site - 1)) sites
+              = q + 1)
+            -> (let _ = lemma_div_exact sites (q + 1) (r - site
+            - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                  - site
+                + sites
+              - 1) sites
+            = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+            + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+          else
+            rf - site + sites - 1 = sites * q + (sites + r - site)
+            && rf - 1 - site + sites - 1 = sites * q + (sites + r - site - 1)
+            && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int q 0 /\ 0 <= sites + r - site /\ sites + r - site < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * q
+                + (sites + r - site)) sites
+              = q)
+            -> (let _ = lemma_div_exact sites q (sites + r
+            - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+              /\ ge_log_Int q 0 /\ 0 <= sites + r - site - 1 /\ sites + r - site - 1 < sites)
+            /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                  * q
+                + (sites + r - site - 1)) sites
+              = q)
+            -> (let _ = lemma_div_exact sites q (sites + r - site
+            - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                  - site
+                + sites
+              - 1) sites
+            = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+            + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+
+        )
+
+    else
+      false
+      && (if r = site then
+        rf - site + sites - 1 = sites * (q + 1) + 0
+        && rf - 1 - site + sites - 1 = sites * q + (sites - 1)
+        && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+          /\ ge_log_Int (q + 1) 0 /\ 0 <= 0 /\ 0 < sites)
+        /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+              * (q + 1)
+            + 0) sites
+          = q + 1)
+        -> (let _ = lemma_div_exact sites (q
+        + 1) 0 in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+          /\ ge_log_Int q 0 /\ 0 <= sites - 1 /\ sites - 1 < sites)
+        /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+              * q
+            + (sites - 1)) sites
+          = q)
+        -> (let _ = lemma_div_exact sites q (sites
+        - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+              - site
+            + sites
+          - 1) sites
+        = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+        + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+      else
+        if gt_log_Int r site then
+          rf - site + sites - 1 = sites * (q + 1) + (r - site)
+          && rf - 1 - site + sites - 1 = sites * (q + 1) + (r - site - 1)
+          && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site /\ r - site < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * (q + 1)
+              + (r - site)) sites
+            = q + 1)
+          -> (let _ = lemma_div_exact sites (q + 1) (r
+          - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site - 1 /\ r - site - 1 < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * (q + 1)
+              + (r - site - 1)) sites
+            = q + 1)
+          -> (let _ = lemma_div_exact sites (q + 1) (r - site
+          - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                - site
+              + sites
+            - 1) sites
+          = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+          + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+        else
+          rf - site + sites - 1 = sites * q + (sites + r - site)
+          && rf - 1 - site + sites - 1 = sites * q + (sites + r - site - 1)
+          && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int q 0 /\ 0 <= sites + r - site /\ sites + r - site < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * q
+              + (sites + r - site)) sites
+            = q)
+          -> (let _ = lemma_div_exact sites q (sites + r
+          - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+            /\ ge_log_Int q 0 /\ 0 <= sites + r - site - 1 /\ sites + r - site - 1 < sites)
+          /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+                * q
+              + (sites + r - site - 1)) sites
+            = q)
+          -> (let _ = lemma_div_exact sites q (sites + r - site
+          - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+                - site
+              + sites
+            - 1) sites
+          = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+          + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+
+      )
+
+  else
+    false
+    && (if r = site then
+      rf - site + sites - 1 = sites * (q + 1) + 0
+      && rf - 1 - site + sites - 1 = sites * q + (sites - 1)
+      && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+        /\ ge_log_Int (q + 1) 0 /\ 0 <= 0 /\ 0 < sites)
+      /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+            * (q + 1)
+          + 0) sites
+        = q + 1)
+      -> (let _ = lemma_div_exact sites (q
+      + 1) 0 in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+        /\ ge_log_Int q 0 /\ 0 <= sites - 1 /\ sites - 1 < sites)
+      /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+            * q
+          + (sites - 1)) sites
+        = q)
+      -> (let _ = lemma_div_exact sites q (sites
+      - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+            - site
+          + sites
+        - 1) sites
+      = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+      + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+    else
+      if gt_log_Int r site then
+        rf - site + sites - 1 = sites * (q + 1) + (r - site)
+        && rf - 1 - site + sites - 1 = sites * (q + 1) + (r - site - 1)
+        && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+          /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site /\ r - site < sites)
+        /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+              * (q + 1)
+            + (r - site)) sites
+          = q + 1)
+        -> (let _ = lemma_div_exact sites (q + 1) (r
+        - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+          /\ ge_log_Int (q + 1) 0 /\ 0 <= r - site - 1 /\ r - site - 1 < sites)
+        /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+              * (q + 1)
+            + (r - site - 1)) sites
+          = q + 1)
+        -> (let _ = lemma_div_exact sites (q + 1) (r - site
+        - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+              - site
+            + sites
+          - 1) sites
+        = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+        + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+      else
+        rf - site + sites - 1 = sites * q + (sites + r - site)
+        && rf - 1 - site + sites - 1 = sites * q + (sites + r - site - 1)
+        && ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+          /\ ge_log_Int q 0 /\ 0 <= sites + r - site /\ sites + r - site < sites)
+        /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+              * q
+            + (sites + r - site)) sites
+          = q)
+        -> (let _ = lemma_div_exact sites q (sites + r
+        - site) in ([@stop_split] [@expl:lemma_div_exact requires] [%#smin_insync_is_site_loss_safe'1] ge_log_Int sites 1
+          /\ ge_log_Int q 0 /\ 0 <= sites + r - site - 1 /\ sites + r - site - 1 < sites)
+        /\ (([@stop_split] [@expl:lemma_div_exact ensures] [%#smin_insync_is_site_loss_safe'2] ComputerDivision.div (sites
+              * q
+            + (sites + r - site - 1)) sites
+          = q)
+        -> (let _ = lemma_div_exact sites q (sites + r - site
+        - 1) in [@stop_split] [@expl:lemma_round_robin_step ensures] [%#smin_insync_is_site_loss_safe'0] ComputerDivision.div (rf
+              - site
+            + sites
+          - 1) sites
+        = ComputerDivision.div (rf - 1 - site + sites - 1) sites
+        + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)))))
+
+    )
+  )

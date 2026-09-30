@@ -32,7 +32,17 @@ follower-in replica traffic (KIP-73), and intra-broker log directory moves
   unthrottled bucket grants without the lock.
 - A caller-injected clock, so a test drives refills with
   `qubit_clock::ManualMonotonicClock` rather than sleeping.
-- The refill arithmetic is the Creusot-proved `plan_consume` kernel. A
+- Cap-and-grant arithmetic uses the Creusot-proved `plan_consume` kernel.
+  Elapsed-time refill uses the proved `quota_refill` kernel, keeping fractional
+  micro-token credit while claiming each clock interval once. Refund and
+  full-request charge use `quota_credit` and `quota_charge`. A composition
+  proves that splitting elapsed time preserves the exact consume budget.
+  The proved `quota_whole_request` selector gives the maximal whole-token
+  grant. An arbitrary consume-trace composition conserves elapsed credit,
+  including debt, fractions, and burst losses, and rules out starvation when
+  the final request covers the burst. It assumes a fixed positive rate/burst
+  and serialized steps. Compositions establish refund restoration when
+  no debt was discarded and repayment of bounded debt over credited tokens. A
   Stateright model in `tests/bucket_model.rs` checks the locking under
   concurrent consumers and resets, and shows the lock-free design it replaced
   breaking both properties.

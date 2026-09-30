@@ -1,0 +1,16 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_checked_sub": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_checked_sub'0": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_diskless_retention_prefix": { "prover": "z3", "time": 0.018 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Some'0": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_elim_Some'1": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_from_u128": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_len_u64": { "prover": "alt-ergo", "time": 0.007 }
+    }
+  }
+}

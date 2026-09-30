@@ -1,0 +1,69 @@
+(* #"/workspace/crates/verified/src/broker/fetch.rs" 43 0 43 79 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 49 34 49 35
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 51 39 51 40
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 33 10 41 1
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 16 8 18 45
+
+use creusot.int.Int32
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type t_ReplicaFetchFacts = {
+  request_leader_epoch: Int32.t;
+  current_leader_epoch: Int32.t;
+  target_matches: bool;
+  reported_target_matches: bool;
+  error_code: Int16.t;
+  diverging_epoch: Int32.t }
+
+type t_ReplicaFetchMutation = Reject | Retry | Truncate | Append
+
+predicate replica_fetch_fenced [#"/workspace/crates/verified/src/broker/fetch.rs" 14 0 14 61] (facts: t_ReplicaFetchFacts) =
+  [%#sfetch'2] Int32.to_int facts.request_leader_epoch <> Int32.to_int facts.current_leader_epoch
+  \/ not facts.target_matches \/ not facts.reported_target_matches
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let replica_fetch_mutation [#"/workspace/crates/verified/src/broker/fetch.rs" 43 0 43 79]
+  (facts: t_ReplicaFetchFacts) (return (x: t_ReplicaFetchMutation)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_4 <- facts.request_leader_epoch <> facts.current_leader_epoch ] s1
+    | s1 = any [ br0 -> {_4 = false} (! bb2) | br1 -> {_4} (! bb4) ] ]
+  | bb2 = any [ br0 -> {facts.target_matches = false} (! bb4) | br1 -> {facts.target_matches} (! bb3) ]
+  | bb3 = any
+    [ br0 -> {facts.reported_target_matches = false} (! bb4) | br1 -> {facts.reported_target_matches} (! bb5) ]
+  | bb5 = s0
+    [ s0 = [ &_9 <- facts.error_code <> ([%#sfetch] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb7) | br1 -> {_9} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_11 <- Int32.ge facts.diverging_epoch ([%#sfetch'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb9) | br1 -> {_11} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Truncate ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplicaFetchMutation = Any.any_l ()
+  | & facts: t_ReplicaFetchFacts = facts
+  | & _4: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l () ])
+  [ return (result: t_ReplicaFetchMutation) -> {[@stop_split] [@expl:replica_fetch_mutation ensures] [%#sfetch'1] result
+    = (if replica_fetch_fenced facts then
+      Reject
+    else
+      if Int16.to_int facts.error_code <> 0 then
+        Retry
+      else
+        if ge_log_Int (Int32.to_int facts.diverging_epoch) 0 then Truncate else Append
+
+    )}
+    (! return {result}) ]

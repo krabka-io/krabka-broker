@@ -1,0 +1,97 @@
+(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 176 0 181 36 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 185 34 185 35
+let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 151 10 151 80
+let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 152 10 153 73
+let%span sreplay_cursor_decision'2 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 154 10 158 45
+let%span sreplay_cursor_decision'3 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 159 10 166 10
+let%span sreplay_cursor_decision'4 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 167 10 174 10
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+type t_BarrierRecoveryFinalizeDecision =
+  | NoPending
+  | MalformedPending
+  | UnknownCoordinator
+  | FencedCoordinator
+  | FinalizePartial
+
+let elim_Some (_x: t_Option_i32) (return (f0: Int32.t)) = any
+  [ _k (f0: Int32.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 176 0 181 36]
+  (has_pending: bool) (current_coordinator_epoch: t_Option_i32) (frozen_coordinator_epoch: Int32.t)
+  (targets_valid: bool) (return (x: t_BarrierRecoveryFinalizeDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {has_pending = false} (! bb1) | br1 -> {has_pending} (! bb2) ]
+  | bb2 = s0
+    [ s0 = [ &_30 <- Int32.lt frozen_coordinator_epoch ([%#sreplay_cursor_decision] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb4) | br1 -> {_30} (! bb6) ] ]
+  | bb4 = any [ br0 -> {targets_valid = false} (! bb6) | br1 -> {targets_valid} (! bb5) ]
+  | bb5 = any
+    [ br0 -> {current_coordinator_epoch = None} (! bb7)
+    | br1 (x0: Int32.t) -> {current_coordinator_epoch = Some x0} (! bb9) ]
+  | bb7 = s0 [ s0 = [ &_ret <- UnknownCoordinator ] s1 | s1 = return {_ret} ]
+  | bb9 = s0
+    [ s0 = elim_Some {current_coordinator_epoch} (fun (r0: Int32.t) -> [ &current' <- r0 ] s1)
+    | s1 = [ &_37 <- Int32.lt current' frozen_coordinator_epoch ] s2
+    | s2 = any [ br0 -> {_37 = false} (! bb11) | br1 -> {_37} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- FencedCoordinator ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- FinalizePartial ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- MalformedPending ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- NoPending ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierRecoveryFinalizeDecision = Any.any_l ()
+  | & has_pending: bool = has_pending
+  | & current_coordinator_epoch: t_Option_i32 = current_coordinator_epoch
+  | & frozen_coordinator_epoch: Int32.t = frozen_coordinator_epoch
+  | & targets_valid: bool = targets_valid
+  | & _30: bool = Any.any_l ()
+  | & current': Int32.t = Any.any_l ()
+  | & _37: bool = Any.any_l () ])
+  [ return (result: t_BarrierRecoveryFinalizeDecision) ->
+  {[@stop_split] [@expl:barrier_recovery_finalize_decision ensures] ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #0] [%#sreplay_cursor_decision'0] (result
+        = NoPending)
+      = (not has_pending))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #1] [%#sreplay_cursor_decision'1] (result
+        = MalformedPending)
+      = (has_pending /\ (Int32.to_int frozen_coordinator_epoch < 0 \/ not targets_valid)))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #2] [%#sreplay_cursor_decision'2] (result
+        = UnknownCoordinator)
+      = (has_pending
+      /\ ge_log_Int (Int32.to_int frozen_coordinator_epoch) 0 /\ targets_valid /\ current_coordinator_epoch = None))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #3] [%#sreplay_cursor_decision'3] (result
+        = FencedCoordinator)
+      = (has_pending
+      /\ ge_log_Int (Int32.to_int frozen_coordinator_epoch) 0
+      /\ targets_valid
+      /\ match current_coordinator_epoch with
+        | Some current' -> Int32.to_int current' < Int32.to_int frozen_coordinator_epoch
+        | None -> false
+        end))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #4] [%#sreplay_cursor_decision'4] (result
+      = FinalizePartial)
+    = (has_pending
+    /\ ge_log_Int (Int32.to_int frozen_coordinator_epoch) 0
+    /\ targets_valid
+    /\ match current_coordinator_epoch with
+      | Some current' -> ge_log_Int (Int32.to_int current') (Int32.to_int frozen_coordinator_epoch)
+      | None -> false
+      end))}
+    (! return {result}) ]

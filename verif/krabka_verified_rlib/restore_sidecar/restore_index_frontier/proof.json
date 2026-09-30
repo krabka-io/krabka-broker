@@ -1,9 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.021 },
-      "vc_restore_index_frontier": { "prover": "alt-ergo", "time": 0.015 }
-    }
-  }
-}

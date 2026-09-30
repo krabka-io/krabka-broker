@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_kafka_watermark_candidate": { "prover": "alt-ergo", "time": 0.015 }
+    }
+  }
+}

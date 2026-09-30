@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_contains": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_index_slice_u64": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_len_u64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_wal_voter_set_valid": { "prover": "alt-ergo", "time": 0.109 }
+    }
+  }
+}

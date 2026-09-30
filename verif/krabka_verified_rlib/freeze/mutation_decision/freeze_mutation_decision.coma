@@ -1,0 +1,67 @@
+(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 196 0 200 27 *)
+
+let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 203 24 203 44
+let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 188 10 188 80
+let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 189 10 191 1
+let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 192 10 194 1
+let%span smutation_decision'3 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 143 10 143 46
+let%span smutation_decision'4 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 169 4 183 5
+
+use creusot.prelude.Any
+
+type t_FreezeMutationKind =
+  | Produce
+  | TransactionEnlistment
+  | DeleteRecords
+  | DeleteTopic
+  | ReassignmentAlter
+  | ReassignmentCompletion
+  | Compaction
+  | Retention
+  | TransactionCompletion
+  | OffsetCommit
+  | Replication
+  | BarrierMarker
+  | TieringCopy
+
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 168 0 168 57] (kind: t_FreezeMutationKind) =
+  [%#smutation_decision'4] match kind with
+    | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
+    | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
+    end
+
+let freeze_refuses (kind: t_FreezeMutationKind) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:freeze_refuses ensures] [%#smutation_decision'3] result
+    = freeze_refusal_model kind}
+    (! return {result}) ]
+
+type t_FreezeMutationDecision = AuthorizationDenied | Frozen | Admit
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let freeze_mutation_decision [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 196 0 200 27]
+  (authorized: bool) (frozen: bool) (kind: t_FreezeMutationKind) (return (x: t_FreezeMutationDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {authorized = false} (! bb1) | br1 -> {authorized} (! bb2) ]
+  | bb2 = any [ br0 -> {frozen = false} (! bb7) | br1 -> {frozen} (! bb3) ]
+  | bb3 = s0
+    [ s0 = freeze_refuses [%#smutation_decision] {kind} (fun (_x: bool) -> [ &_16 <- _x ] s1)
+    | s1 = any [ br0 -> {_16 = false} (! bb7) | br1 -> {_16} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &_ret <- Frozen ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- AuthorizationDenied ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeMutationDecision = Any.any_l ()
+  | & authorized: bool = authorized
+  | & frozen: bool = frozen
+  | & kind: t_FreezeMutationKind = kind
+  | & _16: bool = Any.any_l () ])
+  [ return (result: t_FreezeMutationDecision) ->
+  {[@stop_split] [@expl:freeze_mutation_decision ensures] ([@stop_split] [@expl:freeze_mutation_decision ensures #0] [%#smutation_decision'0] (result
+        = AuthorizationDenied)
+      = (not authorized))
+    /\ ([@stop_split] [@expl:freeze_mutation_decision ensures #1] [%#smutation_decision'1] (result = Frozen)
+      = (authorized /\ frozen /\ freeze_refusal_model kind))
+    /\ ([@stop_split] [@expl:freeze_mutation_decision ensures #2] [%#smutation_decision'2] (result = Admit)
+    = (authorized /\ (not frozen \/ not freeze_refusal_model kind)))}
+    (! return {result}) ]

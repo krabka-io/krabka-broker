@@ -1,25 +1,26 @@
-//! Reading a remote segment's transaction index.
+//! Reading remote transaction indexes for a Fetch window.
 //!
 //! A `Fetch` under `read_committed` needs the aborted transactions that
-//! overlap the offsets it returns. This module fetches the covering segment's
-//! `.txnindex` from the remote tier, decodes it, and keeps the entries that
-//! overlap the requested range. A segment with no aborted transactions has no
-//! index object at all, so the missing-object error maps onto an empty list.
+//! overlap the offsets it returns. Abort markers can live in later segments,
+//! so this module scans the finished remote tail's `.txnindex` objects and
+//! keeps entries overlapping the requested range. A segment owning no abort
+//! marker has no index object; those missing optional objects are skipped.
 
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    IndexType, LogOffset, RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
-    parse_txn_index, txn_overlaps,
+    IndexType, LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
+    TopicIdPartition, parse_txn_index, txn_overlaps,
 };
 
 use super::{AbortedTxnEntry, RemoteReader};
 
 impl RemoteReader {
     /// Returns the aborted transactions that overlap the inclusive offset
-    /// range `[from_offset, to_offset]`, in the finished remote segment that
-    /// covers `from_offset`. It returns an empty `Vec` in three cases: no
-    /// finished segment covers the offset, the segment carries no transaction
-    /// index (`SegmentNotFound` from `fetch_index`), or nothing overlaps.
+    /// range `[from_offset, to_offset]`. An abort marker can be in a later
+    /// finished segment than its data, so all later indexes are considered.
+    /// Returns an empty `Vec` if no finished segment covers the offset or no
+    /// available transaction index contains an overlapping entry. Missing
+    /// optional indexes (`SegmentNotFound` from `fetch_index`) are skipped.
     pub(crate) async fn aborted_transactions(
         &self,
         tp: &TopicIdPartition,
@@ -37,27 +38,37 @@ impl RemoteReader {
             return Ok(Vec::new());
         }
 
-        let index_bytes = match self
-            .fetch_index_blocking(metadata, IndexType::Transaction)
-            .await
-        {
-            Ok(bytes) => bytes,
-            // The transaction index is optional: a segment with no aborted
-            // transactions has no `.txnindex`, surfaced as SegmentNotFound.
-            Err(RemoteStorageError::SegmentNotFound(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(e),
-        };
-
-        let entries = parse_txn_index(&index_bytes)?;
-        Ok(entries
-            .iter()
-            .filter(|e| txn_overlaps(e, from_offset, to_offset))
-            .map(|e| AbortedTxnEntry {
-                start_offset: e.start_offset.get(),
-                last_offset: e.last_offset.get(),
-                producer_id: e.producer_id.get(),
-            })
-            .collect())
+        let mut segments = self.list_remote_log_segments_blocking(tp).await?;
+        segments.retain(|segment| {
+            segment.state() == RemoteLogSegmentState::CopySegmentFinished
+                && segment.end_offset() >= from_offset
+        });
+        segments.sort_by_key(RemoteLogSegmentMetadata::start_offset);
+        let mut aborts = Vec::new();
+        // ponytail: scan the finished tail for later abort markers; use trusted
+        // LSO hints to stop earlier if cold-Fetch profiling requires it.
+        for segment in segments {
+            let bytes = match self
+                .fetch_index_blocking(segment, IndexType::Transaction)
+                .await
+            {
+                Ok(bytes) => bytes,
+                // The index is optional when this segment owns no abort marker.
+                Err(RemoteStorageError::SegmentNotFound(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            aborts.extend(
+                parse_txn_index(&bytes)?
+                    .iter()
+                    .filter(|entry| txn_overlaps(entry, from_offset, to_offset))
+                    .map(|entry| AbortedTxnEntry {
+                        start_offset: entry.start_offset.get(),
+                        last_offset: entry.last_offset.get(),
+                        producer_id: entry.producer_id.get(),
+                    }),
+            );
+        }
+        Ok(aborts)
     }
 }
 

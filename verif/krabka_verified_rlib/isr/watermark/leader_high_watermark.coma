@@ -1,0 +1,214 @@
+(* #"/workspace/crates/verified/src/isr/watermark.rs" 199 0 199 87 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 204 16 204 17
+let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 209 32 209 52
+let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 210 14 210 28
+let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 207 34 208 74
+let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 206 34 206 69
+let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 205 34 205 55
+let%span swatermark'5 = "/workspace/crates/verified/src/isr/watermark.rs" 211 22 211 33
+let%span swatermark'6 = "/workspace/crates/verified/src/isr/watermark.rs" 212 24 212 95
+let%span swatermark'7 = "/workspace/crates/verified/src/isr/watermark.rs" 213 20 213 94
+let%span swatermark'8 = "/workspace/crates/verified/src/isr/watermark.rs" 213 52 213 93
+let%span swatermark'9 = "/workspace/crates/verified/src/isr/watermark.rs" 213 38 213 94
+let%span swatermark'10 = "/workspace/crates/verified/src/isr/watermark.rs" 217 13 217 14
+let%span swatermark'11 = "/workspace/crates/verified/src/isr/watermark.rs" 217 8 217 14
+let%span swatermark'12 = "/workspace/crates/verified/src/isr/watermark.rs" 194 11 194 50
+let%span swatermark'13 = "/workspace/crates/verified/src/isr/watermark.rs" 195 10 195 66
+let%span swatermark'14 = "/workspace/crates/verified/src/isr/watermark.rs" 196 10 196 71
+let%span swatermark'15 = "/workspace/crates/verified/src/isr/watermark.rs" 197 10 197 67
+let%span swatermark'16 = "/workspace/crates/verified/src/isr/watermark.rs" 143 10 143 11
+let%span swatermark'17 = "/workspace/crates/verified/src/isr/watermark.rs" 146 8 156 9
+let%span swatermark'18 = "/workspace/crates/verified/src/isr/watermark.rs" 44 10 44 56
+let%span swatermark'19 = "/workspace/crates/verified/src/isr/watermark.rs" 170 8 178 9
+let%span swatermark'20 = "/workspace/crates/verified/src/isr/watermark.rs" 117 16 117 58
+let%span swatermark'21 = "/workspace/crates/verified/src/isr/watermark.rs" 130 8 132 70
+let%span swatermark'22 = "/workspace/crates/verified/src/isr/watermark.rs" 15 8 22 13
+let%span swatermark'23 = "/workspace/crates/verified/src/isr/watermark.rs" 39 16 39 74
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+type t_HighWatermarkFacts = {
+  current': Int64.t;
+  leader_log_end: Int64.t;
+  isr_size: UInt64.t;
+  effective_min_isr: UInt64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_IsrEligibilityFacts = {
+  fenced: bool;
+  shutting_down: bool;
+  fetch_broker_epoch: t_Option_i64;
+  alive_broker_epoch: t_Option_i64 }
+
+type t_HwmReplica = { log_end: Int64.t; in_isr: bool; caught_up_within_lag: bool; eligibility: t_IsrEligibilityFacts }
+
+let len_HwmReplica (self_: Slice64.slice t_HwmReplica) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 34 0 38 9] (follower_log_end: int) (leader_log_end'0: int) (caught_up_within_lag'0: bool) =
+  [%#swatermark'23] follower_log_end = leader_log_end'0 \/ caught_up_within_lag'0
+
+predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 13 0 13 68] (facts: t_IsrEligibilityFacts) =
+  [%#swatermark'22] not facts.fenced
+  /\ not facts.shutting_down
+  /\ match facts.fetch_broker_epoch with
+    | Some stored -> match facts.alive_broker_epoch with
+      | Some alive -> Int64.to_int stored = - 1 \/ Int64.to_int stored = Int64.to_int alive
+      | None -> false
+      end
+    | None -> false
+    end
+
+predicate kafka_holds_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 128 0 128 74] (replica: t_HwmReplica) (leader_log_end'0: int) =
+  [%#swatermark'21] replica.in_isr
+  \/ kafka_replica_is_caught_up (Int64.to_int replica.log_end) leader_log_end'0 replica.caught_up_within_lag
+  /\ kafka_is_replica_isr_eligible replica.eligibility
+
+function kafka_watermark_candidate [#"/workspace/crates/verified/src/isr/watermark.rs" 144 0 144 91] (leader_log_end'0: int) (replicas: Seq.seq t_HwmReplica) (n: int) : int
+
+axiom kafka_watermark_candidate_def:
+  forall leader_log_end'0: int, replicas: Seq.seq t_HwmReplica, n: int [kafka_watermark_candidate leader_log_end'0 replicas n]. kafka_watermark_candidate leader_log_end'0 replicas n
+    = ([%#swatermark'17] if n <= 0 then
+      leader_log_end'0
+    else
+      if kafka_holds_watermark (Seq.get replicas (n - 1)) leader_log_end'0
+      /\ Int64.to_int (Seq.get replicas (n - 1)).log_end
+      < kafka_watermark_candidate leader_log_end'0 replicas (n - 1) then
+        Int64.to_int (Seq.get replicas (n - 1)).log_end
+      else
+        kafka_watermark_candidate leader_log_end'0 replicas (n - 1)
+
+    )
+
+let replica_isr_eligible (facts: t_IsrEligibilityFacts) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:replica_isr_eligible ensures] [%#swatermark'18] result
+    = kafka_is_replica_isr_eligible facts}
+    (! return {result}) ]
+
+predicate kafka_is_under_min_isr [#"/workspace/crates/verified/src/isr/watermark.rs" 116 0 116 60] (facts: t_HighWatermarkFacts) =
+  [%#swatermark'20] UInt64.t'int facts.isr_size < UInt64.t'int facts.effective_min_isr
+
+function kafka_leader_high_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 168 0 168 91] (facts: t_HighWatermarkFacts) (replicas: Seq.seq t_HwmReplica) : int
+ = [%#swatermark'19] if kafka_is_under_min_isr facts then
+    Int64.to_int facts.current'
+  else
+    if gt_log_Int (kafka_watermark_candidate (Int64.to_int facts.leader_log_end) replicas (Seq.length replicas)) (Int64.to_int facts.current') then
+      kafka_watermark_candidate (Int64.to_int facts.leader_log_end) replicas (Seq.length replicas)
+    else
+      Int64.to_int facts.current'
+
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let leader_high_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 199 0 199 87]
+  (facts: t_HighWatermarkFacts) (replicas: Slice64.slice t_HwmReplica) (return (x: Int64.t)) =
+{[@stop_split] [@expl:leader_high_watermark requires] [%#swatermark'12] Int64.to_int facts.current'
+  <= Int64.to_int facts.leader_log_end}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_15 <- UInt64.lt facts.isr_size facts.effective_min_isr ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb2) | br1 -> {_15} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- facts.current' ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &candidate <- facts.leader_log_end ] s1 | s1 = [ &i <- [%#swatermark] (0: UInt64.t) ] s2 | s2 = bb3 ]
+  | bb3 = bb3invariant
+    [ bb3 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb3 ([%#swatermark'0] Seq.length (Slice64.view replicas)
+      - UInt64.t'int i)}
+      bb3invariant
+    | bb3invariant = {[@expl:loop invariant #0] [%#swatermark'4] UInt64.t'int i <= Seq.length (Slice64.view replicas)}
+      {[@expl:loop invariant #1] [%#swatermark'3] Int64.to_int candidate <= Int64.to_int facts.leader_log_end}
+      {[@expl:loop invariant #2] [%#swatermark'2] Int64.to_int candidate
+      = kafka_watermark_candidate (Int64.to_int facts.leader_log_end) (Slice64.view replicas) (UInt64.t'int i)}
+      (! [ &variant_old_bb3 <- [%#swatermark'0] Seq.length (Slice64.view replicas) - UInt64.t'int i ] s0)
+      [ s0 = len_HwmReplica [%#swatermark'1] {replicas} (fun (_x: UInt64.t) -> [ &_40 <- _x ] s1)
+      | s1 = [ &_38 <- UInt64.lt i _40 ] s2
+      | s2 = any [ br0 -> {_38 = false} (! bb23) | br1 -> {_38} (! bb6) ] ]
+      [ bb6 = s0
+        [ s0 = [ &_43 <- i ] s1
+        | s1 = [ &_44 <- Slice64.length replicas ] s2
+        | s2 = [ &_45 <- UInt64.lt _43 _44 ] s3
+        | s3 = {[@expl:index in bounds] [%#swatermark'5] _45} s4
+        | s4 = Slice64.get [%#swatermark'5] <t_HwmReplica> {replicas} {_43}
+            (fun (r: t_HwmReplica) -> [ &replica <- r ] s5)
+        | s5 = [ &_47 <- replica.log_end = facts.leader_log_end ] s6
+        | s6 = any [ br0 -> {_47 = false} (! bb9) | br1 -> {_47} (! bb8) ] ]
+      | bb8 = s0 [ s0 = [ &caught_up <- [%#swatermark'6] true ] s1 | s1 = bb10 ]
+      | bb9 = s0 [ s0 = [ &caught_up <- replica.caught_up_within_lag ] s1 | s1 = bb10 ]
+      | bb10 = any [ br0 -> {replica.in_isr = false} (! bb12) | br1 -> {replica.in_isr} (! bb11) ]
+      | bb11 = s0 [ s0 = [ &holds <- [%#swatermark'7] true ] s1 | s1 = bb17 ]
+      | bb12 = any [ br0 -> {caught_up = false} (! bb14) | br1 -> {caught_up} (! bb13) ]
+      | bb13 = s0
+        [ s0 = replica_isr_eligible [%#swatermark'8] {replica.eligibility} (fun (_x: bool) -> [ &holds <- _x ] s1)
+        | s1 = bb17 ]
+      | bb14 = s0 [ s0 = [ &holds <- [%#swatermark'9] false ] s1 | s1 = bb17 ]
+      | bb17 = any [ br0 -> {holds = false} (! bb22) | br1 -> {holds} (! bb18) ]
+      | bb18 = s0
+        [ s0 = [ &_56 <- Int64.lt replica.log_end candidate ] s1
+        | s1 = any [ br0 -> {_56 = false} (! bb22) | br1 -> {_56} (! bb19) ] ]
+      | bb19 = s0 [ s0 = [ &candidate <- replica.log_end ] s1 | s1 = bb22 ]
+      | bb22 = s0
+        [ s0 = UInt64.add [%#swatermark'11] {i} {[%#swatermark'10] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb3 ] ] ]
+  | bb23 = s0
+    [ s0 = [ &_61 <- Int64.gt candidate facts.current' ] s1
+    | s1 = any [ br0 -> {_61 = false} (! bb25) | br1 -> {_61} (! bb24) ] ]
+  | bb24 = s0 [ s0 = [ &_ret <- candidate ] s1 | s1 = return {_ret} ]
+  | bb25 = s0 [ s0 = [ &_ret <- facts.current' ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & facts: t_HighWatermarkFacts = facts
+  | & replicas: Slice64.slice t_HwmReplica = replicas
+  | & _15: bool = Any.any_l ()
+  | & candidate: Int64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & replica: t_HwmReplica = Any.any_l ()
+  | & _43: UInt64.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & caught_up: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & holds: bool = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & variant_old_bb3: int = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:leader_high_watermark ensures] ([@stop_split] [@expl:leader_high_watermark ensures #0] [%#swatermark'13] Int64.to_int result
+      = kafka_leader_high_watermark facts (Slice64.view replicas))
+    /\ ([@stop_split] [@expl:leader_high_watermark ensures #1] [%#swatermark'14] Int64.to_int facts.current'
+        <= Int64.to_int result
+      /\ Int64.to_int result <= Int64.to_int facts.leader_log_end)
+    /\ ([@stop_split] [@expl:leader_high_watermark ensures #2] [%#swatermark'15] kafka_is_under_min_isr facts
+    -> result = facts.current')}
+    (! return {result}) ]
