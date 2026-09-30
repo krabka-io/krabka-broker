@@ -8,8 +8,8 @@ Medians summarize three independent topics; the accompanying CSV retains each ru
 The tables are the archived benchmark results for the exact sources and binary
 hashes below. Publication rebased the changes onto broker `a5142413` and protocol
 `a6684fca`, which had advanced while the benchmark was running. The broker pins
-protocol commit `0536491e1c270051cc04dc24d192f5c819ba11b5` from
-[krabka-protocol PR #48](https://github.com/krabka-io/krabka-protocol/pull/48).
+protocol commit `8e385ae182b89dca6c6b119ab865142a6a57d0ea` from
+[krabka-protocol CRC follow-up](https://github.com/krabka-io/krabka-protocol/pull/49).
 These archived numbers do not claim a rerun of the rebased PR revision.
 
 ## Changes and evidence
@@ -40,6 +40,31 @@ The workload accepts optional compression and `zeros|random` arguments. A seeded
 4 MiB random pool prevents mostly zero payloads from masquerading as incompressible
 traffic. Every record retains its timestamp and unique sequence number. Existing
 seven-argument invocations retain their previous LZ4/zeros behavior.
+
+## Contiguous CRC follow-up
+
+After the archived broker comparison, the borrowed batch validator and decoder
+were changed to hash the contiguous covered header and raw body in one call.
+They avoid a separate 40-byte header CRC and seeded digest setup, without copying
+or allocating a combined buffer. CRC coverage remains bounded by `batch_length`.
+
+A release microbenchmark compared protocol `0536491e` with `8e385ae1` on
+this host, using thin LTO, one codegen unit, CPU affinity to core 2, and five
+alternating before/after trials. Each timed public API call checks one
+uncompressed batch containing one record. Medians in nanoseconds per batch:
+
+| Value bytes | Validate before | Validate after | Borrowed decode before | Borrowed decode after |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 13.96 | 6.06 | 19.82 | 12.29 |
+| 64 | 13.37 | 8.29 | 18.13 | 12.61 |
+| 1,024 | 39.75 | 34.48 | 44.84 | 36.98 |
+
+These are isolated API wall times, not whole-broker CPU or memory measurements. A direct CRC probe found negligible gains at 64 KiB and
+1 MiB, where hashing dominates setup. The archived Kafka tables do not include
+this follow-up. Raw trials and probe sources are under `crc-probe/` and
+`record-probe/` in the local artifact directory below. The checked-in records
+benchmark now includes small validation cases, and a regression test verifies
+that a corrupt adjacent batch cannot affect the first batch's CRC.
 
 ## Contract and provenance
 
@@ -354,3 +379,14 @@ normal Bazel resolution, without repository overrides. Both repositories passed
 `cargo clippy --workspace --all-targets --locked -- -D warnings`; the rebased
 protocol companion passed 1,140 unit tests. Formatting and diff checks passed.
 The archived benchmark tables remain tied to their original binaries above.
+
+The contiguous-CRC follow-up passed all 1,141 protocol unit tests and full
+workspace Clippy. The CI timeout repair leaves the Raft model and all state
+bounds intact: it gives only `kraft_model_test` a 900-second Bazel timeout,
+because its five cases exceeded the default 300-second limit on CI. All five
+cases passed locally with their pinned unique-state counts unchanged.
+
+The same follow-up pin passed 4,634 broker unit tests, 474 log unit tests, four
+restart tests, full broker workspace Clippy, and formatting through normal
+dependency resolution. Updating newly yanked `yoke-derive` 0.8.3 to 0.8.4 passed
+all four cargo-deny checks.
