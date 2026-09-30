@@ -24,6 +24,9 @@ impl MetadataSource for ControllerHandle {
     fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
         ControllerHandle::watch_leader(self)
     }
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        ControllerHandle::watch_fatal(self)
+    }
     fn quorum_state(&self) -> QuorumState {
         ControllerHandle::quorum_state(self)
     }

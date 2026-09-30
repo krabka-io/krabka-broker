@@ -65,6 +65,19 @@ pub enum BrokerError {
     #[error("startup failed: {0}")]
     Startup(String),
 
+    /// The metadata controller that this node hosts met a fault that Kafka's
+    /// `ProcessTerminatingFaultHandler` halts the process over, such as a
+    /// replay of a `FeatureLevelRecord` above the range it supports. The text
+    /// is the `Encountered fatal fault: ` prefix of that handler's log line,
+    /// then the message of the exception that caused the fault. Kafka's
+    /// `failureMessage` between the two, such as `Unable to apply
+    /// FeatureLevelRecord record at offset N on active controller, ...`, is
+    /// not part of it. [`crate::Broker::start`] returns it when the fault
+    /// stops the start, and a host returns it from `main` after a stop that a
+    /// fault caused, so that the process exits non-zero as Kafka's does.
+    #[error("Encountered fatal fault: {0}")]
+    FatalFault(String),
+
     /// A group-coordinator request arrived while the group is in a state that
     /// does not allow it, for example a heartbeat during
     /// `PreparingRebalance`.

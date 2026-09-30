@@ -81,6 +81,8 @@ pub struct ControllerHandle {
     engine: KraftController,
     leader: watch::Receiver<Option<NodeId>>,
     shutdown: CancellationToken,
+    /// The reason this controller stopped itself over a fatal fault, if it did.
+    fatal: watch::Receiver<Option<String>>,
     listener_task: Mutex<Option<JoinHandle<()>>>,
     /// Directory holding the metadata log + KIP-630 `.checkpoint` artifacts.
     data_dir: std::path::PathBuf,
@@ -123,6 +125,21 @@ impl ControllerHandle {
     #[must_use]
     pub fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
         self.leader.clone()
+    }
+
+    /// Subscribe to the controller's fatal fault: the message of the fault
+    /// that made it stop itself, and `None` until then.
+    ///
+    /// Kafka handles such a fault (a `FeatureControlManager` replay of a
+    /// feature level that the controller does not support) with a
+    /// `ProcessTerminatingFaultHandler`, which halts the process. A library
+    /// cannot halt its host, so the controller stops itself, publishes the
+    /// message here before it does, and leaves the process to its embedder:
+    /// the broker turns it into its own shutdown. The channel closes without a
+    /// value when the controller is shut down for any other reason.
+    #[must_use]
+    pub fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        self.fatal.clone()
     }
 
     /// Subscribe to metadata-image changes.

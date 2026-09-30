@@ -183,20 +183,9 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::ScramCredentialRecord;
     use krabka_security::SaslMechanism;
-    use serde_wincode::SerdeCompat;
-    use wincode::Serialize;
 
     use super::*;
-
-    fn write_frame(out: &mut Vec<u8>, rec: &MetadataRecord) {
-        let bytes = <SerdeCompat<MetadataRecord>>::serialize(rec).unwrap();
-        out.extend_from_slice(
-            &u32::try_from(bytes.len())
-                .expect("record too large for u32")
-                .to_le_bytes(),
-        );
-        out.extend_from_slice(&bytes);
-    }
+    use crate::test_support::write_bootstrap_records;
 
     #[test]
     fn returns_empty_when_absent() {
@@ -216,9 +205,7 @@ mod tests {
             server_key: vec![3; 64],
             iterations: 4096,
         });
-        let mut bytes = Vec::new();
-        write_frame(&mut bytes, &rec);
-        std::fs::write(dir.path().join("bootstrap.records.bin"), &bytes).unwrap();
+        write_bootstrap_records(dir.path(), &[rec]);
         let got = load_bootstrap_records(dir.path()).unwrap();
         assert!(got.len() == 1);
         match &got[0] {
@@ -242,20 +229,17 @@ mod tests {
             kraft_version: krabka_metadata::KRaftVersionRange::default(),
         }]);
         // Frame the records exactly like `krabka format` does.
-        let mut bytes = Vec::new();
-        write_frame(
-            &mut bytes,
-            &MetadataRecord::V1KRaftVersion(krabka_metadata::KRaftVersionRecord {
-                kraft_version: 1,
-            }),
+        write_bootstrap_records(
+            dir.path(),
+            &[
+                MetadataRecord::V1KRaftVersion(krabka_metadata::KRaftVersionRecord {
+                    kraft_version: 1,
+                }),
+                MetadataRecord::V1Voters(VotersRecord {
+                    voters: seeded.clone(),
+                }),
+            ],
         );
-        write_frame(
-            &mut bytes,
-            &MetadataRecord::V1Voters(VotersRecord {
-                voters: seeded.clone(),
-            }),
-        );
-        std::fs::write(dir.path().join("bootstrap.records.bin"), &bytes).unwrap();
 
         let records = load_bootstrap_records(dir.path()).unwrap();
         assert!(records.len() == 2);

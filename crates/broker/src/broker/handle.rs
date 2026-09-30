@@ -261,12 +261,31 @@ impl BrokerHandle {
     }
 
     /// Subscribe to the self-shutdown signal. Flips `true` when the broker
-    /// decides to stop on its own. Today the only such cause is that all log
-    /// dirs went offline (KIP-112). The embedding application should call
-    /// [`Self::shutdown`] or `controlled_shutdown` when this fires.
+    /// decides to stop on its own. There are two such causes: all log dirs
+    /// went offline (KIP-112), and the controller that this node hosts stopped
+    /// itself over a fatal fault ([`Self::fatal_fault`] gives the reason). The
+    /// embedding application should call [`Self::shutdown`] or
+    /// `controlled_shutdown` when this fires, and exit non-zero for a fatal
+    /// fault, as Kafka halts the process.
     #[must_use]
     pub fn should_shutdown_rx(&self) -> tokio::sync::watch::Receiver<bool> {
         self.broker.should_shutdown.subscribe()
+    }
+
+    /// The fatal fault that stopped this node's controller, or `None` when
+    /// there is none.
+    ///
+    /// Kafka's `ProcessTerminatingFaultHandler` halts the process with exit
+    /// status 1 on such a fault, for example when a controller replays a
+    /// `FeatureLevelRecord` above the range it supports. A library cannot halt
+    /// its host, so [`Self::should_shutdown_rx`] flips and this holds the
+    /// message to exit with. The flag is already latched, so a
+    /// `controlled_shutdown` after it skips the leadership drain, which a dead
+    /// controller could not serve, and stops the broker at once. That stop
+    /// leaves no clean-shutdown proof, as a halted Kafka process leaves none.
+    #[must_use]
+    pub fn fatal_fault(&self) -> Option<String> {
+        self.broker.controller.watch_fatal().borrow().clone()
     }
 
     /// Request a graceful, controlled shutdown of this broker.
@@ -394,9 +413,18 @@ impl BrokerHandle {
     /// `BrokerLifecycleManager` registered at. A node that never registered
     /// has no epoch to name and writes nothing; so does a pure controller,
     /// which holds no replica and so no ELR membership.
+    ///
+    /// A stop that a fatal controller fault caused writes nothing either.
+    /// Kafka handles that fault with `ProcessTerminatingFaultHandler`, which
+    /// calls `Exit.halt(1)`: `BrokerServer.shutdown` never runs, so
+    /// `LogManager.shutdown` never writes `.kafka_cleanshutdown`, and the
+    /// restart registers with `previousBrokerEpoch` `-1`, which the controller
+    /// counts as an unclean shutdown. Leaving a proof here would let this
+    /// node's next registration read as a clean restart for ELR, which no
+    /// Kafka broker's does after that fault.
     fn write_clean_shutdown_proof(&self) {
         let config = &self.broker.config;
-        if !config.is_broker() || config.broker_epoch < 0 {
+        if !config.is_broker() || config.broker_epoch < 0 || self.fatal_fault().is_some() {
             return;
         }
         crate::clean_shutdown::write(&config.log_dir, config.broker_epoch);
