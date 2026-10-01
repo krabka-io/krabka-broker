@@ -26,73 +26,77 @@ let%span srefill'5 = "/workspace/crates/verified/src/quota/refill.rs" 22 10 23 5
 let%span srefill'6 = "/workspace/crates/verified/src/quota/refill.rs" 25 4 25 86
 let%span sconsume_trace = "/workspace/crates/verified/src/composition/consume_trace.rs" 42 22 42 28
 let%span sconsume_trace'0 = "/workspace/crates/verified/src/composition/consume_trace.rs" 43 19 43 25
-let%span sconsume_trace'1 = "/workspace/crates/verified/src/composition/consume_trace.rs" 44 23 44 24
-let%span sconsume_trace'2 = "/workspace/crates/verified/src/composition/consume_trace.rs" 61 32 61 49
-let%span sconsume_trace'3 = "/workspace/crates/verified/src/composition/consume_trace.rs" 62 14 62 25
-let%span sconsume_trace'4 = "/workspace/crates/verified/src/composition/consume_trace.rs" 59 34 60 91
-let%span sconsume_trace'5 = "/workspace/crates/verified/src/composition/consume_trace.rs" 57 34 58 71
-let%span sconsume_trace'6 = "/workspace/crates/verified/src/composition/consume_trace.rs" 54 34 56 98
-let%span sconsume_trace'7 = "/workspace/crates/verified/src/composition/consume_trace.rs" 53 34 53 86
-let%span sconsume_trace'8 = "/workspace/crates/verified/src/composition/consume_trace.rs" 52 34 52 88
-let%span sconsume_trace'9 = "/workspace/crates/verified/src/composition/consume_trace.rs" 50 34 51 55
-let%span sconsume_trace'10 = "/workspace/crates/verified/src/composition/consume_trace.rs" 49 34 49 97
-let%span sconsume_trace'11 = "/workspace/crates/verified/src/composition/consume_trace.rs" 48 34 48 55
-let%span sconsume_trace'12 = "/workspace/crates/verified/src/composition/consume_trace.rs" 47 34 47 82
-let%span sconsume_trace'13 = "/workspace/crates/verified/src/composition/consume_trace.rs" 46 34 46 89
-let%span sconsume_trace'14 = "/workspace/crates/verified/src/composition/consume_trace.rs" 45 34 45 52
-let%span sconsume_trace'15 = "/workspace/crates/verified/src/composition/consume_trace.rs" 63 34 63 42
-let%span sconsume_trace'16 = "/workspace/crates/verified/src/composition/consume_trace.rs" 63 34 63 44
-let%span sconsume_trace'17 = "/workspace/crates/verified/src/composition/consume_trace.rs" 63 19 63 45
-let%span sconsume_trace'18 = "/workspace/crates/verified/src/composition/consume_trace.rs" 64 22 64 39
-let%span sconsume_trace'19 = "/workspace/crates/verified/src/composition/consume_trace.rs" 65 22 66 64
-let%span sconsume_trace'20 = "/workspace/crates/verified/src/composition/consume_trace.rs" 67 23 67 84
-let%span sconsume_trace'21 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 24 68 43
-let%span sconsume_trace'22 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 46 68 62
-let%span sconsume_trace'23 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 24 68 62
-let%span sconsume_trace'24 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 65 68 85
-let%span sconsume_trace'25 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 24 68 85
-let%span sconsume_trace'26 = "/workspace/crates/verified/src/composition/consume_trace.rs" 69 64 69 65
-let%span sconsume_trace'27 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 38 70 55
-let%span sconsume_trace'28 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 27 70 56
-let%span sconsume_trace'29 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 70 70 92
-let%span sconsume_trace'30 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 59 70 93
-let%span sconsume_trace'31 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 27 70 93
-let%span sconsume_trace'32 = "/workspace/crates/verified/src/composition/consume_trace.rs" 71 35 71 48
-let%span sconsume_trace'33 = "/workspace/crates/verified/src/composition/consume_trace.rs" 71 24 71 48
-let%span sconsume_trace'34 = "/workspace/crates/verified/src/composition/consume_trace.rs" 71 12 71 48
-let%span sconsume_trace'35 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 12 73 13
-let%span sconsume_trace'36 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 22 76 82
-let%span sconsume_trace'37 = "/workspace/crates/verified/src/composition/consume_trace.rs" 77 42 77 50
-let%span sconsume_trace'38 = "/workspace/crates/verified/src/composition/consume_trace.rs" 77 42 77 52
-let%span sconsume_trace'39 = "/workspace/crates/verified/src/composition/consume_trace.rs" 77 22 77 82
-let%span sconsume_trace'40 = "/workspace/crates/verified/src/composition/consume_trace.rs" 79 12 79 85
-let%span sconsume_trace'41 = "/workspace/crates/verified/src/composition/consume_trace.rs" 84 25 84 26
-let%span sconsume_trace'42 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 28 87 9
-let%span sconsume_trace'43 = "/workspace/crates/verified/src/composition/consume_trace.rs" 88 22 88 42
-let%span sconsume_trace'44 = "/workspace/crates/verified/src/composition/consume_trace.rs" 89 22 89 82
-let%span sconsume_trace'45 = "/workspace/crates/verified/src/composition/consume_trace.rs" 90 22 91 53
-let%span sconsume_trace'46 = "/workspace/crates/verified/src/composition/consume_trace.rs" 93 12 99 13
-let%span sconsume_trace'47 = "/workspace/crates/verified/src/composition/consume_trace.rs" 105 30 105 55
-let%span sconsume_trace'48 = "/workspace/crates/verified/src/composition/consume_trace.rs" 105 19 105 56
-let%span sconsume_trace'49 = "/workspace/crates/verified/src/composition/consume_trace.rs" 105 8 105 56
-let%span sconsume_trace'50 = "/workspace/crates/verified/src/composition/consume_trace.rs" 106 8 106 25
-let%span sconsume_trace'51 = "/workspace/crates/verified/src/composition/consume_trace.rs" 111 13 111 14
-let%span sconsume_trace'52 = "/workspace/crates/verified/src/composition/consume_trace.rs" 111 8 111 14
-let%span sconsume_trace'53 = "/workspace/crates/verified/src/composition/consume_trace.rs" 13 11 13 71
-let%span sconsume_trace'54 = "/workspace/crates/verified/src/composition/consume_trace.rs" 14 11 14 61
-let%span sconsume_trace'55 = "/workspace/crates/verified/src/composition/consume_trace.rs" 15 11 15 20
-let%span sconsume_trace'56 = "/workspace/crates/verified/src/composition/consume_trace.rs" 16 10 16 73
-let%span sconsume_trace'57 = "/workspace/crates/verified/src/composition/consume_trace.rs" 17 10 17 66
-let%span sconsume_trace'58 = "/workspace/crates/verified/src/composition/consume_trace.rs" 18 10 18 31
-let%span sconsume_trace'59 = "/workspace/crates/verified/src/composition/consume_trace.rs" 19 10 19 83
-let%span sconsume_trace'60 = "/workspace/crates/verified/src/composition/consume_trace.rs" 20 10 21 61
-let%span sconsume_trace'61 = "/workspace/crates/verified/src/composition/consume_trace.rs" 22 10 25 40
-let%span sconsume_trace'62 = "/workspace/crates/verified/src/composition/consume_trace.rs" 26 10 27 67
-let%span sconsume_trace'63 = "/workspace/crates/verified/src/composition/consume_trace.rs" 28 10 30 38
-let%span sconsume_trace'64 = "/workspace/crates/verified/src/composition/consume_trace.rs" 122 11 123 55
-let%span sconsume_trace'65 = "/workspace/crates/verified/src/composition/consume_trace.rs" 124 11 124 48
-let%span sconsume_trace'66 = "/workspace/crates/verified/src/composition/consume_trace.rs" 125 10 126 67
-let%span sconsume_trace'67 = "/workspace/crates/verified/src/composition/consume_trace.rs" 133 2 134 1
+let%span sconsume_trace'1 = "/workspace/crates/verified/src/composition/consume_trace.rs" 46 45 46 46
+let%span sconsume_trace'2 = "/workspace/crates/verified/src/composition/consume_trace.rs" 47 23 47 24
+let%span sconsume_trace'3 = "/workspace/crates/verified/src/composition/consume_trace.rs" 66 32 66 49
+let%span sconsume_trace'4 = "/workspace/crates/verified/src/composition/consume_trace.rs" 67 14 67 25
+let%span sconsume_trace'5 = "/workspace/crates/verified/src/composition/consume_trace.rs" 64 34 65 91
+let%span sconsume_trace'6 = "/workspace/crates/verified/src/composition/consume_trace.rs" 62 34 63 71
+let%span sconsume_trace'7 = "/workspace/crates/verified/src/composition/consume_trace.rs" 59 34 61 98
+let%span sconsume_trace'8 = "/workspace/crates/verified/src/composition/consume_trace.rs" 58 34 58 86
+let%span sconsume_trace'9 = "/workspace/crates/verified/src/composition/consume_trace.rs" 57 34 57 67
+let%span sconsume_trace'10 = "/workspace/crates/verified/src/composition/consume_trace.rs" 56 34 56 45
+let%span sconsume_trace'11 = "/workspace/crates/verified/src/composition/consume_trace.rs" 55 34 55 71
+let%span sconsume_trace'12 = "/workspace/crates/verified/src/composition/consume_trace.rs" 53 34 54 55
+let%span sconsume_trace'13 = "/workspace/crates/verified/src/composition/consume_trace.rs" 52 34 52 97
+let%span sconsume_trace'14 = "/workspace/crates/verified/src/composition/consume_trace.rs" 51 34 51 55
+let%span sconsume_trace'15 = "/workspace/crates/verified/src/composition/consume_trace.rs" 50 34 50 82
+let%span sconsume_trace'16 = "/workspace/crates/verified/src/composition/consume_trace.rs" 49 34 49 89
+let%span sconsume_trace'17 = "/workspace/crates/verified/src/composition/consume_trace.rs" 48 34 48 52
+let%span sconsume_trace'18 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 34 68 42
+let%span sconsume_trace'19 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 34 68 44
+let%span sconsume_trace'20 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 19 68 45
+let%span sconsume_trace'21 = "/workspace/crates/verified/src/composition/consume_trace.rs" 69 22 69 39
+let%span sconsume_trace'22 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 22 71 64
+let%span sconsume_trace'23 = "/workspace/crates/verified/src/composition/consume_trace.rs" 72 23 72 84
+let%span sconsume_trace'24 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 24 73 43
+let%span sconsume_trace'25 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 46 73 62
+let%span sconsume_trace'26 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 24 73 62
+let%span sconsume_trace'27 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 65 73 85
+let%span sconsume_trace'28 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 24 73 85
+let%span sconsume_trace'29 = "/workspace/crates/verified/src/composition/consume_trace.rs" 74 64 74 65
+let%span sconsume_trace'30 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 38 75 55
+let%span sconsume_trace'31 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 27 75 56
+let%span sconsume_trace'32 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 70 75 92
+let%span sconsume_trace'33 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 59 75 93
+let%span sconsume_trace'34 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 27 75 93
+let%span sconsume_trace'35 = "/workspace/crates/verified/src/composition/consume_trace.rs" 76 35 76 48
+let%span sconsume_trace'36 = "/workspace/crates/verified/src/composition/consume_trace.rs" 76 24 76 48
+let%span sconsume_trace'37 = "/workspace/crates/verified/src/composition/consume_trace.rs" 76 12 76 48
+let%span sconsume_trace'38 = "/workspace/crates/verified/src/composition/consume_trace.rs" 78 12 78 13
+let%span sconsume_trace'39 = "/workspace/crates/verified/src/composition/consume_trace.rs" 80 22 81 82
+let%span sconsume_trace'40 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 42 82 50
+let%span sconsume_trace'41 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 42 82 52
+let%span sconsume_trace'42 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 22 82 82
+let%span sconsume_trace'43 = "/workspace/crates/verified/src/composition/consume_trace.rs" 84 12 84 85
+let%span sconsume_trace'44 = "/workspace/crates/verified/src/composition/consume_trace.rs" 89 25 89 26
+let%span sconsume_trace'45 = "/workspace/crates/verified/src/composition/consume_trace.rs" 87 28 92 9
+let%span sconsume_trace'46 = "/workspace/crates/verified/src/composition/consume_trace.rs" 93 22 93 42
+let%span sconsume_trace'47 = "/workspace/crates/verified/src/composition/consume_trace.rs" 94 22 94 82
+let%span sconsume_trace'48 = "/workspace/crates/verified/src/composition/consume_trace.rs" 95 22 96 53
+let%span sconsume_trace'49 = "/workspace/crates/verified/src/composition/consume_trace.rs" 98 12 104 13
+let%span sconsume_trace'50 = "/workspace/crates/verified/src/composition/consume_trace.rs" 111 30 111 47
+let%span sconsume_trace'51 = "/workspace/crates/verified/src/composition/consume_trace.rs" 113 30 113 55
+let%span sconsume_trace'52 = "/workspace/crates/verified/src/composition/consume_trace.rs" 113 19 113 56
+let%span sconsume_trace'53 = "/workspace/crates/verified/src/composition/consume_trace.rs" 113 8 113 56
+let%span sconsume_trace'54 = "/workspace/crates/verified/src/composition/consume_trace.rs" 114 8 114 25
+let%span sconsume_trace'55 = "/workspace/crates/verified/src/composition/consume_trace.rs" 119 13 119 14
+let%span sconsume_trace'56 = "/workspace/crates/verified/src/composition/consume_trace.rs" 119 8 119 14
+let%span sconsume_trace'57 = "/workspace/crates/verified/src/composition/consume_trace.rs" 13 11 13 71
+let%span sconsume_trace'58 = "/workspace/crates/verified/src/composition/consume_trace.rs" 14 11 14 61
+let%span sconsume_trace'59 = "/workspace/crates/verified/src/composition/consume_trace.rs" 15 11 15 20
+let%span sconsume_trace'60 = "/workspace/crates/verified/src/composition/consume_trace.rs" 16 10 16 73
+let%span sconsume_trace'61 = "/workspace/crates/verified/src/composition/consume_trace.rs" 17 10 17 66
+let%span sconsume_trace'62 = "/workspace/crates/verified/src/composition/consume_trace.rs" 18 10 18 31
+let%span sconsume_trace'63 = "/workspace/crates/verified/src/composition/consume_trace.rs" 19 10 19 83
+let%span sconsume_trace'64 = "/workspace/crates/verified/src/composition/consume_trace.rs" 20 10 21 61
+let%span sconsume_trace'65 = "/workspace/crates/verified/src/composition/consume_trace.rs" 22 10 25 40
+let%span sconsume_trace'66 = "/workspace/crates/verified/src/composition/consume_trace.rs" 26 10 27 67
+let%span sconsume_trace'67 = "/workspace/crates/verified/src/composition/consume_trace.rs" 28 10 30 38
+let%span sconsume_trace'68 = "/workspace/crates/verified/src/composition/consume_trace.rs" 130 11 131 55
+let%span sconsume_trace'69 = "/workspace/crates/verified/src/composition/consume_trace.rs" 132 11 132 48
+let%span sconsume_trace'70 = "/workspace/crates/verified/src/composition/consume_trace.rs" 133 10 134 67
+let%span sconsume_trace'71 = "/workspace/crates/verified/src/composition/consume_trace.rs" 141 2 142 1
 let%span srequest = "/workspace/crates/verified/src/quota/request.rs" 9 11 9 31
 let%span srequest'0 = "/workspace/crates/verified/src/quota/request.rs" 10 10 10 62
 let%span srequest'1 = "/workspace/crates/verified/src/quota/request.rs" 11 10 13 36
@@ -254,17 +258,17 @@ type tup2_Int_Int = { f0'8: int; f1'8: int }
 
 type tup3_Int_Int_Int = { f0'9: int; f1'9: int; f2'9: int }
 
-function lemma_refill_grant_ledger [#"/workspace/crates/verified/src/composition/consume_trace.rs" 127 0 133 1] (granted: int) (previous: tup2_Int_Int) (refilled: tup3_Int_Int_Int) (consumed: tup2_Int_Int) (credit: int) : ()
- = [%#sconsume_trace'67] ()
+function lemma_refill_grant_ledger [#"/workspace/crates/verified/src/composition/consume_trace.rs" 135 0 141 1] (granted: int) (previous: tup2_Int_Int) (refilled: tup3_Int_Int_Int) (consumed: tup2_Int_Int) (credit: int) : ()
+ = [%#sconsume_trace'71] ()
 
 axiom lemma_refill_grant_ledger_spec:
-  forall granted: int, previous: tup2_Int_Int, refilled: tup3_Int_Int_Int, consumed: tup2_Int_Int, credit: int. ([%#sconsume_trace'64] refilled.f0'9
+  forall granted: int, previous: tup2_Int_Int, refilled: tup3_Int_Int_Int, consumed: tup2_Int_Int, credit: int. ([%#sconsume_trace'68] refilled.f0'9
             * 1000000000
           + refilled.f1'9
         + refilled.f2'9
       = previous.f0'8 * 1000000000 + previous.f1'8 + credit)
-    -> ([%#sconsume_trace'65] consumed.f0'8 + consumed.f1'8 = refilled.f0'9)
-    -> ([%#sconsume_trace'66] (granted + consumed.f0'8 + consumed.f1'8) * 1000000000 + refilled.f1'9 + refilled.f2'9
+    -> ([%#sconsume_trace'69] consumed.f0'8 + consumed.f1'8 = refilled.f0'9)
+    -> ([%#sconsume_trace'70] (granted + consumed.f0'8 + consumed.f1'8) * 1000000000 + refilled.f1'9 + refilled.f2'9
     = (granted + previous.f0'8) * 1000000000 + previous.f1'8 + credit)
 
 type tup4_u64_u64_u64_u64 = { f0'10: UInt64.t; f1'10: UInt64.t; f2'10: UInt64.t; f3'10: UInt64.t }
@@ -278,13 +282,13 @@ meta "select_lsinst" "all"
 let metered_consumes_conserve_elapsed_credit [#"/workspace/crates/verified/src/composition/consume_trace.rs" 31 0 38 39]
   (initial: tup3_u64_u64_u64) (start: UInt64.t) (steps: Slice64.slice tup2_u64_u64) (rate: UInt64.t) (burst: UInt64.t)
   (units_per_token: UInt64.t) (return (x: tup3_u128_tup4_u64_u64_u64_u64_u128)) =
-{[@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires] ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #0] [%#sconsume_trace'53] UInt64.t'int initial.f0
+{[@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires] ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #0] [%#sconsume_trace'57] UInt64.t'int initial.f0
       <= UInt64.t'int burst
     /\ (UInt64.t'int initial.f0 = 0 \/ UInt64.t'int initial.f1 = 0))
-  /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #1] [%#sconsume_trace'54] UInt64.t'int initial.f2
+  /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #1] [%#sconsume_trace'58] UInt64.t'int initial.f2
       < 1000000000
     /\ gt_log_Int (UInt64.t'int units_per_token) 0)
-  /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #2] [%#sconsume_trace'55] gt_log_Int (UInt64.t'int rate) 0)}
+  /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #2] [%#sconsume_trace'59] gt_log_Int (UInt64.t'int rate) 0)}
   (! bb0
   [ bb0 = s0
     [ s0 = [ &available <- initial.f0 ] s1
@@ -293,162 +297,157 @@ let metered_consumes_conserve_elapsed_credit [#"/workspace/crates/verified/src/c
     | s3 = [ &last_clock <- start ] s4
     | s4 = [ &granted <- [%#sconsume_trace] (0: UInt128.t) ] s5
     | s5 = [ &lost <- [%#sconsume_trace'0] (0: UInt128.t) ] s6
-    | s6 = [ &i <- [%#sconsume_trace'1] (0: UInt64.t) ] s7
-    | s7 = bb1 ]
-  | bb1 = bb1invariant
-    [ bb1 =
-      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sconsume_trace'2] Seq.length (Slice64.view steps)
+    | s6 = [ &spent <- [%#sconsume_trace'1] 0 ] s7
+    | s7 = [ &i <- [%#sconsume_trace'2] (0: UInt64.t) ] s8
+    | s8 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#sconsume_trace'3] Seq.length (Slice64.view steps)
       - UInt64.t'int i)}
-      bb1invariant
-    | bb1invariant = {[@expl:loop invariant #0] [%#sconsume_trace'14] UInt64.t'int i <= Seq.length (Slice64.view steps)}
-      {[@expl:loop invariant #1] [%#sconsume_trace'13] UInt64.t'int available <= UInt64.t'int burst
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#sconsume_trace'17] UInt64.t'int i <= Seq.length (Slice64.view steps)}
+      {[@expl:loop invariant #1] [%#sconsume_trace'16] UInt64.t'int available <= UInt64.t'int burst
       /\ (UInt64.t'int available = 0 \/ UInt64.t'int debt = 0)}
-      {[@expl:loop invariant #2] [%#sconsume_trace'12] UInt64.t'int debt <= UInt64.t'int initial.f1
+      {[@expl:loop invariant #2] [%#sconsume_trace'15] UInt64.t'int debt <= UInt64.t'int initial.f1
       /\ UInt64.t'int fraction < 1000000000}
-      {[@expl:loop invariant #3] [%#sconsume_trace'11] ge_log_Int (UInt64.t'int last_clock) (UInt64.t'int start)}
-      {[@expl:loop invariant #4] [%#sconsume_trace'10] forall k: int. 0 <= k /\ k < UInt64.t'int i
+      {[@expl:loop invariant #3] [%#sconsume_trace'14] ge_log_Int (UInt64.t'int last_clock) (UInt64.t'int start)}
+      {[@expl:loop invariant #4] [%#sconsume_trace'13] forall k: int. 0 <= k /\ k < UInt64.t'int i
         -> ge_log_Int (UInt64.t'int last_clock) (UInt64.t'int (Seq.get (Slice64.view steps) k).f0'0)}
-      {[@expl:loop invariant #5] [%#sconsume_trace'9] UInt64.t'int last_clock = UInt64.t'int start
+      {[@expl:loop invariant #5] [%#sconsume_trace'12] UInt64.t'int last_clock = UInt64.t'int start
       \/ (exists k: int. 0 <= k
         /\ k < UInt64.t'int i /\ UInt64.t'int last_clock = UInt64.t'int (Seq.get (Slice64.view steps) k).f0'0)}
-      {[@expl:loop invariant #6] [%#sconsume_trace'8] ge_log_Int (UInt128.t'int granted * UInt64.t'int units_per_token
+      {[@expl:loop invariant #6] [%#sconsume_trace'11] UInt128.t'int granted * UInt64.t'int units_per_token = spent}
+      {[@expl:loop invariant #7] [%#sconsume_trace'10] ge_log_Int spent 0}
+      {[@expl:loop invariant #8] [%#sconsume_trace'9] ge_log_Int (spent
       + UInt64.t'int available) (UInt64.t'int initial.f0)}
-      {[@expl:loop invariant #7] [%#sconsume_trace'7] UInt128.t'int lost
+      {[@expl:loop invariant #9] [%#sconsume_trace'8] UInt128.t'int lost
       <= UInt64.t'int initial.f2 + (UInt64.t'int last_clock - UInt64.t'int start) * UInt64.t'int rate}
-      {[@expl:loop invariant #8] [%#sconsume_trace'6] (UInt128.t'int granted * UInt64.t'int units_per_token
-                + UInt64.t'int available
-              - UInt64.t'int debt)
-            * 1000000000
+      {[@expl:loop invariant #10] [%#sconsume_trace'7] (spent + UInt64.t'int available - UInt64.t'int debt) * 1000000000
           + UInt64.t'int fraction
         + UInt128.t'int lost
       = (UInt64.t'int initial.f0 - UInt64.t'int initial.f1) * 1000000000 + UInt64.t'int initial.f2
       + (UInt64.t'int last_clock - UInt64.t'int start) * UInt64.t'int rate}
-      {[@expl:loop invariant #9] [%#sconsume_trace'5] UInt128.t'int granted * UInt64.t'int units_per_token
-        + UInt64.t'int available
+      {[@expl:loop invariant #11] [%#sconsume_trace'6] spent + UInt64.t'int available
       <= UInt64.t'int initial.f0
       + ComputerDivision.div (UInt64.t'int initial.f2
       + (UInt64.t'int last_clock - UInt64.t'int start) * UInt64.t'int rate) 1000000000}
-      {[@expl:loop invariant #10] [%#sconsume_trace'4] gt_log_Int (UInt64.t'int i) 0
+      {[@expl:loop invariant #12] [%#sconsume_trace'5] gt_log_Int (UInt64.t'int i) 0
         /\ ge_log_Int (UInt64.t'int (Seq.get (Slice64.view steps) (UInt64.t'int i
         - 1)).f1'0) (ComputerDivision.div (UInt64.t'int burst) (UInt64.t'int units_per_token))
       -> UInt64.t'int available < UInt64.t'int units_per_token}
-      (! [ &variant_old_bb1 <- [%#sconsume_trace'2] Seq.length (Slice64.view steps) - UInt64.t'int i ] s0)
-      [ s0 = len_tup2_u64_u64 [%#sconsume_trace'3] {steps} (fun (_x: UInt64.t) -> [ &_121 <- _x ] s1)
-      | s1 = [ &_119 <- UInt64.lt i _121 ] s2
-      | s2 = any [ br0 -> {_119 = false} (! bb24) | br1 -> {_119} (! bb4) ] ]
-      [ bb4 = s0
-        [ s0 = [ &_126 <- i ] s1
-        | s1 = [ &_127 <- Slice64.length steps ] s2
-        | s2 = [ &_128 <- UInt64.lt _126 _127 ] s3
-        | s3 = {[@expl:index in bounds] [%#sconsume_trace'15] _128} s4
-        | s4 = Slice64.get [%#sconsume_trace'16] <tup2_u64_u64> {steps} {_126}
-            (fun (r: tup2_u64_u64) -> [ &_125 <- r.f0'0 ] s5)
-        | s5 = max_u64 [%#sconsume_trace'17] {last_clock} {_125} (fun (_x: UInt64.t) -> [ &next <- _x ] s6)
-        | s6 = UInt64.sub [%#sconsume_trace'18] {next} {last_clock} (fun (_x: UInt64.t) -> [ &elapsed <- _x ] s7)
-        | s7 = {[@expl:assertion] [%#sconsume_trace'19] (UInt64.t'int next - UInt64.t'int start) * UInt64.t'int rate
+      (! [ &variant_old_bb2 <- [%#sconsume_trace'3] Seq.length (Slice64.view steps) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_u64_u64 [%#sconsume_trace'4] {steps} (fun (_x: UInt64.t) -> [ &_126 <- _x ] s1)
+      | s1 = [ &_124 <- UInt64.lt i _126 ] s2
+      | s2 = any [ br0 -> {_124 = false} (! bb26) | br1 -> {_124} (! bb5) ] ]
+      [ bb5 = s0
+        [ s0 = [ &_131 <- i ] s1
+        | s1 = [ &_132 <- Slice64.length steps ] s2
+        | s2 = [ &_133 <- UInt64.lt _131 _132 ] s3
+        | s3 = {[@expl:index in bounds] [%#sconsume_trace'18] _133} s4
+        | s4 = Slice64.get [%#sconsume_trace'19] <tup2_u64_u64> {steps} {_131}
+            (fun (r: tup2_u64_u64) -> [ &_130 <- r.f0'0 ] s5)
+        | s5 = max_u64 [%#sconsume_trace'20] {last_clock} {_130} (fun (_x: UInt64.t) -> [ &next <- _x ] s6)
+        | s6 = UInt64.sub [%#sconsume_trace'21] {next} {last_clock} (fun (_x: UInt64.t) -> [ &elapsed <- _x ] s7)
+        | s7 = {[@expl:assertion] [%#sconsume_trace'22] (UInt64.t'int next - UInt64.t'int start) * UInt64.t'int rate
           = (UInt64.t'int last_clock - UInt64.t'int start) * UInt64.t'int rate
           + UInt64.t'int elapsed * UInt64.t'int rate}
           s8
-        | s8 = quota_refill [%#sconsume_trace'20] {available} {debt} {fraction} {elapsed} {rate} {burst}
+        | s8 = quota_refill [%#sconsume_trace'23] {available} {debt} {fraction} {elapsed} {rate} {burst}
             (fun (_x: tup3_u64_u64_u64) -> [ &refilled <- _x ] s9)
-        | s9 = from_u128 [%#sconsume_trace'21] {elapsed} (fun (_x: UInt128.t) -> [ &_148 <- _x ] s10)
-        | s10 = from_u128 [%#sconsume_trace'22] {rate} (fun (_x: UInt128.t) -> [ &_150 <- _x ] s11)
-        | s11 = UInt128.mul [%#sconsume_trace'23] {_148} {_150} (fun (_x: UInt128.t) -> [ &_147 <- _x ] s12)
-        | s12 = from_u128 [%#sconsume_trace'24] {fraction} (fun (_x: UInt128.t) -> [ &_152 <- _x ] s13)
-        | s13 = UInt128.add [%#sconsume_trace'25] {_147} {_152} (fun (_x: UInt128.t) -> [ &numerator <- _x ] s14)
-        | s14 = [ &_155 <- refilled.f0 = burst ] s15
-        | s15 = any [ br0 -> {_155 = false} (! bb17) | br1 -> {_155} (! bb11) ] ]
-      | bb11 = s0
-        [ s0 = [ &_158 <- refilled.f1 = ([%#sconsume_trace'26] (0: UInt64.t)) ] s1
-        | s1 = any [ br0 -> {_158 = false} (! bb17) | br1 -> {_158} (! bb12) ] ]
+        | s9 = from_u128 [%#sconsume_trace'24] {elapsed} (fun (_x: UInt128.t) -> [ &_153 <- _x ] s10)
+        | s10 = from_u128 [%#sconsume_trace'25] {rate} (fun (_x: UInt128.t) -> [ &_155 <- _x ] s11)
+        | s11 = UInt128.mul [%#sconsume_trace'26] {_153} {_155} (fun (_x: UInt128.t) -> [ &_152 <- _x ] s12)
+        | s12 = from_u128 [%#sconsume_trace'27] {fraction} (fun (_x: UInt128.t) -> [ &_157 <- _x ] s13)
+        | s13 = UInt128.add [%#sconsume_trace'28] {_152} {_157} (fun (_x: UInt128.t) -> [ &numerator <- _x ] s14)
+        | s14 = [ &_160 <- refilled.f0 = burst ] s15
+        | s15 = any [ br0 -> {_160 = false} (! bb18) | br1 -> {_160} (! bb12) ] ]
       | bb12 = s0
-        [ s0 = UInt64.sub [%#sconsume_trace'27] {debt} {refilled.f1} (fun (_x: UInt64.t) -> [ &_162 <- _x ] s1)
-        | s1 = from_u128 [%#sconsume_trace'28] {_162} (fun (_x: UInt128.t) -> [ &_161 <- _x ] s2)
-        | s2 = UInt64.sub [%#sconsume_trace'29] {refilled.f0} {available} (fun (_x: UInt64.t) -> [ &_166 <- _x ] s3)
-        | s3 = from_u128 [%#sconsume_trace'30] {_166} (fun (_x: UInt128.t) -> [ &_165 <- _x ] s4)
-        | s4 = UInt128.add [%#sconsume_trace'31] {_161} {_165} (fun (_x: UInt128.t) -> [ &credited <- _x ] s5)
-        | s5 = UInt128.mul [%#sconsume_trace'33] {credited} {[%#sconsume_trace'32] (1000000000: UInt128.t)}
-            (fun (_x: UInt128.t) -> [ &_170 <- _x ] s6)
-        | s6 = UInt128.sub [%#sconsume_trace'34] {numerator} {_170} (fun (_x: UInt128.t) -> [ &discarded <- _x ] s7)
-        | s7 = bb18 ]
-      | bb17 = s0 [ s0 = [ &discarded <- [%#sconsume_trace'35] (0: UInt128.t) ] s1 | s1 = bb18 ]
-      | bb18 = s0
-        [ s0 = {[@expl:assertion] [%#sconsume_trace'36] (UInt64.t'int refilled.f0 - UInt64.t'int refilled.f1)
+        [ s0 = [ &_163 <- refilled.f1 = ([%#sconsume_trace'29] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_163 = false} (! bb18) | br1 -> {_163} (! bb13) ] ]
+      | bb13 = s0
+        [ s0 = UInt64.sub [%#sconsume_trace'30] {debt} {refilled.f1} (fun (_x: UInt64.t) -> [ &_167 <- _x ] s1)
+        | s1 = from_u128 [%#sconsume_trace'31] {_167} (fun (_x: UInt128.t) -> [ &_166 <- _x ] s2)
+        | s2 = UInt64.sub [%#sconsume_trace'32] {refilled.f0} {available} (fun (_x: UInt64.t) -> [ &_171 <- _x ] s3)
+        | s3 = from_u128 [%#sconsume_trace'33] {_171} (fun (_x: UInt128.t) -> [ &_170 <- _x ] s4)
+        | s4 = UInt128.add [%#sconsume_trace'34] {_166} {_170} (fun (_x: UInt128.t) -> [ &credited <- _x ] s5)
+        | s5 = UInt128.mul [%#sconsume_trace'36] {credited} {[%#sconsume_trace'35] (1000000000: UInt128.t)}
+            (fun (_x: UInt128.t) -> [ &_175 <- _x ] s6)
+        | s6 = UInt128.sub [%#sconsume_trace'37] {numerator} {_175} (fun (_x: UInt128.t) -> [ &discarded <- _x ] s7)
+        | s7 = bb19 ]
+      | bb18 = s0 [ s0 = [ &discarded <- [%#sconsume_trace'38] (0: UInt128.t) ] s1 | s1 = bb19 ]
+      | bb19 = s0
+        [ s0 = {[@expl:assertion] [%#sconsume_trace'39] (UInt64.t'int refilled.f0 - UInt64.t'int refilled.f1)
                 * 1000000000
               + UInt64.t'int refilled.f2
             + UInt128.t'int discarded
           = (UInt64.t'int available - UInt64.t'int debt) * 1000000000 + UInt64.t'int fraction
           + UInt64.t'int elapsed * UInt64.t'int rate}
           s1
-        | s1 = [ &_185 <- i ] s2
-        | s2 = [ &_186 <- Slice64.length steps ] s3
-        | s3 = [ &_187 <- UInt64.lt _185 _186 ] s4
-        | s4 = {[@expl:index in bounds] [%#sconsume_trace'37] _187} s5
-        | s5 = Slice64.get [%#sconsume_trace'38] <tup2_u64_u64> {steps} {_185}
-            (fun (r: tup2_u64_u64) -> [ &_184 <- r.f1'0 ] s6)
-        | s6 = quota_whole_request [%#sconsume_trace'39] {_184} {refilled.f0} {units_per_token}
+        | s1 = [ &_190 <- i ] s2
+        | s2 = [ &_191 <- Slice64.length steps ] s3
+        | s3 = [ &_192 <- UInt64.lt _190 _191 ] s4
+        | s4 = {[@expl:index in bounds] [%#sconsume_trace'40] _192} s5
+        | s5 = Slice64.get [%#sconsume_trace'41] <tup2_u64_u64> {steps} {_190}
+            (fun (r: tup2_u64_u64) -> [ &_189 <- r.f1'0 ] s6)
+        | s6 = quota_whole_request [%#sconsume_trace'42] {_189} {refilled.f0} {units_per_token}
             (fun (_x: UInt64.t) -> [ &request <- _x ] s7)
         | s7 =
-          {[@expl:assertion] [%#sconsume_trace'40] let _ = lemma_div_monotone (UInt64.t'int refilled.f0) (UInt64.t'int burst) (UInt64.t'int units_per_token) in ComputerDivision.div (UInt64.t'int refilled.f0) (UInt64.t'int units_per_token)
+          {[@expl:assertion] [%#sconsume_trace'43] let _ = lemma_div_monotone (UInt64.t'int refilled.f0) (UInt64.t'int burst) (UInt64.t'int units_per_token) in ComputerDivision.div (UInt64.t'int refilled.f0) (UInt64.t'int units_per_token)
           <= ComputerDivision.div (UInt64.t'int burst) (UInt64.t'int units_per_token)}
           s8
-        | s8 = [ &_198 <- { f0'1 = refilled.f0 } ] s9
-        | s9 = [ &_200 <- { f0'2 = ([%#sconsume_trace'41] (0: UInt64.t)) } ] s10
-        | s10 = [ &_201 <- { f0'3 = burst } ] s11
-        | s11 = [ &_203 <- { f0'4 = request } ] s12
-        | s12 = plan_consume [%#sconsume_trace'42] {_198} {_200} {_201} {_203}
-            (fun (_x: tup2_GrantedTokens_NewAvailable) -> [ &_197 <- _x ] s13)
-        | s13 = [ &grant <- _197.f0'7 ] s14
-        | s14 = [ &left <- _197.f1'7 ] s15
-        | s15 = {[@expl:assertion] [%#sconsume_trace'43] UInt64.t'int grant.f0'5 = UInt64.t'int request} s16
+        | s8 = [ &_203 <- { f0'1 = refilled.f0 } ] s9
+        | s9 = [ &_205 <- { f0'2 = ([%#sconsume_trace'44] (0: UInt64.t)) } ] s10
+        | s10 = [ &_206 <- { f0'3 = burst } ] s11
+        | s11 = [ &_208 <- { f0'4 = request } ] s12
+        | s12 = plan_consume [%#sconsume_trace'45] {_203} {_205} {_206} {_208}
+            (fun (_x: tup2_GrantedTokens_NewAvailable) -> [ &_202 <- _x ] s13)
+        | s13 = [ &grant <- _202.f0'7 ] s14
+        | s14 = [ &left <- _202.f1'7 ] s15
+        | s15 = {[@expl:assertion] [%#sconsume_trace'46] UInt64.t'int grant.f0'5 = UInt64.t'int request} s16
         | s16 =
-          {[@expl:assertion] [%#sconsume_trace'44] ComputerDivision.div (UInt64.t'int grant.f0'5) (UInt64.t'int units_per_token)
+          {[@expl:assertion] [%#sconsume_trace'47] ComputerDivision.div (UInt64.t'int grant.f0'5) (UInt64.t'int units_per_token)
             * UInt64.t'int units_per_token
           = UInt64.t'int grant.f0'5}
           s17
-        | s17 = {[@expl:assertion] [%#sconsume_trace'45] (UInt128.t'int granted
+        | s17 = {[@expl:assertion] [%#sconsume_trace'48] (UInt128.t'int granted
               + ComputerDivision.div (UInt64.t'int grant.f0'5) (UInt64.t'int units_per_token))
             * UInt64.t'int units_per_token
           = UInt128.t'int granted * UInt64.t'int units_per_token + UInt64.t'int grant.f0'5}
           s18
-        | s18 = {[@expl:assertion] [%#sconsume_trace'46] let _ = lemma_refill_grant_ledger (UInt128.t'int granted
-          * UInt64.t'int units_per_token) { f0'8 = UInt64.t'int available - UInt64.t'int debt;
-                                            f1'8 = UInt64.t'int fraction } { f0'9 = UInt64.t'int refilled.f0
-                                                                             - UInt64.t'int refilled.f1;
-                                                                             f1'9 = UInt64.t'int refilled.f2;
-                                                                             f2'9 = UInt128.t'int discarded } { f0'8 = UInt64.t'int grant.f0'5;
-                                                                                                                f1'8 = UInt64.t'int left.f0'6
-                                                                                                                - UInt64.t'int refilled.f1 } (UInt64.t'int elapsed
-          * UInt64.t'int rate) in ((UInt128.t'int granted
-                        + ComputerDivision.div (UInt64.t'int grant.f0'5) (UInt64.t'int units_per_token))
-                      * UInt64.t'int units_per_token
-                    + UInt64.t'int left.f0'6
-                  - UInt64.t'int refilled.f1)
+        | s18 =
+          {[@expl:assertion] [%#sconsume_trace'49] let _ = lemma_refill_grant_ledger spent { f0'8 = UInt64.t'int available
+                                                                                             - UInt64.t'int debt;
+                                                                                             f1'8 = UInt64.t'int fraction } { f0'9 = UInt64.t'int refilled.f0
+                                                                                                                              - UInt64.t'int refilled.f1;
+                                                                                                                              f1'9 = UInt64.t'int refilled.f2;
+                                                                                                                              f2'9 = UInt128.t'int discarded } { f0'8 = UInt64.t'int grant.f0'5;
+                                                                                                                                                                 f1'8 = UInt64.t'int left.f0'6
+                                                                                                                                                                 - UInt64.t'int refilled.f1 } (UInt64.t'int elapsed
+          * UInt64.t'int rate) in (spent + UInt64.t'int grant.f0'5 + UInt64.t'int left.f0'6 - UInt64.t'int refilled.f1)
                 * 1000000000
               + UInt64.t'int refilled.f2
             + UInt128.t'int discarded
-          = (UInt128.t'int granted * UInt64.t'int units_per_token + UInt64.t'int available - UInt64.t'int debt)
-              * 1000000000
-            + UInt64.t'int fraction
+          = (spent + UInt64.t'int available - UInt64.t'int debt) * 1000000000 + UInt64.t'int fraction
           + UInt64.t'int elapsed * UInt64.t'int rate}
           s19
-        | s19 = [ &_236 <- units_per_token ] s20
-        | s20 = [ &_237 <- _236 = ([%#sconsume_trace'47] (0: UInt64.t)) ] s21
-        | s21 = {[@expl:division by zero] [%#sconsume_trace'47] not _237} s22
-        | s22 = UInt64.div [%#sconsume_trace'47] {grant.f0'5} {_236} (fun (_x: UInt64.t) -> [ &_234 <- _x ] s23)
-        | s23 = from_u128 [%#sconsume_trace'48] {_234} (fun (_x: UInt128.t) -> [ &_233 <- _x ] s24)
-        | s24 = UInt128.add [%#sconsume_trace'49] {granted} {_233} (fun (_x: UInt128.t) -> [ &granted <- _x ] s25)
-        | s25 = UInt128.add [%#sconsume_trace'50] {lost} {discarded} (fun (_x: UInt128.t) -> [ &lost <- _x ] s26)
-        | s26 = [ &available <- left.f0'6 ] s27
-        | s27 = [ &debt <- refilled.f1 ] s28
-        | s28 = [ &fraction <- refilled.f2 ] s29
-        | s29 = [ &last_clock <- next ] s30
-        | s30 = UInt64.add [%#sconsume_trace'52] {i} {[%#sconsume_trace'51] (1: UInt64.t)}
-            (fun (_x: UInt64.t) -> [ &i <- _x ] s31)
-        | s31 = bb1 ] ] ]
-  | bb24 = s0
-    [ s0 = [ &_245 <- { f0'10 = available; f1'10 = debt; f2'10 = fraction; f3'10 = last_clock } ] s1
-    | s1 = [ &_ret <- { f0'11 = granted; f1'11 = _245; f2'11 = lost } ] s2
+        | s19 = [ &spent <- [%#sconsume_trace'50] spent + UInt64.t'int grant.f0'5 ] s20
+        | s20 = [ &_245 <- units_per_token ] s21
+        | s21 = [ &_246 <- _245 = ([%#sconsume_trace'51] (0: UInt64.t)) ] s22
+        | s22 = {[@expl:division by zero] [%#sconsume_trace'51] not _246} s23
+        | s23 = UInt64.div [%#sconsume_trace'51] {grant.f0'5} {_245} (fun (_x: UInt64.t) -> [ &_243 <- _x ] s24)
+        | s24 = from_u128 [%#sconsume_trace'52] {_243} (fun (_x: UInt128.t) -> [ &_242 <- _x ] s25)
+        | s25 = UInt128.add [%#sconsume_trace'53] {granted} {_242} (fun (_x: UInt128.t) -> [ &granted <- _x ] s26)
+        | s26 = UInt128.add [%#sconsume_trace'54] {lost} {discarded} (fun (_x: UInt128.t) -> [ &lost <- _x ] s27)
+        | s27 = [ &available <- left.f0'6 ] s28
+        | s28 = [ &debt <- refilled.f1 ] s29
+        | s29 = [ &fraction <- refilled.f2 ] s30
+        | s30 = [ &last_clock <- next ] s31
+        | s31 = UInt64.add [%#sconsume_trace'56] {i} {[%#sconsume_trace'55] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s32)
+        | s32 = bb2 ] ] ]
+  | bb26 = s0
+    [ s0 = [ &_254 <- { f0'10 = available; f1'10 = debt; f2'10 = fraction; f3'10 = last_clock } ] s1
+    | s1 = [ &_ret <- { f0'11 = granted; f1'11 = _254; f2'11 = lost } ] s2
     | s2 = return {_ret} ] ]
   [ & _ret: tup3_u128_tup4_u64_u64_u64_u64_u128 = Any.any_l ()
   | & initial: tup3_u64_u64_u64 = initial
@@ -463,66 +462,67 @@ let metered_consumes_conserve_elapsed_credit [#"/workspace/crates/verified/src/c
   | & last_clock: UInt64.t = Any.any_l ()
   | & granted: UInt128.t = Any.any_l ()
   | & lost: UInt128.t = Any.any_l ()
+  | & spent: int = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _119: bool = Any.any_l ()
-  | & _121: UInt64.t = Any.any_l ()
-  | & next: UInt64.t = Any.any_l ()
-  | & _125: UInt64.t = Any.any_l ()
+  | & _124: bool = Any.any_l ()
   | & _126: UInt64.t = Any.any_l ()
-  | & _127: UInt64.t = Any.any_l ()
-  | & _128: bool = Any.any_l ()
+  | & next: UInt64.t = Any.any_l ()
+  | & _130: UInt64.t = Any.any_l ()
+  | & _131: UInt64.t = Any.any_l ()
+  | & _132: UInt64.t = Any.any_l ()
+  | & _133: bool = Any.any_l ()
   | & elapsed: UInt64.t = Any.any_l ()
   | & refilled: tup3_u64_u64_u64 = Any.any_l ()
   | & numerator: UInt128.t = Any.any_l ()
-  | & _147: UInt128.t = Any.any_l ()
-  | & _148: UInt128.t = Any.any_l ()
-  | & _150: UInt128.t = Any.any_l ()
   | & _152: UInt128.t = Any.any_l ()
+  | & _153: UInt128.t = Any.any_l ()
+  | & _155: UInt128.t = Any.any_l ()
+  | & _157: UInt128.t = Any.any_l ()
   | & discarded: UInt128.t = Any.any_l ()
-  | & _155: bool = Any.any_l ()
-  | & _158: bool = Any.any_l ()
+  | & _160: bool = Any.any_l ()
+  | & _163: bool = Any.any_l ()
   | & credited: UInt128.t = Any.any_l ()
-  | & _161: UInt128.t = Any.any_l ()
-  | & _162: UInt64.t = Any.any_l ()
-  | & _165: UInt128.t = Any.any_l ()
-  | & _166: UInt64.t = Any.any_l ()
+  | & _166: UInt128.t = Any.any_l ()
+  | & _167: UInt64.t = Any.any_l ()
   | & _170: UInt128.t = Any.any_l ()
+  | & _171: UInt64.t = Any.any_l ()
+  | & _175: UInt128.t = Any.any_l ()
   | & request: UInt64.t = Any.any_l ()
-  | & _184: UInt64.t = Any.any_l ()
-  | & _185: UInt64.t = Any.any_l ()
-  | & _186: UInt64.t = Any.any_l ()
-  | & _187: bool = Any.any_l ()
+  | & _189: UInt64.t = Any.any_l ()
+  | & _190: UInt64.t = Any.any_l ()
+  | & _191: UInt64.t = Any.any_l ()
+  | & _192: bool = Any.any_l ()
   | & grant: t_GrantedTokens = Any.any_l ()
   | & left: t_NewAvailable = Any.any_l ()
-  | & _197: tup2_GrantedTokens_NewAvailable = Any.any_l ()
-  | & _198: t_AvailableTokens = Any.any_l ()
-  | & _200: t_RefillTokens = Any.any_l ()
-  | & _201: t_BurstCapacity = Any.any_l ()
-  | & _203: t_RequestedTokens = Any.any_l ()
-  | & _233: UInt128.t = Any.any_l ()
-  | & _234: UInt64.t = Any.any_l ()
-  | & _236: UInt64.t = Any.any_l ()
-  | & _237: bool = Any.any_l ()
-  | & _245: tup4_u64_u64_u64_u64 = Any.any_l ()
-  | & variant_old_bb1: int = Any.any_l () ])
+  | & _202: tup2_GrantedTokens_NewAvailable = Any.any_l ()
+  | & _203: t_AvailableTokens = Any.any_l ()
+  | & _205: t_RefillTokens = Any.any_l ()
+  | & _206: t_BurstCapacity = Any.any_l ()
+  | & _208: t_RequestedTokens = Any.any_l ()
+  | & _242: UInt128.t = Any.any_l ()
+  | & _243: UInt64.t = Any.any_l ()
+  | & _245: UInt64.t = Any.any_l ()
+  | & _246: bool = Any.any_l ()
+  | & _254: tup4_u64_u64_u64_u64 = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l () ])
   [ return (result: tup3_u128_tup4_u64_u64_u64_u64_u128) ->
-  {[@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures] ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #0] [%#sconsume_trace'56] UInt64.t'int result.f1'11.f0'10
+  {[@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures] ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #0] [%#sconsume_trace'60] UInt64.t'int result.f1'11.f0'10
         <= UInt64.t'int burst
       /\ (UInt64.t'int result.f1'11.f0'10 = 0 \/ UInt64.t'int result.f1'11.f1'10 = 0))
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #1] [%#sconsume_trace'57] UInt64.t'int result.f1'11.f1'10
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #1] [%#sconsume_trace'61] UInt64.t'int result.f1'11.f1'10
         <= UInt64.t'int initial.f1
       /\ UInt64.t'int result.f1'11.f2'10 < 1000000000)
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #2] [%#sconsume_trace'58] ge_log_Int (UInt64.t'int result.f1'11.f3'10) (UInt64.t'int start))
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #3] [%#sconsume_trace'59] forall i: int. 0
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #2] [%#sconsume_trace'62] ge_log_Int (UInt64.t'int result.f1'11.f3'10) (UInt64.t'int start))
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #3] [%#sconsume_trace'63] forall i: int. 0
             <= i
           /\ i < Seq.length (Slice64.view steps)
         -> ge_log_Int (UInt64.t'int result.f1'11.f3'10) (UInt64.t'int (Seq.get (Slice64.view steps) i).f0'0))
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #4] [%#sconsume_trace'60] UInt64.t'int result.f1'11.f3'10
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #4] [%#sconsume_trace'64] UInt64.t'int result.f1'11.f3'10
         = UInt64.t'int start
       \/ (exists i: int. 0 <= i
         /\ i < Seq.length (Slice64.view steps)
         /\ UInt64.t'int result.f1'11.f3'10 = UInt64.t'int (Seq.get (Slice64.view steps) i).f0'0))
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #5] [%#sconsume_trace'61] (UInt128.t'int result.f0'11
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #5] [%#sconsume_trace'65] (UInt128.t'int result.f0'11
                   * UInt64.t'int units_per_token
                 + UInt64.t'int result.f1'11.f0'10
               - UInt64.t'int result.f1'11.f1'10)
@@ -531,13 +531,13 @@ let metered_consumes_conserve_elapsed_credit [#"/workspace/crates/verified/src/c
         + UInt128.t'int result.f2'11
       = (UInt64.t'int initial.f0 - UInt64.t'int initial.f1) * 1000000000 + UInt64.t'int initial.f2
       + (UInt64.t'int result.f1'11.f3'10 - UInt64.t'int start) * UInt64.t'int rate)
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #6] [%#sconsume_trace'62] UInt128.t'int result.f0'11
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #6] [%#sconsume_trace'66] UInt128.t'int result.f0'11
           * UInt64.t'int units_per_token
         + UInt64.t'int result.f1'11.f0'10
       <= UInt64.t'int initial.f0
       + ComputerDivision.div (UInt64.t'int initial.f2
       + (UInt64.t'int result.f1'11.f3'10 - UInt64.t'int start) * UInt64.t'int rate) 1000000000)
-    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #7] [%#sconsume_trace'63] gt_log_Int (Seq.length (Slice64.view steps)) 0
+    /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit ensures #7] [%#sconsume_trace'67] gt_log_Int (Seq.length (Slice64.view steps)) 0
       /\ ge_log_Int (UInt64.t'int (Seq.get (Slice64.view steps) (Seq.length (Slice64.view steps)
       - 1)).f1'0) (ComputerDivision.div (UInt64.t'int burst) (UInt64.t'int units_per_token))
     -> UInt64.t'int result.f1'11.f0'10 < UInt64.t'int units_per_token)}
