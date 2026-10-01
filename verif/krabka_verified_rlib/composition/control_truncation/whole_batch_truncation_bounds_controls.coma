@@ -1,0 +1,271 @@
+(* #"/workspace/crates/verified/src/composition/control_truncation.rs" 38 0 45 22 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 101 10 101 40
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
+let%span sfuture_log_swap_admission'2 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 138 29 139 73
+let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 140 28 140 53
+let%span smetadata_record_offset_deltas'1 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 141 28 142 54
+let%span smetadata_record_offset_deltas'2 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 143 28 144 68
+let%span smetadata_record_offset_deltas'3 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 131 28 131 60
+let%span scontrol_truncation = "/workspace/crates/verified/src/composition/control_truncation.rs" 46 19 46 25
+let%span scontrol_truncation'0 = "/workspace/crates/verified/src/composition/control_truncation.rs" 52 14 52 33
+let%span scontrol_truncation'1 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 17 53 27
+let%span scontrol_truncation'2 = "/workspace/crates/verified/src/composition/control_truncation.rs" 51 16 51 72
+let%span scontrol_truncation'3 = "/workspace/crates/verified/src/composition/control_truncation.rs" 50 16 50 55
+let%span scontrol_truncation'4 = "/workspace/crates/verified/src/composition/control_truncation.rs" 49 16 49 84
+let%span scontrol_truncation'5 = "/workspace/crates/verified/src/composition/control_truncation.rs" 48 16 48 36
+let%span scontrol_truncation'6 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 57 53 67
+let%span scontrol_truncation'7 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 70 53 71
+let%span scontrol_truncation'8 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 57 53 71
+let%span scontrol_truncation'9 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 31 53 77
+let%span scontrol_truncation'10 = "/workspace/crates/verified/src/composition/control_truncation.rs" 54 14 54 24
+let%span scontrol_truncation'11 = "/workspace/crates/verified/src/composition/control_truncation.rs" 55 16 55 17
+let%span scontrol_truncation'12 = "/workspace/crates/verified/src/composition/control_truncation.rs" 55 8 55 17
+let%span scontrol_truncation'13 = "/workspace/crates/verified/src/composition/control_truncation.rs" 57 18 57 83
+let%span scontrol_truncation'14 = "/workspace/crates/verified/src/composition/control_truncation.rs" 58 14 58 52
+let%span scontrol_truncation'15 = "/workspace/crates/verified/src/composition/control_truncation.rs" 59 19 59 57
+let%span scontrol_truncation'16 = "/workspace/crates/verified/src/composition/control_truncation.rs" 60 20 60 58
+let%span scontrol_truncation'17 = "/workspace/crates/verified/src/composition/control_truncation.rs" 61 18 61 41
+let%span scontrol_truncation'18 = "/workspace/crates/verified/src/composition/control_truncation.rs" 62 18 62 52
+let%span scontrol_truncation'19 = "/workspace/crates/verified/src/composition/control_truncation.rs" 63 16 63 50
+let%span scontrol_truncation'20 = "/workspace/crates/verified/src/composition/control_truncation.rs" 17 11 17 58
+let%span scontrol_truncation'21 = "/workspace/crates/verified/src/composition/control_truncation.rs" 18 11 18 83
+let%span scontrol_truncation'22 = "/workspace/crates/verified/src/composition/control_truncation.rs" 19 11 19 94
+let%span scontrol_truncation'23 = "/workspace/crates/verified/src/composition/control_truncation.rs" 20 11 20 122
+let%span scontrol_truncation'24 = "/workspace/crates/verified/src/composition/control_truncation.rs" 21 11 21 103
+let%span scontrol_truncation'25 = "/workspace/crates/verified/src/composition/control_truncation.rs" 22 11 22 28
+let%span scontrol_truncation'26 = "/workspace/crates/verified/src/composition/control_truncation.rs" 23 10 37 30
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.MinMax
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let truncation_batch_retained (batch_last: Int64.t) (cut: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:truncation_batch_retained ensures] [%#sfuture_log_swap_admission] result
+    = (Int64.to_int batch_last < Int64.to_int cut)}
+    (! return {result}) ]
+
+let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sfuture_log_swap_admission'0] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sfuture_log_swap_admission'1] Int64.to_int result
+      <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sfuture_log_swap_admission'2] Int64.to_int result
+      = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]
+
+let control_history_frontier (offsets: Slice64.slice Int64.t) (frontier: Int64.t) (return (x: UInt64.t)) =
+{[@stop_split] [@expl:control_history_frontier requires] [%#smetadata_record_offset_deltas] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view offsets)
+    -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int (Seq.get (Slice64.view offsets) j)}
+  any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:control_history_frontier ensures] ([@stop_split] [@expl:control_history_frontier ensures #0] [%#smetadata_record_offset_deltas'0] UInt64.t'int result
+      <= Seq.length (Slice64.view offsets))
+    /\ ([@stop_split] [@expl:control_history_frontier ensures #1] [%#smetadata_record_offset_deltas'1] forall i: int. 0
+            <= i
+          /\ i < UInt64.t'int result -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:control_history_frontier ensures #2] [%#smetadata_record_offset_deltas'2] forall i: int. UInt64.t'int result
+          <= i
+        /\ i < Seq.length (Slice64.view offsets)
+      -> Int64.to_int frontier <= Int64.to_int (Seq.get (Slice64.view offsets) i))}
+    (! return {result}) ]
+
+let frontier_reaches (frontier: Int64.t) (target: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:frontier_reaches ensures] [%#smetadata_record_offset_deltas'3] result
+    = ge_log_Int (Int64.to_int frontier) (Int64.to_int target)}
+    (! return {result}) ]
+
+type tup7_usize_i64_i64_usize_usize_bool_bool = {
+  f0: UInt64.t;
+  f1: Int64.t;
+  f2: Int64.t;
+  f3: UInt64.t;
+  f4: UInt64.t;
+  f5: bool;
+  f6: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let whole_batch_truncation_bounds_controls [#"/workspace/crates/verified/src/composition/control_truncation.rs" 38 0 45 22]
+  (ends: Slice64.slice Int64.t) (physical_start: Int64.t) (cut: Int64.t) (previous_hwm: Int64.t)
+  (history: Slice64.slice Int64.t) (pending_end: Int64.t) (return (x: tup7_usize_i64_i64_usize_usize_bool_bool)) =
+{[@stop_split] [@expl:whole_batch_truncation_bounds_controls requires] ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #0] [%#scontrol_truncation'20] 0
+      <= Int64.to_int physical_start
+    /\ Int64.to_int physical_start <= Int64.to_int cut)
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #1] [%#scontrol_truncation'21] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view ends)
+      -> Int64.to_int physical_start < Int64.to_int (Seq.get (Slice64.view ends) i))
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #2] [%#scontrol_truncation'22] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view ends)
+      -> Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view ends) j))
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #3] [%#scontrol_truncation'23] 0
+      <= Int64.to_int previous_hwm
+    /\ Int64.to_int previous_hwm
+    <= (if Seq.length (Slice64.view ends) = 0 then
+      Int64.to_int physical_start
+    else
+      Int64.to_int (Seq.get (Slice64.view ends) (Seq.length (Slice64.view ends) - 1))
+    ))
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #4] [%#scontrol_truncation'24] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view history)
+      -> Int64.to_int (Seq.get (Slice64.view history) i) < Int64.to_int (Seq.get (Slice64.view history) j))
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #5] [%#scontrol_truncation'25] 0
+  <= Int64.to_int pending_end)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &kept <- [%#scontrol_truncation] (0: UInt64.t) ] s1 | s1 = [ &end' <- physical_start ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#scontrol_truncation'0] Seq.length (Slice64.view ends)
+      - UInt64.t'int kept)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#scontrol_truncation'5] UInt64.t'int kept
+      <= Seq.length (Slice64.view ends)}
+      {[@expl:loop invariant #1] [%#scontrol_truncation'4] Int64.to_int end'
+      = (if UInt64.t'int kept = 0 then
+        Int64.to_int physical_start
+      else
+        Int64.to_int (Seq.get (Slice64.view ends) (UInt64.t'int kept - 1))
+      )}
+      {[@expl:loop invariant #2] [%#scontrol_truncation'3] Int64.to_int physical_start <= Int64.to_int end'
+      /\ Int64.to_int end' <= Int64.to_int cut}
+      {[@expl:loop invariant #3] [%#scontrol_truncation'2] forall i: int. 0 <= i /\ i < UInt64.t'int kept
+        -> Int64.to_int (Seq.get (Slice64.view ends) i) <= Int64.to_int cut}
+      (! [ &variant_old_bb1 <- [%#scontrol_truncation'0] Seq.length (Slice64.view ends) - UInt64.t'int kept ] s0)
+      [ s0 = len_i64 [%#scontrol_truncation'1] {ends} (fun (_x: UInt64.t) -> [ &_56 <- _x ] s1)
+      | s1 = [ &_54 <- UInt64.lt kept _56 ] s2
+      | s2 = any [ br0 -> {_54 = false} (! bb11) | br1 -> {_54} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_61 <- kept ] s1
+        | s1 = [ &_62 <- Slice64.length ends ] s2
+        | s2 = [ &_63 <- UInt64.lt _61 _62 ] s3
+        | s3 = {[@expl:index in bounds] [%#scontrol_truncation'6] _63} s4
+        | s4 = Slice64.get [%#scontrol_truncation'6] <Int64.t> {ends} {_61} (fun (r: Int64.t) -> [ &_60 <- r ] s5)
+        | s5 = Int64.sub [%#scontrol_truncation'8] {_60} {[%#scontrol_truncation'7] (1: Int64.t)}
+            (fun (_x: Int64.t) -> [ &_59 <- _x ] s6)
+        | s6 = truncation_batch_retained [%#scontrol_truncation'9] {_59} {cut} (fun (_x: bool) -> [ &_58 <- _x ] s7)
+        | s7 = any [ br0 -> {_58 = false} (! bb11) | br1 -> {_58} (! bb7) ] ]
+      | bb7 = s0
+        [ s0 = [ &_66 <- kept ] s1
+        | s1 = [ &_67 <- Slice64.length ends ] s2
+        | s2 = [ &_68 <- UInt64.lt _66 _67 ] s3
+        | s3 = {[@expl:index in bounds] [%#scontrol_truncation'10] _68} s4
+        | s4 = Slice64.get [%#scontrol_truncation'10] <Int64.t> {ends} {_66} (fun (r: Int64.t) -> [ &_65 <- r ] s5)
+        | s5 = [ &end' <- _65 ] s6
+        | s6 = UInt64.add [%#scontrol_truncation'12] {kept} {[%#scontrol_truncation'11] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &kept <- _x ] s7)
+        | s7 = bb1 ] ] ]
+  | bb11 = s0
+    [ s0 = {[@expl:assertion] [%#scontrol_truncation'13] forall i: int. UInt64.t'int kept <= i
+          /\ i < Seq.length (Slice64.view ends) -> Int64.to_int cut < Int64.to_int (Seq.get (Slice64.view ends) i)}
+      s1
+    | s1 = truncation_frontier [%#scontrol_truncation'14] {previous_hwm} {end'} (fun (_x: Int64.t) -> [ &hwm <- _x ] s2)
+    | s2 = control_history_frontier [%#scontrol_truncation'15] {history} {end'}
+        (fun (_x: UInt64.t) -> [ &retained <- _x ] s3)
+    | s3 = control_history_frontier [%#scontrol_truncation'16] {history} {hwm}
+        (fun (_x: UInt64.t) -> [ &committed <- _x ] s4)
+    | s4 = {[@expl:assertion] [%#scontrol_truncation'17] UInt64.t'int committed <= UInt64.t'int retained} s5
+    | s5 = frontier_reaches [%#scontrol_truncation'18] {end'} {pending_end} (fun (_x: bool) -> [ &present <- _x ] s6)
+    | s6 = frontier_reaches [%#scontrol_truncation'19] {hwm} {pending_end} (fun (_x: bool) -> [ &ready <- _x ] s7)
+    | s7 = [ &_ret <- { f0 = kept; f1 = end'; f2 = hwm; f3 = retained; f4 = committed; f5 = present; f6 = ready } ] s8
+    | s8 = return {_ret} ] ]
+  [ & _ret: tup7_usize_i64_i64_usize_usize_bool_bool = Any.any_l ()
+  | & ends: Slice64.slice Int64.t = ends
+  | & physical_start: Int64.t = physical_start
+  | & cut: Int64.t = cut
+  | & previous_hwm: Int64.t = previous_hwm
+  | & history: Slice64.slice Int64.t = history
+  | & pending_end: Int64.t = pending_end
+  | & kept: UInt64.t = Any.any_l ()
+  | & end': Int64.t = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & _56: UInt64.t = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _59: Int64.t = Any.any_l ()
+  | & _60: Int64.t = Any.any_l ()
+  | & _61: UInt64.t = Any.any_l ()
+  | & _62: UInt64.t = Any.any_l ()
+  | & _63: bool = Any.any_l ()
+  | & _65: Int64.t = Any.any_l ()
+  | & _66: UInt64.t = Any.any_l ()
+  | & _67: UInt64.t = Any.any_l ()
+  | & _68: bool = Any.any_l ()
+  | & hwm: Int64.t = Any.any_l ()
+  | & retained: UInt64.t = Any.any_l ()
+  | & committed: UInt64.t = Any.any_l ()
+  | & present: bool = Any.any_l ()
+  | & ready: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: tup7_usize_i64_i64_usize_usize_bool_bool) ->
+  {[@stop_split] [@expl:whole_batch_truncation_bounds_controls ensures] [%#scontrol_truncation'26] UInt64.t'int result.f0
+      <= Seq.length (Slice64.view ends)
+    /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view ends)
+        -> (i < UInt64.t'int result.f0) = (Int64.to_int (Seq.get (Slice64.view ends) i) <= Int64.to_int cut))
+    /\ Int64.to_int result.f1
+      = (if UInt64.t'int result.f0 = 0 then
+        Int64.to_int physical_start
+      else
+        Int64.to_int (Seq.get (Slice64.view ends) (UInt64.t'int result.f0 - 1))
+      )
+    /\ Int64.to_int physical_start <= Int64.to_int result.f1
+    /\ Int64.to_int result.f1 <= Int64.to_int cut
+    /\ Int64.to_int result.f2 = MinMax.min (Int64.to_int previous_hwm) (Int64.to_int result.f1)
+    /\ 0 <= Int64.to_int result.f2
+    /\ Int64.to_int result.f2 <= Int64.to_int result.f1
+    /\ UInt64.t'int result.f4 <= UInt64.t'int result.f3
+    /\ UInt64.t'int result.f3 <= Seq.length (Slice64.view history)
+    /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view history)
+        -> (i < UInt64.t'int result.f3) = (Int64.to_int (Seq.get (Slice64.view history) i) < Int64.to_int result.f1)
+        /\ (i < UInt64.t'int result.f4)
+        = (Int64.to_int (Seq.get (Slice64.view history) i) < Int64.to_int previous_hwm
+        /\ Int64.to_int (Seq.get (Slice64.view history) i) < Int64.to_int result.f1))
+    /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view history)
+          /\ UInt64.t'int result.f0 < Seq.length (Slice64.view ends)
+          /\ Int64.to_int result.f1 <= Int64.to_int (Seq.get (Slice64.view history) i)
+          /\ Int64.to_int (Seq.get (Slice64.view history) i)
+          < Int64.to_int (Seq.get (Slice64.view ends) (UInt64.t'int result.f0))
+        -> UInt64.t'int result.f3 <= i /\ UInt64.t'int result.f4 <= i)
+    /\ result.f5 = (Int64.to_int pending_end <= Int64.to_int result.f1)
+    /\ result.f6
+      = (Int64.to_int pending_end <= Int64.to_int previous_hwm /\ Int64.to_int pending_end <= Int64.to_int result.f1)
+    /\ (result.f6 -> result.f5)}
+    (! return {result}) ]

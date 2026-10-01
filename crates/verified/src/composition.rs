@@ -164,6 +164,9 @@ use scheduled_stability::scheduled_stable_prefix_bounds_fetch;
 mod replication;
 use replication::fenced_replication_bounds_fetch;
 
+mod control_truncation;
+use control_truncation::whole_batch_truncation_bounds_controls;
+
 mod restore_retry;
 use restore_retry::filtered_restore_preserves_producer_retry;
 

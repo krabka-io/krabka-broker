@@ -1784,3 +1784,73 @@ proof/mutation configuration checks pass. One new session is retained; all
 below 300 lines (largest: 288), across 51 composition topic files. This layer is
 local on `codex/proof-control-commit-waiter`, above published PR #1270, and has no
 remote qualification yet.
+
+## Whole-batch truncation and control-history restoration
+
+The earlier fenced-replication composition clamps logical coordinates to the
+requested divergence cut. Without actual batch extents, it cannot establish
+that those coordinates fit the physical prefix left by whole-batch storage
+truncation. Likewise, ordered control-history lookup proves which offsets
+precede a supplied frontier, but does not prove that the host supplies the
+retained log end. These are distinct integration obligations.
+
+The production audit found that `KraftLog::truncate_to` clamped its HWM to the
+requested cut, and both controller truncation paths restored control histories
+at that cut. Storage discards a complete batch when the cut lies inside it. A
+cut at 3 in batches ending at 2 and 4 therefore leaves physical end 2. The old
+HWM could remain at 3, and the version row at offset 2 could survive in memory
+after its batch was removed. These boundary regressions fail on the original
+implementation. The fix reuses `truncation_frontier` at the actual retained log
+end and passes that end to history restoration in both controller paths.
+
+`whole_batch_truncation_bounds_controls` consumes the complete physical batch
+ends and an ordered history, including snapshot/genesis baseline rows. It
+derives exactly the whole-batch retained prefix, then composes the physical
+end with HWM clamping, retained and committed history prefixes, and waiter
+presence/readiness. History rows in the first discarded batch cannot survive,
+even when their offset precedes the requested cut. The independent oracle
+filters physical ends and history rows linearly. Properties and boundary
+tables cover empty and shifted logs, every interior cut, offset limits, and
+waiter equality.
+
+A real log regression truncates inside a two-record batch with four prior
+HWMs, advances again, and reopens the persisted log. A controller regression
+uses actual version/Voters batches and exercises both the local action and
+fenced follower-Fetch response, checking both restored histories and the
+retained version. The follower's HWM remains before the discarded batch; this
+is a boundary consistency test, not a demonstration that a valid Kafka leader
+produces an interior divergence hint.
+
+Complete batch decoding, truthful history association, valid consensus
+divergence selection and successful storage effects remain host obligations.
+The theorem permits the mechanical HWM clamp after any modeled cut; it does
+not establish that truncating committed metadata is safe or roll back the
+committed metadata image. Cuts below the first local offset use reset-to and
+are outside this retained-prefix theorem. Snapshot replay and crash durability
+are not established by this composition.
+
+Six scoped variants fail as intended: using the requested cut for the composed
+HWM or retained history, making history lookup inclusive, retaining a batch
+whose last offset equals the cut, restoring the old host HWM clamp, and
+restoring the local action's requested-cut history boundary. The inclusive
+history and partial-batch variants change both primitive body and contract;
+each helper remains provable while the aggregate proof and native oracle fail.
+The positive composition passes the same cache-free depth-two search.
+
+A seventh variant changes only the Fetch branch's restoration back to its
+requested cut. The final-state regression still passes: Fetch later feeds the
+core, which emits a second truncation action at the now-retained boundary.
+This masks the first restoration in the final state. The regression therefore
+does not independently qualify that first call site, although passing the
+actual end there avoids transient discarded history. The local-action control
+independently catches the mismatch. All temporary edits were restored, and
+failing property seeds remain outside the repository.
+
+Pinned-image generation and cache-free canonical replay both prove all 563
+sessions. All 352 verified-crate tests, all 383 Raft tests, the three focused
+Bazel targets, workspace all-target Clippy with warnings denied, formatting,
+and proof/mutation configuration checks pass. One new session is retained;
+all 1,124 parent artifact files are unchanged. Every authored verified Rust
+source remains below 300 lines (largest: 288). This layer remains local on
+`codex/proof-control-truncation`, above published PR #1271, with no remote
+qualification yet.
