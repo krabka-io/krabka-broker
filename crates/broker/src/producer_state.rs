@@ -25,6 +25,8 @@ mod replication_mirror;
 mod restart_agreement;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod truncation_replay;
 
 #[cfg(test)]
 pub(crate) use self::decision::check_pure;

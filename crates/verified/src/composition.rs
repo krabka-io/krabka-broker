@@ -167,6 +167,9 @@ use replication::fenced_replication_bounds_fetch;
 mod control_truncation;
 use control_truncation::whole_batch_truncation_bounds_controls;
 
+mod truncated_producer;
+use truncated_producer::truncated_replay_bounds_first_retry;
+
 mod restore_retry;
 use restore_retry::filtered_restore_preserves_producer_retry;
 
