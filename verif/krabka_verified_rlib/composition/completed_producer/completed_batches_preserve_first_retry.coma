@@ -80,17 +80,18 @@ let%span scompleted_producer'48 = "/workspace/crates/verified/src/composition/co
 let%span scompleted_producer'49 = "/workspace/crates/verified/src/composition/completed_producer.rs" 80 10 82 77
 let%span scompleted_producer'50 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
 let%span scompleted_producer'51 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
-let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 20 11 20 27
-let%span scompletion'0 = "/workspace/crates/verified/src/producer/completion.rs" 21 11 21 47
-let%span scompletion'1 = "/workspace/crates/verified/src/producer/completion.rs" 22 11 22 94
-let%span scompletion'2 = "/workspace/crates/verified/src/producer/completion.rs" 23 10 23 87
-let%span scompletion'3 = "/workspace/crates/verified/src/producer/completion.rs" 24 10 24 68
-let%span scompletion'4 = "/workspace/crates/verified/src/producer/completion.rs" 25 10 31 98
-let%span scompletion'5 = "/workspace/crates/verified/src/producer/completion.rs" 32 10 34 59
-let%span scompletion'6 = "/workspace/crates/verified/src/producer/completion.rs" 35 10 39 74
-let%span scompletion'7 = "/workspace/crates/verified/src/producer/completion.rs" 40 10 43 74
-let%span scompletion'8 = "/workspace/crates/verified/src/producer/completion.rs" 44 10 45 72
+let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 30 11 30 27
+let%span scompletion'0 = "/workspace/crates/verified/src/producer/completion.rs" 31 11 31 47
+let%span scompletion'1 = "/workspace/crates/verified/src/producer/completion.rs" 32 11 32 94
+let%span scompletion'2 = "/workspace/crates/verified/src/producer/completion.rs" 33 10 33 87
+let%span scompletion'3 = "/workspace/crates/verified/src/producer/completion.rs" 34 10 34 68
+let%span scompletion'4 = "/workspace/crates/verified/src/producer/completion.rs" 35 10 41 98
+let%span scompletion'5 = "/workspace/crates/verified/src/producer/completion.rs" 42 10 44 59
+let%span scompletion'6 = "/workspace/crates/verified/src/producer/completion.rs" 45 10 49 74
+let%span scompletion'7 = "/workspace/crates/verified/src/producer/completion.rs" 50 10 53 74
+let%span scompletion'8 = "/workspace/crates/verified/src/producer/completion.rs" 54 10 55 72
 let%span scompletion'9 = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
+let%span scompletion'10 = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
 
 use seq.Seq
 use creusot.int.Int64
@@ -170,6 +171,12 @@ axiom view_Vec_usize_Global_spec:
 function completion_offset [#"/workspace/crates/verified/src/producer/completion.rs" 10 0 10 74] (ends: Seq.seq Int64.t) (incoming: Int64.t) (index: int) : int
  = [%#scompletion'9] if index = Seq.length ends then Int64.to_int incoming else Int64.to_int (Seq.get ends index)
 
+predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 20 0 20 76] (selected: Seq.seq UInt64.t) (source: int)
+
+axiom completion_source_selected_spec:
+  forall selected: Seq.seq UInt64.t, source: int [completion_source_selected selected source]. [%#scompletion'10] completion_source_selected selected source
+    = (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = source)
+
 let producer_completion_window (current': t_Option_i16) (epoch: Int16.t) (ends: Slice64.slice Int64.t)
   (incoming: Int64.t) (return (x: tup2_bool_Vec_usize_Global)) =
 {[@stop_split] [@expl:producer_completion_window requires] ([@stop_split] [@expl:producer_completion_window requires #0] [%#scompletion] Seq.length (Slice64.view ends)
@@ -215,9 +222,7 @@ let producer_completion_window (current': t_Option_i16) (epoch: Int16.t) (ends: 
               | Some value -> Int16.to_int epoch <= Int16.to_int value
               | None -> false
               end
-          /\ not (exists j: int. 0 <= j
-            /\ j < Seq.length (view_Vec_usize_Global result.f1)
-            /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j) = i)
+          /\ not completion_source_selected (view_Vec_usize_Global result.f1) i
         -> Seq.length (view_Vec_usize_Global result.f1) = 5
         /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1)
           -> Int64.to_int (Seq.get (Slice64.view ends) i)
