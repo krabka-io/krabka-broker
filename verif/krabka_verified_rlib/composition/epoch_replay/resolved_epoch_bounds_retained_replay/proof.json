@@ -1,0 +1,41 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_branch_Result_Option_tup3_i32_FetchWatermarks_FetchVisibility_unit": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_branch_Result_tup2_Option_usize_i64_unit": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_from_residual_Result_Option_tup5_i32_FetchWatermarks_FetchVisibility_Option_usize_i64_unit": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_from_unit": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_ok_or_tup2_Option_usize_i64": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_resolved_epoch_bounds_retained_replay": {
+        "prover": "z3",
+        "time": 0.022
+      },
+      "vc_truncated_snapshot_selection_bounds_replay": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      },
+      "vc_validated_epochs_bound_truncated_fetch": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      }
+    }
+  }
+}

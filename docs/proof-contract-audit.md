@@ -4,10 +4,10 @@ The proof suite contains substantial search, conservation, progress, and quorum 
 
 ## Scope and method
 
-This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds forty-five cross-module compositions. The 28
+This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds forty-nine cross-module compositions. The 28
 sources with at least 300 lines now use matching subdirectories for kernels
 and tests; the public module paths remain the same. Composition theorems are
-grouped into 28 topic files. The layout-only move preserved all 305 function bodies and
+grouped into 31 topic files. The layout-only move preserved all 305 function bodies and
 contracts, passed all 264 tests, and preserved the 3,625-entry mutation
 inventory. Saved proof sessions and catalog links follow the new paths.
 Fresh generation and the final two-worker no-cache saved-session replay passed
@@ -82,7 +82,7 @@ A specification is not automatically weak because it resembles a short function.
 
 34. **Record filtering must preserve more than survivor offsets.** The old selection theorem exported only a boolean and returned `true` for invalid coordinates, leaving no selected-record evidence for a caller. It now exports exact original-index witnesses, complete invalid-input rejection, the original frontier and batch classification. The new composition sends every survivor through actual rewrite admission and connects the full archived span to modulo sequence arithmetic and producer-snapshot retry reconstruction. Dropping a trailing record must not shrink the batch sequence span; dropping every record still leaves the original header span. The real materializer already applies this rule, but its stale rationale incorrectly claimed local append always requires exact contiguity. The corrected explanation names the producer retry/sequence guarantee. The native regression restores encoded filtered/empty batches, reopens the log, checks complete header/record equality and producer metadata, and classifies the original retry at ordinary and wrapping sequences. Decoding, snapshot publication, complete replay and PID routing remain host obligations.
 
-35. **A control exposed fifteen opaque boolean-only compositions; twelve remain.** Replacing all fifteen `#[ensures(result)]` bodies with unconditional `true` still proves all fifteen files, and all 48 composition tests still pass. Their existing bodies check useful relationships through other kernels, but the exported contract promises only `true`; another theorem cannot reuse the checked relationship, and removing the body checks leaves the promised contract and tests intact. The append, reservation and read-committed Fetch contracts have since been repaired with concrete witnesses and independent oracles; twelve entries remain explicitly marked as boolean-only procedural checks in the table. They still need relational postconditions or concrete returned witnesses, following the repaired snapshot, abort and restore-selection compositions. This is an open audit finding, not a claim that all composition contracts are now strong. All temporary replacements and proof artifacts were restored byte-for-byte.
+35. **A control exposed fifteen opaque boolean-only compositions; twelve remained at that checkpoint.** Replacing all fifteen `#[ensures(result)]` bodies with unconditional `true` still proves all fifteen files, and all 48 composition tests still pass. Their existing bodies check useful relationships through other kernels, but the exported contract promises only `true`; another theorem cannot reuse the checked relationship, and removing the body checks leaves the promised contract and tests intact. The append, reservation and read-committed Fetch contracts have since been repaired with concrete witnesses and independent oracles; twelve entries remained boolean-only procedural checks at that checkpoint. They still need relational postconditions or concrete returned witnesses, following the repaired snapshot, abort and restore-selection compositions. This is an open audit finding, not a claim that all composition contracts are now strong. All temporary replacements and proof artifacts were restored byte-for-byte.
 
 ## Compositions established
 
@@ -112,21 +112,25 @@ A specification is not automatically weak because it resembles a short function.
 | `quota_charge_refund_restores_consume_budget` | Debt-first refill, full charge, refund, and grant arithmetic restore the refilled signed balance and exactly the next consume budget. Admission is complete exactly when the charge's debt fits in `u64`; saturation cannot silently establish restoration. | A coherent bucket has at most one of available/debt nonzero and available at/below burst. Counts are effective micro-tokens; the charge/refund pair must be serialized without intervening state changes. Integer representability, unit conversion, clock claims, locking, and quota lookup are distinct boundaries. |
 | `bounded_quota_debt_cannot_outlast_repayment` | Capped charge, debt-first repayment, and consume give the exact signed-ledger balance, clear debt after credit at least the cap, and grant the full probe when credit exceeds the cap by that probe and the burst fits it. The exact balance law excludes fabricated full bursts. | A coherent starting bucket, accurately computed integer debt cap and credited refill, and serialized state publication. The theorem bounds credits, not elapsed wall time; rate/wait rounding and real-time progress remain external. |
 | `covering_copy_preserves_logical_fetch` | The actual trim planner, whole-batch covering validation, byte comparison, live append, Produce acknowledgement, tail recovery, and Fetch compose across an interior logical floor. Complete valid copies that fit are admitted; every visible offset has a concrete copied batch with identical coordinates and bytes, while offsets before either floor have none. Encoded-byte progress equals exactly the copied lengths. | Source batches are the complete physical sequence covering the reconciled logical floor, possibly starting before it. Faithful decoding and completed I/O are assumed. Production persists a higher canonical floor in the follower before physical rebasing and has an injected-failure/reopen regression; the theorem does not prove filesystem publication or all crash interleavings. |
-| `validated_index_bounds_lookup` | Running the actual archived offset-index row validator establishes the global sortedness needed by both binary searches, bounds returned byte positions, and orders a floor before a present ceiling. | The host rejects failed validation and uses the same entries/extent at lookup; empty-index position zero is a fallback, not proof that a byte exists. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
-| `loss_settlement_is_idempotent` | Settling and replaying the same durable audit marker cannot remove pending losses twice. | Generation is below `u64::MAX`; saturation can otherwise reuse a generation with a remainder. Durability/marker parsing remain external. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `validated_index_bounds_lookup` | Returns exact floor and ceiling byte cursors after complete archive validation, with source membership, global floor/ceiling extremality and byte bounds; invalid archives are rejected exactly. | The same entries and extent must describe the actual file. Empty-index zero is a fallback; structural validity alone cannot establish truthful batch rows. |
+| `indexed_offset_scan_preserves_first_batch` | Connects sparse rows to complete physical batch rows, consumes validated cursors and reuses the scalar first-match kernel. Every matching batch lies at or after the floor; the indexed scan returns the globally first qualifying batch, bounded by a present ceiling. | Complete faithfully decoded last-offset/byte-position batch rows. Actual header lengths, the host's extra batch skip, windowed decoding and I/O remain external. |
+| `loss_settlement_is_idempotent` | Returns the settled and replayed states, proves exact remaining count and generation, and establishes that replay preserves both fields. | Generation is below `u64::MAX`; saturation can otherwise reuse a generation with a remainder. Durability/marker parsing remain external. |
+| `admitted_loss_marker_preserves_pending` | Consumes that witness with actual marker admission to conserve pending losses, reject duplicate admission, and admit a fresh generation exactly when losses remain. | Matching snapshot generation, snapshot count at most pending count, and no generation exhaustion. Parsed shape facts and durable publication remain host obligations. |
 | `validated_time_cursors_are_monotone` | Segment-span and time-index row validation establish the global order required by time lookup. Increasing the target never moves the absolute cursor backwards or outside the segment, including repeated timestamps and the u32/i64 boundaries. | Targets are ordered; the decoded entries and segment extent stay unchanged. A sparse cursor bound does not prove that a scan skips no matching record. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
-| `validated_epochs_bound_truncated_fetch` | Archived epoch-row validation establishes global lookup order. A resolved reconciliation cut stays inside the log; truncation-clamped HWM, LSO, delivery frontier, and consumer Fetch cannot expose the discarded tail. | Unplaceable epochs return the undefined sentinel; malformed archives are rejected. The host must apply the cut to the same log and publish coherent watermarks durably. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `validated_epochs_bound_truncated_fetch` | Returns invalid-history rejection, an unplaceable epoch, or the actual Kafka epoch cut with exact clamped watermarks and consumer view. Complete row validation establishes lookup ordering; no resolved cut grows the log or exposes its discarded tail. | Complete faithfully decoded epoch history and an accurate original end. Batch-aligned cuts, reset below retained floors, durable application and coherent publication remain host obligations. |
+| `resolved_epoch_bounds_retained_replay` | Consumes that cut to select a globally newest surviving snapshot and exact replay cursor. Rejects replay below either retained floor; a discarded-tail snapshot cannot suppress reconstruction. Invalid history and unplaceable epochs retain distinct outcomes. | Complete snapshot enumeration, trustworthy snapshot bytes and floors, batch-aligned truncation and actual replay/I/O remain external. Rejection below a floor means this retained-history path cannot be used; the production full-reset path is outside the theorem. |
 | `truncated_snapshot_selection_bounds_replay` | Selection returns a globally newest eligible snapshot, or no selection exactly when none survives. Replay starts at exactly the maximum of the local floor and selected snapshot, or the logical floor when there is no snapshot. A valid call always returns a witness; discarded-tail selection, artificial empty selection, and unnecessary replay skipping are excluded. | Log/local starts are nonnegative and no greater than the cut, which is at or below the old end. Snapshot bytes, pruning persistence, and actual replay remain external. |
 | `corrupt_snapshot_fallback_preserves_replay` | Repeated newest selection and corrupt-candidate removal preserve every non-corrupt candidate and original identity. The result loads a globally newest decoded survivor with the exact replay cursor, stops at a globally newest read I/O failure, or uses the exact fallback cursor when every eligible candidate is corrupt. Candidate removal proves termination; duplicates and arbitrary input order are allowed. | Read outcome classification, complete file enumeration, pruning and filesystem effects remain host facts. Order-preserving deletion projects the host swap-removal; any tied maximum is permitted. I/O error payloads and faithful bytes are not proved. |
 | `restored_aborts_remain_bounded_when_fetch_shrinks` | Complete admission returns original row-index witnesses for exactly every abort intersecting the narrowed Fetch window, in marker order. Invalid indexes return `None`; valid indexes cannot be rejected wholesale. Selected starts remain below HWM, LSO, and delivery, and narrowing introduces no new overlap. | Complete decoded index and truthful owner extent. Starts may decrease or precede the owner segment. This proves exact filtering of supplied indexes; transaction reconstruction and index enumeration remain external. |
 | `restored_abort_sources_cover_committed_fetch` | Archive admission and those witnesses compose with inclusive remote overlap, half-open local selection, consumer visibility, and production wire-row deduplication. Every qualifying `(producer_id, first_offset)` from either source appears exactly once; no other row appears. Marker owners may lie entirely after the fetched data. | Complete accurate current-lineage source indexes, coherent frontiers, decoding, I/O, and client record/control filtering. The real Fetch regression covers remote-only, local-only, and duplicated markers in later segments. Missing optional indexes and full-tail scanning remain host policies. |
 | `segment_maximum_proves_delivery` | Delivery of the actual maximum batch activation time is equivalent to delivery of every batch, including empty sets and signed/overflow boundaries. The result exports a quantified aggregate contract used by the prefix theorem. | Activation times are the complete decoded batch-header set. An unknown cached maximum cannot stand in for this computed maximum. |
-| `scheduled_prefix_bounds_fetch` | Ordered batch validation, the proved maximum shortcut, per-batch deadlines, watermark advancement, and Fetch composition hide every waiting batch from consumers while leaving follower replication ungated. Compacted gaps and nonmonotone activation times are allowed. | The two arrays have equal length and represent a complete ordered log window beginning on a batch boundary; failed batch/extent validation and incomplete walks are excluded. This recomputes from log start and does not verify cached-cursor invalidation, clock behavior, or the host's I/O walk. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `scheduled_prefix_bounds_fetch` | Returns the greatest delivery frontier and exact consumer/follower views. Every waiting batch bounds the frontier, which is the end or an actual waiting batch base. Rejects malformed or incomplete walks, including corrupt tails after the first waiting batch. | Complete aligned decoded batch/timestamp arrays from one log window. Gaps and nonmonotone activation times are allowed; cached-cursor invalidation and clock accuracy remain external. |
+| `scheduled_stable_prefix_bounds_fetch` | Consumes that frontier and the derived transaction LSO to expose exactly the greatest consumer prefix bounded by HWM, every waiting batch, and every unstable transaction start. Follower replication reaches the end. | Complete coherent batch/time and unstable-start arrays; every start is at most the end. Inherited delivery/LSO fields are ignored. Decoding, input completeness and durable host publication remain external. |
 | `fenced_replication_bounds_fetch` | Stale/error responses preserve log end and HWM; divergence cannot grow either; successful append coordinates plus monotone HWM advancement bound consumer Fetch by the new local end. | Initial HWM is no greater than log end. The host must apply the same plan under its target lock. The composition uses the KRaft HWM kernel; the data-replica async helper's equivalent arithmetic is outside Creusot. Bytes, identity projection, and durable application remain external. |
 | `restore_selection_respects_batch_extent` | Returns the complete archived frontier, Keep/Empty/Filter decision, and original selected indices in source order. Every qualifying row appears, no excluded row appears, and every survivor stays inside the original span. Invalid coordinates reject the complete input instead of returning `true`. | Complete decoded data rows and faithful exclusion facts. Selection alone does not establish encoded payload integrity, legal producer identity, or producer-state publication. |
 | `filtered_restore_preserves_producer_retry` | Exact selection, rewritten header/record admission, modulo sequence arithmetic, and snapshot reconstruction return original-index/offset/timestamp witnesses and preserve the original retry sequence and acknowledgement frontier. Empty and trailing-filtered rewrites retain the full archived sequence span. | One admitted last non-transactional idempotent data batch with ordered deltas and truthful timestamp bounds. Payload encoding, snapshot durability, complete replay, PID routing, and ring installation remain host obligations; the native regression checks filtered/empty encoded restores through reopen and retry classification. |
-| `constructed_wal_placement_is_installable` | The actual complete placement fold establishes the installer's local-first, unique-node, exact-count invariant. Zero/incomplete placements are rejected. | The host maps exact rack-string equality and node IDs faithfully. This does not prove metadata authentication, byte-identical log support, or durable membership transitions. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
-| `wal_placement_survives_one_rack_loss` | A complete placement of at least three voters loses at most one voter per configured rack, leaving enough distinct nodes for the original majority. The input is the actual placement, not round-robin counts. | Incomplete placement is refused by installation. Rack labels must reflect physical failure domains; surviving voters must communicate and fsync. This is a quorum arithmetic/placement result, not an unconditional availability claim. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `constructed_wal_placement_is_installable` | Returns the actual node/rack placement, exact node-ID projection, and exact installer admission. Selected identities and racks are distinct; incomplete nonempty selections block every remaining candidate. | Faithful node/rack metadata projection and durable membership transitions remain external. Greedy selection is maximal, not globally maximum when metadata conflicts; the contract permits tied choices rather than pinning full greedy order. |
+| `wal_placement_survives_one_rack_loss` | Consumes that witness and returns exactly all surviving node IDs in placement order, installer admission and quorum capacity. Any one rack removes at most one voter; every installed configuration of at least three voters retains its original majority. Incomplete installation cannot claim quorum capacity. | Physical failure-domain identity, survivor communication, fsync, election scheduling and durable membership transitions remain external. This is capacity under one-rack loss, not unconditional availability. |
 | `trim_steps_converge` | Arbitrary traces of completed/paused steps keep a fixed global frontier, never regress either store, catch WAL up after one completed step, and catch both stores up after two. Local advancement requires WAL already at the frontier; replay after completion cannot advance either. | A completed step durably applies exactly the selected store frontier. Paused/failed entries leave observed state unchanged; partial I/O, checkpoint durability, acknowledgement loss, and concurrent mutation remain external. This is an aggregate theorem over the existing application kernel. |
 | `admitted_trim_bounds_reload_and_retry` | Admission plus two completed reconciliation steps preserve HWM/delivery/log-end bounds, make the same request a Noop and application Complete, exclude snapshots at/below the new floor, and bound the producer replay cursor inside the remaining log. | Both prior store frontiers obey the caps. The post-trim logical floor is the reconciled floor; diskless local-cache eviction has a separate logical floor. Snapshot bytes and producer history, whole-batch replay, and durable host application remain external. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
 | `diskless_trim_reconciliation_preserves_coverage` | Diskless trim selection plus arbitrary completed/paused reconciliation steps keeps both physical frontiers inside committed object coverage and behind the clamped HWM safety lag. | Prior WAL eviction obeys those same caps; committed index/object coverage is accurate. This is physical eviction, not logical deletion; PUT/index/checkpoint persistence remains external. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
@@ -485,27 +489,27 @@ restore/retry controls. At that checkpoint, replacing all fifteen boolean-only
 bodies with `true` proved all fifteen affected files and passed all 48 composition
 tests. The append and reservation entries now return concrete witnesses with
 exact relational postconditions and independent arithmetic oracles. The
-remaining twelve contracts still need exported relations or witnesses. The
+remaining six contracts still need exported relations or witnesses. The
 thirteen-function checkpoint control proved all thirteen replacements and passed
 all 53 composition tests. The read-committed Fetch entry has since been upgraded
-and consumed by the stability/abort-source composition below. Repeating the
-control for the current twelve entries proves all twelve replacements and
-passes all 57 composition tests. Temporary control changes and artifacts are
+and consumed by the stability/abort-source composition below. At the twelve-entry checkpoint, repeating the
+control proved all twelve replacements and passed all 57 composition tests.
+The audit-loss settlement entry has since been upgraded and consumed by the
+marker-admission composition below. Scheduled delivery now exports its derived
+frontier to the transaction-stability composition. Placement now exports its
+actual voter set and installer admission to the rack-loss witness. Epoch
+reconciliation now exports its resolved cut into retained snapshot replay. Offset
+index validation now exports its cursors into complete-batch first-match selection. Temporary
+control changes and artifacts are
 restored byte-for-byte:
 
 
-- `loss_settlement_is_idempotent`
-- `scheduled_prefix_bounds_fetch`
-- `validated_epochs_bound_truncated_fetch`
-- `validated_index_bounds_lookup`
 - `validated_time_cursors_are_monotone`
 - `remote_timestamp_scan_preserves_first`
 - `validated_remote_and_local_time_starts_agree`
 - `constructed_time_index_preserves_first`
 - `admitted_trim_bounds_reload_and_retry`
 - `diskless_trim_reconciliation_preserves_coverage`
-- `constructed_wal_placement_is_installable`
-- `wal_placement_survives_one_rack_loss`
 
 
 The forty-third-composition batch passes fresh pinned generation and full
@@ -615,5 +619,263 @@ Creusot/mutation configuration checks pass. Mutation discovery includes the
 upgraded Fetch witness and its abort-source consumer. All 1,056 unrelated prior
 artifact files are preserved byte-for-byte; only the strengthened Fetch session
 and new consumer session change. Every verified Rust source remains under
-300 lines. The twelve opaque contracts above remain open; remote CI is reported
-separately from these local results.
+300 lines. That checkpoint left twelve opaque contracts open; the audit-loss repair
+below reduced that checkpoint list to eleven. Remote CI is reported separately
+from local results.
+
+## Audit-loss replay witness and marker admission
+
+The audit settlement helper now returns both actual settlement and replay states,
+with exact pending-count and generation relations plus equality of both states.
+The new forty-sixth composition consumes those exported relations together with
+`audit_loss_marker_admission`. An admitted durable snapshot settles exactly its
+reported count, preserves concurrent losses in the next generation, rejects
+admission of the original marker again, and admits the remaining count's new
+marker exactly when a positive remainder exists.
+
+The snapshot must name the pending generation and report no more than its
+pending count. These are host snapshot invariants. The input generation remains
+below `u64::MAX`; the output can reach that last generation, so the theorem does
+not establish arbitrarily many future settlements. Parsed marker shape and
+actual durable publication remain external. The helper also covers mismatched
+generations and clamped over-reporting; only the bounded matching-snapshot
+consumer claims conservation.
+
+Independent wide signed-ledger tests compare both returned states and every
+admission result. They cover full and partial settlement, zero and over-reported
+counts, unrelated generations, invalid headers/field counts, stale admissions,
+`u64::MAX` counts and the final usable input generation. Three manual controls
+are restored byte-for-byte. Hiding the helper's exported relations leaves its
+own proof and all three oracle tests passing but fails the consumer proof.
+Returning the original pending states fails the witness proof and its oracles.
+A deliberately weakened settlement kernel that discards a partial remainder
+still proves locally, but fails the strengthened witness and the real audit
+spool's concurrent-loss snapshot/reopen regression.
+
+The affected native suites pass all 290 verified and 96 audit library tests.
+Verified/audit Bazel targets, workspace all-target Clippy with warnings denied,
+the verified rustdoc target, repository formatting and Creusot/mutation gates
+pass. Fresh pinned generation and full no-cache two-worker saved replay prove
+all 531 files. Only the upgraded helper and new consumer sessions change; all
+1,058 unrelated prior artifact files remain byte-identical. Mutation discovery
+includes both witnesses. Every verified Rust source remains below 300 lines.
+Eleven boolean-only composition contracts remained open at this checkpoint.
+This proof work is local and uncommitted, separately from PR #1259's CI repairs.
+
+## Scheduled-delivery witness and transaction stability
+
+The old scheduled-prefix helper exported only `true`, including for malformed
+or incomplete walks. It now returns the computed delivery frontier and actual
+consumer/follower views, or rejects exactly invalid complete batch geometry.
+Its contract bounds the frontier by every waiting batch and identifies it as
+the log end or an actual waiting batch base. These properties establish the
+greatest permitted frontier without duplicating its executable scan.
+
+The forty-seventh composition consumes that witness and the existing derived
+transaction-stability witness. Its exact consumer limit is the minimum of HWM,
+the derived delivery frontier, and the least unstable transaction start. Any
+prefix bounded by all three constraints is no greater than that limit. Follower
+replication remains ungated. Stale inherited delivery and LSO fields cannot
+substitute for either derived result.
+
+Inputs must contain complete aligned decoded batches and activation times,
+plus complete unstable transaction starts from a coherent log view. Batch gaps,
+nonmonotone timers, and unordered duplicate transaction starts are allowed.
+Invalid spans, overlap, incomplete tails and starts beyond the end are rejected.
+Byte decoding, enumeration completeness, cached-cursor invalidation, hardware
+clock accuracy and durable publication remain host obligations.
+
+Independent wide-integer geometry/deadline and visibility oracles cover raw
+invalid inputs and generated complete gapped walks, stale gates, signed clock
+extremes and exclusive-offset overflow. Removing only the helper's exported
+relations leaves its own proof and all three new tests passing, but fails the
+consumer proof. Using inherited delivery instead of the returned frontier fails
+the consumer proof and behavioral oracle. Dropping the clock deadline from both
+the real delivery kernel and its contract leaves that kernel provable but fails
+the compositions, behavioral oracle and native log watermark regression: the
+mutant advances to offset 8 while the waiting batch requires offset 4. All
+control edits and positive artifacts are restored byte-for-byte.
+
+Positive validation passes all 293 verified and 473 log library tests and all 16
+native delivery integration tests. Verified/log/delivery Bazel targets, workspace
+all-target Clippy with warnings denied, rustdoc, formatting and Creusot/mutation
+gates pass. Fresh pinned generation and full no-cache two-worker saved-session replay
+prove all 532 files. Only the scheduled helper, its new consumer,
+and the explicit whole-index close in the existing abort proof retain regenerated
+sessions; all 1,058 unrelated prior artifact files remain byte-identical. Every
+verified Rust source remains below 300 lines. Ten boolean-only composition
+contracts remained open at this checkpoint. At that checkpoint this batch remained local, separately from PR #1259's
+published CI repairs.
+
+## Placement admission and rack-loss witnesses
+
+Both old placement compositions exported only `true`; the rack-loss proof also
+reran selection independently and returned `true` for incomplete placement.
+The installation helper now exports the selected `(node, rack)` rows, exact
+node-ID projection and actual installer admission. It preserves distinct node
+and rack identities, source membership and maximality of nonempty incomplete
+selection. Admission is exactly a complete, nonempty local-first node set.
+
+The rack-loss composition consumes these exported guarantees instead of
+selecting a second independent placement. Its returned survivor IDs are exactly
+the selected nodes outside the failed rack, in placement order. At most one
+selected voter disappears. For requested voter counts of at least three, every
+admitted placement therefore retains its original strict majority; incomplete
+installation reports no installed quorum capacity even if all selected voters
+survive. The result includes both admission and the actual election-quorum
+check. The two boolean-only entries are removed from the current open list.
+
+This proves capacity of a coherent configured voter set. Faithful mapping of
+metadata rack strings to physical failure domains, communication, fsync,
+election scheduling and durable membership changes remain host obligations.
+Greedy placement is maximal, not globally maximum on conflicting duplicate
+metadata rows. The contract exports that maximality and source identity, but
+does not claim to pin every greedy tie choice; the independent native oracle
+additionally checks the actual first-eligible placement order.
+
+The independent set-based oracle compares all returned placement rows, node IDs,
+admission, survivor order and quorum capacity. Boundary witnesses include local
+rack loss, absent/local-unregistered candidates, zero/two/three voters, duplicated
+node/rack metadata, incomplete selection, and `usize::MAX`/`u64::MAX`.
+Four restored controls distinguish the new contracts from tautological checks.
+Removing only exported rack uniqueness keeps the installation helper provable
+and both oracle tests passing but fails the rack-loss consumer. Reporting a
+quorum for uninstalled configurations and dropping survivors fail both proof
+and tests. Raising the majority threshold in both the election kernel and its
+contract leaves that altered kernel and the placement helper provable but fails
+the rack-loss consumer, its oracle and the existing strict-majority regression.
+All temporary source changes and positive proof sessions are restored byte-for-byte.
+
+All 293 verified library tests and all four native broker placement regressions
+pass. Verified Bazel tests, verified rustdoc, workspace all-target Clippy with
+warnings denied, formatting and Creusot/mutation gates pass. Fresh pinned full
+generation and full no-cache two-worker saved-session replay prove all 532 files;
+a final targeted generation checks the proof-only removal bookkeeping after its
+normal-build cleanup. Only the two upgraded placement sessions and the quota CI
+repair are retained; all 1,058 unrelated prior artifact files remain byte-identical.
+Every verified Rust source remains below 300 lines. Eight boolean-only contracts
+remained open at this checkpoint. The placement witnesses were local and uncommitted at that checkpoint.
+
+The quota CI repair states two multiplication identities explicitly before
+combining the whole-token and refill ledgers. It changes no contract or runtime
+behavior. The latest inspected CI run passed the abort repair and its complete
+build/lint/format/test/doc job, but timed out on two quota-trace obligations.
+Locally, all 530 published files plus the quota repair pass in the matching CI
+toolchain image under four CPUs; a no-cache targeted quota proof also passes
+under one CPU. Remote CI for the new repair is reported separately.
+
+## Resolved epoch cut and retained snapshot replay
+
+The old epoch composition exported only `true`, including malformed archives
+and unplaceable epoch requests. It now returns an exact witness: invalid archive
+or window, an unplaceable epoch, or a resolved epoch and cut with all clamped
+watermark and consumer fields. Row validation supplies the lookup's strict
+ordering; the cut follows Kafka's existing `endOffsetFor` relation and lies in
+the original segment/log extent.
+
+The forty-eighth composition consumes that cut together with the existing
+truncated-snapshot witness. The newest eligible snapshot is selected against
+the resolved cut, with original-index membership and global maximality; replay
+starts exactly at the selected snapshot/local floor maximum, or at the logical
+and local floor maximum when no snapshot survives. Watermarks, consumer limit,
+snapshot admission and replay all use the same derived cut. Invalid windows and
+archives, unplaceable epochs and successful replay remain distinct outcomes.
+A valid cut below either retained floor is rejected by this retained-history
+composition; it cannot manufacture an earlier floor and replay pruned data.
+Production uses a full reset when the cut falls below local data. This proof
+neither replaces that reset path nor claims full recovery for that case.
+
+Complete accurate epoch and snapshot enumeration, trustworthy persisted bytes,
+coherent floor/end inputs, batch-aligned cuts, actual truncation and replay,
+and durable publication remain host obligations. The cutoff is an exclusive
+coordinate; scalar row validation alone does not prove its byte-level boundary.
+
+Independent tree-map, filtered-maximum and exact-watermark oracles exercise
+arbitrary malformed histories and generated valid ordered histories with gap
+requests, empty caches, tied/unordered snapshots, cut-below-floor cases, discarded
+tails and signed integer extremes. Five restored controls test the boundary.
+Replacing the helper's exported relations with a tautology leaves its own proof
+and all three oracle tests passing but fails the downstream consumer proof.
+Using the old end for snapshot selection, fabricating earlier retained floors,
+and rejecting every history each fail their proof and behavioral oracle.
+A paired mutation makes both lookup body and contract always return the requested
+epoch and original end: that kernel proves, but the validated-cut helper fails,
+as do the composition oracle and the native log checkpoint case-table regression.
+All temporary mutations and positive artifacts are restored byte-for-byte.
+
+Final validation on continuation branch `codex/proof-witness-continuation`,
+based on current `main` at `4afe33aa`, passes all 296 verified and 474 log
+library tests. Isolated Cargo log tests explicitly enable
+`krabka-compression/lz4`, required by main's new LZ4 timestamp regression;
+Bazel's log suite also passes all 474 tests. Verified/log Bazel targets,
+verified rustdoc, workspace all-target Clippy with warnings denied, formatting
+and Creusot/mutation gates pass. Fresh pinned generation on that base and full
+no-cache two-worker saved-session replay prove all 533 files. Only the upgraded
+epoch helper and new replay consumer sessions are retained; all 1,062 unrelated
+prior artifact files remain byte-identical. Both witnesses appear in mutation
+discovery. Every verified Rust source remains below 300 lines. Seven boolean-only
+composition contracts remained open at this checkpoint.
+
+PR #1259 merged after every required CI check passed at `870877ca`. This
+witness batch and the preceding witnesses are carried by the separate
+continuation branch; they are not part of that merged PR's remote qualification.
+
+## Offset-index cursors and complete batch seek
+
+The old offset-index composition exported only `true`. It now returns exact
+floor and ceiling byte positions after complete row validation, or rejects an
+invalid archive. Source membership and global floor/ceiling extremality are
+exported, including zero fallback and absent ceiling.
+
+The forty-ninth composition connects sparse index rows to complete decoded
+`(last_relative_offset, byte_position)` batch rows. Both sequences must be
+strictly ordered in both columns; the first physical batch starts at byte zero
+and every sparse row must exactly name a physical batch. The floor therefore
+cannot skip any qualifying batch. Reusing the existing scalar first-match
+search with earlier positions masked returns exactly the globally first batch
+whose last offset reaches the target. A present ceiling bounds that result;
+no match also implies no ceiling. This is the conservative index floor: the
+host's additional header-length skip is outside this theorem.
+
+The semantic membership check matters: physical batches `(10, 0), (20, 20)`
+and sparse row `(0, 20)` pass structural validation in a 40-byte file, yet
+target 5 would skip the first match. The consumer rejects that false row.
+Complete accurate batch enumeration, decoding, physical lengths, windowed
+read budgets and I/O remain host obligations; byte bounds alone cannot prove
+any of those facts. This proof/test-only composition adds no production scan.
+
+Three independent tree-map, set-membership and full linear-scan oracle tests
+cover arbitrary malformed archives, generated ordered sparse indexes, exact
+targets, absent ceilings, empty files, false source rows and integer extremes.
+Two restored controls check the new dependency: hiding the helper's exported
+relations keeps its own proof and all three tests passing but fails the
+downstream proof; a floor at the final batch instead of the selected index
+position fails both the consumer proof and the behavioral oracle.
+
+Publication validation for this continuation passes 299 verified and 474 log
+library tests, scoped verified/log Bazel tests, verified doctests/rustdoc,
+workspace all-target Clippy with warnings denied, formatting and the
+Creusot/mutation static gates. Fresh pinned Creusot 0.13.0 generation and
+no-cache two-worker saved-session replay prove all 534 files. Only the upgraded
+offset helper and new seek consumer retain regenerated sessions in this final
+batch; all 1,064 unrelated prior artifact files remain byte-identical. All four
+new consumers appear in mutation discovery, and every verified Rust source
+remains below 300 lines. Six boolean-only contracts remain open. Full workspace
+Bazel CI and the full mutation sweep are separate from these local checks.
+
+## Quota trace CI follow-up
+
+PR #1260's exact failed Creusot job left two obligations in one of its
+534 files, `metered_consumes_conserve_elapsed_credit` unproved. Setup's
+unsupported command fell back successfully; the failure was in the solver's
+large conservation context. A private proved ledger lemma now lifts refill
+conservation through a whole-token grant before the trace composes it with
+its accumulated balance. The trace contract and runtime behavior are unchanged;
+no assumptions or trusted annotations are added.
+
+The isolated published snapshot plus this repair proves all 535 files in
+the exact CI image, digest `76ba64e5066553606a438b28ffc4cce7ae45cab2c2f9dd1855d5ef4ffe9be9c8`,
+with four CPUs. Both affected proofs also pass a no-cache one-CPU run in that
+image. Existing independent quota ledger tests, all-target workspace Clippy
+with warnings denied, formatting and the Creusot/mutation skip gates pass.
+Remote CI for the repair is reported separately.

@@ -79,18 +79,30 @@ contracts must also rule out rejecting everything.
 ### Cross-module theorems
 
 The proof/test-only [composition module](../crates/verified/src/composition.rs)
-calls the existing kernels through their contracts and checks forty-five connections.
-Twelve older compositions still export only `#[ensures(result)]`; their laws
+calls the existing kernels through their contracts and checks forty-nine connections.
+Six older compositions still export only `#[ensures(result)]`; their laws
 are body checks rather than reusable relational postconditions. A historical
 control replacing all fifteen then-remaining bodies with `true` proved those
-files and passed all composition tests. Append, reservation and read-committed Fetch compositions now return actual
+files and passed all composition tests. Append, reservation, audit-loss settlement, scheduled delivery and read-committed Fetch compositions now return actual
 computed witnesses, with exact admission and relational contracts plus
 independent oracles. The
 [audit](proof-contract-audit.md#remaining-boolean-only-composition-contracts)
-identifies the twelve remaining entries explicitly. The preceding thirteen-entry
+identifies the six remaining entries explicitly. The preceding thirteen-entry
 control proved all affected files and passed all 53 then-existing composition
-tests; read-committed Fetch has since been repaired. The current twelve-entry
-control also proves all twelve replacements and passes all 57 composition tests.
+tests; read-committed Fetch has since been repaired. The twelve-entry checkpoint
+control proved all twelve replacements and passed all 57 composition tests;
+audit-loss settlement has since been repaired and consumed by marker admission.
+Scheduled delivery now exports its greatest frontier to a transaction-stability
+consumer proving the greatest prefix allowed by both gates and HWM; inherited
+delivery/LSO values cannot replace those derived frontiers. Placement now exports
+actual voter identities and installer admission into the exact rack-loss survivor
+witness, which proves capacity for the original majority after one rack loss.
+Offset-index validation exports exact byte cursors to a complete-batch seek
+composition proving the indexed scan finds the same first match as a full scan;
+structural row validity alone cannot establish truthful batch positions.
+Validated epoch reconciliation exports its actual cut to retained snapshot
+selection and replay; neither discarded-tail snapshots nor invented earlier
+floors can suppress reconstruction.
 Witness-returning compositions carry their aggregate guarantees in the exported
 contracts. The connections are:
 allocation, append, acknowledgement, recovery, and scan frontiers agree;
@@ -101,7 +113,9 @@ every unstable start, HW and delivery, and that prefix determines the complete
 remote/local abort-row union; a newly advanced
 consensus HWM gives the Fetch limit quorum support; archived offset-index row
 validation establishes global ordering and bounded floor/ceiling lookups; and
-replaying an audit settlement is idempotent before generation exhaustion;
+replaying an audit settlement returns the exact conserved pending state before
+generation exhaustion; its witness and marker admission preserve concurrent
+losses, reject duplicate admission and permit the fresh remainder marker;
 restored time-index cursors are monotone and remain within their segment;
 validated epoch reconciliation cuts bound truncated consumer Fetch;
 snapshot selection after truncation yields a replay cursor inside the surviving

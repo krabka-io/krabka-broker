@@ -1,16 +1,17 @@
-(* #"/workspace/crates/verified/src/composition/audit.rs" 8 0 8 92 *)
+(* #"/workspace/crates/verified/src/composition/audit.rs" 16 0 19 31 *)
 
-let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 84 10 85 76
-let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 86 10 87 52
-let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 88 10 89 26
-let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 90 10 92 63
-let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 93 10 94 51
+let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 85 10 86 76
+let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 87 10 88 52
+let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 89 10 90 26
+let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 91 10 93 63
+let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 94 10 95 51
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span saudit = "/workspace/crates/verified/src/composition/audit.rs" 9 18 9 50
-let%span saudit'0 = "/workspace/crates/verified/src/composition/audit.rs" 10 19 10 53
-let%span saudit'1 = "/workspace/crates/verified/src/composition/audit.rs" 11 4 11 80
-let%span saudit'2 = "/workspace/crates/verified/src/composition/audit.rs" 6 11 6 40
-let%span saudit'3 = "/workspace/crates/verified/src/composition/audit.rs" 7 10 7 16
+let%span saudit = "/workspace/crates/verified/src/composition/audit.rs" 20 18 20 50
+let%span saudit'0 = "/workspace/crates/verified/src/composition/audit.rs" 21 19 21 53
+let%span saudit'1 = "/workspace/crates/verified/src/composition/audit.rs" 9 11 9 40
+let%span saudit'2 = "/workspace/crates/verified/src/composition/audit.rs" 10 10 10 88
+let%span saudit'3 = "/workspace/crates/verified/src/composition/audit.rs" 11 10 13 23
+let%span saudit'4 = "/workspace/crates/verified/src/composition/audit.rs" 14 10 15 88
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -43,27 +44,45 @@ let settle_loss_batch (state: t_AuditLosses) (batch: t_AuditLosses) (return (x: 
       <> state.generation -> UInt64.t'int result.generation = UInt64.t'int state.generation + 1)}
     (! return {result}) ]
 
+type tup2_AuditLosses_AuditLosses = { f0: t_AuditLosses; f1: t_AuditLosses }
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let loss_settlement_is_idempotent [#"/workspace/crates/verified/src/composition/audit.rs" 8 0 8 92]
-  (state: t_AuditLosses) (marker: t_AuditLosses) (return (x: bool)) =
-{[@stop_split] [@expl:loss_settlement_is_idempotent requires] [%#saudit'2] UInt64.t'int state.generation
+let loss_settlement_is_idempotent [#"/workspace/crates/verified/src/composition/audit.rs" 16 0 19 31]
+  (state: t_AuditLosses) (marker: t_AuditLosses) (return (x: tup2_AuditLosses_AuditLosses)) =
+{[@stop_split] [@expl:loss_settlement_is_idempotent requires] [%#saudit'1] UInt64.t'int state.generation
   < UInt64.t'int const_MAX}
   (! bb0
   [ bb0 = s0
     [ s0 = settle_loss_batch [%#saudit] {state} {marker} (fun (_x: t_AuditLosses) -> [ &settled <- _x ] s1)
     | s1 = settle_loss_batch [%#saudit'0] {settled} {marker} (fun (_x: t_AuditLosses) -> [ &replayed <- _x ] s2)
-    | s2 = [ &_12 <- settled.count = replayed.count ] s3
-    | s3 = any [ br0 -> {_12 = false} (! bb4) | br1 -> {_12} (! bb3) ] ]
-  | bb3 = s0 [ s0 = [ &_ret <- settled.generation = replayed.generation ] s1 | s1 = return {_ret} ]
-  | bb4 = s0 [ s0 = [ &_ret <- [%#saudit'1] false ] s1 | s1 = return {_ret} ] ]
-  [ & _ret: bool = Any.any_l ()
+    | s2 = [ &_ret <- { f0 = settled; f1 = replayed } ] s3
+    | s3 = return {_ret} ] ]
+  [ & _ret: tup2_AuditLosses_AuditLosses = Any.any_l ()
   | & state: t_AuditLosses = state
   | & marker: t_AuditLosses = marker
   | & settled: t_AuditLosses = Any.any_l ()
-  | & replayed: t_AuditLosses = Any.any_l ()
-  | & _12: bool = Any.any_l () ])
-  [ return (result: bool) -> {[@stop_split] [@expl:loss_settlement_is_idempotent ensures] [%#saudit'3] result}
+  | & replayed: t_AuditLosses = Any.any_l () ])
+  [ return (result: tup2_AuditLosses_AuditLosses) ->
+  {[@stop_split] [@expl:loss_settlement_is_idempotent ensures] ([@stop_split] [@expl:loss_settlement_is_idempotent ensures #0] [%#saudit'2] result.f0.count
+        = result.f1.count
+      /\ result.f0.generation = result.f1.generation)
+    /\ ([@stop_split] [@expl:loss_settlement_is_idempotent ensures #1] [%#saudit'3] UInt64.t'int result.f0.count
+      = (if state.generation = marker.generation then
+        if UInt64.t'int marker.count <= UInt64.t'int state.count then
+          UInt64.t'int state.count - UInt64.t'int marker.count
+        else
+          0
+
+      else
+        UInt64.t'int state.count
+      ))
+    /\ ([@stop_split] [@expl:loss_settlement_is_idempotent ensures #2] [%#saudit'4] UInt64.t'int result.f0.generation
+    = (if state.generation = marker.generation /\ UInt64.t'int marker.count < UInt64.t'int state.count then
+      UInt64.t'int state.generation + 1
+    else
+      UInt64.t'int state.generation
+    ))}
     (! return {result}) ]

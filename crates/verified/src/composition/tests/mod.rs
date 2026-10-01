@@ -67,3 +67,13 @@ mod restore_retry;
 mod append;
 
 mod stable_fetch;
+
+mod loss_replay;
+
+mod scheduled_prefix;
+
+mod wal_placement;
+
+mod epoch_replay;
+
+mod offset_seek;

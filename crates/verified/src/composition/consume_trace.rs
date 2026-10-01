@@ -89,17 +89,19 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
         proof_assert!((grant.0@ / units_per_token@) * units_per_token@ == grant.0@);
         proof_assert!((granted@ + grant.0@ / units_per_token@) * units_per_token@
             == granted@ * units_per_token@ + grant.0@);
-        // Expand the whole-token update before composing the ledger equality.
-        proof_assert!((granted@ * units_per_token@ + available@ - debt@) * 1_000_000_000
-            == granted@ * units_per_token@ * 1_000_000_000
-                + (available@ - debt@) * 1_000_000_000);
-        proof_assert!(((granted@ + grant.0@ / units_per_token@) * units_per_token@
-            + left.0@ - refilled.1@) * 1_000_000_000
-            == granted@ * units_per_token@ * 1_000_000_000
-                + (grant.0@ + left.0@ - refilled.1@) * 1_000_000_000);
-        proof_assert!((grant.0@ + left.0@ - refilled.1@) * 1_000_000_000
-            + refilled.2@ + discarded@
-            == (available@ - debt@) * 1_000_000_000 + fraction@ + elapsed@ * rate@);
+        proof_assert!({
+            lemma_refill_grant_ledger(
+                granted@ * units_per_token@,
+                (available@ - debt@, fraction@),
+                (refilled.0@ - refilled.1@, refilled.2@, discarded@),
+                (grant.0@, left.0@ - refilled.1@),
+                elapsed@ * rate@,
+            );
+            ((granted@ + grant.0@ / units_per_token@) * units_per_token@
+                + left.0@ - refilled.1@) * 1_000_000_000 + refilled.2@ + discarded@
+                == (granted@ * units_per_token@ + available@ - debt@) * 1_000_000_000
+                    + fraction@ + elapsed@ * rate@
+        });
         granted += u128::from(grant.0 / units_per_token);
         lost += discarded;
         available = left.0;
@@ -109,4 +111,24 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
         i += 1;
     }
     (granted, (available, debt, fraction, last_clock), lost)
+}
+
+/// Lift a refilled balance's conservation law through a whole-token grant.
+/// Isolate the additive ledger step from the trace's nonlinear token products.
+// cargo-mutants: #[cfg(creusot)] proof lemma; not compiled outside Creusot.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+#[requires(refilled.0 * 1_000_000_000 + refilled.1 + refilled.2
+    == previous.0 * 1_000_000_000 + previous.1 + credit)]
+#[requires(consumed.0 + consumed.1 == refilled.0)]
+#[ensures((granted + consumed.0 + consumed.1) * 1_000_000_000 + refilled.1 + refilled.2
+    == (granted + previous.0) * 1_000_000_000 + previous.1 + credit)]
+fn lemma_refill_grant_ledger(
+    granted: Int,
+    previous: (Int, Int),
+    refilled: (Int, Int, Int),
+    consumed: (Int, Int),
+    credit: Int,
+) {
 }
