@@ -54,3 +54,6 @@ pub use delete_target::{remote_retention_prefix, retention_delete_target};
 
 #[cfg(test)]
 mod tests;
+
+mod coverage;
+pub use coverage::remote_covered_through;

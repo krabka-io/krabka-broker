@@ -217,3 +217,9 @@ use trim_timestamp::completed_trim_preserves_retained_timestamp;
 
 mod eviction_timestamp;
 use eviction_timestamp::physical_eviction_routes_retained_timestamp;
+
+mod time_range;
+use time_range::constructed_time_range_preserves_first;
+
+mod stable_time_range;
+use stable_time_range::stable_time_range_preserves_first;

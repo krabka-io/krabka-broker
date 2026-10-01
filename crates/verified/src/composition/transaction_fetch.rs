@@ -8,7 +8,7 @@ use super::{
 /// Return the actual unstable frontier and read-committed visibility. The
 /// limit is the largest prefix bounded by every live/unreplicated transaction,
 /// HW and delivery; a transaction beyond the log end rejects the whole input.
-/// The starts must be a complete, coherent snapshot of transaction state.
+/// Starts must preserve a coherent minimum; omitted-start validity is external.
 #[ensures(match result {
     None => exists<i: Int> 0 <= i && i < starts@.len() && starts@[i]@ > w.log_end@,
     Some((lso, visibility)) => lso@ <= w.log_end@
