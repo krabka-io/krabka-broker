@@ -4,7 +4,7 @@ use assert2::assert;
 
 use super::*;
 
-fn expected_membership(
+pub(super) fn expected_membership(
     old: &[u64],
     leader: ReconfigurationLeadership,
     current: CurrentVoterSet,

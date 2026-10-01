@@ -6,4 +6,5 @@ use crate::reconfiguration::{
 
 mod oracle;
 use oracle::{check_overlap, current, leading, target};
+mod control_support;
 mod sets;
