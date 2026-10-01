@@ -5,6 +5,21 @@ use super::completion_offset;
 mod order;
 mod witness;
 
+/// An unchanged window contains every original source. Isolate the existential
+/// witness from the executable selector's mutable state and epoch branches.
+// cargo-mutants: #[cfg(creusot)] proof lemma; not compiled outside Creusot.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+#[requires(forall<j: Int> 0 <= j && j < selected.len() ==> selected[j]@ == j)]
+#[ensures(result)]
+#[ensures(result ==> (forall<i: Int> 0 <= i && i < selected.len() ==>
+    exists<j: Int> 0 <= j && j < selected.len() && selected[j]@ == i))]
+pub(super) fn lemma_identity_window(selected: Seq<usize>) -> bool {
+    proof_assert!(forall<i: Int> 0 <= i && i < selected.len() ==> selected[i]@ == i);
+    true
+}
+
 /// A sorted insertion followed by a one-row prefix cut keeps the greatest
 /// five distinct offsets. This isolates the inverse-index proof from the
 /// mutable Vec and producer-epoch branches of the executable selector.
