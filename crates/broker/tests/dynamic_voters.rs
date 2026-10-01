@@ -42,7 +42,6 @@ async fn start_dynamic_cluster(n: u64) -> Vec<(BrokerHandle, TempDir)> {
         config.listen_addr = data_addr;
         config.advertised_listener = data_addr.to_string();
         config.controller_listen_addr = controller_addr;
-        config.controller_election_timeout = krabka_units::millis(200);
         config.auto_join_retry_backoff = krabka_units::millis(20);
         config.startup_leader_wait_timeout = krabka_units::secs(10);
 
