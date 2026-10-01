@@ -182,6 +182,9 @@ use completed_eviction::completed_eviction_bounds_waiters;
 mod epoch_handoff;
 use epoch_handoff::epoch_handoff_distinguishes_identity_and_data_retry;
 
+mod epoch_delayed;
+use epoch_delayed::epoch_handoff_survives_delayed_completions;
+
 mod truncated_producer;
 use truncated_producer::truncated_replay_bounds_first_retry;
 

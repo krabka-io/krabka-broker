@@ -111,3 +111,5 @@ mod completed_producer;
 mod completed_eviction;
 
 mod epoch_handoff;
+
+mod epoch_delayed;

@@ -2194,3 +2194,75 @@ weakening controls restore the proof bodies qualified by the positive runs; the
 additional rotation counterexample is a native scope check. The 1,142 unaffected
 parent artifact files remain byte-identical, and all authored verified Rust
 sources remain below 300 lines (maximum 288). Remote CI is tracked separately.
+
+## Epoch handoff under an arbitrary delayed completion trace
+
+The handoff theorem previously stopped at the first higher-epoch data
+completion. That is insufficient to justify continued fencing: acknowledgements
+for old data may finish later and invoke `ProducerState::commit`. The production
+path holds the partition mutex, invokes `earlier_after_completion`, and returns
+without updating the entry when the shared completion selector rejects the
+callback. Epoch allocation alone does not establish this partition state.
+
+`epoch_handoff_survives_delayed_completions` consumes the existing handoff
+theorem's actual epoch and selected completion origin. It then folds an arbitrary
+length slice of old-epoch callbacks through `completed_batches_preserve_first_retry`.
+Each iteration reconstructs its survivor from the returned source, rather than
+assuming the old state survives. Finally it calls the reconstructed-window
+retry classifier with the new batch's actual wrapped sequence range.
+
+The aggregate law proves every callback is rejected, arbitrary old-epoch data
+requests remain fenced, the old identity classifies as an initialization retry,
+and the new data retry still returns slot four with its original base offset,
+exclusive durability frontier and HWM readiness. There is no bound on the
+number of callbacks and no ordering assumption on their physical offsets,
+epochs or sequences. Callbacks may share the new batch's sequence range or
+physical endpoint without replacing its origin.
+
+This is a serialized metadata theorem at one HWM observation. The host must
+provide truthful same-PID rows and keep the entry installed between callbacks.
+Truncation, expiry, new-epoch data, marker publication and physical persistence
+are outside this trace. An initialization identity classification still does not
+prove complete API admission. The submit-only `producer_state_model` does not
+enumerate deferred callback schedules; existing host completion tests separately
+exercise reordered commits and real-marker restart agreement. Neither bounded
+model checking nor those native cases replaces the unbounded callback induction.
+
+A scoped weakening audit found that removing the explicit rejected-window
+length equality does **not** break this consumer. Its generated Coma imports
+the weakened contract: physical coverage prevents the sole existing source
+from disappearing, and the epoch/source bounds prevent a stale callback from
+becoming the survivor. This redundancy is specific to the one-batch handoff
+trace; the general preservation clause remains useful for other consumers.
+The audit does not count this passing weakening as a failed proof control.
+
+Two independent scoped contract controls do break the final consumer: removing
+the completed-window callback-admission equivalence, or hiding its general
+fencing equivalence while retaining the empty-window classification. In both
+cases the weakened helper still proves and all three new native checks pass,
+but the consumer remains unproved (23 of 24 split goals). These controls use
+forced, cache-free depth-six proof searches and restore the original contracts.
+
+A separate native mutation makes the production completion selector accept
+stale callbacks. All three new checks then fail; the original selector is
+restored byte-for-byte. Boundary and property checks include no callbacks,
+longer repeated callback traces, arbitrary physical order, arbitrary lower
+epochs, sequence aliases, wrapped sequences and the maximum exclusive frontier.
+No production code or existing helper contracts change in this layer.
+
+Final local qualification passes pinned forced generation of the new session,
+ordinary cache-free generation of all 574 sessions, and cache-free canonical
+saved-ledger replay of all 574 sessions with a four-CPU limit. All 375 native
+verified-crate tests, relevant Bazel doc tests, strict workspace Clippy, the four
+proof/mutation configuration checks and repository formatting pass. All 1,146
+parent artifact files remain byte-identical; only the new session is retained.
+All 297 authored verified Rust sources remain below 300 lines (maximum 288).
+
+Remote qualification remains separate: the parent handoff PR's
+[proof job](https://github.com/krabka-io/krabka-broker/actions/runs/36900395724/job/110497814680)
+left completion selection, completed-window classification and elapsed-credit
+conservation unproved with the same image digest used locally. Setup succeeded.
+GitHub refuses a job retry while the containing workflow is active. A fresh
+archive of that exact parent commit passes all 573 sessions using the unchanged
+CI image entrypoint and a four-CPU limit. The remote failure is not reproduced
+by that local invocation; these results do not establish remote CI success.

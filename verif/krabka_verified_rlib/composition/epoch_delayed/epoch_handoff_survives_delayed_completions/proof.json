@@ -1,0 +1,65 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_completed_batches_preserve_first_retry": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_decrement_sequence": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_deref_Vec_ProducerSnapshotEntryFacts_Global": {
+        "prover": "alt-ergo",
+        "time": 0.014
+      },
+      "vc_epoch_handoff_distinguishes_identity_and_data_retry": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_epoch_handoff_survives_delayed_completions": {
+        "prover": "z3",
+        "time": 0.141
+      },
+      "vc_index_Vec_ProducerSnapshotEntryFacts_Global": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_index_Vec_usize_Global": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_index_mut_Vec_ProducerSnapshotEntryFacts_Global": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_len_ProducerSnapshotEntryFacts": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_len_ProducerSnapshotEntryFacts'0": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      },
+      "vc_new_ProducerSnapshotEntryFacts": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_new_tup2_bool_ProducerDecision": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      },
+      "vc_push_ProducerSnapshotEntryFacts": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_push_tup2_bool_ProducerDecision": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_rebuilt_data_window_bounds_retry": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_unwrap_tup4_usize_i64_i64_bool": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      }
+    }
+  }
+}
