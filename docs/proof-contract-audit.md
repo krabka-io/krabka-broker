@@ -1643,3 +1643,11 @@ above published PR #1268; it has no remote qualification yet. The parent's
 and benchmark workflows pass at `bbd81b8fe5b9493e2f25f2d87e8c55dab5f354af`.
 Those remote results qualify the parent's 553-session layer, not this local
 558-session layer.
+
+The membership constructor and overlap consumer also carry the admitted plan's
+exact version and control-record flags, and the single-flight leadership facts.
+Their bodies already obtained those guarantees from the production admission
+kernel, but previously stopped exporting them. The stronger interface is proved
+across all five reconfiguration sessions; all 342 native tests and workspace
+all-target Clippy still pass. This enables a consumer to derive zero, one or two
+actual control-record deltas from that same plan instead of trusting a count.

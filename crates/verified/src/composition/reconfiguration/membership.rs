@@ -3,7 +3,7 @@ use creusot_std::prelude::*;
 #[cfg(creusot)]
 use super::spec::{expected_member, has_node, membership_coherent, prefix_node_extend, valid_old};
 #[cfg(creusot)]
-use crate::reconfiguration::voter_reconfiguration_rejection;
+use crate::reconfiguration::{admitted_plan, may_reconfigure, voter_reconfiguration_rejection};
 use crate::{
     reconfiguration::{
         CurrentVoterSet, ReconfigurationLeadership, TargetMembership, TargetVoter, VoterChangeKind,
@@ -26,6 +26,8 @@ use crate::{
         None => true, Some(_) => false,
     }))]
 #[ensures(match result { None => true, Some((plan, next)) =>
+    admitted_plan(context, request.kind, plan) && may_reconfigure(leadership, context)
+    &&
     next@.len() == plan.next_voter_count@ && next@.len() > 0
     && old@.len() - 1 <= next@.len() && next@.len() <= old@.len() + 1
     && (forall<id: u64> has_node(next@, next@.len(), id)

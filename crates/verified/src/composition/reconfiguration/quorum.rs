@@ -7,7 +7,7 @@ use super::spec::{
     valid_old,
 };
 #[cfg(creusot)]
-use crate::reconfiguration::voter_reconfiguration_rejection;
+use crate::reconfiguration::{admitted_plan, may_reconfigure, voter_reconfiguration_rejection};
 use crate::{
     consensus::election_has_quorum,
     reconfiguration::{
@@ -36,6 +36,8 @@ type QuorumOverlap = Option<(
         None => true, Some(_) => false,
     }))]
 #[ensures(match result { None => true, Some((plan, next, counts, quorums, common)) =>
+    admitted_plan(context, request.kind, plan) && may_reconfigure(leadership, context)
+    &&
     next@.len() == plan.next_voter_count@ && next@.len() > 0
     && counts.0@ <= old@.len() && counts.1@ <= next@.len()
     && counts.0@ == grant_count(old@, next@, votes@, node, false, votes@.len())

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 40 0 47 49 *)
+(* #"/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 42 0 49 49 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
@@ -14,47 +14,47 @@ let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creu
 let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
 let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
 let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 100 10 103 37
-let%span smembership = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 48 18 48 29
-let%span smembership'0 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 48 18 48 30
-let%span smembership'1 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 49 41 49 50
-let%span smembership'2 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 49 8 49 51
-let%span smembership'3 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 52 20 52 25
-let%span smembership'4 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 53 16 53 22
-let%span smembership'5 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 56 14 56 29
-let%span smembership'6 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 57 14 57 23
-let%span smembership'7 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 55 16 55 49
-let%span smembership'8 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 54 16 54 32
-let%span smembership'9 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 58 24 58 52
-let%span smembership'10 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 59 16 59 39
-let%span smembership'11 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 59 25 59 31
-let%span smembership'12 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 60 13 60 14
-let%span smembership'13 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 60 8 60 14
-let%span smembership'14 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 68 8 68 76
-let%span smembership'15 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 74 29 74 39
-let%span smembership'16 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 75 8 75 9
-let%span smembership'17 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 82 14 82 29
-let%span smembership'18 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 83 14 83 23
-let%span smembership'19 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 80 16 81 32
-let%span smembership'20 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 78 16 79 62
-let%span smembership'21 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 77 16 77 90
-let%span smembership'22 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 76 16 76 32
-let%span smembership'23 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 84 24 84 52
-let%span smembership'24 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 85 22 85 28
-let%span smembership'25 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 86 26 86 55
-let%span smembership'26 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 87 26 87 65
-let%span smembership'27 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 89 35 89 40
-let%span smembership'28 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 90 22 90 28
-let%span smembership'29 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 90 12 90 29
-let%span smembership'30 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 91 26 92 74
-let%span smembership'31 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 94 13 94 14
-let%span smembership'32 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 94 8 94 14
-let%span smembership'33 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 97 22 97 57
-let%span smembership'34 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 99 31 99 36
-let%span smembership'35 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 100 8 100 23
-let%span smembership'36 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 101 22 102 66
+let%span smembership = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 50 18 50 29
+let%span smembership'0 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 50 18 50 30
+let%span smembership'1 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 51 41 51 50
+let%span smembership'2 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 51 8 51 51
+let%span smembership'3 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 54 20 54 25
+let%span smembership'4 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 55 16 55 22
+let%span smembership'5 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 58 14 58 29
+let%span smembership'6 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 59 14 59 23
+let%span smembership'7 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 57 16 57 49
+let%span smembership'8 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 56 16 56 32
+let%span smembership'9 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 60 24 60 52
+let%span smembership'10 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 61 16 61 39
+let%span smembership'11 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 61 25 61 31
+let%span smembership'12 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 62 13 62 14
+let%span smembership'13 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 62 8 62 14
+let%span smembership'14 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 70 8 70 76
+let%span smembership'15 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 76 29 76 39
+let%span smembership'16 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 77 8 77 9
+let%span smembership'17 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 84 14 84 29
+let%span smembership'18 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 85 14 85 23
+let%span smembership'19 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 82 16 83 32
+let%span smembership'20 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 80 16 81 62
+let%span smembership'21 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 79 16 79 90
+let%span smembership'22 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 78 16 78 32
+let%span smembership'23 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 86 24 86 52
+let%span smembership'24 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 87 22 87 28
+let%span smembership'25 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 88 26 88 55
+let%span smembership'26 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 89 26 89 65
+let%span smembership'27 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 91 35 91 40
+let%span smembership'28 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 92 22 92 28
+let%span smembership'29 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 92 12 92 29
+let%span smembership'30 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 93 26 94 74
+let%span smembership'31 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 96 13 96 14
+let%span smembership'32 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 96 8 96 14
+let%span smembership'33 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 99 22 99 57
+let%span smembership'34 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 101 31 101 36
+let%span smembership'35 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 102 8 102 23
+let%span smembership'36 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 103 22 104 66
 let%span smembership'37 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 22 11 22 45
 let%span smembership'38 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 23 10 27 6
-let%span smembership'39 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 28 10 39 1
+let%span smembership'39 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 28 10 41 1
 let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
 let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 94 11 94 44
 let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 95 10 96 57
@@ -66,8 +66,8 @@ let%span svoter_reconfiguration_decision'0 = "/workspace/crates/verified/src/rec
 let%span svoter_reconfiguration_decision'1 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 28 28 30 71
 let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 100 8 159 9
 let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 177 8 192 9
-let%span sadmitted_plan'1 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 33 8 36 9
-let%span sadmitted_plan'2 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 19 8 22 47
+let%span sadmitted_plan'1 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 19 8 22 47
+let%span sadmitted_plan'2 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 33 8 36 9
 let%span sadmitted_plan'3 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 51 8 51 87
 let%span sadmitted_plan'4 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 70 8 71 67
 
@@ -332,13 +332,13 @@ predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitt
     end
 
 predicate is_admit [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 31 0 31 63] (decision: t_VoterReconfigurationDecision) =
-  [%#sadmitted_plan'1] match decision with
+  [%#sadmitted_plan'2] match decision with
     | Admit _ -> true
     | _ -> false
     end
 
 predicate may_reconfigure [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 17 0 17 94] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) =
-  [%#sadmitted_plan'2] leadership.is_leader
+  [%#sadmitted_plan'1] leadership.is_leader
   /\ leadership.no_pending_change /\ leadership.epoch_committed /\ voters.latest_controls_committed
 
 let voter_reconfiguration_decision (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet)
@@ -399,7 +399,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 40 0 47 49]
+let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 42 0 49 49]
   (old': Slice64.slice UInt64.t) (leadership: t_ReconfigurationLeadership) (context: t_CurrentVoterSet)
   (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter)
   (return (x: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global)) =
@@ -407,24 +407,24 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
   = Seq.length (Slice64.view old')}
   (! bb0
   [ bb0 = s0
-    [ s0 = first_u64 [%#smembership] {old'} (fun (_x: t_Option_ref_u64) -> [ &_24 <- _x ] s1)
-    | s1 = branch_Option_ref_u64 [%#smembership'0] {_24}
-        (fun (_x: t_ControlFlow_Option_Infallible_ref_u64) -> [ &_23 <- _x ] s2)
+    [ s0 = first_u64 [%#smembership] {old'} (fun (_x: t_Option_ref_u64) -> [ &_26 <- _x ] s1)
+    | s1 = branch_Option_ref_u64 [%#smembership'0] {_26}
+        (fun (_x: t_ControlFlow_Option_Infallible_ref_u64) -> [ &_25 <- _x ] s2)
     | s2 = any
-      [ br0 (x0: UInt64.t) -> {_23 = Continue x0} (! bb5)
-      | br1 (x0: t_Option_Infallible) -> {_23 = Break x0} (! bb6) ] ]
+      [ br0 (x0: UInt64.t) -> {_25 = Continue x0} (! bb5)
+      | br1 (x0: t_Option_Infallible) -> {_25 = Break x0} (! bb6) ] ]
   | bb6 = s0
-    [ s0 = elim_Break {_23} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    [ s0 = elim_Break {_25} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
     | s1 = from_residual_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global [%#smembership'0] {residual}
         (fun (_x: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &_ret <- _x ] s2)
     | s2 = return {_ret} ]
   | bb5 = s0
-    [ s0 = elim_Continue {_23} (fun (r0: UInt64.t) -> [ &val' <- r0 ] s1)
-    | s1 = [ &_22 <- val' ] s2
-    | s2 = [ &anchor <- _22 ] s3
-    | s3 = len_u64 [%#smembership'1] {old'} (fun (_x: UInt64.t) -> [ &_35 <- _x ] s4)
-    | s4 = wal_voter_set_valid [%#smembership'2] {old'} {anchor} {_35} (fun (_x: bool) -> [ &_32 <- _x ] s5)
-    | s5 = any [ br0 -> {_32 = false} (! bb11) | br1 -> {_32} (! bb10) ] ]
+    [ s0 = elim_Continue {_25} (fun (r0: UInt64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &_24 <- val' ] s2
+    | s2 = [ &anchor <- _24 ] s3
+    | s3 = len_u64 [%#smembership'1] {old'} (fun (_x: UInt64.t) -> [ &_37 <- _x ] s4)
+    | s4 = wal_voter_set_valid [%#smembership'2] {old'} {anchor} {_37} (fun (_x: bool) -> [ &_34 <- _x ] s5)
+    | s5 = any [ br0 -> {_34 = false} (! bb11) | br1 -> {_34} (! bb10) ] ]
   | bb10 = s0
     [ s0 = [ &found <- [%#smembership'3] false ] s1 | s1 = [ &i <- [%#smembership'4] (0: UInt64.t) ] s2 | s2 = bb12 ]
   | bb12 = bb12invariant
@@ -435,25 +435,25 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
     | bb12invariant = {[@expl:loop invariant #0] [%#smembership'8] UInt64.t'int i <= Seq.length (Slice64.view old')}
       {[@expl:loop invariant #1] [%#smembership'7] found = has_node (Slice64.view old') (UInt64.t'int i) node}
       (! [ &variant_old_bb12 <- [%#smembership'5] Seq.length (Slice64.view old') - UInt64.t'int i ] s0)
-      [ s0 = len_u64 [%#smembership'6] {old'} (fun (_x: UInt64.t) -> [ &_56 <- _x ] s1)
-      | s1 = [ &_54 <- UInt64.lt i _56 ] s2
-      | s2 = any [ br0 -> {_54 = false} (! bb20) | br1 -> {_54} (! bb15) ] ]
+      [ s0 = len_u64 [%#smembership'6] {old'} (fun (_x: UInt64.t) -> [ &_58 <- _x ] s1)
+      | s1 = [ &_56 <- UInt64.lt i _58 ] s2
+      | s2 = any [ br0 -> {_56 = false} (! bb20) | br1 -> {_56} (! bb15) ] ]
       [ bb15 = s0
         [ s0 =
           {[@expl:assertion] [%#smembership'9] let _ = prefix_node_extend (Slice64.view old') (UInt64.t'int i) in true}
           s1
         | s1 = any [ br0 -> {found = false} (! bb17) | br1 -> {found} (! bb16) ] ]
-      | bb16 = s0 [ s0 = [ &_62 <- [%#smembership'10] true ] s1 | s1 = bb19 ]
+      | bb16 = s0 [ s0 = [ &_64 <- [%#smembership'10] true ] s1 | s1 = bb19 ]
       | bb17 = s0
-        [ s0 = [ &_65 <- i ] s1
-        | s1 = [ &_66 <- Slice64.length old' ] s2
-        | s2 = [ &_67 <- UInt64.lt _65 _66 ] s3
-        | s3 = {[@expl:index in bounds] [%#smembership'11] _67} s4
-        | s4 = Slice64.get [%#smembership'11] <UInt64.t> {old'} {_65} (fun (r: UInt64.t) -> [ &_64 <- r ] s5)
-        | s5 = [ &_62 <- _64 = node ] s6
+        [ s0 = [ &_67 <- i ] s1
+        | s1 = [ &_68 <- Slice64.length old' ] s2
+        | s2 = [ &_69 <- UInt64.lt _67 _68 ] s3
+        | s3 = {[@expl:index in bounds] [%#smembership'11] _69} s4
+        | s4 = Slice64.get [%#smembership'11] <UInt64.t> {old'} {_67} (fun (r: UInt64.t) -> [ &_66 <- r ] s5)
+        | s5 = [ &_64 <- _66 = node ] s6
         | s6 = bb19 ]
       | bb19 = s0
-        [ s0 = [ &found <- _62 ] s1
+        [ s0 = [ &found <- _64 ] s1
         | s1 = UInt64.add [%#smembership'13] {i} {[%#smembership'12] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &i <- _x ] s2)
         | s2 = bb12 ] ] ]
@@ -462,37 +462,37 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
     | br1 -> {request.kind = Remove} (! bb21)
     | br2 -> {request.kind = Update} (! bb21)
     | br3 -> {request.kind = FinalizeKraftVersion} (! bb23) ]
-  | bb21 = s0 [ s0 = [ &_71 <- false ] s1 | s1 = bb24 ]
-  | bb23 = s0 [ s0 = [ &_71 <- true ] s1 | s1 = bb24 ]
-  | bb24 = any [ br0 -> {_71 = false} (! bb25) | br1 -> {_71} (! bb32) ]
+  | bb21 = s0 [ s0 = [ &_73 <- false ] s1 | s1 = bb24 ]
+  | bb23 = s0 [ s0 = [ &_73 <- true ] s1 | s1 = bb24 ]
+  | bb24 = any [ br0 -> {_73 = false} (! bb25) | br1 -> {_73} (! bb32) ]
   | bb25 = any
     [ br0 -> {target.membership = Absent} (! bb28)
     | br1 -> {target.membership = PresentUnknownDirectory} (! bb26)
     | br2 -> {target.membership = PresentSameDirectory} (! bb26)
     | br3 -> {target.membership = PresentOtherDirectory} (! bb26) ]
-  | bb26 = s0 [ s0 = [ &_75 <- false ] s1 | s1 = bb29 ]
-  | bb28 = s0 [ s0 = [ &_75 <- true ] s1 | s1 = bb29 ]
-  | bb29 = s0 [ s0 = [ &_73 <- found = _75 ] s1 | s1 = any [ br0 -> {_73 = false} (! bb32) | br1 -> {_73} (! bb30) ] ]
+  | bb26 = s0 [ s0 = [ &_77 <- false ] s1 | s1 = bb29 ]
+  | bb28 = s0 [ s0 = [ &_77 <- true ] s1 | s1 = bb29 ]
+  | bb29 = s0 [ s0 = [ &_75 <- found = _77 ] s1 | s1 = any [ br0 -> {_75 = false} (! bb32) | br1 -> {_75} (! bb30) ] ]
   | bb30 = s0 [ s0 = [ &_ret <- None'1 ] s1 | s1 = return {_ret} ]
   | bb32 = s0
     [ s0 = voter_reconfiguration_decision [%#smembership'14] {leadership} {context} {request} {target}
-        (fun (_x: t_VoterReconfigurationDecision) -> [ &_80 <- _x ] s1)
+        (fun (_x: t_VoterReconfigurationDecision) -> [ &_82 <- _x ] s1)
     | s1 = any
-      [ br0 -> {_80 = NotLeader} (! bb36)
-      | br1 -> {_80 = InProgress} (! bb36)
-      | br2 -> {_80 = EpochUncommitted} (! bb36)
-      | br3 -> {_80 = EmptyCurrentVoterSet} (! bb36)
-      | br4 -> {_80 = UnsupportedKraftVersion} (! bb36)
-      | br5 -> {_80 = DuplicateVoter} (! bb36)
-      | br6 -> {_80 = IncompatibleVoter} (! bb36)
-      | br7 -> {_80 = VoterNotCaughtUp} (! bb36)
-      | br8 -> {_80 = VoterNotFound} (! bb36)
-      | br9 -> {_80 = DirectoryMismatch} (! bb36)
-      | br10 -> {_80 = InvalidVersionTransition} (! bb36)
-      | br11 (x0: t_VoterReconfigurationPlan) -> {_80 = Admit x0} (! bb35) ] ]
+      [ br0 -> {_82 = NotLeader} (! bb36)
+      | br1 -> {_82 = InProgress} (! bb36)
+      | br2 -> {_82 = EpochUncommitted} (! bb36)
+      | br3 -> {_82 = EmptyCurrentVoterSet} (! bb36)
+      | br4 -> {_82 = UnsupportedKraftVersion} (! bb36)
+      | br5 -> {_82 = DuplicateVoter} (! bb36)
+      | br6 -> {_82 = IncompatibleVoter} (! bb36)
+      | br7 -> {_82 = VoterNotCaughtUp} (! bb36)
+      | br8 -> {_82 = VoterNotFound} (! bb36)
+      | br9 -> {_82 = DirectoryMismatch} (! bb36)
+      | br10 -> {_82 = InvalidVersionTransition} (! bb36)
+      | br11 (x0: t_VoterReconfigurationPlan) -> {_82 = Admit x0} (! bb35) ] ]
   | bb36 = s0 [ s0 = [ &_ret <- None'1 ] s1 | s1 = return {_ret} ]
   | bb35 = s0
-    [ s0 = elim_Admit {_80} (fun (r0: t_VoterReconfigurationPlan) -> [ &plan <- r0 ] s1)
+    [ s0 = elim_Admit {_82} (fun (r0: t_VoterReconfigurationPlan) -> [ &plan <- r0 ] s1)
     | s1 = any
       [ br0 -> {request.kind = Add} (! bb37)
       | br1 -> {request.kind = Remove} (! bb39)
@@ -525,22 +525,22 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
           /\ j < k /\ k < Seq.length (view_Vec_u64_Global next)
         -> Seq.get (view_Vec_u64_Global next) j <> Seq.get (view_Vec_u64_Global next) k}
       (! [ &variant_old_bb46 <- [%#smembership'17] Seq.length (Slice64.view old') - UInt64.t'int i ] s0)
-      [ s0 = len_u64 [%#smembership'18] {old'} (fun (_x: UInt64.t) -> [ &_115 <- _x ] s1)
-      | s1 = [ &_113 <- UInt64.lt i _115 ] s2
-      | s2 = any [ br0 -> {_113 = false} (! bb59) | br1 -> {_113} (! bb49) ] ]
+      [ s0 = len_u64 [%#smembership'18] {old'} (fun (_x: UInt64.t) -> [ &_117 <- _x ] s1)
+      | s1 = [ &_115 <- UInt64.lt i _117 ] s2
+      | s2 = any [ br0 -> {_115 = false} (! bb59) | br1 -> {_115} (! bb49) ] ]
       [ bb49 = s0
         [ s0 =
           {[@expl:assertion] [%#smembership'23] let _ = prefix_node_extend (Slice64.view old') (UInt64.t'int i) in true}
           s1
         | s1 = any [ br0 -> {remove = false} (! bb53) | br1 -> {remove} (! bb50) ] ]
       | bb50 = s0
-        [ s0 = [ &_125 <- i ] s1
-        | s1 = [ &_126 <- Slice64.length old' ] s2
-        | s2 = [ &_127 <- UInt64.lt _125 _126 ] s3
-        | s3 = {[@expl:index in bounds] [%#smembership'24] _127} s4
-        | s4 = Slice64.get [%#smembership'24] <UInt64.t> {old'} {_125} (fun (r: UInt64.t) -> [ &_124 <- r ] s5)
-        | s5 = [ &_123 <- _124 <> node ] s6
-        | s6 = any [ br0 -> {_123 = false} (! bb58) | br1 -> {_123} (! bb53) ] ]
+        [ s0 = [ &_127 <- i ] s1
+        | s1 = [ &_128 <- Slice64.length old' ] s2
+        | s2 = [ &_129 <- UInt64.lt _127 _128 ] s3
+        | s3 = {[@expl:index in bounds] [%#smembership'24] _129} s4
+        | s4 = Slice64.get [%#smembership'24] <UInt64.t> {old'} {_127} (fun (r: UInt64.t) -> [ &_126 <- r ] s5)
+        | s5 = [ &_125 <- _126 <> node ] s6
+        | s6 = any [ br0 -> {_125 = false} (! bb58) | br1 -> {_125} (! bb53) ] ]
       | bb53 = s0
         [ s0 =
           {[@expl:assertion] [%#smembership'25] not has_node (Slice64.view old') (UInt64.t'int i) (Seq.get (Slice64.view old') (UInt64.t'int i))}
@@ -549,14 +549,14 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
           {[@expl:assertion] [%#smembership'26] not has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) (Seq.get (Slice64.view old') (UInt64.t'int i))}
           s2
         | s2 = [ &before <- [%#smembership'27] view_Vec_u64_Global next ] s3
-        | s3 = [ &_144 <- i ] s4
-        | s4 = [ &_145 <- Slice64.length old' ] s5
-        | s5 = [ &_146 <- UInt64.lt _144 _145 ] s6
-        | s6 = {[@expl:index in bounds] [%#smembership'28] _146} s7
-        | s7 = Slice64.get [%#smembership'28] <UInt64.t> {old'} {_144} (fun (r: UInt64.t) -> [ &_143 <- r ] s8)
+        | s3 = [ &_146 <- i ] s4
+        | s4 = [ &_147 <- Slice64.length old' ] s5
+        | s5 = [ &_148 <- UInt64.lt _146 _147 ] s6
+        | s6 = {[@expl:index in bounds] [%#smembership'28] _148} s7
+        | s7 = Slice64.get [%#smembership'28] <UInt64.t> {old'} {_146} (fun (r: UInt64.t) -> [ &_145 <- r ] s8)
         | s8 = MutBorrow.borrow_mut <t_Vec_u64_Global> {next}
-            (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_142 <- _bor ] [ &next <- _bor.final ] s9)
-        | s9 = push_u64 [%#smembership'29] {_142} {_143} (fun (_x: ()) -> [ &_141 <- _x ] s10)
+            (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_144 <- _bor ] [ &next <- _bor.final ] s9)
+        | s9 = push_u64 [%#smembership'29] {_144} {_145} (fun (_x: ()) -> [ &_143 <- _x ] s10)
         | s10 =
           {[@expl:assertion] [%#smembership'30] forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
             = (has_node before (Seq.length before) id \/ Seq.get (Slice64.view old') (UInt64.t'int i) = id)}
@@ -573,14 +573,14 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
       s1
     | s1 = [ &before'0 <- [%#smembership'34] view_Vec_u64_Global next ] s2
     | s2 = MutBorrow.borrow_mut <t_Vec_u64_Global> {next}
-        (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_164 <- _bor ] [ &next <- _bor.final ] s3)
-    | s3 = push_u64 [%#smembership'35] {_164} {node} (fun (_x: ()) -> [ &_163 <- _x ] s4)
+        (fun (_bor: MutBorrow.t t_Vec_u64_Global) -> [ &_166 <- _bor ] [ &next <- _bor.final ] s3)
+    | s3 = push_u64 [%#smembership'35] {_166} {node} (fun (_x: ()) -> [ &_165 <- _x ] s4)
     | s4 =
       {[@expl:assertion] [%#smembership'36] forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
         = (has_node before'0 (Seq.length before'0) id \/ node = id)}
       s5
     | s5 = bb64 ]
-  | bb64 = s0 [ s0 = [ &_171 <- { f0 = plan; f1 = next } ] s1 | s1 = [ &_ret <- Some'1 _171 ] s2 | s2 = return {_ret} ]
+  | bb64 = s0 [ s0 = [ &_173 <- { f0 = plan; f1 = next } ] s1 | s1 = [ &_ret <- Some'1 _173 ] s2 | s2 = return {_ret} ]
   | bb11 = s0 [ s0 = [ &_ret <- None'1 ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
   | & old': Slice64.slice UInt64.t = old'
@@ -590,48 +590,48 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
   | & node: UInt64.t = node
   | & target: t_TargetVoter = target
   | & anchor: UInt64.t = Any.any_l ()
-  | & _22: UInt64.t = Any.any_l ()
-  | & _23: t_ControlFlow_Option_Infallible_ref_u64 = Any.any_l ()
-  | & _24: t_Option_ref_u64 = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _25: t_ControlFlow_Option_Infallible_ref_u64 = Any.any_l ()
+  | & _26: t_Option_ref_u64 = Any.any_l ()
   | & residual: t_Option_Infallible = Any.any_l ()
   | & val': UInt64.t = Any.any_l ()
-  | & _32: bool = Any.any_l ()
-  | & _35: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
   | & found: bool = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _54: bool = Any.any_l ()
-  | & _56: UInt64.t = Any.any_l ()
-  | & _62: bool = Any.any_l ()
-  | & _64: UInt64.t = Any.any_l ()
-  | & _65: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _58: UInt64.t = Any.any_l ()
+  | & _64: bool = Any.any_l ()
   | & _66: UInt64.t = Any.any_l ()
-  | & _67: bool = Any.any_l ()
-  | & _71: bool = Any.any_l ()
+  | & _67: UInt64.t = Any.any_l ()
+  | & _68: UInt64.t = Any.any_l ()
+  | & _69: bool = Any.any_l ()
   | & _73: bool = Any.any_l ()
   | & _75: bool = Any.any_l ()
+  | & _77: bool = Any.any_l ()
   | & plan: t_VoterReconfigurationPlan = Any.any_l ()
-  | & _80: t_VoterReconfigurationDecision = Any.any_l ()
+  | & _82: t_VoterReconfigurationDecision = Any.any_l ()
   | & remove: bool = Any.any_l ()
   | & add: bool = Any.any_l ()
   | & next: t_Vec_u64_Global = Any.any_l ()
-  | & _113: bool = Any.any_l ()
-  | & _115: UInt64.t = Any.any_l ()
-  | & _123: bool = Any.any_l ()
-  | & _124: UInt64.t = Any.any_l ()
-  | & _125: UInt64.t = Any.any_l ()
+  | & _115: bool = Any.any_l ()
+  | & _117: UInt64.t = Any.any_l ()
+  | & _125: bool = Any.any_l ()
   | & _126: UInt64.t = Any.any_l ()
-  | & _127: bool = Any.any_l ()
+  | & _127: UInt64.t = Any.any_l ()
+  | & _128: UInt64.t = Any.any_l ()
+  | & _129: bool = Any.any_l ()
   | & before: Seq.seq UInt64.t = Any.any_l ()
-  | & _141: () = Any.any_l ()
-  | & _142: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
-  | & _143: UInt64.t = Any.any_l ()
-  | & _144: UInt64.t = Any.any_l ()
+  | & _143: () = Any.any_l ()
+  | & _144: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
   | & _145: UInt64.t = Any.any_l ()
-  | & _146: bool = Any.any_l ()
+  | & _146: UInt64.t = Any.any_l ()
+  | & _147: UInt64.t = Any.any_l ()
+  | & _148: bool = Any.any_l ()
   | & before'0: Seq.seq UInt64.t = Any.any_l ()
-  | & _163: () = Any.any_l ()
-  | & _164: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
-  | & _171: tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & _165: () = Any.any_l ()
+  | & _166: MutBorrow.t t_Vec_u64_Global = Any.any_l ()
+  | & _173: tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
   | & variant_old_bb12: int = Any.any_l ()
   | & variant_old_bb46: int = Any.any_l () ])
   [ return (result: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) ->
@@ -647,7 +647,9 @@ let constructed_voter_reconfiguration [#"/workspace/crates/verified/src/composit
         end))
     /\ ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #1] [%#smembership'39] match result with
       | None'1 -> true
-      | Some'1 {f0 = plan; f1 = next} -> Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
+      | Some'1 {f0 = plan; f1 = next} -> admitted_plan context request.kind plan
+      /\ may_reconfigure leadership context
+      /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
       /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
       /\ Seq.length (Slice64.view old') - 1 <= Seq.length (view_Vec_u64_Global next)
       /\ Seq.length (view_Vec_u64_Global next) <= Seq.length (Slice64.view old') + 1
