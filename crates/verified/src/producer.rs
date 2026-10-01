@@ -49,5 +49,10 @@ pub use sequence_decision::{
 mod decision;
 pub use decision::producer_decision;
 
+mod completion;
+#[cfg(creusot)]
+pub use completion::completion_offset;
+pub use completion::producer_completion_window;
+
 #[cfg(test)]
 mod tests;

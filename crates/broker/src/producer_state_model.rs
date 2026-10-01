@@ -1,6 +1,6 @@
 //! Exhaustive stateright enumeration of the idempotent-producer tracker: the
 //! host's retained-batch bookkeeping ([`ProducerEntry::retained_batches`] and
-//! [`ProducerEntry::earlier_after_append`]) around the proved
+//! [`super::entry::earlier_after_completion`]) around the proved
 //! `producer_decision` kernel, as `check_retained` runs them. There is one
 //! producer id per partition, and the broker serializes its requests, so the
 //! model enumerates every bounded submit sequence.
@@ -27,7 +27,7 @@ use krabka_verified::increment_sequence;
 use stateright::{Checker, Model, Property};
 
 use super::{
-    Decision, NO_EARLIER_BATCHES, ProducerEntry, RetainedBatch,
+    Decision, ProducerEntry, RetainedBatch,
     decision::{Checked, SequenceContext, check_retained},
     entry::{EarlierBatches, NUM_BATCHES_TO_RETAIN},
 };
@@ -109,9 +109,11 @@ impl HostEntry {
     /// The entry after the host accepts `batch` at `epoch`: exactly what
     /// `ProducerState::commit` stores.
     fn after_append(existing: Option<&Self>, epoch: i16, batch: Range) -> Self {
-        let earlier: EarlierBatches = existing.map_or(NO_EARLIER_BATCHES, |existing| {
-            existing.entry().earlier_after_append(epoch)
-        });
+        let (_, earlier): (bool, EarlierBatches) = super::entry::earlier_after_completion(
+            existing.map(HostEntry::entry),
+            epoch,
+            batch.batch(),
+        );
         Self {
             epoch,
             last: Range {

@@ -173,6 +173,9 @@ use snapshot_tail::loaded_snapshot_bounds_truncated_retry;
 mod producer_window;
 use producer_window::rebuilt_data_window_bounds_retry;
 
+mod completed_producer;
+use completed_producer::completed_batches_preserve_first_retry;
+
 mod truncated_producer;
 use truncated_producer::truncated_replay_bounds_first_retry;
 

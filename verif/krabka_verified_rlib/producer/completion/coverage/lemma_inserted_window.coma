@@ -1,0 +1,318 @@
+(* #"/workspace/crates/verified/src/producer/completion/coverage.rs" 36 0 42 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
+let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 14 11 14 69
+let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 11 15 55
+let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 11 16 51
+let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 17 11 17 91
+let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 18 11 18 73
+let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 19 11 19 82
+let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 20 11 22 69
+let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 23 10 23 16
+let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 24 10 24 62
+let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 25 10 25 97
+let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 26 10 27 102
+let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 28 10 31 72
+let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 32 10 35 73
+let%span sorder = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 21 11 21 50
+let%span sorder'0 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 22 11 22 61
+let%span sorder'1 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 23 11 23 91
+let%span sorder'2 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 24 11 24 73
+let%span sorder'3 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 25 11 25 82
+let%span sorder'4 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 26 10 26 16
+let%span sorder'5 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 27 10 28 86
+let%span sorder'6 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 10 16 11 63
+
+use creusot.int.Int64
+use seq.Seq
+use creusot.int.UInt64
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function completion_offset [#"/workspace/crates/verified/src/producer/completion.rs" 10 0 10 74] (ends: Seq.seq Int64.t) (incoming: Int64.t) (index: int) : int
+ = [%#scompletion] if index = Seq.length ends then Int64.to_int incoming else Int64.to_int (Seq.get ends index)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function insertion_source [#"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 9 0 9 71] (count: int) (position: int) (ordinal: int) : int
+ = [%#sorder'6] if ordinal = position then count else if gt_log_Int ordinal position then ordinal - 1 else ordinal
+
+predicate lemma_inserted_pair [#"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 29 0 35 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (lower: int) (upper: int)
+
+axiom lemma_inserted_pair_spec:
+  forall ends: Seq.seq Int64.t, incoming: Int64.t, position: int, lower: int, upper: int [lemma_inserted_pair ends incoming position lower upper]. ([%#sorder] 0
+        <= position
+      /\ position <= Seq.length ends)
+    -> ([%#sorder'0] 0 <= lower /\ lower < upper /\ upper <= Seq.length ends)
+    -> ([%#sorder'1] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+    -> ([%#sorder'2] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+    -> ([%#sorder'3] forall i: int. position <= i /\ i < Seq.length ends
+        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
+    -> ([%#sorder'4] lemma_inserted_pair ends incoming position lower upper)
+
+axiom lemma_inserted_pair_spec'0:
+  forall ends: Seq.seq Int64.t, incoming: Int64.t, position: int, lower: int, upper: int [lemma_inserted_pair ends incoming position lower upper]. ([%#sorder] 0
+        <= position
+      /\ position <= Seq.length ends)
+    -> ([%#sorder'0] 0 <= lower /\ lower < upper /\ upper <= Seq.length ends)
+    -> ([%#sorder'1] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+    -> ([%#sorder'2] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+    -> ([%#sorder'3] forall i: int. position <= i /\ i < Seq.length ends
+        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
+    -> ([%#sorder'5] lemma_inserted_pair ends incoming position lower upper
+    -> completion_offset ends incoming (insertion_source (Seq.length ends) position lower)
+    < completion_offset ends incoming (insertion_source (Seq.length ends) position upper))
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant ends : Seq.seq Int64.t
+
+constant incoming : Int64.t
+
+constant position : int
+
+constant first : int
+
+constant selected : Seq.seq UInt64.t
+
+predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 36 0 42 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
+
+goal vc_lemma_inserted_window: ([%#scoverage] Seq.length ends <= 5 /\ 0 <= position /\ position <= Seq.length ends)
+  -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
+  -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
+  -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+  -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+  -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
+      -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
+  -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+      -> UInt64.t'int (Seq.get selected j)
+      = (if first + j = position then
+        Seq.length ends
+      else
+        if gt_log_Int (first + j) position then first + j - 1 else first + j
+      ))
+  -> (forall i: int. 0 <= i
+        /\ i < Seq.length ends /\ (if ge_log_Int i position then ge_log_Int (i + 1) first else ge_log_Int i first)
+      -> UInt64.t'int (Seq.get selected ((if ge_log_Int i position then i + 1 else i) - first)) = i)
+  && (if ge_log_Int position first then
+    UInt64.t'int (Seq.get selected (position - first)) = Seq.length ends
+    && (forall i: int. 0 <= i
+          /\ i < Seq.length ends
+          /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
+        -> i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5)
+    && (forall j: int. 0 <= j /\ j < Seq.length selected
+        -> UInt64.t'int (Seq.get selected j) = insertion_source (Seq.length ends) position (first + j))
+    && (forall i: int, j: int. if 0 <= i then
+          if i < j then
+            if j < Seq.length selected then
+              ([@stop_split] [@expl:lemma_inserted_pair requires] ([@stop_split] [@expl:lemma_inserted_pair requires #0] [%#sorder] 0
+                    <= position
+                  /\ position <= Seq.length ends)
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #1] [%#sorder'0] 0 <= first + i
+                  /\ first + i < first + j /\ first + j <= Seq.length ends)
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #2] [%#sorder'1] forall i'0: int, j'0: int. 0
+                        <= i'0
+                      /\ i'0 < j'0 /\ j'0 < Seq.length ends
+                    -> Int64.to_int (Seq.get ends i'0) < Int64.to_int (Seq.get ends j'0))
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #3] [%#sorder'2] forall i'0: int. 0 <= i'0
+                      /\ i'0 < position -> Int64.to_int (Seq.get ends i'0) < Int64.to_int incoming)
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #4] [%#sorder'3] forall i'0: int. position <= i'0
+                    /\ i'0 < Seq.length ends -> Int64.to_int incoming < Int64.to_int (Seq.get ends i'0)))
+              /\ (([@stop_split] [@expl:lemma_inserted_pair ensures] ([@stop_split] [@expl:lemma_inserted_pair ensures #0] [%#sorder'4] lemma_inserted_pair ends incoming position (first
+                  + i) (first + j))
+                /\ ([@stop_split] [@expl:lemma_inserted_pair ensures #1] [%#sorder'5] lemma_inserted_pair ends incoming position (first
+                  + i) (first + j)
+                -> completion_offset ends incoming (insertion_source (Seq.length ends) position (first + i))
+                < completion_offset ends incoming (insertion_source (Seq.length ends) position (first + j))))
+              -> (let checked = lemma_inserted_pair ends incoming position (first + i) (first + j) in true))
+            else
+              true
+
+          else
+            true
+
+        else
+          true
+      )
+    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
+        -> (let checked = lemma_inserted_pair ends incoming position (first + i) (first + j) in checked
+        /\ completion_offset ends incoming (UInt64.t'int (Seq.get selected i))
+        < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
+    && (forall j: int. if first = 1 then
+          if gt_log_Int position 0 then
+            if 0 <= j then
+              if j < Seq.length selected then
+                ([@stop_split] [@expl:lemma_inserted_pair requires] ([@stop_split] [@expl:lemma_inserted_pair requires #0] [%#sorder] 0
+                      <= position
+                    /\ position <= Seq.length ends)
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #1] [%#sorder'0] 0 <= 0
+                    /\ 0 < first + j /\ first + j <= Seq.length ends)
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #2] [%#sorder'1] forall i: int, j'0: int. 0 <= i
+                        /\ i < j'0 /\ j'0 < Seq.length ends
+                      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j'0))
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #3] [%#sorder'2] forall i: int. 0 <= i
+                        /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #4] [%#sorder'3] forall i: int. position <= i
+                      /\ i < Seq.length ends -> Int64.to_int incoming < Int64.to_int (Seq.get ends i)))
+                /\ (([@stop_split] [@expl:lemma_inserted_pair ensures] ([@stop_split] [@expl:lemma_inserted_pair ensures #0] [%#sorder'4] lemma_inserted_pair ends incoming position 0 (first
+                    + j))
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair ensures #1] [%#sorder'5] lemma_inserted_pair ends incoming position 0 (first
+                    + j)
+                  -> completion_offset ends incoming (insertion_source (Seq.length ends) position 0)
+                  < completion_offset ends incoming (insertion_source (Seq.length ends) position (first + j))))
+                -> (let checked = lemma_inserted_pair ends incoming position 0 (first + j) in true))
+              else
+                true
+
+            else
+              true
+
+          else
+            true
+
+        else
+          true
+      )
+    /\ (forall j: int. first = 1 /\ gt_log_Int position 0 /\ 0 <= j /\ j < Seq.length selected
+        -> (let checked = lemma_inserted_pair ends incoming position 0 (first + j) in checked
+        /\ Int64.to_int (Seq.get ends 0) < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
+    && (let result = true in [@stop_split] [@expl:lemma_inserted_window ensures] ([@stop_split] [@expl:lemma_inserted_window ensures #0] [%#scoverage'6] result)
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #1] [%#scoverage'7] result
+      -> gt_log_Int (Seq.length selected) 0 /\ Seq.length selected <= 5)
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #2] [%#scoverage'8] result
+      -> (forall j: int. 0 <= j /\ j < Seq.length selected -> UInt64.t'int (Seq.get selected j) <= Seq.length ends))
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #3] [%#scoverage'9] result
+      -> (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
+        -> completion_offset ends incoming (UInt64.t'int (Seq.get selected i))
+        < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #4] [%#scoverage'10] result
+      -> (forall i: int. 0 <= i
+          /\ i < Seq.length ends
+          /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
+        -> Seq.length selected = 5
+        /\ (forall j: int. 0 <= j /\ j < Seq.length selected
+          -> Int64.to_int (Seq.get ends i) < completion_offset ends incoming (UInt64.t'int (Seq.get selected j)))))
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #5] [%#scoverage'11] result
+    -> not (exists j: int. 0 <= j
+        /\ j < Seq.length selected
+        /\ completion_offset ends incoming (UInt64.t'int (Seq.get selected j)) = Int64.to_int incoming)
+    -> Seq.length selected = 5
+    /\ (forall j: int. 0 <= j /\ j < Seq.length selected
+      -> Int64.to_int incoming < completion_offset ends incoming (UInt64.t'int (Seq.get selected j)))))
+  else
+    (forall i: int. 0 <= i
+          /\ i < Seq.length ends
+          /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
+        -> i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5)
+    && (forall j: int. 0 <= j /\ j < Seq.length selected
+        -> UInt64.t'int (Seq.get selected j) = insertion_source (Seq.length ends) position (first + j))
+    && (forall i: int, j: int. if 0 <= i then
+          if i < j then
+            if j < Seq.length selected then
+              ([@stop_split] [@expl:lemma_inserted_pair requires] ([@stop_split] [@expl:lemma_inserted_pair requires #0] [%#sorder] 0
+                    <= position
+                  /\ position <= Seq.length ends)
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #1] [%#sorder'0] 0 <= first + i
+                  /\ first + i < first + j /\ first + j <= Seq.length ends)
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #2] [%#sorder'1] forall i'0: int, j'0: int. 0
+                        <= i'0
+                      /\ i'0 < j'0 /\ j'0 < Seq.length ends
+                    -> Int64.to_int (Seq.get ends i'0) < Int64.to_int (Seq.get ends j'0))
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #3] [%#sorder'2] forall i'0: int. 0 <= i'0
+                      /\ i'0 < position -> Int64.to_int (Seq.get ends i'0) < Int64.to_int incoming)
+                /\ ([@stop_split] [@expl:lemma_inserted_pair requires #4] [%#sorder'3] forall i'0: int. position <= i'0
+                    /\ i'0 < Seq.length ends -> Int64.to_int incoming < Int64.to_int (Seq.get ends i'0)))
+              /\ (([@stop_split] [@expl:lemma_inserted_pair ensures] ([@stop_split] [@expl:lemma_inserted_pair ensures #0] [%#sorder'4] lemma_inserted_pair ends incoming position (first
+                  + i) (first + j))
+                /\ ([@stop_split] [@expl:lemma_inserted_pair ensures #1] [%#sorder'5] lemma_inserted_pair ends incoming position (first
+                  + i) (first + j)
+                -> completion_offset ends incoming (insertion_source (Seq.length ends) position (first + i))
+                < completion_offset ends incoming (insertion_source (Seq.length ends) position (first + j))))
+              -> (let checked = lemma_inserted_pair ends incoming position (first + i) (first + j) in true))
+            else
+              true
+
+          else
+            true
+
+        else
+          true
+      )
+    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
+        -> (let checked = lemma_inserted_pair ends incoming position (first + i) (first + j) in checked
+        /\ completion_offset ends incoming (UInt64.t'int (Seq.get selected i))
+        < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
+    && (forall j: int. if first = 1 then
+          if gt_log_Int position 0 then
+            if 0 <= j then
+              if j < Seq.length selected then
+                ([@stop_split] [@expl:lemma_inserted_pair requires] ([@stop_split] [@expl:lemma_inserted_pair requires #0] [%#sorder] 0
+                      <= position
+                    /\ position <= Seq.length ends)
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #1] [%#sorder'0] 0 <= 0
+                    /\ 0 < first + j /\ first + j <= Seq.length ends)
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #2] [%#sorder'1] forall i: int, j'0: int. 0 <= i
+                        /\ i < j'0 /\ j'0 < Seq.length ends
+                      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j'0))
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #3] [%#sorder'2] forall i: int. 0 <= i
+                        /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair requires #4] [%#sorder'3] forall i: int. position <= i
+                      /\ i < Seq.length ends -> Int64.to_int incoming < Int64.to_int (Seq.get ends i)))
+                /\ (([@stop_split] [@expl:lemma_inserted_pair ensures] ([@stop_split] [@expl:lemma_inserted_pair ensures #0] [%#sorder'4] lemma_inserted_pair ends incoming position 0 (first
+                    + j))
+                  /\ ([@stop_split] [@expl:lemma_inserted_pair ensures #1] [%#sorder'5] lemma_inserted_pair ends incoming position 0 (first
+                    + j)
+                  -> completion_offset ends incoming (insertion_source (Seq.length ends) position 0)
+                  < completion_offset ends incoming (insertion_source (Seq.length ends) position (first + j))))
+                -> (let checked = lemma_inserted_pair ends incoming position 0 (first + j) in true))
+              else
+                true
+
+            else
+              true
+
+          else
+            true
+
+        else
+          true
+      )
+    /\ (forall j: int. first = 1 /\ gt_log_Int position 0 /\ 0 <= j /\ j < Seq.length selected
+        -> (let checked = lemma_inserted_pair ends incoming position 0 (first + j) in checked
+        /\ Int64.to_int (Seq.get ends 0) < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
+    && (let result = true in [@stop_split] [@expl:lemma_inserted_window ensures] ([@stop_split] [@expl:lemma_inserted_window ensures #0] [%#scoverage'6] result)
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #1] [%#scoverage'7] result
+      -> gt_log_Int (Seq.length selected) 0 /\ Seq.length selected <= 5)
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #2] [%#scoverage'8] result
+      -> (forall j: int. 0 <= j /\ j < Seq.length selected -> UInt64.t'int (Seq.get selected j) <= Seq.length ends))
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #3] [%#scoverage'9] result
+      -> (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
+        -> completion_offset ends incoming (UInt64.t'int (Seq.get selected i))
+        < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #4] [%#scoverage'10] result
+      -> (forall i: int. 0 <= i
+          /\ i < Seq.length ends
+          /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
+        -> Seq.length selected = 5
+        /\ (forall j: int. 0 <= j /\ j < Seq.length selected
+          -> Int64.to_int (Seq.get ends i) < completion_offset ends incoming (UInt64.t'int (Seq.get selected j)))))
+    /\ ([@stop_split] [@expl:lemma_inserted_window ensures #5] [%#scoverage'11] result
+    -> not (exists j: int. 0 <= j
+        /\ j < Seq.length selected
+        /\ completion_offset ends incoming (UInt64.t'int (Seq.get selected j)) = Int64.to_int incoming)
+    -> Seq.length selected = 5
+    /\ (forall j: int. 0 <= j /\ j < Seq.length selected
+      -> Int64.to_int incoming < completion_offset ends incoming (UInt64.t'int (Seq.get selected j)))))
+  )
