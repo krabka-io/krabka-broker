@@ -1420,3 +1420,75 @@ This batch is prepared on `codex/proof-retention-ledgers`, above PR #1265.
 The parent's [full CI rerun succeeds](https://github.com/krabka-io/krabka-broker/actions/runs/36807206627)
 at `29c8568e9221bca96e460f5bfdb5a751e45f2af9`; that result does not qualify
 the new layer. Remote CI for the new commit is tracked separately.
+
+
+## Retention selection through completed remote deletion
+
+Selection does not establish deletion completion or justify moving the logical
+floor across a gap in finished remote metadata. The production pass already
+stopped its floor at such gaps, but still computed `md.end_offset() + 1` directly.
+The metadata constructor permits an inclusive end of `i64::MAX`. A new real
+retention-pass regression reaches `DeleteSegmentFinished` and reproduces an
+arithmetic overflow panic on that endpoint; `i64::MAX - 1` exercises the last
+representable successor in the same test.
+
+The host now delegates each completed range to
+[`remote_retention_floor_step`](../crates/verified/src/retention/remote_floor.rs),
+which consumes the existing checked `retention_delete_target`. The step exports
+monotonicity and exact closure of the contiguous run at a gap, malformed
+coordinates or successor exhaustion. Independently of its exact branch result,
+every offset it crosses belongs to that completed range. Once closed, the run
+cannot resume on a later row. The overflow regression passes after this change.
+
+[`completed_remote_retention_bounds_floor`](../crates/verified/src/composition/remote_delete.rs)
+derives floor, expiry and size facts from actual finished ranges, selects with
+all three retention policies and consumes completion observations up to the
+first failure. Its contract carries funded-prefix eligibility and maximal policy
+selection, exact success-prefix bounds, and a monotone floor whose every crossed
+offset belongs to a successfully completed deletion. A separate geometric
+prefix predicate requires each representable range to reach the initial floor or
+one of its predecessors. Every such completed prefix makes progress past each
+of its inclusive endpoints, so unchanged-floor implementations cannot satisfy
+the consumer. Earlier valid progress survives a later unrepresentable endpoint.
+
+The composition admits overlapping, obsolete and arbitrarily ordered valid
+ranges; the production listing is sorted. A gap freezes the floor even if a later
+out-of-order row could fill it. Supplied expiry flags and size debt must reflect
+the host's policy projection. A true completion observation means the delete
+lifecycle actually completed, not that it was merely selected or attempted.
+Metadata truth, object-store I/O, concurrent snapshots and durable publication
+of the returned floor remain outside this pure planner proof.
+
+Native oracles independently compute cumulative charged bytes and predecessor
+connections in the completed range prefix. Tables cover missing/failed deletion
+observations, later successes after failure, floor-only breaches, mixed expiry
+and byte funding, zero debt, overlaps, gaps and successor exhaustion. No recursive
+copy of the production floor fold is used as the native oracle.
+
+Scoped negative controls checked four failure modes after the positive proof:
+
+- Removing the gap check from both the step body and its exact branch contract
+  still fails the independent crossed-offset bound. Hiding that bound lets the
+  weakened step prove, while the stronger composition and native oracles reject
+  it.
+- Hiding the remote selected/stopping byte-budget exports leaves the selection
+  helper provable and all 335 native tests green, but breaks the aggregate
+  composition. Its budget claim therefore depends on semantic exports.
+- Returning the initial floor satisfies monotonicity and empty crossed-offset
+  coverage, but fails the connected-prefix progress claim and native oracle.
+- Ignoring a failed completion observation fails both the success-prefix proof
+  and the behavioral tests.
+
+All temporary control edits were restored before final validation. Pinned-image
+generation and cache-free replay of the saved artifacts each prove 551 files;
+native verification passes 335 tests. Bazel passes
+the broker retention target (27 tests), verified unit/doc targets, log tests and
+remote-storage tests. Workspace all-target Clippy with warnings denied, repository
+formatting and Creusot/mutation configuration checks pass. Only three new proof
+sessions are retained; the 1,096 previously published artifact files remain
+byte-identical. Every verified Rust source remains below 300 lines (largest: 288).
+
+This batch is on `codex/proof-remote-delete-frontier`, above PR #1266. The parent's
+Produce-readiness fixture repair is inherited from `d5bb60ed`; its remote proof
+job passes, while its full workflow is still running with one image-tool download
+HTTP 500 before tests. Parent CI does not qualify this new layer.

@@ -1,0 +1,30 @@
+(* #"/workspace/crates/verified/src/composition/remote_delete.rs" 39 0 39 83 *)
+
+let%span sremote_delete = "/workspace/crates/verified/src/composition/remote_delete.rs" 36 11 36 43
+let%span sremote_delete'0 = "/workspace/crates/verified/src/composition/remote_delete.rs" 37 10 38 54
+let%span sremote_delete'1 = "/workspace/crates/verified/src/composition/remote_delete.rs" 28 16 28 98
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use int.Int
+
+type tup4_i64_i64_u64_bool = { f0: Int64.t; f1: Int64.t; f2: UInt64.t; f3: bool }
+
+predicate deleted_prefix_covers [#"/workspace/crates/verified/src/composition/remote_delete.rs" 27 0 27 91] (rows: Seq.seq tup4_i64_i64_u64_bool) (count: int) (offset: int) =
+  [%#sremote_delete'1] exists j: int. 0 <= j
+    /\ j < count /\ Int64.to_int (Seq.get rows j).f0 <= offset /\ offset <= Int64.to_int (Seq.get rows j).f1
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant rows : Seq.seq tup4_i64_i64_u64_bool
+
+constant count : int
+
+function lemma_deleted_prefix_covers_extend [#"/workspace/crates/verified/src/composition/remote_delete.rs" 39 0 39 83] (rows: Seq.seq tup4_i64_i64_u64_bool) (count: int) : ()
+
+goal vc_lemma_deleted_prefix_covers_extend: ([%#sremote_delete] 0 <= count /\ count < Seq.length rows)
+  -> ([@stop_split] [@expl:lemma_deleted_prefix_covers_extend ensures] [%#sremote_delete'0] forall offset: int. deleted_prefix_covers rows count offset
+    -> deleted_prefix_covers rows (count + 1) offset)

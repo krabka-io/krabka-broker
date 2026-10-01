@@ -11,7 +11,9 @@ use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
-use krabka_verified::retention::{RemoteRetentionSegment, remote_retention_prefix};
+use krabka_verified::retention::{
+    RemoteRetentionSegment, remote_retention_floor_step, remote_retention_prefix,
+};
 use tracing::warn;
 
 use super::{NO_BYTES, archive::ArchiveMode, delete::delete_one_segment};
@@ -335,11 +337,8 @@ pub(crate) async fn remote_retention_pass(
             break;
         }
         outcome.deleted += 1;
-        if contiguous && md.start_offset() <= floor.0 {
-            floor = floor.max(Offset(md.end_offset() + 1));
-        } else {
-            contiguous = false;
-        }
+        (floor.0, contiguous) =
+            remote_retention_floor_step(floor.0, contiguous, md.start_offset(), md.end_offset());
     }
     if floor > log_start_offset {
         outcome.log_start = Some(floor);
@@ -389,3 +388,6 @@ async fn delete_outside_lineage(
 mod epoch_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod floor_tests;

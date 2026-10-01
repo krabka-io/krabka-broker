@@ -43,3 +43,5 @@ mod barrier_cut_expiry_is_exact_and_fails_closed_at_extremes;
 mod delete_target_rejects_offset_exhaustion;
 
 mod remote_charge;
+
+mod remote_floor;
