@@ -109,3 +109,5 @@ mod snapshot_tail;
 mod completed_producer;
 
 mod completed_eviction;
+
+mod epoch_handoff;

@@ -1,0 +1,461 @@
+(* #"/workspace/crates/verified/src/composition/epoch_handoff.rs" 33 0 40 17 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 142 10 142 52
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 143 10 147 5
+let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 148 10 152 5
+let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 153 10 160 5
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 19 8 24 65
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 203 8 208 56
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 220 8 223 73
+let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 49 11 49 53
+let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 50 11 50 109
+let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 51 11 51 81
+let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 52 11 54 95
+let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 55 11 55 118
+let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 56 10 56 105
+let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 57 10 57 68
+let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 58 10 60 155
+let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 61 10 71 96
+let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 72 10 73 72
+let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 74 10 75 108
+let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 76 10 85 1
+let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 86 10 90 95
+let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 91 10 93 77
+let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
+let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
+let%span sepoch_handoff = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 31 42 35
+let%span sepoch_handoff'0 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 37 42 42
+let%span sepoch_handoff'1 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 8 42 75
+let%span sepoch_handoff'2 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 8 42 84
+let%span sepoch_handoff'3 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 44 67 44 69
+let%span sepoch_handoff'4 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 44 8 44 96
+let%span sepoch_handoff'5 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 46 37 53 5
+let%span sepoch_handoff'6 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 21 11 21 74
+let%span sepoch_handoff'7 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 22 11 22 27
+let%span sepoch_handoff'8 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 23 11 24 36
+let%span sepoch_handoff'9 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 25 11 27 84
+let%span sepoch_handoff'10 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 28 11 28 118
+let%span sepoch_handoff'11 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 29 10 29 58
+let%span sepoch_handoff'12 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 30 10 30 59
+let%span sepoch_handoff'13 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 31 10 31 62
+let%span sepoch_handoff'14 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 32 10 32 46
+let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 39 10 40 27
+let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 41 10 44 42
+let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 45 10 51 41
+let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 52 10 58 51
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 226 53 226 54
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 50
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 54
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use int.EuclideanDivision
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_ProducerSnapshotEntryFacts = {
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  last_sequence: Int32.t;
+  last_offset: Int64.t;
+  offset_delta: Int32.t;
+  coordinator_epoch: Int32.t;
+  current_txn_first_offset: Int64.t }
+
+type tup2_i64_i16 = { f0: Int64.t; f1: Int16.t }
+
+type t_Option_tup2_i64_i16 = None'0 | Some'0 tup2_i64_i16
+
+constant const_MAX: Int16.t = (32767: Int16.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+type tup2_Option_tup2_i64_i16_Option_i64 = { f0'0: t_Option_tup2_i64_i16; f1'0: t_Option_i64 }
+
+let next_producer_identity (verified: bool) (recovery: bool) (pid: Int64.t) (epoch: Int16.t) (fresh: t_Option_i64)
+  (return (x: t_Option_tup2_i64_i16)) = any
+  [ return (result: t_Option_tup2_i64_i16) ->
+  {[@stop_split] [@expl:next_producer_identity ensures] ([@stop_split] [@expl:next_producer_identity ensures #0] [%#snext_producer_identity] not verified
+      -> result = Some'0 { f0 = pid; f1 = epoch })
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #1] [%#snext_producer_identity'0] verified
+        /\ not recovery /\ Int16.to_int epoch < Int16.to_int const_MAX - 1
+      -> match result with
+        | Some'0 {f0 = result_pid; f1 = result_epoch} -> result_pid = pid
+        /\ Int16.to_int result_epoch = Int16.to_int epoch + 1
+        | None'0 -> false
+        end)
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #2] [%#snext_producer_identity'1] verified
+        /\ recovery /\ Int16.to_int epoch < Int16.to_int const_MAX
+      -> match result with
+        | Some'0 {f0 = result_pid; f1 = result_epoch} -> result_pid = pid
+        /\ Int16.to_int result_epoch = Int16.to_int epoch + 1
+        | None'0 -> false
+        end)
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #3] [%#snext_producer_identity'2] verified
+      /\ (not recovery /\ ge_log_Int (Int16.to_int epoch) (Int16.to_int const_MAX - 1)
+      \/ recovery /\ ge_log_Int (Int16.to_int epoch) (Int16.to_int const_MAX))
+    -> match { f0'0 = result; f1'0 = fresh } with
+      | {f0'0 = Some'0 {f0 = result_pid; f1 = result_epoch}; f1'0 = Some fresh_pid} -> result_pid = fresh_pid
+      /\ Int16.to_int result_epoch = 0
+      | {f0'0 = None'0; f1'0 = None} -> true
+      | _ -> false
+      end)}
+    (! return {result}) ]
+
+let unwrap_tup2_i64_i16 (self_: t_Option_tup2_i64_i16) (return (x: tup2_i64_i16)) =
+{[@stop_split] [@expl:unwrap requires] [%#soption] self_ <> None'0}
+  any
+  [ return (result: tup2_i64_i16) -> {[@stop_split] [@expl:unwrap ensures] [%#soption'0] Some'0 result = self_}
+    (! return {result}) ]
+
+type t_InitProducerIdIdentityDecision = BumpWithoutIdentity | Bump | Retry | Fenced
+
+type tup2_i16_bool = { f0'1: Int16.t; f1'1: bool }
+
+constant const_EXHAUSTED_PRODUCER_EPOCH [#"/workspace/crates/verified/src/transaction.rs" 226 0 226 39] : Int16.t
+
+let set_EXHAUSTED_PRODUCER_EPOCH (return) = bb0
+  [ bb0 = s0
+    [ s0 =
+      [ &_1 <- let (_fst, _snd) = Int16.sub_with_overflow ([%#stransaction'0] const_MAX) ([%#stransaction] (1: Int16.t)) in { f0'1 = _fst;
+                                                                                                                              f1'1 = _snd } ]
+      s1
+    | s1 = {[@expl:Sub overflow] [%#stransaction'1] not _1.f1'1} s2
+    | s2 = [ &_ret <- _1.f0'1 ] s3
+    | s3 = return {_ret} ] ] [ & _ret: Int16.t = Any.any_l () | & _1: tup2_i16_bool = Any.any_l () ]
+  [ return (_const: Int16.t) -> -{const_EXHAUSTED_PRODUCER_EPOCH = _const}- return ]
+
+let init_producer_id_identity_decision (entry_pid: Int64.t) (entry_epoch: Int16.t) (last_epoch: Int16.t)
+  (prev_pid: Int64.t) (request_pid: Int64.t) (request_epoch: Int16.t) (return (x: t_InitProducerIdIdentityDecision)) =
+any
+  [ return (result: t_InitProducerIdIdentityDecision) ->
+  {[@stop_split] [@expl:init_producer_id_identity_decision ensures] ([@stop_split] [@expl:init_producer_id_identity_decision ensures #0] [%#sproducer_identity] (result
+        = BumpWithoutIdentity)
+      = (Int64.to_int request_pid = - 1))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #1] [%#sproducer_identity'0] (result = Bump)
+      = (Int64.to_int request_pid <> - 1
+      /\ Int64.to_int request_pid = Int64.to_int entry_pid /\ Int16.to_int request_epoch = Int16.to_int entry_epoch))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #2] [%#sproducer_identity'1] (result = Retry)
+      = (Int64.to_int request_pid <> - 1
+      /\ (Int64.to_int request_pid = Int64.to_int entry_pid
+        \/ Int64.to_int request_pid = Int64.to_int prev_pid
+        /\ ge_log_Int (Int16.to_int request_epoch) (Int16.to_int const_EXHAUSTED_PRODUCER_EPOCH))
+      /\ not (Int64.to_int request_pid = Int64.to_int entry_pid
+        /\ Int16.to_int request_epoch = Int16.to_int entry_epoch)
+      /\ Int16.to_int request_epoch = Int16.to_int last_epoch))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #3] [%#sproducer_identity'2] (result = Fenced)
+    = (Int64.to_int request_pid <> - 1
+    /\ (not (Int64.to_int request_pid = Int64.to_int entry_pid
+      \/ Int64.to_int request_pid = Int64.to_int prev_pid
+      /\ ge_log_Int (Int16.to_int request_epoch) (Int16.to_int const_EXHAUSTED_PRODUCER_EPOCH))
+    \/ not (Int64.to_int request_pid = Int64.to_int entry_pid /\ Int16.to_int request_epoch = Int16.to_int entry_epoch)
+    /\ Int16.to_int request_epoch <> Int16.to_int last_epoch)))}
+    (! return {result}) ]
+
+type t_Option_i16 = None'1 | Some'1 Int16.t
+
+type tup3_i16_i32_i32 = { f0'2: Int16.t; f1'2: Int32.t; f2'2: Int32.t }
+
+type tup2_i32_i32 = { f0'3: Int32.t; f1'3: Int32.t }
+
+type t_Vec_usize_Global
+
+type t_ProducerDecision = Append'0 | Duplicate'0 UInt64.t | OutOfOrder'0 | Fenced'0
+
+type tup4_usize_i64_i64_bool = { f0'4: UInt64.t; f1'4: Int64.t; f2'4: Int64.t; f3'4: bool }
+
+type t_Option_tup4_usize_i64_i64_bool = None'2 | Some'2 tup4_usize_i64_i64_bool
+
+type tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool = {
+  f0'5: bool;
+  f1'5: t_Vec_usize_Global;
+  f2'5: t_ProducerDecision;
+  f3'5: t_Option_tup4_usize_i64_i64_bool }
+
+predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 201 0 201 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+  [%#ssnapshot_transaction_valid] Int64.to_int entry.last_offset = - 1
+    /\ Int32.to_int entry.last_sequence = - 1 /\ Int32.to_int entry.offset_delta = 0
+  \/ ge_log_Int (Int64.to_int entry.last_offset) 0
+  /\ ge_log_Int (Int32.to_int entry.last_sequence) 0
+  /\ ge_log_Int (Int32.to_int entry.offset_delta) 0
+  /\ ge_log_Int (Int64.to_int entry.last_offset) (Int32.to_int entry.offset_delta)
+  /\ Int64.to_int entry.last_offset < snapshot_offset
+
+predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 218 0 218 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+  [%#ssnapshot_transaction_valid'0] Int64.to_int entry.current_txn_first_offset = - 1
+  \/ ge_log_Int (Int64.to_int entry.current_txn_first_offset) 0
+  /\ Int64.to_int entry.current_txn_first_offset < snapshot_offset
+  /\ Int64.to_int entry.current_txn_first_offset <= Int64.to_int entry.last_offset
+
+predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 17 0 17 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+  [%#sreplay_start] ge_log_Int snapshot_offset 0
+  /\ ge_log_Int (Int64.to_int entry.producer_id) 0
+  /\ ge_log_Int (Int16.to_int entry.producer_epoch) 0
+  /\ ge_log_Int (Int32.to_int entry.coordinator_epoch) (- 1)
+  /\ snapshot_last_record_valid snapshot_offset entry /\ snapshot_transaction_valid snapshot_offset entry
+
+constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_usize_Global (self: t_Vec_usize_Global) : Seq.seq UInt64.t
+
+axiom view_Vec_usize_Global_spec:
+  forall self: t_Vec_usize_Global [view_Vec_usize_Global self]. [%#svec] Seq.length (view_Vec_usize_Global self)
+    <= UInt64.t'int const_MAX'0
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function completed_row [#"/workspace/crates/verified/src/composition/completed_producer.rs" 13 0 17 31] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) : t_ProducerSnapshotEntryFacts
+ = [%#scompleted_producer'13] if index = Seq.length rows then incoming else Seq.get rows index
+
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
+ = [%#ssequence_decision] EuclideanDivision.mod sequence 2147483648
+
+predicate matches_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 25 0 30 9] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) (request: tup3_i16_i32_i32) =
+  [%#scompleted_producer'14] let row = completed_row rows incoming index in request.f0'2 = row.producer_epoch
+  /\ Int32.to_int request.f1'2 = sequence_modulo_2_31 (Int32.to_int row.last_sequence - Int32.to_int row.offset_delta)
+  /\ Int32.to_int row.last_sequence = sequence_modulo_2_31 (Int32.to_int request.f1'2 + Int32.to_int request.f2'2)
+
+let completed_batches_preserve_first_retry (end': Int64.t) (hwm: Int64.t) (current': t_Option_i16)
+  (rows: Slice64.slice t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts)
+  (request: tup3_i16_i32_i32) (return (x: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool)) =
+{[@stop_split] [@expl:completed_batches_preserve_first_retry requires] ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #0] [%#scompleted_producer] 0
+      <= Int64.to_int end'
+    /\ 0 <= Int64.to_int hwm /\ Seq.length (Slice64.view rows) <= 5)
+  /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #1] [%#scompleted_producer'0] snapshot_entry_valid_model (Int64.to_int end') incoming
+    /\ ge_log_Int (Int64.to_int incoming.last_offset) 0)
+  /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #2] [%#scompleted_producer'1] match current' with
+      | None'1 -> Seq.length (Slice64.view rows) = 0
+      | Some'1 epoch -> ge_log_Int (Int16.to_int epoch) 0
+      end)
+  /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #3] [%#scompleted_producer'2] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view rows)
+      -> snapshot_entry_valid_model (Int64.to_int end') (Seq.get (Slice64.view rows) i)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view rows) i).last_offset) 0
+      /\ (Seq.get (Slice64.view rows) i).producer_id = incoming.producer_id
+      /\ current' = Some'1 ((Seq.get (Slice64.view rows) i).producer_epoch))
+  /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #4] [%#scompleted_producer'3] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view rows)
+    -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
+    < Int64.to_int (Seq.get (Slice64.view rows) j).last_offset)}
+  any
+  [ return (result: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool) ->
+  {[@stop_split] [@expl:completed_batches_preserve_first_retry ensures] ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #0] [%#scompleted_producer'4] result.f0'5
+      = match current' with
+        | None'1 -> true
+        | Some'1 epoch -> Int16.to_int epoch <= Int16.to_int incoming.producer_epoch
+        end)
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #1] [%#scompleted_producer'5] Seq.length (view_Vec_usize_Global result.f1'5)
+        <= 5
+      /\ (result.f0'5 -> gt_log_Int (Seq.length (view_Vec_usize_Global result.f1'5)) 0))
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #2] [%#scompleted_producer'6] forall j: int. 0
+            <= j
+          /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+        -> UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j) <= Seq.length (Slice64.view rows)
+        /\ (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j))).producer_epoch
+        = match current' with
+          | Some'1 epoch -> if gt_log_Int (Int16.to_int epoch) (Int16.to_int incoming.producer_epoch) then
+            epoch
+          else
+            incoming.producer_epoch
+
+          | None'1 -> incoming.producer_epoch
+          end)
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #3] [%#scompleted_producer'7] (forall i: int, j: int. 0
+              <= i
+            /\ i < j /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+          -> Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) i))).last_offset
+          < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j))).last_offset)
+      /\ (forall i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view rows)
+            /\ match current' with
+                | Some'1 epoch -> Int16.to_int incoming.producer_epoch <= Int16.to_int epoch
+                | None'1 -> false
+                end
+            /\ not (exists j: int. 0 <= j
+              /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+              /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j) = i)
+          -> Seq.length (view_Vec_usize_Global result.f1'5) = 5
+          /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+            -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
+            < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j))).last_offset))
+      /\ (result.f0'5
+        /\ not (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+          /\ (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j))).last_offset
+          = incoming.last_offset)
+      -> Seq.length (view_Vec_usize_Global result.f1'5) = 5
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+        -> Int64.to_int incoming.last_offset
+        < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j))).last_offset)))
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #4] [%#scompleted_producer'8] not result.f0'5
+      -> Seq.length (view_Vec_usize_Global result.f1'5) = Seq.length (Slice64.view rows)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view rows)
+        -> UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j) = j))
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #5] [%#scompleted_producer'9] match result.f2'5 with
+          | Duplicate'0 _ -> true
+          | _ -> false
+          end
+      = (exists j: int. 0 <= j
+        /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+        /\ matches_retry (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j)) request))
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #6] [%#scompleted_producer'10] match result.f3'5 with
+        | None'2 -> match result.f2'5 with
+          | Duplicate'0 _ -> false
+          | _ -> true
+          end
+        | Some'2 {f0'4 = source; f1'4 = base; f2'4 = frontier; f3'4 = ready} -> UInt64.t'int source
+          <= Seq.length (Slice64.view rows)
+        /\ 0 <= Int64.to_int base
+        /\ Int64.to_int base < Int64.to_int frontier
+        /\ Int64.to_int frontier <= Int64.to_int end'
+        /\ ready = ge_log_Int (Int64.to_int hwm) (Int64.to_int frontier)
+        /\ Int64.to_int base
+          = Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int source)).last_offset
+          - Int32.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int source)).offset_delta
+        /\ Int64.to_int frontier
+          = Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int source)).last_offset + 1
+        /\ matches_retry (Slice64.view rows) incoming (UInt64.t'int source) request
+        /\ (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
+          /\ Seq.get (view_Vec_usize_Global result.f1'5) j = source
+          /\ match result.f2'5 with
+              | Duplicate'0 slot -> UInt64.t'int slot
+              = (if j + 1 = Seq.length (view_Vec_usize_Global result.f1'5) then 4 else j)
+              | _ -> false
+              end
+          /\ (forall k: int. 0 <= k /\ k < j
+            -> not matches_retry (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) k)) request))
+        end)
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #7] [%#scompleted_producer'11] (result.f2'5
+          = Fenced'0)
+        = (Int16.to_int request.f0'2
+        < match current' with
+          | Some'1 epoch -> if gt_log_Int (Int16.to_int epoch) (Int16.to_int incoming.producer_epoch) then
+            Int16.to_int epoch
+          else
+            Int16.to_int incoming.producer_epoch
+
+          | None'1 -> Int16.to_int incoming.producer_epoch
+          end)
+      /\ (Seq.length (view_Vec_usize_Global result.f1'5) = 0
+      -> result.f2'5
+      = (if Int16.to_int request.f0'2
+      < match current' with
+        | Some'1 epoch -> Int16.to_int epoch
+        | None'1 -> Int16.to_int incoming.producer_epoch
+        end then
+        Fenced'0
+      else
+        if Int32.to_int request.f1'2 = 0 then Append'0 else OutOfOrder'0
+      )))
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #8] [%#scompleted_producer'12] gt_log_Int (Seq.length (Slice64.view rows)) 0
+      /\ current' = Some'1 (incoming.producer_epoch)
+      /\ Int64.to_int incoming.last_offset
+      <= Int64.to_int (Seq.get (Slice64.view rows) (Seq.length (Slice64.view rows) - 1)).last_offset
+    -> gt_log_Int (Seq.length (view_Vec_usize_Global result.f1'5)) 0
+    /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) (Seq.length (view_Vec_usize_Global result.f1'5) - 1))
+    = Seq.length (Slice64.view rows) - 1)}
+    (! return {result}) ]
+
+type tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision = {
+  f0'6: Int16.t;
+  f1'6: t_InitProducerIdIdentityDecision;
+  f2'6: t_Vec_usize_Global;
+  f3'6: t_ProducerDecision }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let epoch_handoff_distinguishes_identity_and_data_retry [#"/workspace/crates/verified/src/composition/epoch_handoff.rs" 33 0 40 17]
+  (end': Int64.t) (hwm: Int64.t) (epoch: Int16.t) (rows: Slice64.slice t_ProducerSnapshotEntryFacts)
+  (first: t_ProducerSnapshotEntryFacts) (request: tup2_i32_i32)
+  (return (x: tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision)) =
+{[@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires] ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #0] [%#sepoch_handoff'6] 0
+      <= Int64.to_int end'
+    /\ 0 <= Int64.to_int hwm /\ 0 <= Int16.to_int epoch /\ Int16.to_int epoch < Int16.to_int const_MAX - 1)
+  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #1] [%#sepoch_handoff'7] Seq.length (Slice64.view rows)
+    <= 5)
+  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #2] [%#sepoch_handoff'8] snapshot_entry_valid_model (Int64.to_int end') first
+    /\ ge_log_Int (Int64.to_int first.last_offset) 0 /\ first.producer_epoch = epoch)
+  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #3] [%#sepoch_handoff'9] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view rows)
+      -> snapshot_entry_valid_model (Int64.to_int end') (Seq.get (Slice64.view rows) i)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view rows) i).last_offset) 0
+      /\ (Seq.get (Slice64.view rows) i).producer_id = first.producer_id
+      /\ (Seq.get (Slice64.view rows) i).producer_epoch = epoch)
+  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #4] [%#sepoch_handoff'10] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view rows)
+    -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
+    < Int64.to_int (Seq.get (Slice64.view rows) j).last_offset)}
+  (! set_EXHAUSTED_PRODUCER_EPOCH
+    (bb0
+    [ bb0 = s0
+      [ s0 = [ &_36 <- None ] s1
+      | s1 = next_producer_identity [%#sepoch_handoff'1] {[%#sepoch_handoff] true} {[%#sepoch_handoff'0] false}
+          {first.producer_id} {epoch} {_36} (fun (_x: t_Option_tup2_i64_i16) -> [ &_33 <- _x ] s2)
+      | s2 = unwrap_tup2_i64_i16 [%#sepoch_handoff'2] {_33} (fun (_x: tup2_i64_i16) -> [ &_32 <- _x ] s3)
+      | s3 = [ &pid <- _32.f0 ] s4
+      | s4 = [ &next_epoch <- _32.f1 ] s5
+      | s5 = init_producer_id_identity_decision [%#sepoch_handoff'4] {pid} {next_epoch} {epoch}
+          {[%#sepoch_handoff'3] (-1: Int64.t)} {first.producer_id} {epoch}
+          (fun (_x: t_InitProducerIdIdentityDecision) -> [ &identity <- _x ] s6)
+      | s6 = [ &first <- { first with producer_epoch = next_epoch } ] s7
+      | s7 = [ &_49 <- Some'1 epoch ] s8
+      | s8 = [ &_53 <- { f0'2 = epoch; f1'2 = request.f0'3; f2'2 = request.f1'3 } ] s9
+      | s9 = completed_batches_preserve_first_retry [%#sepoch_handoff'5] {end'} {hwm} {_49} {rows} {first} {_53}
+          (fun (_x: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool) -> [ &_46 <- _x ] s10)
+      | s10 = [ &selected <- _46.f1'5 ] s11
+      | s11 = [ &decision <- _46.f2'5 ] s12
+      | s12 = [ &_ret <- { f0'6 = next_epoch; f1'6 = identity; f2'6 = selected; f3'6 = decision } ] s13
+      | s13 = return {_ret} ] ]
+    [ & _ret: tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision = Any.any_l ()
+    | & end': Int64.t = end'
+    | & hwm: Int64.t = hwm
+    | & epoch: Int16.t = epoch
+    | & rows: Slice64.slice t_ProducerSnapshotEntryFacts = rows
+    | & first: t_ProducerSnapshotEntryFacts = first
+    | & request: tup2_i32_i32 = request
+    | & pid: Int64.t = Any.any_l ()
+    | & next_epoch: Int16.t = Any.any_l ()
+    | & _32: tup2_i64_i16 = Any.any_l ()
+    | & _33: t_Option_tup2_i64_i16 = Any.any_l ()
+    | & _36: t_Option_i64 = Any.any_l ()
+    | & identity: t_InitProducerIdIdentityDecision = Any.any_l ()
+    | & selected: t_Vec_usize_Global = Any.any_l ()
+    | & decision: t_ProducerDecision = Any.any_l ()
+    | & _46: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool = Any.any_l ()
+    | & _49: t_Option_i16 = Any.any_l ()
+    | & _53: tup3_i16_i32_i32 = Any.any_l () ]))
+  [ return (result: tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision) ->
+  {[@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures] ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #0] [%#sepoch_handoff'11] Int16.to_int result.f0'6
+        = Int16.to_int epoch + 1
+      /\ Int16.to_int result.f0'6 < Int16.to_int const_MAX)
+    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #1] [%#sepoch_handoff'12] result.f1'6
+      = Retry)
+    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #2] [%#sepoch_handoff'13] Seq.length (view_Vec_usize_Global result.f2'6)
+        = 1
+      /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f2'6) 0) = Seq.length (Slice64.view rows))
+    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #3] [%#sepoch_handoff'14] result.f3'6
+    = Fenced'0)}
+    (! return {result}) ]

@@ -2146,3 +2146,51 @@ Both weakening controls use fresh depth-six plans and restore the same proof
 bodies qualified by the positive runs. The 1,140 unaffected parent artifact files
 remain byte-identical, and all authored verified Rust sources remain below 300
 lines (maximum 288). Remote CI is tracked separately.
+
+## Same-PID epoch handoff across identity and data retries
+
+The completed-window contract described duplicates and the marker-only empty
+case, but did not export general epoch fencing. For a nonempty window, an opaque
+caller could establish that an old request was not a Duplicate while still being
+unable to distinguish Fenced from Append or OutOfOrder. The interface now states
+that Fenced is exactly a request epoch below the effective completed-window epoch,
+including the rejected-completion and marker-only cases. Its implementation and
+preconditions are unchanged.
+
+`epoch_handoff_distinguishes_identity_and_data_retry` consumes the actual normal
+verified identity transition, fills the new completed batch's epoch from its
+result, and composes initialization identity classification with the completed
+data window. The old identity is an InitProducerId identity Retry because it names
+the recorded last epoch; every old-epoch data request is Fenced after the new
+batch completes. Only the new completion's original source survives, even when
+the physical offset precedes an old batch or its sequences repeat an old alias.
+The theorem covers every normal same-PID increment through `i16::MAX - 1` and
+arbitrary request sequence fields. It does not equate identity classification
+with full initialization API admission.
+
+Two controls independently remove the general fencing law and weaken the normal
+increment to a nondecreasing epoch. Each weakened helper still proves and the
+native checks pass, while the handoff consumer fails. Fresh depth-six plans and
+cache-free answers keep those controls scoped to the exported contracts.
+
+The identity-transition kernel has two further limits that its ledger now makes
+explicit. It returns the supplied rotation ID without proving that ID's
+nonnegativity or freshness: supplying the old PID returns that PID at epoch zero.
+Even allocating a genuinely different PID does not update the old partition's
+tracked entry; a native counterexample still classifies an old retained data
+batch as a Duplicate after allocation alone. Partition fencing requires a
+published higher-epoch marker or completed data at that PID. This theorem proves
+the completed-data route, with recorded last epoch, PID association and faithful
+batch projection supplied by the host. It does not prove marker fan-out, PID
+rotation, recovery-identity installation, coordinator state admission or byte
+durability.
+
+Qualification uses pinned Creusot v0.13.0 compilation, forced cache-free
+generation of both affected sessions, ordinary cache-free generation of all 573
+sessions, and full cache-free saved-ledger replay of all 573 sessions. The final
+verified-crate Bazel suite passes 372 native tests and the doc tests; strict
+workspace Clippy, proof/mutation configuration checks and formatting pass. Both
+weakening controls restore the proof bodies qualified by the positive runs; the
+additional rotation counterexample is a native scope check. The 1,142 unaffected
+parent artifact files remain byte-identical, and all authored verified Rust
+sources remain below 300 lines (maximum 288). Remote CI is tracked separately.
