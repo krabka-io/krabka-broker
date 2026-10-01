@@ -2266,3 +2266,45 @@ GitHub refuses a job retry while the containing workflow is active. A fresh
 archive of that exact parent commit passes all 573 sessions using the unchanged
 CI image entrypoint and a four-CPU limit. The remote failure is not reproduced
 by that local invocation; these results do not establish remote CI success.
+
+## Completion source coverage as a reusable proof interface
+
+Three successive proof jobs leave the completion selector and completed-window
+composition unproved despite successful setup and local replay with the same
+pinned image. The isolated failed tasks concern old-source coverage: a known
+identity window must contain every old origin, and omitting an eligible old
+origin must leave five selected slots. These are existing safety guarantees,
+not newly discovered broker behavior.
+
+The selector now names source membership with a closed logical predicate whose
+proved contract is exactly the original existential slot relation. Its generated
+axiom has an explicit membership term for each source. The completed-window
+consumer uses the same predicate when transferring coverage from offset vectors
+to typed rows. Expanding the predicate reproduces both original contracts
+byte-for-byte; preconditions, runtime bodies and the proof budgets are unchanged.
+A separate identity-window lemma supplies the existential witnesses before the
+selector returns its unchanged window. It isolates this reasoning from mutable
+vector state and epoch branches. These two auxiliary interfaces support the
+existing cross-module safety laws; they are not new end-to-end broker claims.
+
+Forced host searches reduce the largest recorded selector attempt from 1.1
+seconds to about 0.14, and the completed-window attempt from 0.599 to about
+0.15. Removing the identity-window lemma restores the 1.1-second selector
+attempt, so membership alone does not give both sessions the same headroom.
+
+A scoped contract control removes the selector's old-source coverage guarantee.
+The weakened selector still proves and all four native completion checks pass,
+but the composed consumer proves only 49 of 55 obligations. The original
+selector is then restored byte-for-byte. This tests the consumer's dependence
+on physical source coverage, independently of epoch admission and retry shape.
+
+Final local qualification passes pinned forced generation of all four affected
+sessions, ordinary cache-free generation and cache-free saved-ledger replay of
+all 575 sessions with four CPUs. All 372 native verified-crate tests, relevant
+Bazel tests and doc tests, strict verified-crate Clippy, formatting and the four
+proof/mutation configuration checks pass. Updated artifacts include the
+completed-window consumers' imported contracts and source locations in the
+modified coverage module; 1,136 unrelated parent artifacts remain byte-identical.
+All 295 authored verified Rust files remain below 300 lines (maximum 288).
+The repaired source needs fresh remote qualification; earlier failed jobs do
+not establish success for this revision.

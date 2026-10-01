@@ -62,7 +62,7 @@ type CompletedRetry = (
     completed_row(rows@, incoming, result.1@[i]@).last_offset@ < completed_row(rows@, incoming, result.1@[j]@).last_offset@)
     && (forall<i: Int> 0 <= i && i < rows@.len()
     && (match current { Some(epoch) => incoming.producer_epoch@ <= epoch@, None => false })
-    && !(exists<j: Int> 0 <= j && j < result.1@.len() && result.1@[j]@ == i) ==>
+    && !crate::producer::completion_source_selected(result.1@, i) ==>
         result.1@.len() == 5 && (forall<j: Int> 0 <= j && j < result.1@.len() ==>
             rows@[i].last_offset@ < completed_row(rows@, incoming, result.1@[j]@).last_offset@))
     && (result.0 && !(exists<j: Int> 0 <= j && j < result.1@.len()

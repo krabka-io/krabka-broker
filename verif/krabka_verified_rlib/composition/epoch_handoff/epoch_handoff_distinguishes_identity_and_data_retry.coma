@@ -29,6 +29,7 @@ let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/co
 let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 91 10 93 77
 let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
 let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
+let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
 let%span sepoch_handoff = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 31 42 35
 let%span sepoch_handoff'0 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 37 42 42
 let%span sepoch_handoff'1 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 8 42 75
@@ -223,6 +224,12 @@ meta "rewrite_def" predicate gt_log_Int
 function completed_row [#"/workspace/crates/verified/src/composition/completed_producer.rs" 13 0 17 31] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) : t_ProducerSnapshotEntryFacts
  = [%#scompleted_producer'13] if index = Seq.length rows then incoming else Seq.get rows index
 
+predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 20 0 20 76] (selected: Seq.seq UInt64.t) (source: int)
+
+axiom completion_source_selected_spec:
+  forall selected: Seq.seq UInt64.t, source: int [completion_source_selected selected source]. [%#scompletion] completion_source_selected selected source
+    = (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = source)
+
 function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
  = [%#ssequence_decision] EuclideanDivision.mod sequence 2147483648
 
@@ -289,9 +296,7 @@ let completed_batches_preserve_first_retry (end': Int64.t) (hwm: Int64.t) (curre
                 | Some'1 epoch -> Int16.to_int incoming.producer_epoch <= Int16.to_int epoch
                 | None'1 -> false
                 end
-            /\ not (exists j: int. 0 <= j
-              /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
-              /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'5) j) = i)
+            /\ not completion_source_selected (view_Vec_usize_Global result.f1'5) i
           -> Seq.length (view_Vec_usize_Global result.f1'5) = 5
           /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1'5)
             -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
