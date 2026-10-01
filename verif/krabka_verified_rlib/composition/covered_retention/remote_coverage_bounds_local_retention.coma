@@ -1,0 +1,508 @@
+(* #"/workspace/crates/verified/src/composition/covered_retention.rs" 62 0 67 21 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span scovered_retention = "/workspace/crates/verified/src/composition/covered_retention.rs" 68 23 68 34
+let%span scovered_retention'0 = "/workspace/crates/verified/src/composition/covered_retention.rs" 70 19 70 20
+let%span scovered_retention'1 = "/workspace/crates/verified/src/composition/covered_retention.rs" 70 13 70 21
+let%span scovered_retention'2 = "/workspace/crates/verified/src/composition/covered_retention.rs" 70 13 70 23
+let%span scovered_retention'3 = "/workspace/crates/verified/src/composition/covered_retention.rs" 69 13 69 14
+let%span scovered_retention'4 = "/workspace/crates/verified/src/composition/covered_retention.rs" 72 18 72 77
+let%span scovered_retention'5 = "/workspace/crates/verified/src/composition/covered_retention.rs" 73 18 73 56
+let%span scovered_retention'6 = "/workspace/crates/verified/src/composition/covered_retention.rs" 74 48 74 58
+let%span scovered_retention'7 = "/workspace/crates/verified/src/composition/covered_retention.rs" 75 16 75 22
+let%span scovered_retention'8 = "/workspace/crates/verified/src/composition/covered_retention.rs" 80 14 80 31
+let%span scovered_retention'9 = "/workspace/crates/verified/src/composition/covered_retention.rs" 81 14 81 25
+let%span scovered_retention'10 = "/workspace/crates/verified/src/composition/covered_retention.rs" 77 16 79 104
+let%span scovered_retention'11 = "/workspace/crates/verified/src/composition/covered_retention.rs" 76 16 76 56
+let%span scovered_retention'12 = "/workspace/crates/verified/src/composition/covered_retention.rs" 83 57 83 65
+let%span scovered_retention'13 = "/workspace/crates/verified/src/composition/covered_retention.rs" 83 57 83 67
+let%span scovered_retention'14 = "/workspace/crates/verified/src/composition/covered_retention.rs" 84 21 84 29
+let%span scovered_retention'15 = "/workspace/crates/verified/src/composition/covered_retention.rs" 84 21 84 31
+let%span scovered_retention'16 = "/workspace/crates/verified/src/composition/covered_retention.rs" 85 18 85 26
+let%span scovered_retention'17 = "/workspace/crates/verified/src/composition/covered_retention.rs" 85 18 85 28
+let%span scovered_retention'18 = "/workspace/crates/verified/src/composition/covered_retention.rs" 82 8 86 10
+let%span scovered_retention'19 = "/workspace/crates/verified/src/composition/covered_retention.rs" 87 13 87 14
+let%span scovered_retention'20 = "/workspace/crates/verified/src/composition/covered_retention.rs" 87 8 87 14
+let%span scovered_retention'21 = "/workspace/crates/verified/src/composition/covered_retention.rs" 90 17 90 21
+let%span scovered_retention'22 = "/workspace/crates/verified/src/composition/covered_retention.rs" 91 17 91 22
+let%span scovered_retention'23 = "/workspace/crates/verified/src/composition/covered_retention.rs" 89 4 93 6
+let%span scovered_retention'24 = "/workspace/crates/verified/src/composition/covered_retention.rs" 94 39 94 45
+let%span scovered_retention'25 = "/workspace/crates/verified/src/composition/covered_retention.rs" 94 16 94 57
+let%span scovered_retention'26 = "/workspace/crates/verified/src/composition/covered_retention.rs" 95 18 95 76
+let%span scovered_retention'27 = "/workspace/crates/verified/src/composition/covered_retention.rs" 96 18 96 40
+let%span scovered_retention'28 = "/workspace/crates/verified/src/composition/covered_retention.rs" 97 18 97 93
+let%span scovered_retention'29 = "/workspace/crates/verified/src/composition/covered_retention.rs" 98 18 101 5
+let%span scovered_retention'30 = "/workspace/crates/verified/src/composition/covered_retention.rs" 102 27 102 28
+let%span scovered_retention'31 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 27 105 28
+let%span scovered_retention'32 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 19 105 28
+let%span scovered_retention'33 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 13 105 29
+let%span scovered_retention'34 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 13 105 31
+let%span scovered_retention'35 = "/workspace/crates/verified/src/composition/covered_retention.rs" 107 17 107 46
+let%span scovered_retention'36 = "/workspace/crates/verified/src/composition/covered_retention.rs" 20 11 20 37
+let%span scovered_retention'37 = "/workspace/crates/verified/src/composition/covered_retention.rs" 21 11 21 106
+let%span scovered_retention'38 = "/workspace/crates/verified/src/composition/covered_retention.rs" 22 11 22 101
+let%span scovered_retention'39 = "/workspace/crates/verified/src/composition/covered_retention.rs" 23 11 23 105
+let%span scovered_retention'40 = "/workspace/crates/verified/src/composition/covered_retention.rs" 25 4 25 66
+let%span scovered_retention'41 = "/workspace/crates/verified/src/composition/covered_retention.rs" 37 10 37 74
+let%span scovered_retention'42 = "/workspace/crates/verified/src/composition/covered_retention.rs" 38 10 40 108
+let%span scovered_retention'43 = "/workspace/crates/verified/src/composition/covered_retention.rs" 41 10 42 50
+let%span scovered_retention'44 = "/workspace/crates/verified/src/composition/covered_retention.rs" 43 10 46 1
+let%span scovered_retention'45 = "/workspace/crates/verified/src/composition/covered_retention.rs" 47 10 49 22
+let%span scovered_retention'46 = "/workspace/crates/verified/src/composition/covered_retention.rs" 50 10 50 65
+let%span scovered_retention'47 = "/workspace/crates/verified/src/composition/covered_retention.rs" 51 10 58 1
+let%span scovered_retention'48 = "/workspace/crates/verified/src/composition/covered_retention.rs" 59 10 61 45
+let%span scoverage = "/workspace/crates/verified/src/retention/coverage.rs" 23 11 24 38
+let%span scoverage'0 = "/workspace/crates/verified/src/retention/coverage.rs" 25 10 35 1
+let%span scoverage'1 = "/workspace/crates/verified/src/retention/coverage.rs" 8 16 8 90
+let%span scoverage'2 = "/workspace/crates/verified/src/retention/coverage.rs" 16 16 16 109
+let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 112 10 117 1
+let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 118 10 118 36
+let%span sremote_retention_model'1 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 119 10 119 72
+let%span sremote_retention_model'2 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 120 10 121 33
+let%span sremote_retention_model'3 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 122 10 123 65
+let%span sremote_retention_model'4 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 71 10 71 19
+let%span sremote_retention_model'5 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 80 8 88 9
+let%span sremote_retention_model'6 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 38 8 42 9
+let%span sdelete_target = "/workspace/crates/verified/src/retention/delete_target.rs" 58 10 62 1
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type tup4_i64_i64_u64_bool = { f0: Int64.t; f1: Int64.t; f2: UInt64.t; f3: bool }
+
+let len_tup4_i64_i64_u64_bool (self_: Slice64.slice tup4_i64_i64_u64_bool) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type tup2_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t }
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate remote_ranges_valid [#"/workspace/crates/verified/src/retention/coverage.rs" 7 0 7 59] (ranges: Seq.seq tup2_i64_i64) =
+  [%#scoverage'1] forall i: int. 0 <= i /\ i < Seq.length ranges
+    -> Int64.to_int (Seq.get ranges i).f0'0 <= Int64.to_int (Seq.get ranges i).f1'0
+
+predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 15 0 15 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
+  [%#scoverage'2] exists i: int. 0 <= i
+    /\ i < Seq.length ranges
+    /\ Int64.to_int (Seq.get ranges i).f0'0 <= offset /\ offset <= Int64.to_int (Seq.get ranges i).f1'0
+
+let remote_covered_through (ranges: Slice64.slice tup2_i64_i64) (local_start: Int64.t) (return (x: t_Option_i64)) =
+{[@stop_split] [@expl:remote_covered_through requires] [%#scoverage] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view ranges)
+    -> Int64.to_int (Seq.get (Slice64.view ranges) i).f0'0 <= Int64.to_int (Seq.get (Slice64.view ranges) j).f0'0}
+  any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:remote_covered_through ensures] [%#scoverage'0] match result with
+      | None -> not remote_ranges_valid (Slice64.view ranges)
+      \/ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view ranges)
+        -> Int64.to_int local_start < Int64.to_int (Seq.get (Slice64.view ranges) i).f0'0
+        \/ Int64.to_int (Seq.get (Slice64.view ranges) i).f1'0 < Int64.to_int local_start)
+      | Some through -> remote_ranges_valid (Slice64.view ranges)
+      /\ Int64.to_int local_start <= Int64.to_int through
+      /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view ranges) /\ through = (Seq.get (Slice64.view ranges) i).f1'0)
+      /\ (forall offset: int. Int64.to_int local_start <= offset /\ offset <= Int64.to_int through
+          -> remote_covers_offset (Slice64.view ranges) offset)
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view ranges)
+          /\ Int64.to_int (Seq.get (Slice64.view ranges) i).f0'0 <= Int64.to_int through + 1
+        -> Int64.to_int (Seq.get (Slice64.view ranges) i).f1'0 <= Int64.to_int through)
+      end}
+    (! return {result}) ]
+
+type t_Vec_LocalRetentionSegment_Global
+
+type t_LocalRetentionSegment = { blocked: bool; expired: bool; size: UInt64.t }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_LocalRetentionSegment_Global (self: t_Vec_LocalRetentionSegment_Global) : Seq.seq t_LocalRetentionSegment
+
+axiom view_Vec_LocalRetentionSegment_Global_spec:
+  forall self: t_Vec_LocalRetentionSegment_Global [view_Vec_LocalRetentionSegment_Global self]. [%#svec'0] Seq.length (view_Vec_LocalRetentionSegment_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_LocalRetentionSegment (return (x: t_Vec_LocalRetentionSegment_Global)) = any
+  [ return (result: t_Vec_LocalRetentionSegment_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_LocalRetentionSegment_Global result) = 0}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let elim_Some (_x: t_Option_i64) (return (f0'1: Int64.t)) = any
+  [ _k (f0'1: Int64.t) -> {Some f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let push_LocalRetentionSegment (self_: MutBorrow.t t_Vec_LocalRetentionSegment_Global) (v: t_LocalRetentionSegment)
+  (return (x: ())) = any
+  [ return (result: ()) ->
+  {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_LocalRetentionSegment_Global self_.final
+    = Seq.snoc (view_Vec_LocalRetentionSegment_Global self_.current) v}
+    (! return {result}) ]
+
+let deref_Vec_LocalRetentionSegment_Global (self_: t_Vec_LocalRetentionSegment_Global)
+  (return (x: Slice64.slice t_LocalRetentionSegment)) = any
+  [ return (result: Slice64.slice t_LocalRetentionSegment) ->
+  {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result = view_Vec_LocalRetentionSegment_Global self_}
+    (! return {result}) ]
+
+type t_Option_u64 = None'0 | Some'0 UInt64.t
+
+function local_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 72 0 78 8] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) (i: int) (debt: int) (sizing: bool) : int
+
+axiom local_retention_model_def:
+  forall segments: Seq.seq t_LocalRetentionSegment, limit: int, i: int, debt: int, sizing: bool [local_retention_model segments limit i debt sizing]. local_retention_model segments limit i debt sizing
+    = ([%#sremote_retention_model'5] if ge_log_Int i limit
+    \/ ge_log_Int i (Seq.length segments) \/ (Seq.get segments i).blocked then
+      i
+    else
+      if sizing /\ UInt64.t'int (Seq.get segments i).size <= debt then
+        local_retention_model segments limit (i + 1) (debt - UInt64.t'int (Seq.get segments i).size) true
+      else
+        if (Seq.get segments i).expired then local_retention_model segments limit (i + 1) debt false else i
+
+    )
+
+function local_retention_limit [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 36 0 36 73] (segments: Seq.seq t_LocalRetentionSegment) : int
+ = [%#sremote_retention_model'6] if gt_log_Int (Seq.length segments) 0
+  /\ UInt64.t'int (Seq.get segments (Seq.length segments - 1)).size = 0 then
+    Seq.length segments - 1
+  else
+    Seq.length segments
+
+
+let local_retention_prefix (segments: Slice64.slice t_LocalRetentionSegment) (size_debt: t_Option_u64)
+  (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:local_retention_prefix ensures] ([@stop_split] [@expl:local_retention_prefix ensures #0] [%#sremote_retention_model] UInt64.t'int result
+      = match size_debt with
+        | None'0 -> local_retention_model (Slice64.view segments) (local_retention_limit (Slice64.view segments)) 0 0 false
+        | Some'0 debt -> local_retention_model (Slice64.view segments) (local_retention_limit (Slice64.view segments)) 0 (UInt64.t'int debt) true
+        end)
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #1] [%#sremote_retention_model'0] UInt64.t'int result
+      <= Seq.length (Slice64.view segments))
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #2] [%#sremote_retention_model'1] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result -> not (Seq.get (Slice64.view segments) i).blocked)
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #3] [%#sremote_retention_model'2] gt_log_Int (Seq.length (Slice64.view segments)) 0
+        /\ UInt64.t'int (Seq.get (Slice64.view segments) (Seq.length (Slice64.view segments) - 1)).size = 0
+      -> UInt64.t'int result < Seq.length (Slice64.view segments))
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #4] [%#sremote_retention_model'3] UInt64.t'int result
+      < local_retention_limit (Slice64.view segments)
+    -> (Seq.get (Slice64.view segments) (UInt64.t'int result)).blocked
+    \/ not (Seq.get (Slice64.view segments) (UInt64.t'int result)).expired)}
+    (! return {result}) ]
+
+type tup2_Option_i64_Option_i64 = { f0'1: t_Option_i64; f1'1: t_Option_i64 }
+
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
+
+let retention_delete_target (last_offset: t_Option_i64) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:retention_delete_target ensures] [%#sdelete_target] match { f0'1 = last_offset;
+                                                                                    f1'1 = result } with
+      | {f0'1 = None; f1'1 = result'0} -> result'0 = None
+      | {f0'1 = Some last; f1'1 = None} -> Int64.to_int last = Int64.to_int const_MAX'0
+      | {f0'1 = Some last; f1'1 = Some target} -> Int64.to_int last < Int64.to_int const_MAX'0
+      /\ Int64.to_int target = Int64.to_int last + 1
+      end}
+    (! return {result}) ]
+
+type tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64 = {
+  f0'2: t_Option_i64;
+  f1'2: t_Vec_LocalRetentionSegment_Global;
+  f2'2: UInt64.t;
+  f3'2: t_Option_i64 }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/composition/covered_retention.rs" 62 0 67 21]
+  (remote: Slice64.slice tup2_i64_i64) (local: Slice64.slice tup4_i64_i64_u64_bool) (size_debt: t_Option_u64)
+  (active_size: UInt64.t) (return (x: tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64)) =
+{[@stop_split] [@expl:remote_coverage_bounds_local_retention requires] ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #0] [%#scovered_retention'36] Seq.length (Slice64.view local)
+    < UInt64.t'int const_MAX)
+  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #1] [%#scovered_retention'37] forall i: int. 0
+          <= i
+        /\ i < Seq.length (Slice64.view local)
+      -> 0 <= Int64.to_int (Seq.get (Slice64.view local) i).f0
+      /\ Int64.to_int (Seq.get (Slice64.view local) i).f0 <= Int64.to_int (Seq.get (Slice64.view local) i).f1)
+  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #2] [%#scovered_retention'38] forall i: int, j: int. 0
+          <= i
+        /\ i < j /\ j < Seq.length (Slice64.view local)
+      -> Int64.to_int (Seq.get (Slice64.view local) i).f1 < Int64.to_int (Seq.get (Slice64.view local) j).f0)
+  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #3] [%#scovered_retention'39] forall i: int, j: int. 0
+        <= i
+      /\ i < j /\ j < Seq.length (Slice64.view remote)
+    -> Int64.to_int (Seq.get (Slice64.view remote) i).f0'0 <= Int64.to_int (Seq.get (Slice64.view remote) j).f0'0)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = len_tup4_i64_i64_u64_bool [%#scovered_retention] {local} (fun (_x: UInt64.t) -> [ &_35 <- _x ] s1)
+    | s1 = any [ br0 -> {_35 = (0: UInt64.t)} (! bb4) | default -> -{_35 <> (0: UInt64.t)}- (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_37 <- [%#scovered_retention'0] (0: UInt64.t) ] s1
+    | s1 = [ &_38 <- Slice64.length local ] s2
+    | s2 = [ &_39 <- UInt64.lt _37 _38 ] s3
+    | s3 = {[@expl:index in bounds] [%#scovered_retention'1] _39} s4
+    | s4 = Slice64.get [%#scovered_retention'2] <tup4_i64_i64_u64_bool> {local} {_37}
+        (fun (r: tup4_i64_i64_u64_bool) -> [ &anchor <- r.f0 ] s5)
+    | s5 = bb6 ]
+  | bb4 = s0 [ s0 = [ &anchor <- [%#scovered_retention'3] (0: Int64.t) ] s1 | s1 = bb6 ]
+  | bb6 = s0
+    [ s0 = {[@expl:assertion] [%#scovered_retention'4] Int64.to_int anchor
+      = (if Seq.length (Slice64.view local) = 0 then 0 else Int64.to_int (Seq.get (Slice64.view local) 0).f0)}
+      s1
+    | s1 = remote_covered_through [%#scovered_retention'5] {remote} {anchor}
+        (fun (_x: t_Option_i64) -> [ &covered <- _x ] s2)
+    | s2 = new_LocalRetentionSegment [%#scovered_retention'6]
+        (fun (_x: t_Vec_LocalRetentionSegment_Global) -> [ &facts <- _x ] s3)
+    | s3 = [ &i <- [%#scovered_retention'7] (0: UInt64.t) ] s4
+    | s4 = bb9 ]
+  | bb9 = bb9invariant
+    [ bb9 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb9 ([%#scovered_retention'8] Seq.length (Slice64.view local)
+      - UInt64.t'int i)}
+      bb9invariant
+    | bb9invariant = {[@expl:loop invariant #0] [%#scovered_retention'11] UInt64.t'int i
+        <= Seq.length (Slice64.view local)
+      /\ Seq.length (view_Vec_LocalRetentionSegment_Global facts) = UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#scovered_retention'10] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (Seq.get (view_Vec_LocalRetentionSegment_Global facts) j).size = (Seq.get (Slice64.view local) j).f2
+        /\ (Seq.get (view_Vec_LocalRetentionSegment_Global facts) j).expired = (Seq.get (Slice64.view local) j).f3
+        /\ (Seq.get (view_Vec_LocalRetentionSegment_Global facts) j).blocked
+        = match covered with
+          | None -> true
+          | Some through'1 -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view local) j).f1) (Int64.to_int through'1)
+          end}
+      (! [ &variant_old_bb9 <- [%#scovered_retention'8] Seq.length (Slice64.view local) - UInt64.t'int i ] s0)
+      [ s0 = len_tup4_i64_i64_u64_bool [%#scovered_retention'9] {local} (fun (_x: UInt64.t) -> [ &_66 <- _x ] s1)
+      | s1 = [ &_64 <- UInt64.lt i _66 ] s2
+      | s2 = any [ br0 -> {_64 = false} (! bb23) | br1 -> {_64} (! bb12) ] ]
+      [ bb12 = any [ br0 -> {covered = None} (! bb13) | br1 (x0: Int64.t) -> {covered = Some x0} (! bb15) ]
+      | bb15 = s0
+        [ s0 = elim_Some {covered} (fun (r0: Int64.t) -> [ &through'0 <- r0 ] s1)
+        | s1 = [ &_79 <- i ] s2
+        | s2 = [ &_80 <- Slice64.length local ] s3
+        | s3 = [ &_81 <- UInt64.lt _79 _80 ] s4
+        | s4 = {[@expl:index in bounds] [%#scovered_retention'12] _81} s5
+        | s5 = Slice64.get [%#scovered_retention'13] <tup4_i64_i64_u64_bool> {local} {_79}
+            (fun (r: tup4_i64_i64_u64_bool) -> [ &_78 <- r.f1 ] s6)
+        | s6 = [ &_77 <- Int64.le _78 through'0 ] s7
+        | s7 = any [ br0 -> {_77 = false} (! bb13) | br1 -> {_77} (! bb17) ] ]
+      | bb17 = s0
+        [ s0 = elim_Some {covered} (fun (r0: Int64.t) -> [ &through <- r0 ] s1) | s1 = [ &_72 <- true ] s2 | s2 = bb19 ]
+      | bb13 = s0 [ s0 = [ &_72 <- false ] s1 | s1 = bb19 ]
+      | bb19 = s0
+        [ s0 = [ &_71 <- not _72 ] s1
+        | s1 = [ &_84 <- i ] s2
+        | s2 = [ &_85 <- Slice64.length local ] s3
+        | s3 = [ &_86 <- UInt64.lt _84 _85 ] s4
+        | s4 = {[@expl:index in bounds] [%#scovered_retention'14] _86} s5
+        | s5 = Slice64.get [%#scovered_retention'15] <tup4_i64_i64_u64_bool> {local} {_84}
+            (fun (r: tup4_i64_i64_u64_bool) -> [ &_83 <- r.f3 ] s6)
+        | s6 = [ &_88 <- i ] s7
+        | s7 = [ &_89 <- Slice64.length local ] s8
+        | s8 = [ &_90 <- UInt64.lt _88 _89 ] s9
+        | s9 = {[@expl:index in bounds] [%#scovered_retention'16] _90} s10
+        | s10 = Slice64.get [%#scovered_retention'17] <tup4_i64_i64_u64_bool> {local} {_88}
+            (fun (r: tup4_i64_i64_u64_bool) -> [ &_87 <- r.f2 ] s11)
+        | s11 = [ &_70 <- { blocked = _71; expired = _83; size = _87 } ] s12
+        | s12 = MutBorrow.borrow_mut <t_Vec_LocalRetentionSegment_Global> {facts}
+            (fun (_bor: MutBorrow.t t_Vec_LocalRetentionSegment_Global) ->
+              [ &_69 <- _bor ] [ &facts <- _bor.final ] s13)
+        | s13 = push_LocalRetentionSegment [%#scovered_retention'18] {_69} {_70} (fun (_x: ()) -> [ &_68 <- _x ] s14)
+        | s14 = UInt64.add [%#scovered_retention'20] {i} {[%#scovered_retention'19] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s15)
+        | s15 = bb9 ] ] ]
+  | bb23 = s0
+    [ s0 = [ &_94 <- { blocked = ([%#scovered_retention'21] true);
+                       expired = ([%#scovered_retention'22] false);
+                       size = active_size } ] s1
+    | s1 = MutBorrow.borrow_mut <t_Vec_LocalRetentionSegment_Global> {facts}
+        (fun (_bor: MutBorrow.t t_Vec_LocalRetentionSegment_Global) -> [ &_93 <- _bor ] [ &facts <- _bor.final ] s2)
+    | s2 = push_LocalRetentionSegment [%#scovered_retention'23] {_93} {_94} (fun (_x: ()) -> [ &_92 <- _x ] s3)
+    | s3 = [ &_100 <- facts ] s4
+    | s4 = deref_Vec_LocalRetentionSegment_Global [%#scovered_retention'24] {_100}
+        (fun (_x: Slice64.slice t_LocalRetentionSegment) -> [ &_98 <- _x ] s5)
+    | s5 = local_retention_prefix [%#scovered_retention'25] {_98} {size_debt}
+        (fun (_x: UInt64.t) -> [ &count <- _x ] s6)
+    | s6 = {[@expl:assertion] [%#scovered_retention'26] forall j: int. 0 <= j /\ j < UInt64.t'int count
+        -> not (Seq.get (view_Vec_LocalRetentionSegment_Global facts) j).blocked}
+      s7
+    | s7 = {[@expl:assertion] [%#scovered_retention'27] UInt64.t'int count <= Seq.length (Slice64.view local)} s8
+    | s8 = {[@expl:assertion] [%#scovered_retention'28] UInt64.t'int count < Seq.length (Slice64.view local)
+      -> (Seq.get (view_Vec_LocalRetentionSegment_Global facts) (UInt64.t'int count)).blocked
+      \/ not (Seq.get (view_Vec_LocalRetentionSegment_Global facts) (UInt64.t'int count)).expired}
+      s9
+    | s9 = {[@expl:assertion] [%#scovered_retention'29] match covered with
+        | None -> UInt64.t'int count = 0
+        | Some through'1 -> forall j: int. 0 <= j /\ j < UInt64.t'int count
+          -> Int64.to_int (Seq.get (Slice64.view local) j).f1 <= Int64.to_int through'1
+        end}
+      s10
+    | s10 = [ &_121 <- count = ([%#scovered_retention'30] (0: UInt64.t)) ] s11
+    | s11 = any [ br0 -> {_121 = false} (! bb28) | br1 -> {_121} (! bb27) ] ]
+  | bb27 = s0 [ s0 = [ &last <- None ] s1 | s1 = bb30 ]
+  | bb28 = s0
+    [ s0 = UInt64.sub [%#scovered_retention'32] {count} {[%#scovered_retention'31] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_124 <- _x ] s1)
+    | s1 = [ &_126 <- Slice64.length local ] s2
+    | s2 = [ &_127 <- UInt64.lt _124 _126 ] s3
+    | s3 = {[@expl:index in bounds] [%#scovered_retention'33] _127} s4
+    | s4 = Slice64.get [%#scovered_retention'34] <tup4_i64_i64_u64_bool> {local} {_124}
+        (fun (r: tup4_i64_i64_u64_bool) -> [ &_123 <- r.f1 ] s5)
+    | s5 = [ &last <- Some _123 ] s6
+    | s6 = bb30 ]
+  | bb30 = s0
+    [ s0 = retention_delete_target [%#scovered_retention'35] {last} (fun (_x: t_Option_i64) -> [ &target <- _x ] s1)
+    | s1 = [ &_ret <- { f0'2 = covered; f1'2 = facts; f2'2 = count; f3'2 = target } ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64 = Any.any_l ()
+  | & remote: Slice64.slice tup2_i64_i64 = remote
+  | & local: Slice64.slice tup4_i64_i64_u64_bool = local
+  | & size_debt: t_Option_u64 = size_debt
+  | & active_size: UInt64.t = active_size
+  | & anchor: Int64.t = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & covered: t_Option_i64 = Any.any_l ()
+  | & facts: t_Vec_LocalRetentionSegment_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _66: UInt64.t = Any.any_l ()
+  | & _68: () = Any.any_l ()
+  | & _69: MutBorrow.t t_Vec_LocalRetentionSegment_Global = Any.any_l ()
+  | & _70: t_LocalRetentionSegment = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & _72: bool = Any.any_l ()
+  | & through: Int64.t = Any.any_l ()
+  | & through'0: Int64.t = Any.any_l ()
+  | & _77: bool = Any.any_l ()
+  | & _78: Int64.t = Any.any_l ()
+  | & _79: UInt64.t = Any.any_l ()
+  | & _80: UInt64.t = Any.any_l ()
+  | & _81: bool = Any.any_l ()
+  | & _83: bool = Any.any_l ()
+  | & _84: UInt64.t = Any.any_l ()
+  | & _85: UInt64.t = Any.any_l ()
+  | & _86: bool = Any.any_l ()
+  | & _87: UInt64.t = Any.any_l ()
+  | & _88: UInt64.t = Any.any_l ()
+  | & _89: UInt64.t = Any.any_l ()
+  | & _90: bool = Any.any_l ()
+  | & _92: () = Any.any_l ()
+  | & _93: MutBorrow.t t_Vec_LocalRetentionSegment_Global = Any.any_l ()
+  | & _94: t_LocalRetentionSegment = Any.any_l ()
+  | & count: UInt64.t = Any.any_l ()
+  | & _98: Slice64.slice t_LocalRetentionSegment = Any.any_l ()
+  | & _100: t_Vec_LocalRetentionSegment_Global = Any.any_l ()
+  | & last: t_Option_i64 = Any.any_l ()
+  | & _121: bool = Any.any_l ()
+  | & _123: Int64.t = Any.any_l ()
+  | & _124: UInt64.t = Any.any_l ()
+  | & _126: UInt64.t = Any.any_l ()
+  | & _127: bool = Any.any_l ()
+  | & target: t_Option_i64 = Any.any_l ()
+  | & variant_old_bb9: int = Any.any_l () ])
+  [ return (result: tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64) ->
+  {[@stop_split] [@expl:remote_coverage_bounds_local_retention ensures] ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #0] [%#scovered_retention'40] let anchor = if Seq.length (Slice64.view local)
+      = 0 then
+        0
+      else
+        Int64.to_int (Seq.get (Slice64.view local) 0).f0
+       in match result.f0'2 with
+        | None -> not remote_ranges_valid (Slice64.view remote)
+        \/ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view remote)
+          -> anchor < Int64.to_int (Seq.get (Slice64.view remote) j).f0'0
+          \/ Int64.to_int (Seq.get (Slice64.view remote) j).f1'0 < anchor)
+        | Some through -> remote_ranges_valid (Slice64.view remote)
+        /\ anchor <= Int64.to_int through
+        /\ (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view remote) /\ through = (Seq.get (Slice64.view remote) j).f1'0)
+        /\ (forall offset: int. anchor <= offset /\ offset <= Int64.to_int through
+            -> remote_covers_offset (Slice64.view remote) offset)
+        /\ (forall j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view remote)
+            /\ Int64.to_int (Seq.get (Slice64.view remote) j).f0'0 <= Int64.to_int through + 1
+          -> Int64.to_int (Seq.get (Slice64.view remote) j).f1'0 <= Int64.to_int through)
+        end)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #1] [%#scovered_retention'41] Seq.length (view_Vec_LocalRetentionSegment_Global result.f1'2)
+        = Seq.length (Slice64.view local) + 1
+      /\ UInt64.t'int result.f2'2 <= Seq.length (Slice64.view local))
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #2] [%#scovered_retention'42] forall i: int. 0
+            <= i
+          /\ i < Seq.length (Slice64.view local)
+        -> (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).size = (Seq.get (Slice64.view local) i).f2
+        /\ (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).expired = (Seq.get (Slice64.view local) i).f3
+        /\ (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).blocked
+        = match result.f0'2 with
+          | None -> true
+          | Some through -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view local) i).f1) (Int64.to_int through)
+          end)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #3] [%#scovered_retention'43] (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).blocked
+      /\ not (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).expired
+      /\ (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).size
+      = active_size)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #4] [%#scovered_retention'44] UInt64.t'int result.f2'2
+      = match size_debt with
+        | None'0 -> local_retention_model (view_Vec_LocalRetentionSegment_Global result.f1'2) (local_retention_limit (view_Vec_LocalRetentionSegment_Global result.f1'2)) 0 0 false
+        | Some'0 debt -> local_retention_model (view_Vec_LocalRetentionSegment_Global result.f1'2) (local_retention_limit (view_Vec_LocalRetentionSegment_Global result.f1'2)) 0 (UInt64.t'int debt) true
+        end)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #5] [%#scovered_retention'45] forall n: int. 0
+            <= n
+          /\ n <= Seq.length (Slice64.view local)
+          /\ (forall i: int. 0 <= i /\ i < n
+            -> not (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).blocked
+            /\ (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).expired)
+        -> n <= UInt64.t'int result.f2'2)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #6] [%#scovered_retention'46] result.f0'2
+        = None -> UInt64.t'int result.f2'2 = 0 /\ result.f3'2 = None)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #7] [%#scovered_retention'47] match result.f3'2 with
+        | None -> UInt64.t'int result.f2'2 = 0
+        \/ Int64.to_int (Seq.get (Slice64.view local) (UInt64.t'int result.f2'2 - 1)).f1 = Int64.to_int const_MAX'0
+        | Some target -> gt_log_Int (UInt64.t'int result.f2'2) 0
+        /\ Int64.to_int (Seq.get (Slice64.view local) (UInt64.t'int result.f2'2 - 1)).f1 < Int64.to_int const_MAX'0
+        /\ Int64.to_int target = Int64.to_int (Seq.get (Slice64.view local) (UInt64.t'int result.f2'2 - 1)).f1 + 1
+        /\ Int64.to_int (Seq.get (Slice64.view local) 0).f0 < Int64.to_int target
+        /\ (exists through: Int64.t. result.f0'2 = Some through /\ Int64.to_int target <= Int64.to_int through + 1)
+        /\ (forall offset: int. Int64.to_int (Seq.get (Slice64.view local) 0).f0 <= offset
+            /\ offset < Int64.to_int target -> remote_covers_offset (Slice64.view remote) offset)
+        end)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #8] [%#scovered_retention'48] forall i: int, offset: int. 0
+          <= i
+        /\ i < UInt64.t'int result.f2'2
+        /\ Int64.to_int (Seq.get (Slice64.view local) i).f0 <= offset
+        /\ offset <= Int64.to_int (Seq.get (Slice64.view local) i).f1
+      -> remote_covers_offset (Slice64.view remote) offset)}
+    (! return {result}) ]

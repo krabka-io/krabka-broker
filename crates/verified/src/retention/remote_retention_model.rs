@@ -107,6 +107,8 @@ pub fn local_retention_model(
 ///
 /// The result equals `local_retention_model` from the oldest segment,
 /// limited by `local_retention_limit`. That fold states the Kafka rule.
+/// Before that limit, the first kept segment is blocked or not expired.
+/// This independently rules out a selector/reference pair that deletes nothing.
 #[ensures(result@ == match size_debt {
     None => local_retention_model(
         segments@, local_retention_limit(segments@), 0, 0, false),
@@ -117,6 +119,8 @@ pub fn local_retention_model(
 #[ensures(forall<i: Int> 0 <= i && i < result@ ==> !segments@[i].blocked)]
 #[ensures(segments@.len() > 0 && segments@[segments@.len() - 1].size@ == 0
     ==> result@ < segments@.len())]
+#[ensures(result@ < local_retention_limit(segments@)
+    ==> segments@[result@].blocked || !segments@[result@].expired)]
 #[must_use]
 pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Option<u64>) -> usize {
     let limit = match segments.len().checked_sub(1) {

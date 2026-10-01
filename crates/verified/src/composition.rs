@@ -223,3 +223,6 @@ use time_range::constructed_time_range_preserves_first;
 
 mod stable_time_range;
 use stable_time_range::stable_time_range_preserves_first;
+
+mod covered_retention;
+use covered_retention::remote_coverage_bounds_local_retention;

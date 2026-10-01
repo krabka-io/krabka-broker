@@ -8,6 +8,14 @@ pub fn remote_ranges_valid(ranges: Seq<(i64, i64)>) -> bool {
     pearlite! { forall<i: Int> 0 <= i && i < ranges.len() ==> ranges[i].0@ <= ranges[i].1@ }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn remote_covers_offset(ranges: Seq<(i64, i64)>, offset: Int) -> bool {
+    pearlite! { exists<i: Int> 0 <= i && i < ranges.len() && ranges[i].0@ <= offset && offset <= ranges[i].1@ }
+}
+
 /// Find the greatest contiguous inclusive coverage rooted at `local_start`.
 /// Sorted ranges may overlap or precede the anchor; obsolete disconnected
 /// prefixes cannot suppress a later anchored component. Reject malformed ranges
@@ -21,7 +29,7 @@ pub fn remote_ranges_valid(ranges: Seq<(i64, i64)>) -> bool {
     Some(through) => remote_ranges_valid(ranges@) && local_start@ <= through@
         && (exists<i: Int> 0 <= i && i < ranges@.len() && through == ranges@[i].1)
         && (forall<offset: Int> local_start@ <= offset && offset <= through@
-            ==> exists<i: Int> 0 <= i && i < ranges@.len() && ranges@[i].0@ <= offset && offset <= ranges@[i].1@)
+            ==> remote_covers_offset(ranges@, offset))
         && forall<i: Int> 0 <= i && i < ranges@.len() && ranges@[i].0@ <= through@ + 1
             ==> ranges@[i].1@ <= through@,
 })]
