@@ -2320,3 +2320,62 @@ Remote success remains separate. The parent delayed-callback PR's
 failed in the inherited completion selector and completed-window composition.
 This rotation proof does not repair those failures; its CI qualification must
 be assessed independently of the local passes above.
+
+## Completion source coverage as a reusable proof interface
+
+Three successive proof jobs leave the completion selector and completed-window
+composition unproved despite successful setup and local replay with the same
+pinned image. The isolated failed tasks concern old-source coverage: a known
+identity window must contain every old origin, and omitting an eligible old
+origin must leave five selected slots. These are existing safety guarantees,
+not newly discovered broker behavior.
+
+The selector now names source membership with a closed logical predicate whose
+proved contract is exactly the original existential slot relation. Its generated
+axiom has an explicit membership term for each source. The completed-window
+consumer uses the same predicate when transferring coverage from offset vectors
+to typed rows. Expanding the predicate reproduces both original contracts
+byte-for-byte; preconditions, runtime bodies and the proof budgets are unchanged.
+A separate identity-window lemma supplies the existential witnesses before the
+selector returns its unchanged window. It isolates this reasoning from mutable
+vector state and epoch branches. These two auxiliary interfaces support the
+existing cross-module safety laws; they are not new end-to-end broker claims.
+
+Forced host searches reduce the largest recorded selector attempt from 1.1
+seconds to about 0.14, and the completed-window attempt from 0.599 to about
+0.15. Removing the identity-window lemma restores the 1.1-second selector
+attempt, so membership alone does not give both sessions the same headroom.
+
+A scoped contract control removes the selector's old-source coverage guarantee.
+The weakened selector still proves and all four native completion checks pass,
+but the composed consumer proves only 49 of 55 obligations. The original
+selector is then restored byte-for-byte. This tests the consumer's dependence
+on physical source coverage, independently of epoch admission and retry shape.
+
+Final local qualification passes pinned forced generation of all four affected
+sessions, ordinary cache-free generation and cache-free saved-ledger replay of
+all 575 sessions with four CPUs. All 372 native verified-crate tests, relevant
+Bazel tests and doc tests, strict verified-crate Clippy, formatting and the four
+proof/mutation configuration checks pass. Updated artifacts include the
+completed-window consumers' imported contracts and source locations in the
+modified coverage module; 1,136 unrelated parent artifacts remain byte-identical.
+All 295 authored verified Rust files remain below 300 lines (maximum 288).
+The repaired source needs fresh remote qualification; earlier failed jobs do
+not establish success for this revision.
+
+The repair is propagated through the delayed-callback and rotation-marker
+layers. Combined qualification passes cache-free pinned generation and
+saved-ledger replay of all 577 sessions with four CPUs, all 377 native tests,
+relevant Bazel tests and doc tests, strict verified-crate Clippy, formatting and
+the four proof/mutation configuration checks. All 1,154 merged artifacts are
+preserved byte-for-byte; all 299 authored verified Rust files remain below 300
+lines (maximum 288).
+
+The repaired handoff revision's
+[proof job](https://github.com/krabka-io/krabka-broker/actions/runs/36922915302/job/110573097477)
+passes all 575 sessions. The delayed-callback revision's
+[new proof job](https://github.com/krabka-io/krabka-broker/actions/runs/36924925346/job/110579793483)
+passes the repaired completion sessions but leaves the separate inherited
+elapsed-credit conservation theorem at 66 of 67 obligations. This remaining
+failure is tracked separately; local combined qualification does not establish
+remote success for the upper layers.

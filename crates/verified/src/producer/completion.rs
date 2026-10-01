@@ -11,6 +11,16 @@ pub fn completion_offset(ends: Seq<i64>, incoming: i64, index: Int) -> Int {
     pearlite! { if index == ends.len() { incoming@ } else { ends[index]@ } }
 }
 
+/// Name source membership so coverage laws have a term for each old origin.
+// cargo-mutants: #[cfg(creusot)] logical predicate; not compiled outside Creusot.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+#[ensures(result == (exists<j: Int> 0 <= j && j < selected.len() && selected[j]@ == source))]
+pub fn completion_source_selected(selected: Seq<usize>, source: Int) -> bool {
+    pearlite! { exists<j: Int> 0 <= j && j < selected.len() && selected[j]@ == source }
+}
+
 /// Merge a deferred data completion into the current epoch's retry window.
 /// The returned indices name old batches, or `ends.len()` for the incoming
 /// batch. Equal physical offsets keep the existing metadata. Earlier
@@ -34,7 +44,7 @@ pub fn completion_offset(ends: Seq<i64>, incoming: i64, index: Int) -> Int {
         < completion_offset(ends@, incoming, result.1@[j]@))]
 #[ensures(forall<i: Int> 0 <= i && i < ends@.len()
     && (match current { Some(value) => epoch@ <= value@, None => false })
-    && !(exists<j: Int> 0 <= j && j < result.1@.len() && result.1@[j]@ == i) ==>
+    && !completion_source_selected(result.1@, i) ==>
         result.1@.len() == 5 && (forall<j: Int> 0 <= j && j < result.1@.len() ==>
             ends@[i]@ < completion_offset(ends@, incoming, result.1@[j]@)))]
 #[ensures(result.0 && !(exists<j: Int> 0 <= j && j < result.1@.len()
@@ -96,6 +106,8 @@ pub fn producer_completion_window(
     if !insert {
         proof_assert!(selected@.len() == ends@.len()
             && (forall<j: Int> 0 <= j && j < selected@.len() ==> selected@[j]@ == j));
+        #[cfg(creusot)]
+        proof_assert!(coverage::lemma_identity_window(selected@));
         proof_assert!(accepted ==>
             position@ < selected@.len() && selected@[position@]@ == position@ && ends@[position@] == incoming);
         return (accepted, selected);
