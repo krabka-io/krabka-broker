@@ -185,6 +185,9 @@ use epoch_handoff::epoch_handoff_distinguishes_identity_and_data_retry;
 mod epoch_delayed;
 use epoch_delayed::epoch_handoff_survives_delayed_completions;
 
+mod rotation_marker;
+use rotation_marker::rotation_marker_bounds_identity_retry;
+
 mod truncated_producer;
 use truncated_producer::truncated_replay_bounds_first_retry;
 

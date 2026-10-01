@@ -2266,3 +2266,57 @@ GitHub refuses a job retry while the containing workflow is active. A fresh
 archive of that exact parent commit passes all 573 sessions using the unchanged
 CI image entrypoint and a four-CPU limit. The remote failure is not reproduced
 by that local invocation; these results do not establish remote CI success.
+
+## Rotation marker and initialization retry cutoff
+
+Allocating a fresh producer ID does not fence the old partition entry. The
+existing native counterexample still returns a duplicate for the old identity
+when its entry has not changed. Normal verified completion reserves epoch
+`i16::MAX` for the old ID's final marker and rotates the client from epoch
+`i16::MAX - 1` to the fresh ID at epoch zero.
+
+`rotation_marker_bounds_identity_retry` composes two actual identity transitions,
+the initialization identity classifier and the partition data classifier. With
+the marker and coordinator completion installed, every data request below the
+marker epoch is fenced regardless of retained sequence aliases. The exhausted
+old identity can still retry initialization, and the fresh identity can append
+sequence zero under either released or trunk empty-log rules. After the fresh
+ID's first normal epoch bump, its epoch-zero identity becomes the initialization
+retry and the exhausted old identity is fenced: the coordinator records a
+single last epoch, so the rotation retry does not survive subsequent bumps.
+
+The marker projection follows `prepare_completion_identities_with_fresh`;
+the previous ID follows `apply_completion`; partition lookup follows
+`check_retained` and marker mirroring. These host operations are not proved by
+the theorem. Allocation must supply distinct nonnegative IDs, lookup must find
+no fresh-ID entry, and marker installation and coordinator last/previous identity
+projection must be faithful. Recovery rotation, full initialization admission,
+entry expiry and physical persistence remain outside this law.
+
+Two forced, cache-free depth-six contract controls leave their weakened helpers
+proved but break the new consumer: removing the rotation transition guarantee
+leaves 3 of 9 goals proved, and removing the initialization retry and fencing
+laws together leaves 5 of 8 proved. Native checks still pass with the weakened
+contracts. Removing only the retry law does not break the consumer: the other
+exact outcome laws and the enum's exhaustiveness imply it here. This passing
+control is recorded as redundancy, not counted as evidence of necessity.
+
+A separate native mutation disables the production data classifier's
+lower-epoch fence; both new checks fail. The original kernels and contracts
+are restored byte-for-byte. Boundary and property checks cover distinct IDs
+including zero and `i64::MAX`, arbitrary sequence pairs, retained holes and
+aliases, negative through exhausted request epochs, and both empty-log rules.
+
+Local qualification passes pinned generation and cache-free saved-ledger
+replay of all 575 sessions with a four-CPU limit, all 377 native verified-crate
+tests, relevant Bazel checks, strict workspace Clippy, repository formatting
+and the four proof/mutation configuration checks. The new session contains 11
+proved obligations; all 1,148 parent artifacts remain byte-identical. All 299
+authored verified Rust sources stay below 300 lines (maximum 288). No production
+kernel or existing contract changes in this layer.
+
+Remote success remains separate. The parent delayed-callback PR's
+[proof job](https://github.com/krabka-io/krabka-broker/actions/runs/36905211202/job/110513916215)
+failed in the inherited completion selector and completed-window composition.
+This rotation proof does not repair those failures; its CI qualification must
+be assessed independently of the local passes above.
