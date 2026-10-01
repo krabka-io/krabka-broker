@@ -33,31 +33,32 @@ let%span scovered_retention'20 = "/workspace/crates/verified/src/composition/cov
 let%span scovered_retention'21 = "/workspace/crates/verified/src/composition/covered_retention.rs" 90 17 90 21
 let%span scovered_retention'22 = "/workspace/crates/verified/src/composition/covered_retention.rs" 91 17 91 22
 let%span scovered_retention'23 = "/workspace/crates/verified/src/composition/covered_retention.rs" 89 4 93 6
-let%span scovered_retention'24 = "/workspace/crates/verified/src/composition/covered_retention.rs" 94 39 94 45
-let%span scovered_retention'25 = "/workspace/crates/verified/src/composition/covered_retention.rs" 94 16 94 57
-let%span scovered_retention'26 = "/workspace/crates/verified/src/composition/covered_retention.rs" 95 18 95 76
-let%span scovered_retention'27 = "/workspace/crates/verified/src/composition/covered_retention.rs" 96 18 96 40
-let%span scovered_retention'28 = "/workspace/crates/verified/src/composition/covered_retention.rs" 97 18 97 93
-let%span scovered_retention'29 = "/workspace/crates/verified/src/composition/covered_retention.rs" 98 18 101 5
-let%span scovered_retention'30 = "/workspace/crates/verified/src/composition/covered_retention.rs" 102 27 102 28
-let%span scovered_retention'31 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 27 105 28
-let%span scovered_retention'32 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 19 105 28
-let%span scovered_retention'33 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 13 105 29
-let%span scovered_retention'34 = "/workspace/crates/verified/src/composition/covered_retention.rs" 105 13 105 31
-let%span scovered_retention'35 = "/workspace/crates/verified/src/composition/covered_retention.rs" 107 17 107 46
-let%span scovered_retention'36 = "/workspace/crates/verified/src/composition/covered_retention.rs" 20 11 20 37
-let%span scovered_retention'37 = "/workspace/crates/verified/src/composition/covered_retention.rs" 21 11 21 106
-let%span scovered_retention'38 = "/workspace/crates/verified/src/composition/covered_retention.rs" 22 11 22 101
-let%span scovered_retention'39 = "/workspace/crates/verified/src/composition/covered_retention.rs" 23 11 23 105
-let%span scovered_retention'40 = "/workspace/crates/verified/src/composition/covered_retention.rs" 25 4 25 66
-let%span scovered_retention'41 = "/workspace/crates/verified/src/composition/covered_retention.rs" 37 10 37 74
-let%span scovered_retention'42 = "/workspace/crates/verified/src/composition/covered_retention.rs" 38 10 40 108
-let%span scovered_retention'43 = "/workspace/crates/verified/src/composition/covered_retention.rs" 41 10 42 50
-let%span scovered_retention'44 = "/workspace/crates/verified/src/composition/covered_retention.rs" 43 10 46 1
-let%span scovered_retention'45 = "/workspace/crates/verified/src/composition/covered_retention.rs" 47 10 49 22
-let%span scovered_retention'46 = "/workspace/crates/verified/src/composition/covered_retention.rs" 50 10 50 65
-let%span scovered_retention'47 = "/workspace/crates/verified/src/composition/covered_retention.rs" 51 10 58 1
-let%span scovered_retention'48 = "/workspace/crates/verified/src/composition/covered_retention.rs" 59 10 61 45
+let%span scovered_retention'24 = "/workspace/crates/verified/src/composition/covered_retention.rs" 94 18 97 5
+let%span scovered_retention'25 = "/workspace/crates/verified/src/composition/covered_retention.rs" 98 39 98 45
+let%span scovered_retention'26 = "/workspace/crates/verified/src/composition/covered_retention.rs" 98 16 98 57
+let%span scovered_retention'27 = "/workspace/crates/verified/src/composition/covered_retention.rs" 99 18 99 76
+let%span scovered_retention'28 = "/workspace/crates/verified/src/composition/covered_retention.rs" 100 18 100 40
+let%span scovered_retention'29 = "/workspace/crates/verified/src/composition/covered_retention.rs" 101 18 101 93
+let%span scovered_retention'30 = "/workspace/crates/verified/src/composition/covered_retention.rs" 102 18 105 5
+let%span scovered_retention'31 = "/workspace/crates/verified/src/composition/covered_retention.rs" 106 27 106 28
+let%span scovered_retention'32 = "/workspace/crates/verified/src/composition/covered_retention.rs" 109 27 109 28
+let%span scovered_retention'33 = "/workspace/crates/verified/src/composition/covered_retention.rs" 109 19 109 28
+let%span scovered_retention'34 = "/workspace/crates/verified/src/composition/covered_retention.rs" 109 13 109 29
+let%span scovered_retention'35 = "/workspace/crates/verified/src/composition/covered_retention.rs" 109 13 109 31
+let%span scovered_retention'36 = "/workspace/crates/verified/src/composition/covered_retention.rs" 111 17 111 46
+let%span scovered_retention'37 = "/workspace/crates/verified/src/composition/covered_retention.rs" 20 11 20 37
+let%span scovered_retention'38 = "/workspace/crates/verified/src/composition/covered_retention.rs" 21 11 21 106
+let%span scovered_retention'39 = "/workspace/crates/verified/src/composition/covered_retention.rs" 22 11 22 101
+let%span scovered_retention'40 = "/workspace/crates/verified/src/composition/covered_retention.rs" 23 11 23 105
+let%span scovered_retention'41 = "/workspace/crates/verified/src/composition/covered_retention.rs" 25 4 25 66
+let%span scovered_retention'42 = "/workspace/crates/verified/src/composition/covered_retention.rs" 37 10 37 74
+let%span scovered_retention'43 = "/workspace/crates/verified/src/composition/covered_retention.rs" 38 10 40 108
+let%span scovered_retention'44 = "/workspace/crates/verified/src/composition/covered_retention.rs" 41 10 42 50
+let%span scovered_retention'45 = "/workspace/crates/verified/src/composition/covered_retention.rs" 43 10 46 1
+let%span scovered_retention'46 = "/workspace/crates/verified/src/composition/covered_retention.rs" 47 10 49 22
+let%span scovered_retention'47 = "/workspace/crates/verified/src/composition/covered_retention.rs" 50 10 50 65
+let%span scovered_retention'48 = "/workspace/crates/verified/src/composition/covered_retention.rs" 51 10 58 1
+let%span scovered_retention'49 = "/workspace/crates/verified/src/composition/covered_retention.rs" 59 10 61 45
 let%span scoverage = "/workspace/crates/verified/src/retention/coverage.rs" 23 11 24 38
 let%span scoverage'0 = "/workspace/crates/verified/src/retention/coverage.rs" 25 10 35 1
 let%span scoverage'1 = "/workspace/crates/verified/src/retention/coverage.rs" 8 16 8 90
@@ -249,18 +250,18 @@ meta "select_lsinst" "all"
 let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/composition/covered_retention.rs" 62 0 67 21]
   (remote: Slice64.slice tup2_i64_i64) (local: Slice64.slice tup4_i64_i64_u64_bool) (size_debt: t_Option_u64)
   (active_size: UInt64.t) (return (x: tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64)) =
-{[@stop_split] [@expl:remote_coverage_bounds_local_retention requires] ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #0] [%#scovered_retention'36] Seq.length (Slice64.view local)
+{[@stop_split] [@expl:remote_coverage_bounds_local_retention requires] ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #0] [%#scovered_retention'37] Seq.length (Slice64.view local)
     < UInt64.t'int const_MAX)
-  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #1] [%#scovered_retention'37] forall i: int. 0
+  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #1] [%#scovered_retention'38] forall i: int. 0
           <= i
         /\ i < Seq.length (Slice64.view local)
       -> 0 <= Int64.to_int (Seq.get (Slice64.view local) i).f0
       /\ Int64.to_int (Seq.get (Slice64.view local) i).f0 <= Int64.to_int (Seq.get (Slice64.view local) i).f1)
-  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #2] [%#scovered_retention'38] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #2] [%#scovered_retention'39] forall i: int, j: int. 0
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view local)
       -> Int64.to_int (Seq.get (Slice64.view local) i).f1 < Int64.to_int (Seq.get (Slice64.view local) j).f0)
-  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #3] [%#scovered_retention'39] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention requires #3] [%#scovered_retention'40] forall i: int, j: int. 0
         <= i
       /\ i < j /\ j < Seq.length (Slice64.view remote)
     -> Int64.to_int (Seq.get (Slice64.view remote) i).f0'0 <= Int64.to_int (Seq.get (Slice64.view remote) j).f0'0)}
@@ -350,40 +351,47 @@ let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/com
     | s1 = MutBorrow.borrow_mut <t_Vec_LocalRetentionSegment_Global> {facts}
         (fun (_bor: MutBorrow.t t_Vec_LocalRetentionSegment_Global) -> [ &_93 <- _bor ] [ &facts <- _bor.final ] s2)
     | s2 = push_LocalRetentionSegment [%#scovered_retention'23] {_93} {_94} (fun (_x: ()) -> [ &_92 <- _x ] s3)
-    | s3 = [ &_100 <- facts ] s4
-    | s4 = deref_Vec_LocalRetentionSegment_Global [%#scovered_retention'24] {_100}
-        (fun (_x: Slice64.slice t_LocalRetentionSegment) -> [ &_98 <- _x ] s5)
-    | s5 = local_retention_prefix [%#scovered_retention'25] {_98} {size_debt}
-        (fun (_x: UInt64.t) -> [ &count <- _x ] s6)
-    | s6 = {[@expl:assertion] [%#scovered_retention'26] forall j: int. 0 <= j /\ j < UInt64.t'int count
+    | s3 = {[@expl:assertion] [%#scovered_retention'24] forall j: int. 0 <= j /\ j < Seq.length (Slice64.view local)
+        -> (Seq.get (view_Vec_LocalRetentionSegment_Global facts) j).blocked
+        = match covered with
+          | None -> true
+          | Some through'1 -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view local) j).f1) (Int64.to_int through'1)
+          end}
+      s4
+    | s4 = [ &_105 <- facts ] s5
+    | s5 = deref_Vec_LocalRetentionSegment_Global [%#scovered_retention'25] {_105}
+        (fun (_x: Slice64.slice t_LocalRetentionSegment) -> [ &_103 <- _x ] s6)
+    | s6 = local_retention_prefix [%#scovered_retention'26] {_103} {size_debt}
+        (fun (_x: UInt64.t) -> [ &count <- _x ] s7)
+    | s7 = {[@expl:assertion] [%#scovered_retention'27] forall j: int. 0 <= j /\ j < UInt64.t'int count
         -> not (Seq.get (view_Vec_LocalRetentionSegment_Global facts) j).blocked}
-      s7
-    | s7 = {[@expl:assertion] [%#scovered_retention'27] UInt64.t'int count <= Seq.length (Slice64.view local)} s8
-    | s8 = {[@expl:assertion] [%#scovered_retention'28] UInt64.t'int count < Seq.length (Slice64.view local)
+      s8
+    | s8 = {[@expl:assertion] [%#scovered_retention'28] UInt64.t'int count <= Seq.length (Slice64.view local)} s9
+    | s9 = {[@expl:assertion] [%#scovered_retention'29] UInt64.t'int count < Seq.length (Slice64.view local)
       -> (Seq.get (view_Vec_LocalRetentionSegment_Global facts) (UInt64.t'int count)).blocked
       \/ not (Seq.get (view_Vec_LocalRetentionSegment_Global facts) (UInt64.t'int count)).expired}
-      s9
-    | s9 = {[@expl:assertion] [%#scovered_retention'29] match covered with
+      s10
+    | s10 = {[@expl:assertion] [%#scovered_retention'30] match covered with
         | None -> UInt64.t'int count = 0
         | Some through'1 -> forall j: int. 0 <= j /\ j < UInt64.t'int count
           -> Int64.to_int (Seq.get (Slice64.view local) j).f1 <= Int64.to_int through'1
         end}
-      s10
-    | s10 = [ &_121 <- count = ([%#scovered_retention'30] (0: UInt64.t)) ] s11
-    | s11 = any [ br0 -> {_121 = false} (! bb28) | br1 -> {_121} (! bb27) ] ]
+      s11
+    | s11 = [ &_126 <- count = ([%#scovered_retention'31] (0: UInt64.t)) ] s12
+    | s12 = any [ br0 -> {_126 = false} (! bb28) | br1 -> {_126} (! bb27) ] ]
   | bb27 = s0 [ s0 = [ &last <- None ] s1 | s1 = bb30 ]
   | bb28 = s0
-    [ s0 = UInt64.sub [%#scovered_retention'32] {count} {[%#scovered_retention'31] (1: UInt64.t)}
-        (fun (_x: UInt64.t) -> [ &_124 <- _x ] s1)
-    | s1 = [ &_126 <- Slice64.length local ] s2
-    | s2 = [ &_127 <- UInt64.lt _124 _126 ] s3
-    | s3 = {[@expl:index in bounds] [%#scovered_retention'33] _127} s4
-    | s4 = Slice64.get [%#scovered_retention'34] <tup4_i64_i64_u64_bool> {local} {_124}
-        (fun (r: tup4_i64_i64_u64_bool) -> [ &_123 <- r.f1 ] s5)
-    | s5 = [ &last <- Some _123 ] s6
+    [ s0 = UInt64.sub [%#scovered_retention'33] {count} {[%#scovered_retention'32] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_129 <- _x ] s1)
+    | s1 = [ &_131 <- Slice64.length local ] s2
+    | s2 = [ &_132 <- UInt64.lt _129 _131 ] s3
+    | s3 = {[@expl:index in bounds] [%#scovered_retention'34] _132} s4
+    | s4 = Slice64.get [%#scovered_retention'35] <tup4_i64_i64_u64_bool> {local} {_129}
+        (fun (r: tup4_i64_i64_u64_bool) -> [ &_128 <- r.f1 ] s5)
+    | s5 = [ &last <- Some _128 ] s6
     | s6 = bb30 ]
   | bb30 = s0
-    [ s0 = retention_delete_target [%#scovered_retention'35] {last} (fun (_x: t_Option_i64) -> [ &target <- _x ] s1)
+    [ s0 = retention_delete_target [%#scovered_retention'36] {last} (fun (_x: t_Option_i64) -> [ &target <- _x ] s1)
     | s1 = [ &_ret <- { f0'2 = covered; f1'2 = facts; f2'2 = count; f3'2 = target } ] s2
     | s2 = return {_ret} ] ]
   [ & _ret: tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64 = Any.any_l ()
@@ -425,18 +433,18 @@ let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/com
   | & _93: MutBorrow.t t_Vec_LocalRetentionSegment_Global = Any.any_l ()
   | & _94: t_LocalRetentionSegment = Any.any_l ()
   | & count: UInt64.t = Any.any_l ()
-  | & _98: Slice64.slice t_LocalRetentionSegment = Any.any_l ()
-  | & _100: t_Vec_LocalRetentionSegment_Global = Any.any_l ()
+  | & _103: Slice64.slice t_LocalRetentionSegment = Any.any_l ()
+  | & _105: t_Vec_LocalRetentionSegment_Global = Any.any_l ()
   | & last: t_Option_i64 = Any.any_l ()
-  | & _121: bool = Any.any_l ()
-  | & _123: Int64.t = Any.any_l ()
-  | & _124: UInt64.t = Any.any_l ()
-  | & _126: UInt64.t = Any.any_l ()
-  | & _127: bool = Any.any_l ()
+  | & _126: bool = Any.any_l ()
+  | & _128: Int64.t = Any.any_l ()
+  | & _129: UInt64.t = Any.any_l ()
+  | & _131: UInt64.t = Any.any_l ()
+  | & _132: bool = Any.any_l ()
   | & target: t_Option_i64 = Any.any_l ()
   | & variant_old_bb9: int = Any.any_l () ])
   [ return (result: tup4_Option_i64_Vec_LocalRetentionSegment_Global_usize_Option_i64) ->
-  {[@stop_split] [@expl:remote_coverage_bounds_local_retention ensures] ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #0] [%#scovered_retention'40] let anchor = if Seq.length (Slice64.view local)
+  {[@stop_split] [@expl:remote_coverage_bounds_local_retention ensures] ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #0] [%#scovered_retention'41] let anchor = if Seq.length (Slice64.view local)
       = 0 then
         0
       else
@@ -457,10 +465,10 @@ let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/com
             /\ Int64.to_int (Seq.get (Slice64.view remote) j).f0'0 <= Int64.to_int through + 1
           -> Int64.to_int (Seq.get (Slice64.view remote) j).f1'0 <= Int64.to_int through)
         end)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #1] [%#scovered_retention'41] Seq.length (view_Vec_LocalRetentionSegment_Global result.f1'2)
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #1] [%#scovered_retention'42] Seq.length (view_Vec_LocalRetentionSegment_Global result.f1'2)
         = Seq.length (Slice64.view local) + 1
       /\ UInt64.t'int result.f2'2 <= Seq.length (Slice64.view local))
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #2] [%#scovered_retention'42] forall i: int. 0
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #2] [%#scovered_retention'43] forall i: int. 0
             <= i
           /\ i < Seq.length (Slice64.view local)
         -> (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).size = (Seq.get (Slice64.view local) i).f2
@@ -470,25 +478,25 @@ let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/com
           | None -> true
           | Some through -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view local) i).f1) (Int64.to_int through)
           end)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #3] [%#scovered_retention'43] (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).blocked
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #3] [%#scovered_retention'44] (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).blocked
       /\ not (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).expired
       /\ (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) (Seq.length (Slice64.view local))).size
       = active_size)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #4] [%#scovered_retention'44] UInt64.t'int result.f2'2
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #4] [%#scovered_retention'45] UInt64.t'int result.f2'2
       = match size_debt with
         | None'0 -> local_retention_model (view_Vec_LocalRetentionSegment_Global result.f1'2) (local_retention_limit (view_Vec_LocalRetentionSegment_Global result.f1'2)) 0 0 false
         | Some'0 debt -> local_retention_model (view_Vec_LocalRetentionSegment_Global result.f1'2) (local_retention_limit (view_Vec_LocalRetentionSegment_Global result.f1'2)) 0 (UInt64.t'int debt) true
         end)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #5] [%#scovered_retention'45] forall n: int. 0
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #5] [%#scovered_retention'46] forall n: int. 0
             <= n
           /\ n <= Seq.length (Slice64.view local)
           /\ (forall i: int. 0 <= i /\ i < n
             -> not (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).blocked
             /\ (Seq.get (view_Vec_LocalRetentionSegment_Global result.f1'2) i).expired)
         -> n <= UInt64.t'int result.f2'2)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #6] [%#scovered_retention'46] result.f0'2
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #6] [%#scovered_retention'47] result.f0'2
         = None -> UInt64.t'int result.f2'2 = 0 /\ result.f3'2 = None)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #7] [%#scovered_retention'47] match result.f3'2 with
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #7] [%#scovered_retention'48] match result.f3'2 with
         | None -> UInt64.t'int result.f2'2 = 0
         \/ Int64.to_int (Seq.get (Slice64.view local) (UInt64.t'int result.f2'2 - 1)).f1 = Int64.to_int const_MAX'0
         | Some target -> gt_log_Int (UInt64.t'int result.f2'2) 0
@@ -499,7 +507,7 @@ let remote_coverage_bounds_local_retention [#"/workspace/crates/verified/src/com
         /\ (forall offset: int. Int64.to_int (Seq.get (Slice64.view local) 0).f0 <= offset
             /\ offset < Int64.to_int target -> remote_covers_offset (Slice64.view remote) offset)
         end)
-    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #8] [%#scovered_retention'48] forall i: int, offset: int. 0
+    /\ ([@stop_split] [@expl:remote_coverage_bounds_local_retention ensures #8] [%#scovered_retention'49] forall i: int, offset: int. 0
           <= i
         /\ i < UInt64.t'int result.f2'2
         /\ Int64.to_int (Seq.get (Slice64.view local) i).f0 <= offset

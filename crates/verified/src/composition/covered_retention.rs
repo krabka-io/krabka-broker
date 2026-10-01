@@ -91,6 +91,10 @@ pub(super) fn remote_coverage_bounds_local_retention(
         expired: false,
         size: active_size,
     });
+    proof_assert!(forall<j: Int> 0 <= j && j < local@.len()
+    ==> facts@[j].blocked == match covered {
+        None => true, Some(through) => local@[j].1@ > through@,
+    });
     let count = local_retention_prefix(&facts, size_debt);
     proof_assert!(forall<j: Int> 0 <= j && j < count@ ==> !facts@[j].blocked);
     proof_assert!(count@ <= local@.len());

@@ -53,9 +53,8 @@ pub fn remote_covered_through(ranges: &[(i64, i64)], local_start: i64) -> Option
         Some(through) => local_start@ <= through@
             && (exists<j: Int> 0 <= j && j < i@ && through == ranges@[j].1)
             && (forall<j: Int> 0 <= j && j < i@ ==> ranges@[j].1@ <= through@)
-            && forall<offset: Int> (forall<j: Int> 0 <= j && j < i@
-                ==> offset < ranges@[j].0@ || ranges@[j].1@ < offset)
-                ==> offset < local_start@ || through@ < offset,
+            && forall<offset: Int> local_start@ <= offset && offset <= through@
+                ==> remote_covers_offset(ranges@, offset),
     })]
     #[variant(ranges@.len() - i@)]
     while i < ranges.len() {

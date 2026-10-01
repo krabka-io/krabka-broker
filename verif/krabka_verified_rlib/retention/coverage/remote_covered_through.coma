@@ -19,22 +19,22 @@ let%span scoverage'7 = "/workspace/crates/verified/src/retention/coverage.rs" 43
 let%span scoverage'8 = "/workspace/crates/verified/src/retention/coverage.rs" 46 13 46 14
 let%span scoverage'9 = "/workspace/crates/verified/src/retention/coverage.rs" 46 8 46 14
 let%span scoverage'10 = "/workspace/crates/verified/src/retention/coverage.rs" 49 8 49 9
-let%span scoverage'11 = "/workspace/crates/verified/src/retention/coverage.rs" 60 14 60 32
-let%span scoverage'12 = "/workspace/crates/verified/src/retention/coverage.rs" 61 14 61 26
-let%span scoverage'13 = "/workspace/crates/verified/src/retention/coverage.rs" 51 16 59 5
+let%span scoverage'11 = "/workspace/crates/verified/src/retention/coverage.rs" 59 14 59 32
+let%span scoverage'12 = "/workspace/crates/verified/src/retention/coverage.rs" 60 14 60 26
+let%span scoverage'13 = "/workspace/crates/verified/src/retention/coverage.rs" 51 16 58 5
 let%span scoverage'14 = "/workspace/crates/verified/src/retention/coverage.rs" 50 16 50 35
-let%span scoverage'15 = "/workspace/crates/verified/src/retention/coverage.rs" 62 27 62 36
-let%span scoverage'16 = "/workspace/crates/verified/src/retention/coverage.rs" 62 13 62 18
-let%span scoverage'17 = "/workspace/crates/verified/src/retention/coverage.rs" 62 20 62 23
-let%span scoverage'18 = "/workspace/crates/verified/src/retention/coverage.rs" 66 61 66 62
-let%span scoverage'19 = "/workspace/crates/verified/src/retention/coverage.rs" 66 38 66 63
-let%span scoverage'20 = "/workspace/crates/verified/src/retention/coverage.rs" 76 13 76 14
-let%span scoverage'21 = "/workspace/crates/verified/src/retention/coverage.rs" 76 8 76 14
-let%span scoverage'22 = "/workspace/crates/verified/src/retention/coverage.rs" 72 30 72 107
+let%span scoverage'15 = "/workspace/crates/verified/src/retention/coverage.rs" 61 27 61 36
+let%span scoverage'16 = "/workspace/crates/verified/src/retention/coverage.rs" 61 13 61 18
+let%span scoverage'17 = "/workspace/crates/verified/src/retention/coverage.rs" 61 20 61 23
+let%span scoverage'18 = "/workspace/crates/verified/src/retention/coverage.rs" 65 61 65 62
+let%span scoverage'19 = "/workspace/crates/verified/src/retention/coverage.rs" 65 38 65 63
+let%span scoverage'20 = "/workspace/crates/verified/src/retention/coverage.rs" 75 13 75 14
+let%span scoverage'21 = "/workspace/crates/verified/src/retention/coverage.rs" 75 8 75 14
+let%span scoverage'22 = "/workspace/crates/verified/src/retention/coverage.rs" 71 30 71 107
 let%span scoverage'23 = "/workspace/crates/verified/src/retention/coverage.rs" 23 11 24 38
 let%span scoverage'24 = "/workspace/crates/verified/src/retention/coverage.rs" 25 10 35 1
-let%span scoverage'25 = "/workspace/crates/verified/src/retention/coverage.rs" 8 16 8 90
-let%span scoverage'26 = "/workspace/crates/verified/src/retention/coverage.rs" 16 16 16 109
+let%span scoverage'25 = "/workspace/crates/verified/src/retention/coverage.rs" 16 16 16 109
+let%span scoverage'26 = "/workspace/crates/verified/src/retention/coverage.rs" 8 16 8 90
 
 use creusot.int.UInt64
 use seq.Seq
@@ -65,6 +65,11 @@ let len_tup2_i64_i64 (self_: Slice64.slice tup2_i64_i64) (return (x: UInt64.t)) 
 
 type t_Option_i64 = None | Some Int64.t
 
+predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 15 0 15 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
+  [%#scoverage'25] exists i: int. 0 <= i
+    /\ i < Seq.length ranges
+    /\ Int64.to_int (Seq.get ranges i).f0 <= offset /\ offset <= Int64.to_int (Seq.get ranges i).f1
+
 let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
   [ _k (f0'0: Int64.t) -> {Some f0'0 = _x} (! return {f0'0})
   | _chk -> (! {[@expl:elim Some] match _x with
@@ -90,13 +95,8 @@ let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
     (! return {result}) ]
 
 predicate remote_ranges_valid [#"/workspace/crates/verified/src/retention/coverage.rs" 7 0 7 59] (ranges: Seq.seq tup2_i64_i64) =
-  [%#scoverage'25] forall i: int. 0 <= i /\ i < Seq.length ranges
+  [%#scoverage'26] forall i: int. 0 <= i /\ i < Seq.length ranges
     -> Int64.to_int (Seq.get ranges i).f0 <= Int64.to_int (Seq.get ranges i).f1
-
-predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 15 0 15 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
-  [%#scoverage'26] exists i: int. 0 <= i
-    /\ i < Seq.length ranges
-    /\ Int64.to_int (Seq.get ranges i).f0 <= offset /\ offset <= Int64.to_int (Seq.get ranges i).f1
 
 meta "compute_max_steps" 1000000
 
@@ -153,10 +153,8 @@ let remote_covered_through [#"/workspace/crates/verified/src/retention/coverage.
         /\ (exists j: int. 0 <= j /\ j < UInt64.t'int i /\ through'1 = (Seq.get (Slice64.view ranges) j).f1)
         /\ (forall j: int. 0 <= j /\ j < UInt64.t'int i
             -> Int64.to_int (Seq.get (Slice64.view ranges) j).f1 <= Int64.to_int through'1)
-        /\ (forall offset: int. (forall j: int. 0 <= j /\ j < UInt64.t'int i
-              -> offset < Int64.to_int (Seq.get (Slice64.view ranges) j).f0
-              \/ Int64.to_int (Seq.get (Slice64.view ranges) j).f1 < offset)
-          -> offset < Int64.to_int local_start \/ Int64.to_int through'1 < offset)
+        /\ (forall offset: int. Int64.to_int local_start <= offset /\ offset <= Int64.to_int through'1
+          -> remote_covers_offset (Slice64.view ranges) offset)
         end}
       (! [ &variant_old_bb10 <- [%#scoverage'11] Seq.length (Slice64.view ranges) - UInt64.t'int i ] s0)
       [ s0 = len_tup2_i64_i64 [%#scoverage'12] {ranges} (fun (_x: UInt64.t) -> [ &_53 <- _x ] s1)
