@@ -146,7 +146,7 @@ A specification is not automatically weak because it resembles a short function.
 | `physical_eviction_routes_retained_timestamp` | Consumes physical frontiers to route the unchanged logical first match to surviving cache or committed remote coverage, preserving coverage/lag bounds. | Both inherited physical frontiers obey those bounds. Correct object coverage, complete record decoding and successful physical I/O remain external. |
 | `constructed_time_range_preserves_first` | Consumes constructed prefix maxima and validated inclusive/strict cursors to return the globally first retained record in a closed timestamp interval, or complete absence. Invalid segment extents and out-of-range records reject exactly. | Complete faithfully decoded record enumeration, valid sparse row positions and coherent logical floors are external. Timestamps may regress; the upper cursor cannot crop the scan tail. |
 | `stable_time_range_preserves_first` | Consumes the derived transaction/HW/delivery prefix and constructed interval scan to return the globally first retained match strictly below the actual visibility limit, or complete absence. Its limit is maximal under the supplied gates; inherited LSO is ignored. | Complete decoded records, a valid minimum-equivalent transaction snapshot, coherent publication, physical reads and client-side abort filtering remain external. Omitted transaction entries are not validated by the supplied-start guard. |
-| `remote_coverage_bounds_local_retention` | Consumes actual remote interval geometry, derives whole-segment blocking, and returns the exact size/time prefix and exclusive deletion target. Every newly evicted offset is covered, including local gaps; selected segments remain covered at successor exhaustion. Every initially unblocked expired prefix is selected independently of reference equality. | Ordered valid local segment ranges and truthful expiry/size facts, complete finished-copy metadata, coherent publication and durable physical deletion remain external. Coverage below an inherited oldest-local start is not established. |
+| `remote_coverage_bounds_local_retention` | Consumes actual remote interval geometry, derives whole-segment blocking, and returns the exact size/time prefix and exclusive deletion target. Every newly evicted offset is covered, including local gaps; selected segments remain covered at successor exhaustion. Every prefix eligible by size or expiry is selected independently of reference equality; each selected non-expired row fits the initial debt together with all older rows. | Ordered valid local segment ranges and truthful expiry/size facts, complete finished-copy metadata, coherent publication and durable physical deletion remain external. Coverage below an inherited oldest-local start is not established. |
 
 The implication-shaped checks explicitly return true on rejected input. They prove a property of admitted operations, not successful admission of every input. `composition_boundary_witnesses` and `restored_state_composition_boundaries` exercise successful paths, corruption, empty sets, exact boundaries, epoch gating, repeated timestamps, cross-segment/interleaved transactions, stale snapshots, and integer exhaustion. This separates legitimate conditional safety from a vacuous all-reject decision: the decision kernels themselves still have admission-completeness contracts, and the token negative control checks that distinction directly.
 
@@ -199,7 +199,7 @@ The implication-shaped checks explicitly return true on rejected input. They pro
 | [remote_txn](../crates/verified/src/remote_txn.rs): `remote_txn_overlap_decision` | Guard | Inclusive interval overlap and invalidity are fully specified. Compose with the half-open local Fetch convention to establish identical abort-filter results; a predicate over four offsets does not prove the transaction index is complete. |
 | [restore](../crates/verified/src/restore.rs): `restore_record_selected`, `restore_batch_filter_decision`, `restore_batch_past_offset_bound`, `restore_archive_reconcile`, `restore_batch_step`, `restore_record_coordinates`, `restore_rewritten_batch_header`, `restore_rewritten_record` | Invariant + guard | Checked batch/record rewriting pins coordinates, producer/header legality, ordering, and filter decisions. Arithmetic reuse is substantive. The strengthened whole-batch selection composition exports complete original-row witnesses and exact Keep/Empty/Filter classification. Rewritten header/record admission now composes with producer snapshot reconstruction to preserve survivor coordinates, full sequence spans and original retry acknowledgements even for empty rewrites. Complete archive reconciliation and preservation of surviving record values still require host iteration and decoded bytes. |
 | [restore_sidecar](../crates/verified/src/restore_sidecar.rs): `restore_index_frontier`, `restore_offset_index_entry_valid`, `restore_time_index_entry_valid`, `restore_txn_index_entry_valid`, `restore_leader_epoch_entry_valid`, `restore_producer_ids_strict` | Guard + ordering | Row validators establish adjacent ordering and extent bounds; producer IDs are checked strictly ordered. The offset/time/epoch theorems now lift row validation to global lookup preconditions and bounds. Transaction validation also composes with interval construction and monotone Fetch overlap filtering. |
-| [retention](../crates/verified/src/retention.rs): `barrier_cut_expired`, `local_retention_prefix`, `remote_retention_prefix`, `retention_delete_target`, `remote_covered_through` | Reference equivalence and interval geometry; safety strengthened | Local deletion separately proves no blocked segment is selected, an empty newest segment survives, and the first kept segment before the limit is blocked or not expired; both prefix results are length-bounded. Remote coverage proves an attained, maximal prefix with no holes from actual input intervals. Completed-copy metadata truth, coherent publication and expiry classification remain host facts. |
+| [retention](../crates/verified/src/retention.rs): `barrier_cut_expired`, `local_retention_prefix`, `remote_retention_prefix`, `retention_delete_target`, `remote_covered_through` | Reference equivalence and interval geometry; safety strengthened | Local deletion separately proves no blocked segment is selected, an empty newest segment survives, and the first kept segment before the limit is blocked or not expired. Independent prefix-byte bounds justify selected non-expired rows and require progress through fully funded unblocked prefixes; both prefix results are length-bounded. Remote coverage proves an attained, maximal prefix with no holes from actual input intervals. Completed-copy metadata truth, coherent publication and expiry classification remain host facts. |
 | [schema](../crates/verified/src/schema.rs): `schema_failure_decision`, `schema_frame_id`, `schema_field_action`, `schema_batch_admission` | Guard + decoding arithmetic | Fail-open applies only to transient errors, frame ID bytes are decoded exactly, and complete walks require matching applicable/admitted counts. The count equality does not prove each distinct applicable field was checked exactly once; registry responses and decoding remain external. |
 | [scram](../crates/verified/src/scram.rs): `scram_alteration_decision` | Guard | The alteration table rejects unauthorized, duplicate, malformed, or out-of-range changes and pins the accepted mechanism. It does not prove derived credential bytes, password secrecy, or durable all-or-nothing batch application. |
 | [share](../crates/verified/src/share.rs): `share_offset_mutation_decision`, `share_prune_frontier` | Selection + guard | Mutation is epoch-fenced and exact retries do not advance state; pruning returns a global minimum. Ownership, acquired-range coverage, and persister durability need the share models; a minimum alone does not show all live groups supplied their frontier. |
@@ -1291,3 +1291,132 @@ The preceding published head `e894b2ba143c3de76b192fd67aafca37d6768d82` complete
 [CI successfully](https://github.com/krabka-io/krabka-broker/actions/runs/36797609074).
 That success does not qualify this new head; its remote checks run after
 publication.
+
+## Independent retention byte cost
+
+The expired-prefix guarantee closes the all-zero escape, but does not require
+size-driven progress. A paired control disables the size arm in both
+`local_retention_model` and `local_retention_prefix`: the primitive and coverage
+consumer still prove, while four native tests fail. Agreement with the fold plus
+conditional coverage and time-driven progress still admits skipping all
+non-expired segments, even when the budget fully funds them.
+
+The selector now exports two independent byte-cost bounds. Every selected
+non-expired row fits the initial debt together with every older row. If the first
+kept row is unblocked and before the deletion limit, its prefix cost exceeds that
+debt. The existing stopping guarantee separately requires it to be non-expired.
+With no size pass, every selected row must be expired. These bounds preserve
+time-driven deletion beyond the size debt; they do not cap all deleted bytes by
+that debt.
+
+[`local_prefix_bytes`](../crates/verified/src/retention/local_bytes.rs) sums exact
+row sizes as mathematical integers, including totals above `u64::MAX`. Its proved
+monotonicity lemma handles arbitrary zero-byte rows. Both definitions remain in
+a small logical module rather than adding another native retention walk. The
+selector's ghost accounting connects the remaining debt to that prefix sum
+while sizing, and records that the initial debt has already been exceeded after
+transition to expiry. Its runtime body and the reference fold are unchanged.
+
+The coverage consumer now exports budget justification for each selected
+non-expired local row, selection of every fully funded unblocked prefix, and
+selection of every unblocked prefix whose rows individually qualify by expiry
+or funded byte cost. This includes a funded prefix followed by expired rows;
+neither homogeneous progress guarantee alone states that handoff. It
+consumes the selector's byte-cost exports and the monotonicity lemma, alongside
+coverage, exact fact construction and the checked successor. Neither a remote
+maximum across a hole nor invented row sizes can satisfy those contracts.
+Truthful segment sizes, exact host debt projection, coherent copy metadata and
+physical deletion remain external.
+
+A new oracle table exercises exact whole-segment debt boundaries, `None` versus
+zero debt with zero-byte rows, totals exceeding `u64::MAX`, and expiry that must
+not restart the size pass for a later non-expired row. It also includes remote
+holes and zero/positive/exhausted active sizes. All 327 native tests pass in the
+positive run; the primitive, byte lemmas and strengthened consumer prove.
+
+Three scoped controls distinguish independent exports from matching code.
+Hiding both byte-cost exports preserves the helper proof and all 327 native
+tests but fails the consumer. Disabling the size arm in both selector and fold,
+or making both select without charging debt, fails the stronger primitive.
+Removing the byte exports and their ghost bookkeeping lets each weakened
+primitive prove again, while the strengthened consumer still fails. Native tests
+fail for both paired mutations. All source mutations are restored and newly
+created failure seeds quarantined. These are targeted controls, not a full
+mutation sweep.
+
+Final local generation and no-cache canonical saved-artifact replay pass for all
+546 files in the exact pinned CI image. The final mixed size/expiry export also
+proves. All 327 native verified tests, the verified/verified-doc/log/remote-storage
+Bazel targets, workspace all-target Clippy with warnings denied, formatting and
+Creusot/mutation configuration checks pass. The final logical export was followed
+by another verified-crate test and Clippy run. All 1,084 unrelated proof artifacts
+remain byte-identical to the published repair baseline; only the local-prefix and
+coverage-consumer sessions are refreshed, with two byte-lemma sessions added.
+There are still 57 executable compositions across 39 topic files; every verified
+Rust source remains below 300 lines.
+
+The separate proof-replay repair is pushed to PR #1265 at
+`29c8568e9221bca96e460f5bfdb5a751e45f2af9`. Its
+[proof CI job passes](https://github.com/krabka-io/krabka-broker/actions/runs/36807206627/job/110194110803);
+the full CI run is tracked separately. That repair carries positive coverage
+membership directly in the coverage-loop invariant and exposes the exact
+blocking projection after appending the active sentinel, without changing runtime
+behavior or exported contracts. The byte-cost batch is included in the next
+retention-ledger PR above that repair; the earlier published proof-CI result
+does not qualify this new batch.
+
+
+## Published trim through remote cleanup
+
+The remote retention contract had the same paired-model weakness: replacing
+both the reference fold and selector with zero still proved, while the existing
+hand-calculated policy tests failed. The selector now independently justifies
+each selected row by a floor breach, expiry, or a fully funded charged prefix.
+Its first kept row must fail all three axes. The mathematical
+[`remote_prefix_charge`](../crates/verified/src/retention/remote_bytes.rs) counts
+expired rows but excludes floor breaches, including rows that breach both axes;
+it handles prefix totals above `u64::MAX`. Ghost accounting connects this
+independent ledger to the existing saturating debt walk. Runtime behavior and
+the reference fold remain unchanged.
+
+[`published_trim_bounds_remote_breach_cleanup`](../crates/verified/src/composition/remote_breach.rs)
+connects DeleteRecords admission, retryable WAL/local trim completion, successful
+floor publication, actual inclusive remote ranges and the remote retention
+selector. It derives every breach from the published checkpoint. Partial store
+progress or failed publication preserves the previous checkpoint. With size and
+time retention disabled, an enabled cleanup selects exactly the initial whole-row
+prefix ending strictly below that checkpoint; a straddling or retained row stops
+it even if later metadata rows would qualify. A missing checkpoint and a tier
+that refuses deletes select nothing. The canonical floor respects the committed
+and delivery bounds, and two successful store steps complete reconciliation.
+
+Completion and publication inputs mean actual durable outcomes. The theorem
+proves the pure planner protocol under those observations, not filesystem sync,
+atomic checkpoint publication, metadata truthfulness or physical object deletion.
+It does not assume that observed store progress establishes a published floor.
+Independent native oracles use cumulative `u128` byte cost, successful-stage
+counts and whole-range prefix boundaries. Boundary tables cover zero debt,
+free floor breaches, expired oversized rows, failed/partial trim attempts,
+publication retry, disabled deletion, overlapping ranges and integer extremes.
+
+
+Scoped mutations publish the new floor before both stores complete, or replace
+cleanup with zero. Both fail the composition proof and both new native tests.
+All temporary source changes are restored and generated failure seeds quarantined.
+These controls complement the paired remote no-op control and the independent
+local byte-budget controls above; they are not a full mutation sweep.
+
+Final local generation and canonical no-cache saved-artifact replay pass for all
+548 proof files in the exact pinned CI image. All 331 native tests, the four
+verified/verified-doc/log/remote-storage Bazel targets, workspace all-target
+Clippy with warnings denied, formatting and proof/mutation configuration checks
+pass. All 1,090 artifacts unrelated to the remote extension remain byte-identical
+to the completed byte-budget batch. Relative to the published parent, three
+existing sessions change and four are added; 1,082 published artifact files are
+preserved exactly. There are 58 executable compositions across 40 topic files,
+and the largest verified Rust source is 288 lines.
+
+This batch is prepared on `codex/proof-retention-ledgers`, above PR #1265.
+The parent's [full CI rerun succeeds](https://github.com/krabka-io/krabka-broker/actions/runs/36807206627)
+at `29c8568e9221bca96e460f5bfdb5a751e45f2af9`; that result does not qualify
+the new layer. Remote CI for the new commit is tracked separately.

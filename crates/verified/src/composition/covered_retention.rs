@@ -5,7 +5,8 @@ use crate::retention::{
 };
 #[cfg(creusot)]
 use crate::retention::{
-    local_retention_limit, local_retention_model, remote_covers_offset, remote_ranges_valid,
+    local_prefix_bytes, local_prefix_bytes_monotone, local_retention_limit, local_retention_model,
+    remote_covers_offset, remote_ranges_valid,
 };
 
 type CoveredRetention = (Option<i64>, Vec<LocalRetentionSegment>, usize, Option<i64>);
@@ -13,7 +14,8 @@ type CoveredRetention = (Option<i64>, Vec<LocalRetentionSegment>, usize, Option<
 /// Derive whole-segment eligibility from actual remote intervals, consume the
 /// local size/time prefix, and convert its inclusive endpoint to a delete target.
 /// Every offset selected for eviction belongs to a supplied remote interval,
-/// including local gaps; every initially unblocked expired prefix is selected.
+/// including local gaps; every prefix eligible by size or expiry is selected.
+/// Every selected non-expired row fits the initial size debt.
 /// Exact expiry/size facts, complete truthful copy metadata valid through
 /// application and durable physical deletion remain external.
 /// The active segment is protected.
@@ -45,8 +47,17 @@ type CoveredRetention = (Option<i64>, Vec<LocalRetentionSegment>, usize, Option<
     Some(debt) => local_retention_model(result.1@, local_retention_limit(result.1@), 0, debt@, true),
 })]
 #[ensures(forall<n: Int> 0 <= n && n <= local@.len()
-    && (forall<i: Int> 0 <= i && i < n ==> !result.1@[i].blocked && result.1@[i].expired)
+    && (forall<i: Int> 0 <= i && i < n ==> !result.1@[i].blocked
+        && (local@[i].3 || match size_debt {
+            None => false, Some(debt) => local_prefix_bytes(result.1@, i + 1) <= debt@,
+        }))
     ==> n <= result.2@)]
+#[ensures((forall<i: Int> 0 <= i && i < result.2@ ==> local@[i].3
+    || match size_debt { None => false, Some(debt) => local_prefix_bytes(result.1@, i + 1) <= debt@ })
+    && (forall<n: Int> 0 <= n && n <= local@.len()
+        && (forall<i: Int> 0 <= i && i < n ==> !result.1@[i].blocked)
+        && match size_debt { None => false, Some(debt) => local_prefix_bytes(result.1@, n) <= debt@ }
+        ==> n <= result.2@))]
 #[ensures(result.0 == None ==> result.2@ == 0 && result.3 == None)]
 #[ensures(match result.3 {
     None => result.2@ == 0 || local@[result.2@ - 1].1@ == i64::MAX@,
@@ -99,6 +110,13 @@ pub(super) fn remote_coverage_bounds_local_retention(
     proof_assert!(forall<j: Int> 0 <= j && j < count@ ==> !facts@[j].blocked);
     proof_assert!(count@ <= local@.len());
     proof_assert!(count@ < local@.len() ==> facts@[count@].blocked || !facts@[count@].expired);
+    proof_assert!({
+        local_prefix_bytes_monotone(facts@, facts@.len());
+        forall<n: Int> 0 <= n && n <= local@.len()
+            && (forall<j: Int> 0 <= j && j < n ==> !facts@[j].blocked)
+            && match size_debt { None => false, Some(debt) => local_prefix_bytes(facts@, n) <= debt@ }
+            ==> n <= count@
+    });
     proof_assert!(match covered {
         None => count@ == 0,
         Some(through) => forall<j: Int> 0 <= j && j < count@ ==> local@[j].1@ <= through@,

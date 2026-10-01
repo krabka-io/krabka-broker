@@ -1,0 +1,68 @@
+(* #"/workspace/crates/verified/src/retention/local_bytes.rs" 28 0 28 84 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span slocal_bytes = "/workspace/crates/verified/src/retention/local_bytes.rs" 27 10 27 15
+let%span slocal_bytes'0 = "/workspace/crates/verified/src/retention/local_bytes.rs" 24 11 24 48
+let%span slocal_bytes'1 = "/workspace/crates/verified/src/retention/local_bytes.rs" 25 10 26 81
+let%span slocal_bytes'2 = "/workspace/crates/verified/src/retention/local_bytes.rs" 10 10 10 15
+let%span slocal_bytes'3 = "/workspace/crates/verified/src/retention/local_bytes.rs" 13 8 15 9
+
+use creusot.int.UInt64
+use seq.Seq
+use int.Int
+
+type t_LocalRetentionSegment = { blocked: bool; expired: bool; size: UInt64.t }
+
+function local_prefix_bytes [#"/workspace/crates/verified/src/retention/local_bytes.rs" 11 0 11 82] (segments: Seq.seq t_LocalRetentionSegment) (count: int) : int
+
+axiom local_prefix_bytes_def:
+  forall segments: Seq.seq t_LocalRetentionSegment, count: int [local_prefix_bytes segments count]. local_prefix_bytes segments count
+    = ([%#slocal_bytes'3] if count <= 0 then
+      0
+    else
+      local_prefix_bytes segments (count - 1) + UInt64.t'int (Seq.get segments (count - 1)).size
+    )
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant segments : Seq.seq t_LocalRetentionSegment
+
+constant limit : int
+
+function local_prefix_bytes_monotone [#"/workspace/crates/verified/src/retention/local_bytes.rs" 28 0 28 84] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) : ()
+
+goal vc_local_prefix_bytes_monotone: ([%#slocal_bytes'0] 0 <= limit /\ limit <= Seq.length segments)
+  -> (if gt_log_Int limit 0 then
+    (([@stop_split] [@expl:local_prefix_bytes_monotone requires] [%#slocal_bytes'0] 0 <= limit - 1
+        /\ limit - 1 <= Seq.length segments)
+      /\ ([@expl:variant decreases] well_founded_relation_Int ([%#slocal_bytes] limit) ([%#slocal_bytes] limit - 1)))
+    /\ (([@stop_split] [@expl:local_prefix_bytes_monotone ensures] [%#slocal_bytes'1] forall first: int, last: int. 0
+            <= first
+          /\ first <= last /\ last <= limit - 1
+        -> local_prefix_bytes segments first <= local_prefix_bytes segments last)
+    -> (let _ = local_prefix_bytes_monotone segments (limit
+    - 1) in [@stop_split] [@expl:local_prefix_bytes_monotone ensures] [%#slocal_bytes'1] forall first: int, last: int. 0
+          <= first
+        /\ first <= last /\ last <= limit -> local_prefix_bytes segments first <= local_prefix_bytes segments last))
+  else
+    [@stop_split] [@expl:local_prefix_bytes_monotone ensures] [%#slocal_bytes'1] forall first: int, last: int. 0
+          <= first
+        /\ first <= last /\ last <= limit -> local_prefix_bytes segments first <= local_prefix_bytes segments last
+  )

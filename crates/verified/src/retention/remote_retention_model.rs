@@ -2,7 +2,7 @@ use creusot_std::prelude::*;
 
 use super::LocalRetentionSegment;
 #[cfg(creusot)]
-use super::RemoteRetentionSegment;
+use super::{RemoteRetentionSegment, local_prefix_bytes};
 
 /// Decide whether one held barrier cut falls outside the retained epoch
 /// window.
@@ -108,7 +108,10 @@ pub fn local_retention_model(
 /// The result equals `local_retention_model` from the oldest segment,
 /// limited by `local_retention_limit`. That fold states the Kafka rule.
 /// Before that limit, the first kept segment is blocked or not expired.
-/// This independently rules out a selector/reference pair that deletes nothing.
+/// Every selected non-expired segment fits the initial size debt together with
+/// every older segment. Before the limit, an unblocked kept segment exceeds
+/// that debt. These independent cost bounds reject a selector/reference pair
+/// that omits the size pass or deletes beyond the budget.
 #[ensures(result@ == match size_debt {
     None => local_retention_model(
         segments@, local_retention_limit(segments@), 0, 0, false),
@@ -121,6 +124,10 @@ pub fn local_retention_model(
     ==> result@ < segments@.len())]
 #[ensures(result@ < local_retention_limit(segments@)
     ==> segments@[result@].blocked || !segments@[result@].expired)]
+#[ensures(forall<i: Int> 0 <= i && i < result@ ==> segments@[i].expired
+    || match size_debt { None => false, Some(debt) => local_prefix_bytes(segments@, i + 1) <= debt@ })]
+#[ensures(result@ < local_retention_limit(segments@) && !segments@[result@].blocked
+    ==> match size_debt { None => true, Some(debt) => local_prefix_bytes(segments@, result@ + 1) > debt@ })]
 #[must_use]
 pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Option<u64>) -> usize {
     let limit = match segments.len().checked_sub(1) {
@@ -134,6 +141,15 @@ pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Opt
     let mut len = 0usize;
     #[invariant(len@ <= limit@)]
     #[invariant(forall<i: Int> 0 <= i && i < len@ ==> !segments@[i].blocked)]
+    #[invariant(local_prefix_bytes(segments@, len@) >= 0)]
+    #[invariant(match size_debt {
+        None => !sizing,
+        Some(initial) => if sizing {
+            local_prefix_bytes(segments@, len@) + debt@ == initial@
+        } else { local_prefix_bytes(segments@, len@) > initial@ },
+    })]
+    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> segments@[i].expired
+        || match size_debt { None => false, Some(initial) => local_prefix_bytes(segments@, i + 1) <= initial@ })]
     #[invariant(limit@ == local_retention_limit(segments@))]
     #[invariant(local_retention_model(segments@, limit@, len@, debt@, sizing) == match size_debt {
         None => local_retention_model(segments@, limit@, 0, 0, false),

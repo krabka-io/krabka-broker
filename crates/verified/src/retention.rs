@@ -59,3 +59,13 @@ mod coverage;
 pub use coverage::remote_covered_through;
 #[cfg(creusot)]
 pub use coverage::{remote_covers_offset, remote_ranges_valid};
+
+#[cfg(creusot)]
+mod local_bytes;
+#[cfg(creusot)]
+pub use local_bytes::{local_prefix_bytes, local_prefix_bytes_monotone};
+
+#[cfg(creusot)]
+mod remote_bytes;
+#[cfg(creusot)]
+pub use remote_bytes::remote_prefix_charge;
