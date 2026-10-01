@@ -1928,3 +1928,80 @@ The 1,126 parent artifact files remain byte-identical; only the new composition
 session is retained. Authored verified Rust sources remain below 300 lines
 (maximum 288). This layer is local on `codex/proof-truncated-producer-window`,
 above `codex/proof-control-truncation`; these local checks do not claim remote CI.
+
+
+## Snapshot-seeded producer replay
+
+The physical-history composition does not describe snapshot recovery by itself.
+A snapshot stores one last data batch per PID, including a batch below the log
+or local floor. Recovery initializes that seed and replays only the uncovered
+local tail; it does not reconstruct every earlier physical batch. Thus a retry
+window can contain a seed whose bytes have been trimmed, and a surviving batch
+covered by the snapshot need not appear in the window at all.
+
+`loaded_snapshot_bounds_truncated_retry` composes whole-batch truncation, the
+snapshot replay cursor, decoded seed admission, ring reconstruction, producer
+classification and acknowledgement readiness. It derives the actual retained
+end before admitting the loaded snapshot. This data-window theorem rejects
+admission exactly when the end lies below a retained floor, the loaded offset is
+outside the reload window,
+or its supplied data seed is invalid or marker-only. An absent PID in a loaded
+snapshot contributes no seed.
+
+On admission, the projected history contains the seed exactly once and exactly
+those local data rows whose last offsets reach the replay cursor and lie below
+the actual end. This includes a whole first batch around an interior cursor.
+Every replayed row retains its original source index; the seed has a distinct
+origin. The latest contiguous epoch's last five rows define the retry window.
+Duplicate classification, first-alias minimality, original coordinates and
+exclusive acknowledgement are exported against that derived window. A seed
+below either floor remains usable while it survives the window, but enough
+replayed batches or an epoch transition can evict it. Every returned frontier
+fits the actual end, and HWM clamping preserves readiness for that frontier.
+
+`rebuilt_data_window_bounds_retry` shares the window construction with the
+physical-history theorem, whose contract remains unchanged. It also admits
+empty histories and epoch resets, following the real data-entry update path's
+contiguous-epoch reset rule. The independent oracle computes physical cuts,
+reload eligibility, seed/tail provenance, a five-row suffix and modular retry
+classification. Real log/tracker regressions reopen explicit snapshots with
+zero through seven tail batches, exclude an older covered batch from retry
+metadata, and trim away the original producer segment
+while a later surviving snapshot carries its retry below the local floor.
+
+Snapshot identity and truthful coverage, complete decoded local rows, correct
+request PID routing, a marker-free PID history and serialized replay remain
+host obligations. Snapshot-file selection and corruption fallback are upstream
+of this loaded-state boundary. Byte equality, presence of seed data below a
+retained floor, transaction-marker epoch state, I/O and crash publication are
+not established by these data-window proofs.
+
+
+Six scoped controls qualify this composition at the positive proof's same
+cache-free depth-four search. Removing only the exact physical end, exact
+replay cursor, or first-alias minimality leaves the respective helper proof
+and native oracle passing while rejecting the composition. Dropping the seed,
+filtering an interior cursor by batch base instead of last offset, or returning
+a merged-window position as the tail source index rejects both the composition
+and independent oracle. All temporary edits were restored; property-test seeds
+remain outside the repository.
+
+
+Saved-artifact replay exposed a solver timeout in the no-duplicate branch's
+existential alias check. The proof now states a checked per-row equivalence
+between the projected seed/tail matcher and reconstructed row matching before
+calling the shared window theorem. This changes no contract or runtime result;
+it makes that provenance bridge explicit instead of relying on the solver to
+find it inside the final quantified postcondition.
+
+
+Final qualification used the pinned Creusot v0.13.0 image and a fresh target.
+Cache-free generation and canonical saved-artifact replay both prove all 566
+sessions. All 359 verified-crate tests and 35 native producer-state tests pass.
+Bazel verified tests/documentation and the producer-state-filtered broker target
+pass, as do strict workspace Clippy, all four proof/mutation configuration checks,
+and repository formatting. The 1,126 unrelated parent artifact files remain
+byte-identical; retained artifacts cover the two new sessions and the refactored
+physical-history session with its unchanged contract. Authored verified Rust
+sources remain below 300 lines (maximum 288). This layer is local on
+`codex/proof-snapshot-tail-retry`; these checks do not establish remote CI.

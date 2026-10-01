@@ -103,3 +103,5 @@ mod reconfiguration;
 mod control_truncation;
 
 mod truncated_producer;
+
+mod snapshot_tail;

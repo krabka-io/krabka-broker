@@ -1,0 +1,158 @@
+use assert2::assert;
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig, Offset};
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_units::prelude::bytes;
+
+use super::{Decision, ProducerState, RetainedBatch, SequenceContext};
+
+fn batch(pid: i64, sequence: i32, delta: i32) -> RecordBatch {
+    RecordBatch {
+        producer_id: pid,
+        producer_epoch: 7,
+        base_sequence: sequence,
+        last_offset_delta: delta,
+        records: (0..=delta)
+            .map(|offset_delta| Record {
+                offset_delta,
+                ..Record::default()
+            })
+            .collect(),
+        ..RecordBatch::default()
+    }
+}
+
+#[tokio::test]
+async fn reopening_rebuilds_only_the_snapshot_seed_and_uncovered_tail() {
+    for count in 0..=7 {
+        let dir = tempfile::tempdir().unwrap();
+        let config = LogConfig::default();
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        log.append(&mut batch(42, 0, 0)).unwrap();
+        log.append(&mut batch(42, 1, 0)).unwrap();
+        log.take_producer_snapshot().unwrap();
+        for sequence in 2..2 + count {
+            log.append(&mut batch(42, sequence, 0)).unwrap();
+        }
+        drop(log);
+        let reopened = Log::open(dir.path(), config).unwrap();
+        let state = ProducerState::new();
+        state
+            .rebuild_from_log("t", PartitionIndex(0), &reopened)
+            .await
+            .unwrap();
+        // The older covered batch still exists, but the snapshot stores only
+        // the last batch and replay begins after both covered batches.
+        let covered = state
+            .check_batch(
+                "t",
+                PartitionIndex(0),
+                SequenceContext::RELEASED,
+                (42, 7),
+                (0, 0),
+            )
+            .await;
+        assert!(covered.decision == Decision::OutOfOrder);
+        assert!(covered.duplicate == None);
+        let seed = state
+            .check_batch(
+                "t",
+                PartitionIndex(0),
+                SequenceContext::RELEASED,
+                (42, 7),
+                (1, 0),
+            )
+            .await;
+        if count < 5 {
+            assert!(seed.decision == Decision::Duplicate { base_offset: 1 });
+            assert!(
+                seed.duplicate
+                    == Some(RetainedBatch {
+                        base_sequence: 1,
+                        last_sequence: 1,
+                        base_offset: 1,
+                        last_offset: 1,
+                        timestamp: 0
+                    })
+            );
+        } else {
+            assert!(!matches!(seed.decision, Decision::Duplicate { .. }));
+            assert!(seed.duplicate == None);
+        }
+        for sequence in 2..2 + count {
+            let checked = state
+                .check_batch(
+                    "t",
+                    PartitionIndex(0),
+                    SequenceContext::RELEASED,
+                    (42, 7),
+                    (sequence, 0),
+                )
+                .await;
+            if 2 + count - sequence <= 5 {
+                assert!(
+                    checked.decision
+                        == Decision::Duplicate {
+                            base_offset: i64::from(sequence)
+                        }
+                );
+                assert!(
+                    checked.duplicate
+                        == Some(RetainedBatch {
+                            base_sequence: sequence,
+                            last_sequence: sequence,
+                            base_offset: i64::from(sequence),
+                            last_offset: i64::from(sequence),
+                            timestamp: 0
+                        })
+                );
+            } else {
+                assert!(!matches!(checked.decision, Decision::Duplicate { .. }));
+                assert!(checked.duplicate == None);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_surviving_snapshot_preserves_a_retry_below_the_local_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = LogConfig {
+        segment_size: bytes(1),
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), config.clone()).unwrap();
+    log.append(&mut batch(42, 0, 1)).unwrap();
+    log.append(&mut batch(99, 0, 0)).unwrap();
+    log.take_producer_snapshot().unwrap();
+    assert!(log.trim_to_offset(Offset(2)).unwrap() == Offset(2));
+    drop(log);
+    let reopened = Log::open(dir.path(), config).unwrap();
+    assert!(reopened.log_start_offset() == Offset(2));
+    assert!(reopened.local_log_start_offset() == Offset(2));
+    let state = ProducerState::new();
+    state
+        .rebuild_from_log("t", PartitionIndex(0), &reopened)
+        .await
+        .unwrap();
+    let checked = state
+        .check_batch(
+            "t",
+            PartitionIndex(0),
+            SequenceContext::RELEASED,
+            (42, 7),
+            (0, 1),
+        )
+        .await;
+    assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
+    assert!(
+        checked.duplicate
+            == Some(RetainedBatch {
+                base_sequence: 0,
+                last_sequence: 1,
+                base_offset: 0,
+                last_offset: 1,
+                timestamp: 0
+            })
+    );
+}

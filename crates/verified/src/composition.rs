@@ -167,6 +167,12 @@ use replication::fenced_replication_bounds_fetch;
 mod control_truncation;
 use control_truncation::whole_batch_truncation_bounds_controls;
 
+mod snapshot_tail;
+use snapshot_tail::loaded_snapshot_bounds_truncated_retry;
+
+mod producer_window;
+use producer_window::rebuilt_data_window_bounds_retry;
+
 mod truncated_producer;
 use truncated_producer::truncated_replay_bounds_first_retry;
 
