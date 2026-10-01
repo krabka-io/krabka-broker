@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/producer/completion/coverage.rs" 18 0 18 65 *)
+
+let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 14 11 14 76
+let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 10 15 16
+let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 10 17 69
+
+use creusot.int.UInt64
+use seq.Seq
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant selected : Seq.seq UInt64.t
+
+predicate lemma_identity_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 18 0 18 65] (selected: Seq.seq UInt64.t)
+
+goal vc_lemma_identity_window: ([%#scoverage] forall j: int. 0 <= j /\ j < Seq.length selected
+      -> UInt64.t'int (Seq.get selected j) = j)
+  -> (forall i: int. 0 <= i /\ i < Seq.length selected -> UInt64.t'int (Seq.get selected i) = i)
+  && (let result = true in [@stop_split] [@expl:lemma_identity_window ensures] ([@stop_split] [@expl:lemma_identity_window ensures #0] [%#scoverage'0] result)
+  /\ ([@stop_split] [@expl:lemma_identity_window ensures #1] [%#scoverage'1] result
+  -> (forall i: int. 0 <= i /\ i < Seq.length selected
+    -> (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i))))

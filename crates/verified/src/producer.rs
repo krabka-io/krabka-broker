@@ -50,9 +50,9 @@ mod decision;
 pub use decision::producer_decision;
 
 mod completion;
-#[cfg(creusot)]
-pub use completion::completion_offset;
 pub use completion::producer_completion_window;
+#[cfg(creusot)]
+pub use completion::{completion_offset, completion_source_selected};
 
 #[cfg(test)]
 mod tests;
