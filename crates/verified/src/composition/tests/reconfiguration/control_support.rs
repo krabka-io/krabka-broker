@@ -4,6 +4,62 @@ use assert2::assert;
 
 use super::{oracle::expected_membership, *};
 
+type ExpectedControl = Option<(
+    VoterReconfigurationPlan,
+    Vec<u64>,
+    Vec<i32>,
+    Option<(i64, (usize, usize), u64)>,
+)>;
+
+pub(super) fn expected_control(
+    old: &[u64],
+    state: (ReconfigurationLeadership, CurrentVoterSet),
+    request: VoterChangeRequest,
+    node: u64,
+    candidate: TargetVoter,
+    base: i64,
+    reports: &[(i64, i64)],
+) -> ExpectedControl {
+    expected_membership(old, state.0, state.1, request, node, candidate).and_then(|(plan, next)| {
+        let count = usize::from(plan.write_kraft_version) + usize::from(plan.write_voters);
+        let deltas: Vec<_> = (0..count).map(|i| i32::try_from(i).unwrap()).collect();
+        if count == 0 {
+            return Some((plan, next, deltas, None));
+        }
+        let end = i128::from(base) + i128::try_from(count).unwrap();
+        if base < 0 || end > i128::from(i64::MAX) {
+            return None;
+        }
+        let end = i64::try_from(end).unwrap();
+        let next_ids: BTreeSet<_> = next.iter().copied().collect();
+        let old_grants: BTreeSet<_> = old
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| reports[*i].0 >= end)
+            .map(|(_, id)| *id)
+            .collect();
+        let mut new_grants: BTreeSet<_> = old
+            .iter()
+            .enumerate()
+            .filter(|(i, id)| reports[*i].1 >= end && next_ids.contains(*id))
+            .map(|(_, id)| *id)
+            .collect();
+        if !old.contains(&node) && next_ids.contains(&node) && reports[old.len()].1 >= end {
+            new_grants.insert(node);
+        }
+        let counts = (old_grants.len(), new_grants.len());
+        if counts.0 <= old.len() / 2 || counts.1 <= next.len() / 2 {
+            return None;
+        }
+        let common = old
+            .iter()
+            .copied()
+            .find(|id| old_grants.contains(id) && new_grants.contains(id))
+            .unwrap();
+        Some((plan, next, deltas, Some((end, counts, common))))
+    })
+}
+
 fn check_control(
     old: &[u64],
     state: (ReconfigurationLeadership, CurrentVoterSet),
@@ -13,49 +69,9 @@ fn check_control(
     base: i64,
     reports: &[(i64, i64)],
 ) {
-    let expected = expected_membership(old, state.0, state.1, request, node, candidate).and_then(
-        |(plan, next)| {
-            let count = usize::from(plan.write_kraft_version) + usize::from(plan.write_voters);
-            let deltas: Vec<_> = (0..count).map(|i| i32::try_from(i).unwrap()).collect();
-            if count == 0 {
-                return Some((plan, next, deltas, None));
-            }
-            let end = i128::from(base) + i128::try_from(count).unwrap();
-            if base < 0 || end > i128::from(i64::MAX) {
-                return None;
-            }
-            let end = i64::try_from(end).unwrap();
-            let next_ids: BTreeSet<_> = next.iter().copied().collect();
-            let old_grants: BTreeSet<_> = old
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| reports[*i].0 >= end)
-                .map(|(_, id)| *id)
-                .collect();
-            let mut new_grants: BTreeSet<_> = old
-                .iter()
-                .enumerate()
-                .filter(|(i, id)| reports[*i].1 >= end && next_ids.contains(*id))
-                .map(|(_, id)| *id)
-                .collect();
-            if !old.contains(&node) && next_ids.contains(&node) && reports[old.len()].1 >= end {
-                new_grants.insert(node);
-            }
-            let counts = (old_grants.len(), new_grants.len());
-            if counts.0 <= old.len() / 2 || counts.1 <= next.len() / 2 {
-                return None;
-            }
-            let common = old
-                .iter()
-                .copied()
-                .find(|id| old_grants.contains(id) && new_grants.contains(id))
-                .unwrap();
-            Some((plan, next, deltas, Some((end, counts, common))))
-        },
-    );
     assert!(
         reconfiguration_control_prefix_support(old, state, request, node, candidate, base, reports)
-            == expected
+            == expected_control(old, state, request, node, candidate, base, reports)
     );
 }
 

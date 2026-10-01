@@ -241,6 +241,6 @@ use schema_produce::schema_checked_produce_frontier;
 
 mod reconfiguration;
 use reconfiguration::{
-    constructed_voter_reconfiguration, reconfiguration_control_prefix_support,
-    reconfigured_majorities_overlap,
+    constructed_voter_reconfiguration, reconfiguration_control_commit_waiter,
+    reconfiguration_control_prefix_support, reconfigured_majorities_overlap,
 };

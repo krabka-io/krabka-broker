@@ -1715,3 +1715,72 @@ composition topic files. This layer remains local on
 `codex/proof-reconfigured-append-support`, above `codex/proof-quorum-membership`;
 neither local layer has a published PR or remote qualification. PR #1268 remains
 green at its published 553-session schema commit.
+
+## Whole-batch control commitment and waiter resolution
+
+A shared whole-batch prefix witness does not yet connect the controller's
+high-watermark advance, per-history lookup and reconfiguration waiter. In
+particular, value equality is weaker than record commitment. Version
+finalization writes KRaftVersion followed by the unchanged Voters value. After
+the HWM passes only the first record, both latest control values can equal the
+committed values even though the new Voters record is still outside the
+committed prefix. The real pending-change guard and offset-based waiter must
+continue to cover that second record; this observation alone is not a controller
+safety defect.
+
+[`reconfiguration_control_commit_waiter`](../crates/verified/src/composition/reconfiguration/control_support/commit.rs)
+consumes the admitted plan, actual deltas and common prefix supporter. It builds
+the absolute control offsets and advances the HWM against the supplied actual
+log end, not just the control batch end. The ordered-history kernel yields the
+committed prefix; the visibility kernel marks each actual row, including its
+version/Voters role. The waiter frontier equals whole-prefix commitment. Its
+readiness is equivalent to either the previous or requested HWM reaching the
+batch's exclusive end, accounting for monotonic clamping. Later appends, an HWM
+inside or beyond this batch, and backward requests preserve that equivalence.
+No-append preflight consumes no coordinates or waiter. Appended batches reject
+an incoherent HWM/log-end projection without adding an unchecked precondition.
+The admission contract is an equivalence, so rejecting every input cannot prove
+it.
+
+The native oracle reuses the independent membership/prefix-set oracle and counts
+visible actual rows linearly. It does not use the history binary search or the
+waiter kernel to determine readiness. Properties cover arbitrary observations;
+fixed tables cover all change kinds, short prefix reports, signed offset limits,
+invalid coordinates and no-append preflight. Another table advances through and
+past both finalization rows while subsequent metadata extends the log end.
+The concrete equal-membership counterexample commits only the version row.
+A real three-voter controller regression independently elects the leader,
+commits its epoch, appends finalization and advances its HWM in two steps. It
+checks the matching voter values with the new Voters record exactly at the HWM,
+then verifies the pending waiter/channel until that final record is passed.
+
+These guarantees require truthful IDs, reported prefixes, matching histories,
+physical storage identity, actual control bytes and the real log end/HWM
+projection. Admission facts describe this batch's admission; progress describes
+a later advance in that same log. They need not describe the same instant, and
+the theorem does not read or revalidate live controller state.
+Both-membership prefix qualification does not establish the KRaft
+core's latest-view consensus rule or election safety. The host still establishes
+which HWM may be requested. Fetched prefixes do not prove fsync, and neither
+this composition nor the regression proves crash durability or complete
+asynchronous controller execution.
+
+Five scoped negative controls test that boundary. Making history lookup
+inclusive, making the waiter require a strictly greater HWM, or removing the
+HWM's log-end clamp keeps each primitive provable under its correspondingly
+changed contract, but fails the aggregate proof and native row oracle. Rejecting
+every preflight fails admission equivalence and native tests. Replacing the real
+controller's offset gate with equality of latest/committed control values makes
+the new controller regression fail at the still-pending final record. The
+positive composition passes the same cache-free depth-two search used for the
+proof controls. Every temporary edit was restored byte-for-byte, and generated
+failing-control seeds were kept outside the repository.
+
+Pinned-image generation and cache-free canonical replay both prove all 562
+sessions. All 349 verified-crate tests, all 381 Raft tests, the three focused
+Bazel targets, workspace all-target Clippy with warnings denied, formatting and
+proof/mutation configuration checks pass. One new session is retained; all
+1,122 parent artifact files are unchanged. Every verified Rust source remains
+below 300 lines (largest: 288), across 51 composition topic files. This layer is
+local on `codex/proof-control-commit-waiter`, above published PR #1270, and has no
+remote qualification yet.
