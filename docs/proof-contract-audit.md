@@ -1273,7 +1273,16 @@ The consumer independently exports selection of every initially unblocked
 expired prefix. With the same paired zero mutation, the stronger primitive
 fails. If its stopping guarantee is removed so the weak primitive proves again,
 the stronger consumer still fails. Native tests fail in both cases. These scoped
-controls close the all-zero selector/reference escape; they are not a full
+controls close the all-zero selector/reference escape for expired prefixes.
+A follow-up adds independent first-segment progress when its size fits the
+active size debt, including non-expired and zero-byte segments. The local
+kernel exports this law and the remote-coverage composition consumes it.
+A paired mutation that stops both the selector and reference fold on
+non-expired size-pass segments fails the stronger kernel. Removing only the
+new progress clause lets that mutated kernel prove again, but leaves the
+consumer at 37 of 38 obligations. Sources are restored byte-for-byte; pinned
+forced generation and the four independent covered-retention native checks
+pass with the stronger law. These checks are not a full
 mutation sweep.
 
 Final local validation passes: fresh-target generation and no-cache canonical

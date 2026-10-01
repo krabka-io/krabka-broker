@@ -14,6 +14,7 @@ type CoveredRetention = (Option<i64>, Vec<LocalRetentionSegment>, usize, Option<
 /// local size/time prefix, and convert its inclusive endpoint to a delete target.
 /// Every offset selected for eviction belongs to a supplied remote interval,
 /// including local gaps; every initially unblocked expired prefix is selected.
+/// A covered oldest segment that fits the size debt also requires progress.
 /// Exact expiry/size facts, complete truthful copy metadata valid through
 /// application and durable physical deletion remain external.
 /// The active segment is protected.
@@ -47,6 +48,9 @@ type CoveredRetention = (Option<i64>, Vec<LocalRetentionSegment>, usize, Option<
 #[ensures(forall<n: Int> 0 <= n && n <= local@.len()
     && (forall<i: Int> 0 <= i && i < n ==> !result.1@[i].blocked && result.1@[i].expired)
     ==> n <= result.2@)]
+#[ensures(local@.len() > 0 && !result.1@[0].blocked && match size_debt {
+    None => false, Some(debt) => local@[0].2@ <= debt@,
+} ==> result.2@ > 0)]
 #[ensures(result.0 == None ==> result.2@ == 0 && result.3 == None)]
 #[ensures(match result.3 {
     None => result.2@ == 0 || local@[result.2@ - 1].1@ == i64::MAX@,
