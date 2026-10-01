@@ -3,6 +3,7 @@ use creusot_std::prelude::*;
 use super::completion_offset;
 
 mod order;
+mod witness;
 
 /// A sorted insertion followed by a one-row prefix cut keeps the greatest
 /// five distinct offsets. This isolates the inverse-index proof from the
@@ -40,13 +41,21 @@ pub(super) fn lemma_inserted_window(
     first: Int,
     selected: Seq<usize>,
 ) -> bool {
-    proof_assert!(forall<i: Int> 0 <= i && i < ends.len()
-        && (if i >= position { i + 1 >= first } else { i >= first }) ==>
-        selected[(if i >= position { i + 1 } else { i }) - first]@ == i);
     proof_assert!(position >= first ==> selected[position - first]@ == ends.len());
     proof_assert!(forall<i: Int> 0 <= i && i < ends.len()
-        && !(exists<j: Int> 0 <= j && j < selected.len() && selected[j]@ == i) ==>
-        i == 0 && ends[i] == ends[0] && first == 1 && position > 0 && selected.len() == 5);
+        && !(exists<j: Int> 0 <= j && j < selected.len() && selected[j]@ == i) ==> {
+        let covered = if i < position { first <= i } else { first <= i + 1 };
+        if covered {
+            let slot = witness::old_source_slot(selected, ends.len(), position, first, i);
+            if selected[slot]@ == i {
+                false
+            } else {
+                i == 0 && ends[i] == ends[0] && first == 1 && position > 0 && selected.len() == 5
+            }
+        } else {
+            i == 0 && ends[i] == ends[0] && first == 1 && position > 0 && selected.len() == 5
+        }
+    });
     proof_assert!(forall<j: Int> 0 <= j && j < selected.len() ==>
         selected[j]@ == order::insertion_source(ends.len(), position, first + j));
     proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < selected.len() ==> {

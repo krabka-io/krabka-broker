@@ -2078,27 +2078,25 @@ signed-offset and epoch boundaries. The composition separately establishes
 valid nonnegative producer geometry for retry coordinates. A separate checked
 insertion lemma connects inverse indices and the dropped prefix to maximal
 retained offsets; a separate pointwise lemma supplies the strict order of any
-two insertion positions. The omitted old row's offset is explicitly tied to
-the discarded prefix before exporting the maximal-window guarantee. Explicit new-epoch and unchanged-window branches preserve the
-same selector contract while separating those cases from sorted insertion.
-Saved-ledger replay exposed unstable quantified bridges in the combined case;
-the checked case facts avoid depending on that search. Qualification also forces
-fresh control plans to avoid carrying a mutated proof strategy into later runs.
-It uses the repository's normal depth and preserves the maximal-window contract.
+two insertion positions. A checked slot witness constructs the retained position
+of every old source outside the discarded prefix. The caller keeps that witness's
+membership as a branch condition, so splitting an omitted-row conjunction cannot
+discard the term needed to contradict omission. The remaining omitted old row is
+explicitly tied to the discarded prefix before exporting the maximal-window
+guarantee. Explicit new-epoch and unchanged-window branches preserve the same
+selector contract while separating those cases from sorted insertion. These
+proof-only changes retain every exported contract and the normal depth-six search.
 
-
-Qualification remains partial for this layer. The pinned Creusot v0.13.0 image
-compiles the frozen source and proves all four new sessions with cache-free,
-forced depth-six search. Broad updating generation still replaces two passing
-window-lemma leaves with failures; that proof-plan instability is unresolved.
-Full canonical saved-ledger replay also fails four window-lemma leaves, while
-forced regeneration of the four new sessions passes. Native validation passes
-all 363 verified-crate tests and 38 producer-state tests, including the model,
+The pinned Creusot v0.13.0 image compiles the frozen source from a fresh target
+directory and proves all 571 sessions with ordinary cache-free generation. Full
+canonical saved-ledger replay also proves all 571 sessions without cached answers.
+Focused forced generation proves all five sessions added by this layer. Native
+validation passes all 363 verified-crate tests and 38 producer-state tests, including the model,
 all completion orders, and real marker/restart cases. Relevant Bazel tests/docs,
 strict workspace Clippy, proof/mutation configuration checks and formatting pass.
 The six scoped controls passed before the final proof-only decomposition; the
 four mutated source files' positive bytes are unchanged. Later edits affect
-only Creusot-only helper bodies and add the pointwise ordering lemma. The 1,132
-parent artifact files remain byte-identical and all authored verified Rust files
-remain below 300 lines (maximum 288). This layer must remain a draft until its
-ordinary proof regeneration and remote CI are qualified.
+only Creusot-only helper bodies and add the pointwise ordering and slot-witness
+lemmas. The 1,132 parent artifact files remain byte-identical and all authored verified Rust files
+remain below 300 lines (maximum 288). Local proof qualification is complete;
+remote CI for the repaired head is tracked separately.

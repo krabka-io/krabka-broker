@@ -57,19 +57,19 @@ let%span scompletion'41 = "/workspace/crates/verified/src/producer/completion.rs
 let%span scompletion'42 = "/workspace/crates/verified/src/producer/completion.rs" 40 10 43 74
 let%span scompletion'43 = "/workspace/crates/verified/src/producer/completion.rs" 44 10 45 72
 let%span scompletion'44 = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
-let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 14 11 14 69
-let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 11 15 55
-let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 11 16 51
-let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 17 11 17 91
-let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 18 11 18 73
-let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 19 11 19 82
-let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 20 11 22 69
-let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 23 10 23 16
-let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 24 10 24 62
-let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 25 10 25 97
-let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 26 10 27 102
-let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 28 10 31 72
-let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 32 10 35 73
+let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 11 15 69
+let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 11 16 55
+let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 17 11 17 51
+let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 18 11 18 91
+let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 19 11 19 73
+let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 20 11 20 82
+let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 21 11 23 69
+let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 24 10 24 16
+let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 25 10 25 62
+let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 26 10 26 97
+let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 27 10 28 102
+let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 29 10 32 72
+let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 33 10 36 73
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -149,7 +149,7 @@ let push_usize (self_: MutBorrow.t t_Vec_usize_Global) (v: UInt64.t) (return (x:
 function completion_offset [#"/workspace/crates/verified/src/producer/completion.rs" 10 0 10 74] (ends: Seq.seq Int64.t) (incoming: Int64.t) (index: int) : int
  = [%#scompletion'44] if index = Seq.length ends then Int64.to_int incoming else Int64.to_int (Seq.get ends index)
 
-predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 36 0 42 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
+predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 37 0 43 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
 
 axiom lemma_inserted_window_spec:
   forall ends: Seq.seq Int64.t, incoming: Int64.t, position: int, first: int, selected: Seq.seq UInt64.t [lemma_inserted_window ends incoming position first selected]. ([%#scoverage] Seq.length ends

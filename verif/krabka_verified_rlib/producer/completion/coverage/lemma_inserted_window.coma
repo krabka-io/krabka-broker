@@ -1,21 +1,21 @@
-(* #"/workspace/crates/verified/src/producer/completion/coverage.rs" 36 0 42 9 *)
+(* #"/workspace/crates/verified/src/producer/completion/coverage.rs" 37 0 43 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
-let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 14 11 14 69
-let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 11 15 55
-let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 11 16 51
-let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 17 11 17 91
-let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 18 11 18 73
-let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 19 11 19 82
-let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 20 11 22 69
-let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 23 10 23 16
-let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 24 10 24 62
-let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 25 10 25 97
-let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 26 10 27 102
-let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 28 10 31 72
-let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 32 10 35 73
+let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 11 15 69
+let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 11 16 55
+let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 17 11 17 51
+let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 18 11 18 91
+let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 19 11 19 73
+let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 20 11 20 82
+let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 21 11 23 69
+let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 24 10 24 16
+let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 25 10 25 62
+let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 26 10 26 97
+let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 27 10 28 102
+let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 29 10 32 72
+let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 33 10 36 73
 let%span sorder = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 21 11 21 50
 let%span sorder'0 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 22 11 22 61
 let%span sorder'1 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 23 11 23 91
@@ -24,6 +24,13 @@ let%span sorder'3 = "/workspace/crates/verified/src/producer/completion/coverage
 let%span sorder'4 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 26 10 26 16
 let%span sorder'5 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 27 10 28 86
 let%span sorder'6 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 10 16 11 63
+let%span switness = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 10 11 10 59
+let%span switness'0 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 11 11 11 40
+let%span switness'1 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 12 11 12 80
+let%span switness'2 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 13 11 13 46
+let%span switness'3 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 14 11 16 69
+let%span switness'4 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 17 10 17 48
+let%span switness'5 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 18 10 18 37
 
 use creusot.int.Int64
 use seq.Seq
@@ -40,6 +47,41 @@ function completion_offset [#"/workspace/crates/verified/src/producer/completion
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
+
+function old_source_slot [#"/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 19 0 25 8] (selected: Seq.seq UInt64.t) (count: int) (position: int) (first: int) (source: int) : int
+
+axiom old_source_slot_spec:
+  forall selected: Seq.seq UInt64.t, count: int, position: int, first: int, source: int [old_source_slot selected count position first source]. ([%#switness] 0
+        <= position
+      /\ position <= count /\ 0 <= first)
+    -> ([%#switness'0] 0 <= source /\ source < count)
+    -> ([%#switness'1] if source < position then first <= source else first <= source + 1)
+    -> ([%#switness'2] Seq.length selected = count + 1 - first)
+    -> ([%#switness'3] forall j: int. 0 <= j /\ j < Seq.length selected
+        -> UInt64.t'int (Seq.get selected j)
+        = (if first + j = position then
+          count
+        else
+          if gt_log_Int (first + j) position then first + j - 1 else first + j
+        ))
+    -> ([%#switness'4] 0 <= old_source_slot selected count position first source
+    /\ old_source_slot selected count position first source < Seq.length selected)
+
+axiom old_source_slot_spec'0:
+  forall selected: Seq.seq UInt64.t, count: int, position: int, first: int, source: int [old_source_slot selected count position first source]. ([%#switness] 0
+        <= position
+      /\ position <= count /\ 0 <= first)
+    -> ([%#switness'0] 0 <= source /\ source < count)
+    -> ([%#switness'1] if source < position then first <= source else first <= source + 1)
+    -> ([%#switness'2] Seq.length selected = count + 1 - first)
+    -> ([%#switness'3] forall j: int. 0 <= j /\ j < Seq.length selected
+        -> UInt64.t'int (Seq.get selected j)
+        = (if first + j = position then
+          count
+        else
+          if gt_log_Int (first + j) position then first + j - 1 else first + j
+        ))
+    -> ([%#switness'5] UInt64.t'int (Seq.get selected (old_source_slot selected count position first source)) = source)
 
 function insertion_source [#"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 9 0 9 71] (count: int) (position: int) (ordinal: int) : int
  = [%#sorder'6] if ordinal = position then count else if gt_log_Int ordinal position then ordinal - 1 else ordinal
@@ -86,7 +128,7 @@ constant first : int
 
 constant selected : Seq.seq UInt64.t
 
-predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 36 0 42 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
+predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 37 0 43 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
 
 goal vc_lemma_inserted_window: ([%#scoverage] Seq.length ends <= 5 /\ 0 <= position /\ position <= Seq.length ends)
   -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
@@ -103,15 +145,92 @@ goal vc_lemma_inserted_window: ([%#scoverage] Seq.length ends <= 5 /\ 0 <= posit
       else
         if gt_log_Int (first + j) position then first + j - 1 else first + j
       ))
-  -> (forall i: int. 0 <= i
-        /\ i < Seq.length ends /\ (if ge_log_Int i position then ge_log_Int (i + 1) first else ge_log_Int i first)
-      -> UInt64.t'int (Seq.get selected ((if ge_log_Int i position then i + 1 else i) - first)) = i)
-  && (if ge_log_Int position first then
+  -> (if ge_log_Int position first then
     UInt64.t'int (Seq.get selected (position - first)) = Seq.length ends
-    && (forall i: int. 0 <= i
+    && (forall i: int. if 0 <= i then
+          if i < Seq.length ends then
+            if not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i) then
+              if i < position then
+                let covered = first <= i in if covered then
+                  ([@stop_split] [@expl:old_source_slot requires] ([@stop_split] [@expl:old_source_slot requires #0] [%#switness] 0
+                        <= position
+                      /\ position <= Seq.length ends /\ 0 <= first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #1] [%#switness'0] 0 <= i /\ i < Seq.length ends)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #2] [%#switness'1] if i < position then
+                        first <= i
+                      else
+                        first <= i + 1
+                      )
+                    /\ ([@stop_split] [@expl:old_source_slot requires #3] [%#switness'2] Seq.length selected
+                      = Seq.length ends + 1 - first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #4] [%#switness'3] forall j: int. 0 <= j
+                        /\ j < Seq.length selected
+                      -> UInt64.t'int (Seq.get selected j)
+                      = (if first + j = position then
+                        Seq.length ends
+                      else
+                        if gt_log_Int (first + j) position then first + j - 1 else first + j
+                      )))
+                  /\ (([@stop_split] [@expl:old_source_slot ensures] ([@stop_split] [@expl:old_source_slot ensures #0] [%#switness'4] 0
+                        <= old_source_slot selected (Seq.length ends) position first i
+                      /\ old_source_slot selected (Seq.length ends) position first i < Seq.length selected)
+                    /\ ([@stop_split] [@expl:old_source_slot ensures #1] [%#switness'5] UInt64.t'int (Seq.get selected (old_source_slot selected (Seq.length ends) position first i))
+                    = i)) -> (let slot = old_source_slot selected (Seq.length ends) position first i in true))
+                else
+                  true
+
+              else
+                let covered = first <= i + 1 in if covered then
+                  ([@stop_split] [@expl:old_source_slot requires] ([@stop_split] [@expl:old_source_slot requires #0] [%#switness] 0
+                        <= position
+                      /\ position <= Seq.length ends /\ 0 <= first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #1] [%#switness'0] 0 <= i /\ i < Seq.length ends)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #2] [%#switness'1] if i < position then
+                        first <= i
+                      else
+                        first <= i + 1
+                      )
+                    /\ ([@stop_split] [@expl:old_source_slot requires #3] [%#switness'2] Seq.length selected
+                      = Seq.length ends + 1 - first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #4] [%#switness'3] forall j: int. 0 <= j
+                        /\ j < Seq.length selected
+                      -> UInt64.t'int (Seq.get selected j)
+                      = (if first + j = position then
+                        Seq.length ends
+                      else
+                        if gt_log_Int (first + j) position then first + j - 1 else first + j
+                      )))
+                  /\ (([@stop_split] [@expl:old_source_slot ensures] ([@stop_split] [@expl:old_source_slot ensures #0] [%#switness'4] 0
+                        <= old_source_slot selected (Seq.length ends) position first i
+                      /\ old_source_slot selected (Seq.length ends) position first i < Seq.length selected)
+                    /\ ([@stop_split] [@expl:old_source_slot ensures #1] [%#switness'5] UInt64.t'int (Seq.get selected (old_source_slot selected (Seq.length ends) position first i))
+                    = i)) -> (let slot = old_source_slot selected (Seq.length ends) position first i in true))
+                else
+                  true
+
+
+            else
+              true
+
+          else
+            true
+
+        else
+          true
+      )
+    /\ (forall i: int. 0 <= i
           /\ i < Seq.length ends
           /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
-        -> i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5)
+        -> (let covered = if i < position then first <= i else first <= i + 1 in if covered then
+          let slot = old_source_slot selected (Seq.length ends) position first i in if UInt64.t'int (Seq.get selected slot)
+          = i then
+            false
+          else
+            i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5
+
+        else
+          i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5
+        ))
     && (forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j) = insertion_source (Seq.length ends) position (first + j))
     && (forall i: int, j: int. if 0 <= i then
@@ -212,10 +331,90 @@ goal vc_lemma_inserted_window: ([%#scoverage] Seq.length ends <= 5 /\ 0 <= posit
     /\ (forall j: int. 0 <= j /\ j < Seq.length selected
       -> Int64.to_int incoming < completion_offset ends incoming (UInt64.t'int (Seq.get selected j)))))
   else
-    (forall i: int. 0 <= i
+    (forall i: int. if 0 <= i then
+          if i < Seq.length ends then
+            if not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i) then
+              if i < position then
+                let covered = first <= i in if covered then
+                  ([@stop_split] [@expl:old_source_slot requires] ([@stop_split] [@expl:old_source_slot requires #0] [%#switness] 0
+                        <= position
+                      /\ position <= Seq.length ends /\ 0 <= first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #1] [%#switness'0] 0 <= i /\ i < Seq.length ends)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #2] [%#switness'1] if i < position then
+                        first <= i
+                      else
+                        first <= i + 1
+                      )
+                    /\ ([@stop_split] [@expl:old_source_slot requires #3] [%#switness'2] Seq.length selected
+                      = Seq.length ends + 1 - first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #4] [%#switness'3] forall j: int. 0 <= j
+                        /\ j < Seq.length selected
+                      -> UInt64.t'int (Seq.get selected j)
+                      = (if first + j = position then
+                        Seq.length ends
+                      else
+                        if gt_log_Int (first + j) position then first + j - 1 else first + j
+                      )))
+                  /\ (([@stop_split] [@expl:old_source_slot ensures] ([@stop_split] [@expl:old_source_slot ensures #0] [%#switness'4] 0
+                        <= old_source_slot selected (Seq.length ends) position first i
+                      /\ old_source_slot selected (Seq.length ends) position first i < Seq.length selected)
+                    /\ ([@stop_split] [@expl:old_source_slot ensures #1] [%#switness'5] UInt64.t'int (Seq.get selected (old_source_slot selected (Seq.length ends) position first i))
+                    = i)) -> (let slot = old_source_slot selected (Seq.length ends) position first i in true))
+                else
+                  true
+
+              else
+                let covered = first <= i + 1 in if covered then
+                  ([@stop_split] [@expl:old_source_slot requires] ([@stop_split] [@expl:old_source_slot requires #0] [%#switness] 0
+                        <= position
+                      /\ position <= Seq.length ends /\ 0 <= first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #1] [%#switness'0] 0 <= i /\ i < Seq.length ends)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #2] [%#switness'1] if i < position then
+                        first <= i
+                      else
+                        first <= i + 1
+                      )
+                    /\ ([@stop_split] [@expl:old_source_slot requires #3] [%#switness'2] Seq.length selected
+                      = Seq.length ends + 1 - first)
+                    /\ ([@stop_split] [@expl:old_source_slot requires #4] [%#switness'3] forall j: int. 0 <= j
+                        /\ j < Seq.length selected
+                      -> UInt64.t'int (Seq.get selected j)
+                      = (if first + j = position then
+                        Seq.length ends
+                      else
+                        if gt_log_Int (first + j) position then first + j - 1 else first + j
+                      )))
+                  /\ (([@stop_split] [@expl:old_source_slot ensures] ([@stop_split] [@expl:old_source_slot ensures #0] [%#switness'4] 0
+                        <= old_source_slot selected (Seq.length ends) position first i
+                      /\ old_source_slot selected (Seq.length ends) position first i < Seq.length selected)
+                    /\ ([@stop_split] [@expl:old_source_slot ensures #1] [%#switness'5] UInt64.t'int (Seq.get selected (old_source_slot selected (Seq.length ends) position first i))
+                    = i)) -> (let slot = old_source_slot selected (Seq.length ends) position first i in true))
+                else
+                  true
+
+
+            else
+              true
+
+          else
+            true
+
+        else
+          true
+      )
+    /\ (forall i: int. 0 <= i
           /\ i < Seq.length ends
           /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
-        -> i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5)
+        -> (let covered = if i < position then first <= i else first <= i + 1 in if covered then
+          let slot = old_source_slot selected (Seq.length ends) position first i in if UInt64.t'int (Seq.get selected slot)
+          = i then
+            false
+          else
+            i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5
+
+        else
+          i = 0 /\ Seq.get ends i = Seq.get ends 0 /\ first = 1 /\ gt_log_Int position 0 /\ Seq.length selected = 5
+        ))
     && (forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j) = insertion_source (Seq.length ends) position (first + j))
     && (forall i: int, j: int. if 0 <= i then
