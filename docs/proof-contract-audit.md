@@ -340,6 +340,16 @@ Creusot/mutation configuration checks pass.
 
 The arbitrary consume-trace composition combines the production refill, whole-token request selector, and grant kernel. An independent signed rational ledger checks small unsaturated balances, fractional credit, debt repayment, burst loss, repeated/backward clocks, empty traces, and 64-bit extremes. Production tests exercise spending between refills and debt repayment. A paired zero-selector/weak-contract control proves both the altered selector and the conservation-only trace, but fails the restored service guarantee, independent ledger tests, and production quantizer tests. All temporary mutations are restored before validation.
 
+CI repeatedly left the trace's accumulated conservation invariant unproved.
+Its induction now keeps a ghost sum of granted storage units, and separately
+proves that this sum equals the actual whole-token grants times their unit
+scale. The credit ledger stays additive instead of combining token products
+with all earlier cap losses. Public contracts and runtime bodies are unchanged.
+Removing that link leaves the trace at 56 of 60 obligations; the positive
+source is restored byte-for-byte. Pinned cache-free full generation passes all
+537 sessions, all 303 native verified tests pass, and each previously failing
+broker integration target passes three local runs. Fresh CI remains required.
+
 The final consume-trace batch passes fresh generation and the two-worker
 no-cache saved-session replay of all 519 proof files, 268 verified tests,
 34 throttle tests, eight bucket-model tests, nine broker Fetch-throttle tests,
