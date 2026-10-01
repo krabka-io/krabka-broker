@@ -1,0 +1,29 @@
+(* #"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 62 0 62 60 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 60 11 60 68
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 61 10 61 52
+
+use int.ComputerDivision
+use int.MinMax
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant old' : int
+
+constant next : int
+
+function adjacent_majorities_exceed_union [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 62 0 62 60] (old': int) (next: int) : ()
+
+goal vc_adjacent_majorities_exceed_union: ([%#sspec] 0 < old' /\ 0 < next /\ old' - 1 <= next /\ next <= old' + 1)
+  -> ([@stop_split] [@expl:adjacent_majorities_exceed_union ensures] [%#sspec'0] gt_log_Int (ComputerDivision.div old' 2
+      + 1
+    + ComputerDivision.div next 2
+  + 1) (MinMax.max old' next))

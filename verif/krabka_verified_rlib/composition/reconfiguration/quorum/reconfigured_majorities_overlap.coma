@@ -1,0 +1,688 @@
+(* #"/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 58 0 66 18 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 13 10 13 61
+let%span smembership = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 22 11 22 45
+let%span smembership'0 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 23 10 27 6
+let%span smembership'1 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 28 10 39 1
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 70 10 70 15
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 79 16 86 5
+let%span sspec'2 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 60 11 60 68
+let%span sspec'3 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 61 10 61 52
+let%span sspec'4 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 20 16 21 63
+let%span sspec'5 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 34 16 35 85
+let%span sspec'6 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 49 16 53 5
+let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 100 8 159 9
+let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 51 8 51 87
+let%span sadmitted_plan'1 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 70 8 71 67
+let%span squorum = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 68 8 68 90
+let%span squorum'0 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 68 8 68 91
+let%span squorum'1 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 71 22 71 28
+let%span squorum'2 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 71 30 71 36
+let%span squorum'3 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 73 16 73 22
+let%span squorum'4 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 88 14 88 31
+let%span squorum'5 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 89 14 89 25
+let%span squorum'6 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 86 16 87 79
+let%span squorum'7 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 83 16 85 36
+let%span squorum'8 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 81 16 82 74
+let%span squorum'9 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 79 16 80 72
+let%span squorum'10 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 76 16 78 52
+let%span squorum'11 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 75 16 75 47
+let%span squorum'12 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 74 16 74 34
+let%span squorum'13 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 90 29 90 38
+let%span squorum'14 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 92 23 92 29
+let%span squorum'15 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 92 12 92 37
+let%span squorum'16 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 96 38 96 46
+let%span squorum'17 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 96 38 96 48
+let%span squorum'18 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 96 24 96 48
+let%span squorum'19 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 97 38 97 46
+let%span squorum'20 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 97 38 97 48
+let%span squorum'21 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 97 24 97 48
+let%span squorum'22 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 99 24 99 25
+let%span squorum'23 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 99 12 99 25
+let%span squorum'24 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 102 24 102 25
+let%span squorum'25 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 102 12 102 25
+let%span squorum'26 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 104 37 104 53
+let%span squorum'27 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 105 26 105 32
+let%span squorum'28 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 107 13 107 14
+let%span squorum'29 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 107 8 107 14
+let%span squorum'30 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 110 8 110 65
+let%span squorum'31 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 114 28 114 37
+let%span squorum'32 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 114 8 114 48
+let%span squorum'33 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 115 28 115 38
+let%span squorum'34 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 115 8 115 49
+let%span squorum'35 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 31 11 31 45
+let%span squorum'36 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 32 11 32 41
+let%span squorum'37 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 33 10 37 6
+let%span squorum'38 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 38 10 51 1
+let%span squorum'39 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 52 10 57 1
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use creusot.int.UInt16
+use seq.Seq
+use int.MinMax
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+type t_ReconfigurationLeadership = { is_leader: bool; no_pending_change: bool; epoch_committed: bool }
+
+type t_CurrentVoterSet = {
+  voter_count: UInt64.t;
+  kraft_version: UInt16.t;
+  latest_controls_committed: bool;
+  all_voters_support_requested: bool }
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+type t_VoterChangeRequest = { kind: t_VoterChangeKind; requested_kraft_version: UInt16.t }
+
+type t_TargetMembership = Absent | PresentUnknownDirectory | PresentSameDirectory | PresentOtherDirectory
+
+type t_TargetVoter = { membership: t_TargetMembership; version_compatible: bool; caught_up: bool }
+
+type t_VoterReconfigurationPlan = {
+  next_voter_count: UInt64.t;
+  next_kraft_version: UInt16.t;
+  write_voters: bool;
+  write_kraft_version: bool;
+  preflight_only: bool }
+
+type t_Vec_u64_Global
+
+type tup2_VoterReconfigurationPlan_Vec_u64_Global = { f0: t_VoterReconfigurationPlan; f1: t_Vec_u64_Global }
+
+type t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global = None | Some tup2_VoterReconfigurationPlan_Vec_u64_Global
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate valid_old [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 19 0 19 41] (nodes: Seq.seq UInt64.t) =
+  [%#sspec'4] gt_log_Int (Seq.length nodes) 0
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length nodes -> Seq.get nodes i <> Seq.get nodes j)
+
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+  [%#sspec] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+
+predicate membership_coherent [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 28 0 33 9] (nodes: Seq.seq UInt64.t) (node: UInt64.t) (membership'0: t_TargetMembership) (kind'0: t_VoterChangeKind) =
+  [%#sspec'5] kind'0 = FinalizeKraftVersion \/ has_node nodes (Seq.length nodes) node = (membership'0 <> Absent)
+
+type t_VoterReconfigurationDecision =
+  | NotLeader
+  | InProgress
+  | EpochUncommitted
+  | EmptyCurrentVoterSet
+  | UnsupportedKraftVersion
+  | DuplicateVoter
+  | IncompatibleVoter
+  | VoterNotCaughtUp
+  | VoterNotFound
+  | DirectoryMismatch
+  | InvalidVersionTransition
+  | Admit t_VoterReconfigurationPlan
+
+type t_Option_VoterReconfigurationDecision = None'0 | Some'0 t_VoterReconfigurationDecision
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+predicate voter_set_removes [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 49 0 49 87] (membership'0: t_TargetMembership) (voters: t_CurrentVoterSet) =
+  [%#sadmitted_plan'0] membership'0 = PresentSameDirectory /\ gt_log_Int (UInt64.t'int voters.voter_count) 1
+
+predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 68 0 68 63] (membership'0: t_TargetMembership) =
+  [%#sadmitted_plan'1] membership'0 = PresentUnknownDirectory \/ membership'0 = PresentSameDirectory
+
+function voter_reconfiguration_rejection [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 93 0 98 41] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) (request: t_VoterChangeRequest) (target: t_TargetVoter) : t_Option_VoterReconfigurationDecision
+ = [%#sadmitted_plan] if not leadership.is_leader then
+    Some'0 (NotLeader)
+  else
+    if not leadership.no_pending_change then
+      Some'0 (InProgress)
+    else
+      if not leadership.epoch_committed then
+        Some'0 (EpochUncommitted)
+      else
+        if not voters.latest_controls_committed then
+          Some'0 (InProgress)
+        else
+          if UInt64.t'int voters.voter_count = 0 then
+            Some'0 (EmptyCurrentVoterSet)
+          else
+            if gt_log_Int (UInt16.t'int voters.kraft_version) 1 then
+              Some'0 (InvalidVersionTransition)
+            else
+              match request.kind with
+                | Add -> if UInt16.t'int voters.kraft_version <> 1 then
+                  Some'0 (UnsupportedKraftVersion)
+                else
+                  if target.membership <> Absent then
+                    Some'0 (DuplicateVoter)
+                  else
+                    if not target.version_compatible then
+                      Some'0 (IncompatibleVoter)
+                    else
+                      if not target.caught_up then
+                        Some'0 (VoterNotCaughtUp)
+                      else
+                        if UInt64.t'int voters.voter_count = UInt64.t'int const_MAX then
+                          Some'0 (InvalidVersionTransition)
+                        else
+                          None'0
+
+
+
+
+
+                | Remove -> if UInt16.t'int voters.kraft_version <> 1 then
+                  Some'0 (UnsupportedKraftVersion)
+                else
+                  if not voter_set_removes target.membership voters then Some'0 (VoterNotFound) else None'0
+
+                | Update -> if not target.version_compatible then
+                  Some'0 (IncompatibleVoter)
+                else
+                  if target.membership = Absent then
+                    Some'0 (VoterNotFound)
+                  else
+                    if not update_key_matches target.membership then Some'0 (DirectoryMismatch) else None'0
+
+
+                | FinalizeKraftVersion -> if UInt16.t'int voters.kraft_version <> 0
+                \/ UInt16.t'int request.requested_kraft_version <> 1 then
+                  Some'0 (InvalidVersionTransition)
+                else
+                  if not voters.all_voters_support_requested then Some'0 (IncompatibleVoter) else None'0
+
+                end
+
+
+
+
+
+
+
+function view_Vec_u64_Global (self: t_Vec_u64_Global) : Seq.seq UInt64.t
+
+axiom view_Vec_u64_Global_spec:
+  forall self: t_Vec_u64_Global [view_Vec_u64_Global self]. [%#svec] Seq.length (view_Vec_u64_Global self)
+    <= UInt64.t'int const_MAX
+
+predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 42 0 48 9] (nodes: Seq.seq UInt64.t) (count: int) (kind'0: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
+  [%#sspec'6] match kind'0 with
+    | Add -> has_node nodes count node \/ node = target
+    | Remove -> has_node nodes count node /\ node <> target
+    | Update | FinalizeKraftVersion -> has_node nodes count node
+    end
+
+let constructed_voter_reconfiguration (old': Slice64.slice UInt64.t) (leadership: t_ReconfigurationLeadership)
+  (context: t_CurrentVoterSet) (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter)
+  (return (x: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global)) =
+{[@stop_split] [@expl:constructed_voter_reconfiguration requires] [%#smembership] UInt64.t'int context.voter_count
+  = Seq.length (Slice64.view old')}
+  any
+  [ return (result: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) ->
+  {[@stop_split] [@expl:constructed_voter_reconfiguration ensures] ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #0] [%#smembership'0] match result with
+          | None -> false
+          | Some _ -> true
+          end
+      = (valid_old (Slice64.view old')
+      /\ membership_coherent (Slice64.view old') node target.membership request.kind
+      /\ match voter_reconfiguration_rejection leadership context request target with
+        | None'0 -> true
+        | Some'0 _ -> false
+        end))
+    /\ ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #1] [%#smembership'1] match result with
+      | None -> true
+      | Some {f0 = plan; f1 = next} -> Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
+      /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
+      /\ Seq.length (Slice64.view old') - 1 <= Seq.length (view_Vec_u64_Global next)
+      /\ Seq.length (view_Vec_u64_Global next) <= Seq.length (Slice64.view old') + 1
+      /\ (forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
+          = expected_member (Slice64.view old') (Seq.length (Slice64.view old')) request.kind node id)
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global next)
+          -> Seq.get (view_Vec_u64_Global next) i <> Seq.get (view_Vec_u64_Global next) j)
+      /\ match request.kind with
+        | Add -> Seq.length (view_Vec_u64_Global next) = Seq.length (Slice64.view old') + 1
+        | Remove -> Seq.length (view_Vec_u64_Global next) + 1 = Seq.length (Slice64.view old')
+        | Update | FinalizeKraftVersion -> Seq.length (view_Vec_u64_Global next) = Seq.length (Slice64.view old')
+        end
+      end)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global =
+  | Continue tup2_VoterReconfigurationPlan_Vec_u64_Global
+  | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global (_1: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global [inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global x]. inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global
+  (self_: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global) ->
+  {[@stop_split] [@expl:branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+  (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_usize_usize = { f0'0: UInt64.t; f1'0: UInt64.t }
+
+type tup2_bool_bool = { f0'1: bool; f1'1: bool }
+
+type t_Option_u64 = None'2 | Some'2 UInt64.t
+
+type tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = {
+  f0'2: t_VoterReconfigurationPlan;
+  f1'2: t_Vec_u64_Global;
+  f2'2: tup2_usize_usize;
+  f3'2: tup2_bool_bool;
+  f4'2: t_Option_u64 }
+
+type t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 =
+  | None'3
+  | Some'3 tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
+
+let from_residual_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
+  (residual: t_Option_Infallible)
+  (return (x: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+  {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None'3}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+  (return (f0'3: tup2_VoterReconfigurationPlan_Vec_u64_Global)) = any
+  [ _k (f0'3: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> {Continue f0'3 = _x} (! return {f0'3})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_tup2_bool_bool (self_: Slice64.slice tup2_bool_bool) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+function grant_count [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 71 0 78 8] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (node: UInt64.t) (new: bool) (count: int) : int
+
+axiom grant_count_def:
+  forall old': Seq.seq UInt64.t, next: Seq.seq UInt64.t, votes: Seq.seq tup2_bool_bool, node: UInt64.t, new: bool, count: int [grant_count old' next votes node new count]. grant_count old' next votes node new count
+    = ([%#sspec'1] if count <= 0 then
+      0
+    else
+      grant_count old' next votes node new (count - 1)
+      + (if new then
+        if (Seq.get votes (count - 1)).f1'1
+        /\ (if count - 1 < Seq.length old' then
+          has_node next (Seq.length next) (Seq.get old' (count - 1))
+        else
+          not has_node old' (Seq.length old') node /\ has_node next (Seq.length next) node
+        ) then
+          1
+        else
+          0
+
+      else
+        if count - 1 < Seq.length old' /\ (Seq.get votes (count - 1)).f0'1 then 1 else 0
+      )
+    )
+
+let len_u64 (self_: Slice64.slice UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let is_none_u64 (self_: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_none ensures] [%#soption] result = (self_ = None'2)}
+    (! return {result}) ]
+
+function adjacent_majorities_exceed_union [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 62 0 62 60] (old': int) (next: int) : ()
+
+axiom adjacent_majorities_exceed_union_spec: forall old': int, next: int. ([%#sspec'2] 0 < old'
+      /\ 0 < next /\ old' - 1 <= next /\ next <= old' + 1)
+    -> ([%#sspec'3] gt_log_Int (ComputerDivision.div old' 2 + 1 + ComputerDivision.div next 2
+    + 1) (MinMax.max old' next))
+
+let election_has_quorum (voter_count'0: UInt64.t) (current_grants: UInt64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:election_has_quorum ensures] [%#sfailover] result
+    = ge_log_Int (UInt64.t'int current_grants) (ComputerDivision.div (UInt64.t'int voter_count'0) 2 + 1)}
+    (! return {result}) ]
+
+let len_u64'0 (self_: t_Vec_u64_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#svec'0] UInt64.t'int result
+    = Seq.length (view_Vec_u64_Global self_)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reconfigured_majorities_overlap [#"/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 58 0 66 18]
+  (old': Slice64.slice UInt64.t) (leadership: t_ReconfigurationLeadership) (context: t_CurrentVoterSet)
+  (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter) (votes: Slice64.slice tup2_bool_bool)
+  (return (x: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) =
+{[@stop_split] [@expl:reconfigured_majorities_overlap requires] ([@stop_split] [@expl:reconfigured_majorities_overlap requires #0] [%#squorum'35] UInt64.t'int context.voter_count
+    = Seq.length (Slice64.view old'))
+  /\ ([@stop_split] [@expl:reconfigured_majorities_overlap requires #1] [%#squorum'36] Seq.length (Slice64.view votes)
+  = Seq.length (Slice64.view old') + 1)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = constructed_voter_reconfiguration [%#squorum] {old'} {leadership} {context} {request} {node} {target}
+        (fun (_x: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &_33 <- _x ] s1)
+    | s1 = branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global [%#squorum'0] {_33}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &_32 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> {_32 = Continue x0} (! bb5)
+      | br1 (x0: t_Option_Infallible) -> {_32 = Break x0} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = elim_Break {_32} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 [%#squorum'0]
+        {residual}
+        (fun (_x: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = elim_Continue {_32} (fun (r0: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &val' <- r0 ] s1)
+    | s1 = [ &_31 <- val' ] s2
+    | s2 = [ &plan <- _31.f0 ] s3
+    | s3 = [ &next <- _31.f1 ] s4
+    | s4 = any
+      [ br0 -> {request.kind = Add} (! bb13)
+      | br1 -> {request.kind = Remove} (! bb11)
+      | br2 -> {request.kind = Update} (! bb11)
+      | br3 -> {request.kind = FinalizeKraftVersion} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &add <- false ] s1 | s1 = bb14 ]
+  | bb13 = s0 [ s0 = [ &add <- true ] s1 | s1 = bb14 ]
+  | bb14 = any
+    [ br0 -> {request.kind = Add} (! bb15)
+    | br1 -> {request.kind = Remove} (! bb17)
+    | br2 -> {request.kind = Update} (! bb15)
+    | br3 -> {request.kind = FinalizeKraftVersion} (! bb15) ]
+  | bb15 = s0 [ s0 = [ &remove <- false ] s1 | s1 = bb18 ]
+  | bb17 = s0 [ s0 = [ &remove <- true ] s1 | s1 = bb18 ]
+  | bb18 = s0
+    [ s0 = [ &counts <- { f0'0 = ([%#squorum'1] (0: UInt64.t)); f1'0 = ([%#squorum'2] (0: UInt64.t)) } ] s1
+    | s1 = [ &common <- None'2 ] s2
+    | s2 = [ &i <- [%#squorum'3] (0: UInt64.t) ] s3
+    | s3 = bb19 ]
+  | bb19 = bb19invariant
+    [ bb19 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb19 ([%#squorum'4] Seq.length (Slice64.view votes)
+      - UInt64.t'int i)}
+      bb19invariant
+    | bb19invariant = {[@expl:loop invariant #0] [%#squorum'12] UInt64.t'int i <= Seq.length (Slice64.view votes)}
+      {[@expl:loop invariant #1] [%#squorum'11] UInt64.t'int counts.f0'0
+      <= MinMax.min (UInt64.t'int i) (Seq.length (Slice64.view old'))}
+      {[@expl:loop invariant #2] [%#squorum'10] UInt64.t'int counts.f1'0
+      <= MinMax.min (UInt64.t'int i) (Seq.length (Slice64.view old'))
+        - (if remove
+        /\ has_node (Slice64.view old') (MinMax.min (UInt64.t'int i) (Seq.length (Slice64.view old'))) node then
+          1
+        else
+          0
+        )
+      + (if add /\ gt_log_Int (UInt64.t'int i) (Seq.length (Slice64.view old')) then 1 else 0)}
+      {[@expl:loop invariant #3] [%#squorum'9] UInt64.t'int counts.f0'0
+        = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node false (UInt64.t'int i)
+      /\ UInt64.t'int counts.f1'0
+      = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node true (UInt64.t'int i)}
+      {[@expl:loop invariant #4] [%#squorum'8] common = None'2
+      -> UInt64.t'int counts.f0'0 + UInt64.t'int counts.f1'0
+      <= MinMax.min (UInt64.t'int i) (Seq.length (Slice64.view old'))
+      + (if add /\ gt_log_Int (UInt64.t'int i) (Seq.length (Slice64.view old')) then 1 else 0)}
+      {[@expl:loop invariant #5] [%#squorum'7] match common with
+        | None'2 -> true
+        | Some'2 id -> exists j: int. 0 <= j
+          /\ j < UInt64.t'int i
+          /\ j < Seq.length (Slice64.view old')
+          /\ Seq.get (Slice64.view old') j = id
+          /\ (Seq.get (Slice64.view votes) j).f0'1
+          /\ (Seq.get (Slice64.view votes) j).f1'1 /\ (not remove \/ id <> node)
+        end}
+      {[@expl:loop invariant #6] [%#squorum'6] (common = None'2)
+      = (not (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i
+        /\ j < Seq.length (Slice64.view old')
+        /\ (Seq.get (Slice64.view votes) j).f0'1
+        /\ (Seq.get (Slice64.view votes) j).f1'1
+        /\ has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) (Seq.get (Slice64.view old') j)))}
+      (! [ &variant_old_bb19 <- [%#squorum'4] Seq.length (Slice64.view votes) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_bool_bool [%#squorum'5] {votes} (fun (_x: UInt64.t) -> [ &_102 <- _x ] s1)
+      | s1 = [ &_100 <- UInt64.lt i _102 ] s2
+      | s2 = any [ br0 -> {_100 = false} (! bb53) | br1 -> {_100} (! bb22) ] ]
+      [ bb22 = s0
+        [ s0 = len_u64 [%#squorum'13] {old'} (fun (_x: UInt64.t) -> [ &_106 <- _x ] s1)
+        | s1 = [ &old_member <- UInt64.lt i _106 ] s2
+        | s2 = any [ br0 -> {old_member = false} (! bb29) | br1 -> {old_member} (! bb24) ] ]
+      | bb24 = any [ br0 -> {remove = false} (! bb25) | br1 -> {remove} (! bb26) ]
+      | bb26 = s0
+        [ s0 = [ &_112 <- i ] s1
+        | s1 = [ &_113 <- Slice64.length old' ] s2
+        | s2 = [ &_114 <- UInt64.lt _112 _113 ] s3
+        | s3 = {[@expl:index in bounds] [%#squorum'14] _114} s4
+        | s4 = Slice64.get [%#squorum'14] <UInt64.t> {old'} {_112} (fun (r: UInt64.t) -> [ &_111 <- r ] s5)
+        | s5 = [ &new_member <- _111 <> node ] s6
+        | s6 = bb30 ]
+      | bb25 = s0 [ s0 = [ &new_member <- [%#squorum'15] true ] s1 | s1 = bb30 ]
+      | bb29 = s0 [ s0 = [ &new_member <- add ] s1 | s1 = bb30 ]
+      | bb30 = any [ br0 -> {old_member = false} (! bb32) | br1 -> {old_member} (! bb31) ]
+      | bb31 = s0
+        [ s0 = [ &_118 <- i ] s1
+        | s1 = [ &_119 <- Slice64.length votes ] s2
+        | s2 = [ &_120 <- UInt64.lt _118 _119 ] s3
+        | s3 = {[@expl:index in bounds] [%#squorum'16] _120} s4
+        | s4 = Slice64.get [%#squorum'17] <tup2_bool_bool> {votes} {_118}
+            (fun (r: tup2_bool_bool) -> [ &old_grant <- r.f0'1 ] s5)
+        | s5 = bb34 ]
+      | bb32 = s0 [ s0 = [ &old_grant <- [%#squorum'18] false ] s1 | s1 = bb34 ]
+      | bb34 = any [ br0 -> {new_member = false} (! bb36) | br1 -> {new_member} (! bb35) ]
+      | bb35 = s0
+        [ s0 = [ &_123 <- i ] s1
+        | s1 = [ &_124 <- Slice64.length votes ] s2
+        | s2 = [ &_125 <- UInt64.lt _123 _124 ] s3
+        | s3 = {[@expl:index in bounds] [%#squorum'19] _125} s4
+        | s4 = Slice64.get [%#squorum'20] <tup2_bool_bool> {votes} {_123}
+            (fun (r: tup2_bool_bool) -> [ &new_grant <- r.f1'1 ] s5)
+        | s5 = bb38 ]
+      | bb36 = s0 [ s0 = [ &new_grant <- [%#squorum'21] false ] s1 | s1 = bb38 ]
+      | bb38 = any [ br0 -> {old_grant = false} (! bb41) | br1 -> {old_grant} (! bb39) ]
+      | bb39 = s0
+        [ s0 = UInt64.add [%#squorum'23] {counts.f0'0} {[%#squorum'22] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &counts <- { counts with f0'0 = _x } ] s1)
+        | s1 = bb41 ]
+      | bb41 = any [ br0 -> {new_grant = false} (! bb44) | br1 -> {new_grant} (! bb42) ]
+      | bb42 = s0
+        [ s0 = UInt64.add [%#squorum'25] {counts.f1'0} {[%#squorum'24] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &counts <- { counts with f1'0 = _x } ] s1)
+        | s1 = bb44 ]
+      | bb44 = any [ br0 -> {old_grant = false} (! bb52) | br1 -> {old_grant} (! bb45) ]
+      | bb45 = any [ br0 -> {new_grant = false} (! bb52) | br1 -> {new_grant} (! bb46) ]
+      | bb46 = s0
+        [ s0 = is_none_u64 [%#squorum'26] {common} (fun (_x: bool) -> [ &_133 <- _x ] s1)
+        | s1 = any [ br0 -> {_133 = false} (! bb52) | br1 -> {_133} (! bb48) ] ]
+      | bb48 = s0
+        [ s0 = [ &_137 <- i ] s1
+        | s1 = [ &_138 <- Slice64.length old' ] s2
+        | s2 = [ &_139 <- UInt64.lt _137 _138 ] s3
+        | s3 = {[@expl:index in bounds] [%#squorum'27] _139} s4
+        | s4 = Slice64.get [%#squorum'27] <UInt64.t> {old'} {_137} (fun (r: UInt64.t) -> [ &_136 <- r ] s5)
+        | s5 = [ &_135 <- Some'2 _136 ] s6
+        | s6 = [ &common <- _135 ] s7
+        | s7 = bb52 ]
+      | bb52 = s0
+        [ s0 = UInt64.add [%#squorum'29] {i} {[%#squorum'28] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb19 ] ] ]
+  | bb53 = s0
+    [ s0 =
+      {[@expl:assertion] [%#squorum'30] let _ = adjacent_majorities_exceed_union (Seq.length (Slice64.view old')) (Seq.length (view_Vec_u64_Global next)) in true}
+      s1
+    | s1 = len_u64 [%#squorum'31] {old'} (fun (_x: UInt64.t) -> [ &_147 <- _x ] s2)
+    | s2 = election_has_quorum [%#squorum'32] {_147} {counts.f0'0} (fun (_x: bool) -> [ &_146 <- _x ] s3)
+    | s3 = len_u64'0 [%#squorum'33] {next} (fun (_x: UInt64.t) -> [ &_151 <- _x ] s4)
+    | s4 = election_has_quorum [%#squorum'34] {_151} {counts.f1'0} (fun (_x: bool) -> [ &_150 <- _x ] s5)
+    | s5 = [ &quorums <- { f0'1 = _146; f1'1 = _150 } ] s6
+    | s6 = [ &_154 <- { f0'2 = plan; f1'2 = next; f2'2 = counts; f3'2 = quorums; f4'2 = common } ] s7
+    | s7 = [ &_ret <- Some'3 _154 ] s8
+    | s8 = return {_ret} ] ]
+  [ & _ret: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = Any.any_l ()
+  | & old': Slice64.slice UInt64.t = old'
+  | & leadership: t_ReconfigurationLeadership = leadership
+  | & context: t_CurrentVoterSet = context
+  | & request: t_VoterChangeRequest = request
+  | & node: UInt64.t = node
+  | & target: t_TargetVoter = target
+  | & votes: Slice64.slice tup2_bool_bool = votes
+  | & plan: t_VoterReconfigurationPlan = Any.any_l ()
+  | & next: t_Vec_u64_Global = Any.any_l ()
+  | & _31: tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & _32: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & _33: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & add: bool = Any.any_l ()
+  | & remove: bool = Any.any_l ()
+  | & counts: tup2_usize_usize = Any.any_l ()
+  | & common: t_Option_u64 = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _100: bool = Any.any_l ()
+  | & _102: UInt64.t = Any.any_l ()
+  | & old_member: bool = Any.any_l ()
+  | & _106: UInt64.t = Any.any_l ()
+  | & new_member: bool = Any.any_l ()
+  | & _111: UInt64.t = Any.any_l ()
+  | & _112: UInt64.t = Any.any_l ()
+  | & _113: UInt64.t = Any.any_l ()
+  | & _114: bool = Any.any_l ()
+  | & old_grant: bool = Any.any_l ()
+  | & _118: UInt64.t = Any.any_l ()
+  | & _119: UInt64.t = Any.any_l ()
+  | & _120: bool = Any.any_l ()
+  | & new_grant: bool = Any.any_l ()
+  | & _123: UInt64.t = Any.any_l ()
+  | & _124: UInt64.t = Any.any_l ()
+  | & _125: bool = Any.any_l ()
+  | & _133: bool = Any.any_l ()
+  | & _135: t_Option_u64 = Any.any_l ()
+  | & _136: UInt64.t = Any.any_l ()
+  | & _137: UInt64.t = Any.any_l ()
+  | & _138: UInt64.t = Any.any_l ()
+  | & _139: bool = Any.any_l ()
+  | & quorums: tup2_bool_bool = Any.any_l ()
+  | & _146: bool = Any.any_l ()
+  | & _147: UInt64.t = Any.any_l ()
+  | & _150: bool = Any.any_l ()
+  | & _151: UInt64.t = Any.any_l ()
+  | & _154: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = Any.any_l ()
+  | & variant_old_bb19: int = Any.any_l () ])
+  [ return (result: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+  {[@stop_split] [@expl:reconfigured_majorities_overlap ensures] ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #0] [%#squorum'37] match result with
+          | None'3 -> false
+          | Some'3 _ -> true
+          end
+      = (valid_old (Slice64.view old')
+      /\ membership_coherent (Slice64.view old') node target.membership request.kind
+      /\ match voter_reconfiguration_rejection leadership context request target with
+        | None'0 -> true
+        | Some'0 _ -> false
+        end))
+    /\ ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #1] [%#squorum'38] match result with
+        | None'3 -> true
+        | Some'3 {f0'2 = plan; f1'2 = next; f2'2 = counts; f3'2 = quorums; f4'2 = common} -> Seq.length (view_Vec_u64_Global next)
+          = UInt64.t'int plan.next_voter_count
+        /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
+        /\ UInt64.t'int counts.f0'0 <= Seq.length (Slice64.view old')
+        /\ UInt64.t'int counts.f1'0 <= Seq.length (view_Vec_u64_Global next)
+        /\ UInt64.t'int counts.f0'0
+          = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node false (Seq.length (Slice64.view votes))
+        /\ UInt64.t'int counts.f1'0
+          = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node true (Seq.length (Slice64.view votes))
+        /\ quorums.f0'1
+          = ge_log_Int (UInt64.t'int counts.f0'0) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
+        /\ quorums.f1'1
+          = ge_log_Int (UInt64.t'int counts.f1'0) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
+        /\ (quorums.f0'1 /\ quorums.f1'1
+          -> match common with
+            | None'2 -> false
+            | Some'2 _ -> true
+            end)
+        /\ (common = None'2)
+          = (not (exists i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view old')
+            /\ (Seq.get (Slice64.view votes) i).f0'1
+            /\ (Seq.get (Slice64.view votes) i).f1'1
+            /\ has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) (Seq.get (Slice64.view old') i)))
+        /\ match common with
+          | None'2 -> true
+          | Some'2 id -> exists i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view old')
+            /\ Seq.get (Slice64.view old') i = id
+            /\ (Seq.get (Slice64.view votes) i).f0'1
+            /\ (Seq.get (Slice64.view votes) i).f1'1
+            /\ (exists j: int. 0 <= j
+              /\ j < Seq.length (view_Vec_u64_Global next) /\ Seq.get (view_Vec_u64_Global next) j = id)
+          end
+        end)
+    /\ ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #2] [%#squorum'39] match result with
+      | None'3 -> true
+      | Some'3 {f1'2 = next} -> Seq.length (Slice64.view old') - 1 <= Seq.length (view_Vec_u64_Global next)
+      /\ Seq.length (view_Vec_u64_Global next) <= Seq.length (Slice64.view old') + 1
+      /\ (forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
+          = expected_member (Slice64.view old') (Seq.length (Slice64.view old')) request.kind node id)
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global next)
+        -> Seq.get (view_Vec_u64_Global next) i <> Seq.get (view_Vec_u64_Global next) j)
+      end)}
+    (! return {result}) ]

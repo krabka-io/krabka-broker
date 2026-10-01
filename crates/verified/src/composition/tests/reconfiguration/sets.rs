@@ -1,0 +1,115 @@
+use std::collections::BTreeSet;
+
+use assert2::assert;
+
+use super::*;
+
+proptest! {
+    #[test]
+    fn changed_quorums_match_actual_set_intersections(
+        old in prop::collection::vec(0u64..12, 0..10), node in 0u64..13,
+        bits in any::<u16>(), operation in 0u8..4, membership in 0u8..4,
+        version in 0u16..3, requested in 0u16..3,
+        ballots in prop::collection::vec((any::<bool>(), any::<bool>()), 11),
+    ) {
+        let flag = |i: u32| bits & (1u16 << i) != 0u16;
+        let leader = ReconfigurationLeadership { is_leader: flag(0), no_pending_change: flag(1), epoch_committed: flag(2) };
+        let context = CurrentVoterSet { voter_count: old.len(), kraft_version: version,
+            latest_controls_committed: flag(3), all_voters_support_requested: flag(4) };
+        let request = VoterChangeRequest { kind: match operation { 0 => VoterChangeKind::Add,
+            1 => VoterChangeKind::Remove, 2 => VoterChangeKind::Update, _ => VoterChangeKind::FinalizeKraftVersion },
+            requested_kraft_version: requested };
+        let target = TargetVoter { membership: match membership { 0 => TargetMembership::Absent,
+            1 => TargetMembership::PresentUnknownDirectory, 2 => TargetMembership::PresentSameDirectory,
+            _ => TargetMembership::PresentOtherDirectory }, version_compatible: flag(5), caught_up: flag(6) };
+        check_overlap(&old, leader, context, request, node, target, &ballots[..=old.len()]);
+    }
+}
+
+#[test]
+fn all_small_majority_pairs_have_a_real_shared_voter() {
+    for n in 1..=5 {
+        let old: Vec<_> = (0..n).rev().map(|id| u64::try_from(id).unwrap()).collect();
+        for (kind, node, membership, version) in [
+            (VoterChangeKind::Add, u64::MAX, TargetMembership::Absent, 1),
+            (
+                VoterChangeKind::Remove,
+                0,
+                TargetMembership::PresentSameDirectory,
+                1,
+            ),
+            (
+                VoterChangeKind::Update,
+                0,
+                TargetMembership::PresentUnknownDirectory,
+                0,
+            ),
+            (
+                VoterChangeKind::Update,
+                0,
+                TargetMembership::PresentSameDirectory,
+                1,
+            ),
+            (
+                VoterChangeKind::FinalizeKraftVersion,
+                0,
+                TargetMembership::Absent,
+                0,
+            ),
+        ] {
+            for mask in 0..(1usize << (2 * (n + 1))) {
+                let votes: Vec<_> = (0..=n)
+                    .map(|i| (mask & (1 << (2 * i)) != 0, mask & (1 << (2 * i + 1)) != 0))
+                    .collect();
+                check_overlap(
+                    &old,
+                    leading(),
+                    current(n, version),
+                    VoterChangeRequest {
+                        kind,
+                        requested_kraft_version: 1,
+                    },
+                    node,
+                    target(membership),
+                    &votes,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shape_and_single_change_bounds_are_real() {
+    let request = VoterChangeRequest {
+        kind: VoterChangeKind::Add,
+        requested_kraft_version: 1,
+    };
+    for old in [&[][..], &[7, 7], &[7, 1, 4]] {
+        for node in [1, 99] {
+            for membership in [
+                TargetMembership::Absent,
+                TargetMembership::PresentSameDirectory,
+            ] {
+                let votes = std::vec![(true, true); old.len() + 1];
+                check_overlap(
+                    old,
+                    leading(),
+                    current(old.len(), 1),
+                    request,
+                    node,
+                    target(membership),
+                    &votes,
+                );
+            }
+        }
+    }
+    // Two additions can separate non-adjacent majority sets. Single-step
+    // intersection does not prove safety of overlapping uncommitted changes.
+    let old: BTreeSet<_> = [0, 1, 2].into_iter().collect();
+    let next: BTreeSet<_> = [0, 1, 2, 3, 4].into_iter().collect();
+    let old_grants: BTreeSet<_> = [0, 1].into_iter().collect();
+    let new_grants: BTreeSet<_> = [2, 3, 4].into_iter().collect();
+    assert!(old_grants.len() > old.len() / 2 && new_grants.len() > next.len() / 2);
+    assert!(old_grants.is_subset(&old) && new_grants.is_subset(&next));
+    assert!(old_grants.is_disjoint(&new_grants));
+}
