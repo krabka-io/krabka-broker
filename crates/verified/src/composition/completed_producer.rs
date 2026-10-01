@@ -58,8 +58,17 @@ type CompletedRetry = (
 #[ensures(forall<j: Int> 0 <= j && j < result.1@.len() ==> result.1@[j]@ <= rows@.len()
     && completed_row(rows@, incoming, result.1@[j]@).producer_epoch ==
         (match current { Some(epoch) => if epoch@ > incoming.producer_epoch@ { epoch } else { incoming.producer_epoch }, None => incoming.producer_epoch }))]
-#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.1@.len() ==>
-    completed_row(rows@, incoming, result.1@[i]@).last_offset@ < completed_row(rows@, incoming, result.1@[j]@).last_offset@)]
+#[ensures((forall<i: Int, j: Int> 0 <= i && i < j && j < result.1@.len() ==>
+    completed_row(rows@, incoming, result.1@[i]@).last_offset@ < completed_row(rows@, incoming, result.1@[j]@).last_offset@)
+    && (forall<i: Int> 0 <= i && i < rows@.len()
+    && (match current { Some(epoch) => incoming.producer_epoch@ <= epoch@, None => false })
+    && !(exists<j: Int> 0 <= j && j < result.1@.len() && result.1@[j]@ == i) ==>
+        result.1@.len() == 5 && (forall<j: Int> 0 <= j && j < result.1@.len() ==>
+            rows@[i].last_offset@ < completed_row(rows@, incoming, result.1@[j]@).last_offset@))
+    && (result.0 && !(exists<j: Int> 0 <= j && j < result.1@.len()
+    && completed_row(rows@, incoming, result.1@[j]@).last_offset == incoming.last_offset) ==>
+        result.1@.len() == 5 && (forall<j: Int> 0 <= j && j < result.1@.len() ==>
+            incoming.last_offset@ < completed_row(rows@, incoming, result.1@[j]@).last_offset@)))]
 #[ensures(!result.0 ==> result.1@.len() == rows@.len()
     && (forall<j: Int> 0 <= j && j < rows@.len() ==> result.1@[j]@ == j))]
 #[ensures((match result.2 { ProducerDecision::Duplicate { .. } => true, _ => false }) ==

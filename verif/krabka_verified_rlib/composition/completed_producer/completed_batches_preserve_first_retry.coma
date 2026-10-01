@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/composition/completed_producer.rs" 83 0 90 19 *)
+(* #"/workspace/crates/verified/src/composition/completed_producer.rs" 92 0 99 19 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -27,43 +27,43 @@ let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/produce
 let%span sproducer_window = "/workspace/crates/verified/src/composition/producer_window.rs" 14 11 14 33
 let%span sproducer_window'0 = "/workspace/crates/verified/src/composition/producer_window.rs" 15 11 17 81
 let%span sproducer_window'1 = "/workspace/crates/verified/src/composition/producer_window.rs" 18 10 53 46
-let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 91 29 91 39
-let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 92 16 92 22
-let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 95 14 95 30
-let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 96 14 96 24
-let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 94 16 94 84
-let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 93 16 93 54
-let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 97 18 97 25
-let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 97 18 97 37
-let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 97 8 97 38
-let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 98 13 98 14
-let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 98 8 98 14
-let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 103 8 103 13
-let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 100 31 105 5
-let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 16 106 30
-let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 107 16 107 17
-let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 108 20 108 36
-let%span scompleted_producer'15 = "/workspace/crates/verified/src/composition/completed_producer.rs" 112 31 112 33
-let%span scompleted_producer'16 = "/workspace/crates/verified/src/composition/completed_producer.rs" 118 19 118 20
-let%span scompleted_producer'17 = "/workspace/crates/verified/src/composition/completed_producer.rs" 119 12 119 17
-let%span scompleted_producer'18 = "/workspace/crates/verified/src/composition/completed_producer.rs" 109 23 120 9
-let%span scompleted_producer'19 = "/workspace/crates/verified/src/composition/completed_producer.rs" 123 52 123 62
-let%span scompleted_producer'20 = "/workspace/crates/verified/src/composition/completed_producer.rs" 124 16 124 22
-let%span scompleted_producer'21 = "/workspace/crates/verified/src/composition/completed_producer.rs" 127 14 127 34
-let%span scompleted_producer'22 = "/workspace/crates/verified/src/composition/completed_producer.rs" 128 14 128 28
-let%span scompleted_producer'23 = "/workspace/crates/verified/src/composition/completed_producer.rs" 126 16 126 109
-let%span scompleted_producer'24 = "/workspace/crates/verified/src/composition/completed_producer.rs" 125 16 125 58
-let%span scompleted_producer'25 = "/workspace/crates/verified/src/composition/completed_producer.rs" 129 29 129 32
-let%span scompleted_producer'26 = "/workspace/crates/verified/src/composition/completed_producer.rs" 130 31 130 41
-let%span scompleted_producer'27 = "/workspace/crates/verified/src/composition/completed_producer.rs" 133 12 133 24
-let%span scompleted_producer'28 = "/workspace/crates/verified/src/composition/completed_producer.rs" 130 8 134 10
-let%span scompleted_producer'29 = "/workspace/crates/verified/src/composition/completed_producer.rs" 135 13 135 14
-let%span scompleted_producer'30 = "/workspace/crates/verified/src/composition/completed_producer.rs" 135 8 135 14
-let%span scompleted_producer'31 = "/workspace/crates/verified/src/composition/completed_producer.rs" 137 18 140 105
-let%span scompleted_producer'32 = "/workspace/crates/verified/src/composition/completed_producer.rs" 142 51 142 56
-let%span scompleted_producer'33 = "/workspace/crates/verified/src/composition/completed_producer.rs" 142 92 142 97
-let%span scompleted_producer'34 = "/workspace/crates/verified/src/composition/completed_producer.rs" 142 8 142 99
-let%span scompleted_producer'35 = "/workspace/crates/verified/src/composition/completed_producer.rs" 146 25 146 32
+let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 100 29 100 39
+let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 101 16 101 22
+let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 104 14 104 30
+let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 105 14 105 24
+let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 103 16 103 84
+let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 102 16 102 54
+let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 18 106 25
+let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 18 106 37
+let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 8 106 38
+let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 107 13 107 14
+let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 107 8 107 14
+let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 112 8 112 13
+let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 109 31 114 5
+let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 115 16 115 30
+let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 116 16 116 17
+let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 117 20 117 36
+let%span scompleted_producer'15 = "/workspace/crates/verified/src/composition/completed_producer.rs" 121 31 121 33
+let%span scompleted_producer'16 = "/workspace/crates/verified/src/composition/completed_producer.rs" 127 19 127 20
+let%span scompleted_producer'17 = "/workspace/crates/verified/src/composition/completed_producer.rs" 128 12 128 17
+let%span scompleted_producer'18 = "/workspace/crates/verified/src/composition/completed_producer.rs" 118 23 129 9
+let%span scompleted_producer'19 = "/workspace/crates/verified/src/composition/completed_producer.rs" 132 52 132 62
+let%span scompleted_producer'20 = "/workspace/crates/verified/src/composition/completed_producer.rs" 133 16 133 22
+let%span scompleted_producer'21 = "/workspace/crates/verified/src/composition/completed_producer.rs" 136 14 136 34
+let%span scompleted_producer'22 = "/workspace/crates/verified/src/composition/completed_producer.rs" 137 14 137 28
+let%span scompleted_producer'23 = "/workspace/crates/verified/src/composition/completed_producer.rs" 135 16 135 109
+let%span scompleted_producer'24 = "/workspace/crates/verified/src/composition/completed_producer.rs" 134 16 134 58
+let%span scompleted_producer'25 = "/workspace/crates/verified/src/composition/completed_producer.rs" 138 29 138 32
+let%span scompleted_producer'26 = "/workspace/crates/verified/src/composition/completed_producer.rs" 139 31 139 41
+let%span scompleted_producer'27 = "/workspace/crates/verified/src/composition/completed_producer.rs" 142 12 142 24
+let%span scompleted_producer'28 = "/workspace/crates/verified/src/composition/completed_producer.rs" 139 8 143 10
+let%span scompleted_producer'29 = "/workspace/crates/verified/src/composition/completed_producer.rs" 144 13 144 14
+let%span scompleted_producer'30 = "/workspace/crates/verified/src/composition/completed_producer.rs" 144 8 144 14
+let%span scompleted_producer'31 = "/workspace/crates/verified/src/composition/completed_producer.rs" 146 18 149 105
+let%span scompleted_producer'32 = "/workspace/crates/verified/src/composition/completed_producer.rs" 151 51 151 56
+let%span scompleted_producer'33 = "/workspace/crates/verified/src/composition/completed_producer.rs" 151 92 151 97
+let%span scompleted_producer'34 = "/workspace/crates/verified/src/composition/completed_producer.rs" 151 8 151 99
+let%span scompleted_producer'35 = "/workspace/crates/verified/src/composition/completed_producer.rs" 155 25 155 32
 let%span scompleted_producer'36 = "/workspace/crates/verified/src/composition/completed_producer.rs" 49 11 49 53
 let%span scompleted_producer'37 = "/workspace/crates/verified/src/composition/completed_producer.rs" 50 11 50 109
 let%span scompleted_producer'38 = "/workspace/crates/verified/src/composition/completed_producer.rs" 51 11 51 81
@@ -72,12 +72,12 @@ let%span scompleted_producer'40 = "/workspace/crates/verified/src/composition/co
 let%span scompleted_producer'41 = "/workspace/crates/verified/src/composition/completed_producer.rs" 56 10 56 105
 let%span scompleted_producer'42 = "/workspace/crates/verified/src/composition/completed_producer.rs" 57 10 57 68
 let%span scompleted_producer'43 = "/workspace/crates/verified/src/composition/completed_producer.rs" 58 10 60 155
-let%span scompleted_producer'44 = "/workspace/crates/verified/src/composition/completed_producer.rs" 61 10 62 123
-let%span scompleted_producer'45 = "/workspace/crates/verified/src/composition/completed_producer.rs" 63 10 64 72
-let%span scompleted_producer'46 = "/workspace/crates/verified/src/composition/completed_producer.rs" 65 10 66 108
-let%span scompleted_producer'47 = "/workspace/crates/verified/src/composition/completed_producer.rs" 67 10 76 1
-let%span scompleted_producer'48 = "/workspace/crates/verified/src/composition/completed_producer.rs" 77 10 79 94
-let%span scompleted_producer'49 = "/workspace/crates/verified/src/composition/completed_producer.rs" 80 10 82 77
+let%span scompleted_producer'44 = "/workspace/crates/verified/src/composition/completed_producer.rs" 61 10 71 96
+let%span scompleted_producer'45 = "/workspace/crates/verified/src/composition/completed_producer.rs" 72 10 73 72
+let%span scompleted_producer'46 = "/workspace/crates/verified/src/composition/completed_producer.rs" 74 10 75 108
+let%span scompleted_producer'47 = "/workspace/crates/verified/src/composition/completed_producer.rs" 76 10 85 1
+let%span scompleted_producer'48 = "/workspace/crates/verified/src/composition/completed_producer.rs" 86 10 88 94
+let%span scompleted_producer'49 = "/workspace/crates/verified/src/composition/completed_producer.rs" 89 10 91 77
 let%span scompleted_producer'50 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
 let%span scompleted_producer'51 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
 let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 20 11 20 27
@@ -520,7 +520,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 83 0 90 19]
+let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 92 0 99 19]
   (end': Int64.t) (hwm: Int64.t) (current': t_Option_i16) (rows: Slice64.slice t_ProducerSnapshotEntryFacts)
   (incoming: t_ProducerSnapshotEntryFacts) (request: tup3_i16_i32_i32)
   (return (x: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool)) =
@@ -561,36 +561,36 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
       {[@expl:loop invariant #1] [%#scompleted_producer'3] forall j'0: int. 0 <= j'0 /\ j'0 < UInt64.t'int i
         -> Seq.get (view_Vec_i64_Global ends) j'0 = (Seq.get (Slice64.view rows) j'0).last_offset}
       (! [ &variant_old_bb2 <- [%#scompleted_producer'1] Seq.length (Slice64.view rows) - UInt64.t'int i ] s0)
-      [ s0 = len_ProducerSnapshotEntryFacts [%#scompleted_producer'2] {rows} (fun (_x: UInt64.t) -> [ &_75 <- _x ] s1)
-      | s1 = [ &_73 <- UInt64.lt i _75 ] s2
-      | s2 = any [ br0 -> {_73 = false} (! bb8) | br1 -> {_73} (! bb5) ] ]
+      [ s0 = len_ProducerSnapshotEntryFacts [%#scompleted_producer'2] {rows} (fun (_x: UInt64.t) -> [ &_76 <- _x ] s1)
+      | s1 = [ &_74 <- UInt64.lt i _76 ] s2
+      | s2 = any [ br0 -> {_74 = false} (! bb8) | br1 -> {_74} (! bb5) ] ]
       [ bb5 = s0
-        [ s0 = [ &_80 <- i ] s1
-        | s1 = [ &_81 <- Slice64.length rows ] s2
-        | s2 = [ &_82 <- UInt64.lt _80 _81 ] s3
-        | s3 = {[@expl:index in bounds] [%#scompleted_producer'5] _82} s4
-        | s4 = Slice64.get [%#scompleted_producer'6] <t_ProducerSnapshotEntryFacts> {rows} {_80}
-            (fun (r: t_ProducerSnapshotEntryFacts) -> [ &_79 <- r.last_offset ] s5)
+        [ s0 = [ &_81 <- i ] s1
+        | s1 = [ &_82 <- Slice64.length rows ] s2
+        | s2 = [ &_83 <- UInt64.lt _81 _82 ] s3
+        | s3 = {[@expl:index in bounds] [%#scompleted_producer'5] _83} s4
+        | s4 = Slice64.get [%#scompleted_producer'6] <t_ProducerSnapshotEntryFacts> {rows} {_81}
+            (fun (r: t_ProducerSnapshotEntryFacts) -> [ &_80 <- r.last_offset ] s5)
         | s5 = MutBorrow.borrow_mut <t_Vec_i64_Global> {ends}
-            (fun (_bor: MutBorrow.t t_Vec_i64_Global) -> [ &_78 <- _bor ] [ &ends <- _bor.final ] s6)
-        | s6 = push_i64 [%#scompleted_producer'7] {_78} {_79} (fun (_x: ()) -> [ &_77 <- _x ] s7)
+            (fun (_bor: MutBorrow.t t_Vec_i64_Global) -> [ &_79 <- _bor ] [ &ends <- _bor.final ] s6)
+        | s6 = push_i64 [%#scompleted_producer'7] {_79} {_80} (fun (_x: ()) -> [ &_78 <- _x ] s7)
         | s7 = UInt64.add [%#scompleted_producer'9] {i} {[%#scompleted_producer'8] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &i <- _x ] s8)
         | s8 = bb2 ] ] ]
   | bb8 = s0
-    [ s0 = [ &_92 <- ends ] s1
-    | s1 = deref_Vec_i64_Global [%#scompleted_producer'10] {_92} (fun (_x: Slice64.slice Int64.t) -> [ &_90 <- _x ] s2)
-    | s2 = producer_completion_window [%#scompleted_producer'11] {current'} {incoming.producer_epoch} {_90}
-        {incoming.last_offset} (fun (_x: tup2_bool_Vec_usize_Global) -> [ &_86 <- _x ] s3)
-    | s3 = [ &accepted <- _86.f0 ] s4
-    | s4 = [ &selected <- _86.f1 ] s5
+    [ s0 = [ &_93 <- ends ] s1
+    | s1 = deref_Vec_i64_Global [%#scompleted_producer'10] {_93} (fun (_x: Slice64.slice Int64.t) -> [ &_91 <- _x ] s2)
+    | s2 = producer_completion_window [%#scompleted_producer'11] {current'} {incoming.producer_epoch} {_91}
+        {incoming.last_offset} (fun (_x: tup2_bool_Vec_usize_Global) -> [ &_87 <- _x ] s3)
+    | s3 = [ &accepted <- _87.f0 ] s4
+    | s4 = [ &selected <- _87.f1 ] s5
     | s5 = len_usize [%#scompleted_producer'12] {selected} (fun (_x: UInt64.t) -> [ &count <- _x ] s6)
-    | s6 = [ &_97 <- count = ([%#scompleted_producer'13] (0: UInt64.t)) ] s7
-    | s7 = any [ br0 -> {_97 = false} (! bb17) | br1 -> {_97} (! bb13) ] ]
+    | s6 = [ &_98 <- count = ([%#scompleted_producer'13] (0: UInt64.t)) ] s7
+    | s7 = any [ br0 -> {_98 = false} (! bb17) | br1 -> {_98} (! bb13) ] ]
   | bb13 = s0
     [ s0 = unwrap_i16 [%#scompleted_producer'14] {current'} (fun (_x: Int16.t) -> [ &epoch <- _x ] s1)
-    | s1 = [ &_104 <- { epoch'0 = epoch; last_sequence'0 = ([%#scompleted_producer'15] (-1: Int32.t)) } ] s2
-    | s2 = [ &_103 <- Some'0 _104 ] s3
+    | s1 = [ &_105 <- { epoch'0 = epoch; last_sequence'0 = ([%#scompleted_producer'15] (-1: Int32.t)) } ] s2
+    | s2 = [ &_104 <- Some'0 _105 ] s3
     | s3 = bb0'0
       [ bb0'0 = s0'0
         [ s0'0 = any
@@ -601,13 +601,13 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
         | s2'0 = _const_ret {_ret'0} ] ]
       [ & _ret'0: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
       | & _1: Slice64.array t_Option_RetainedSequenceRange = Any.any_l () ]
-      [ _const_ret (_const: Slice64.array t_Option_RetainedSequenceRange) -> [ &_198 <- _const ] s4 ]
-    | s4 = [ &_108 <- _198 ] s5
-    | s5 = [ &_113 <- end' = ([%#scompleted_producer'16] (0: Int64.t)) ] s6
-    | s6 = producer_decision [%#scompleted_producer'18] {_103} {_108} {request.f0'0} {request.f1'0} {request.f2'0}
-        {_113} {[%#scompleted_producer'17] false} (fun (_x: t_ProducerDecision) -> [ &decision <- _x ] s7)
-    | s7 = [ &_118 <- None'2 ] s8
-    | s8 = [ &_ret <- { f0'2 = accepted; f1'2 = selected; f2'2 = decision; f3'2 = _118 } ] s9
+      [ _const_ret (_const: Slice64.array t_Option_RetainedSequenceRange) -> [ &_199 <- _const ] s4 ]
+    | s4 = [ &_109 <- _199 ] s5
+    | s5 = [ &_114 <- end' = ([%#scompleted_producer'16] (0: Int64.t)) ] s6
+    | s6 = producer_decision [%#scompleted_producer'18] {_104} {_109} {request.f0'0} {request.f1'0} {request.f2'0}
+        {_114} {[%#scompleted_producer'17] false} (fun (_x: t_ProducerDecision) -> [ &decision <- _x ] s7)
+    | s7 = [ &_119 <- None'2 ] s8
+    | s8 = [ &_ret <- { f0'2 = accepted; f1'2 = selected; f2'2 = decision; f3'2 = _119 } ] s9
     | s9 = return {_ret} ]
   | bb17 = s0
     [ s0 = new_ProducerSnapshotEntryFacts [%#scompleted_producer'19]
@@ -627,32 +627,32 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
         = completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) k))}
       (! [ &variant_old_bb19 <- [%#scompleted_producer'21] Seq.length (view_Vec_usize_Global selected)
       - UInt64.t'int j ] s0)
-      [ s0 = len_usize [%#scompleted_producer'22] {selected} (fun (_x: UInt64.t) -> [ &_138 <- _x ] s1)
-      | s1 = [ &_136 <- UInt64.lt j _138 ] s2
-      | s2 = any [ br0 -> {_136 = false} (! bb30) | br1 -> {_136} (! bb22) ] ]
+      [ s0 = len_usize [%#scompleted_producer'22] {selected} (fun (_x: UInt64.t) -> [ &_139 <- _x ] s1)
+      | s1 = [ &_137 <- UInt64.lt j _139 ] s2
+      | s2 = any [ br0 -> {_137 = false} (! bb30) | br1 -> {_137} (! bb22) ] ]
       [ bb22 = s0
         [ s0 = index_Vec_usize_Global [%#scompleted_producer'25] {selected} {j}
-            (fun (_x: UInt64.t) -> [ &_141 <- _x ] s1)
-        | s1 = [ &source <- _141 ] s2
+            (fun (_x: UInt64.t) -> [ &_142 <- _x ] s1)
+        | s1 = [ &source <- _142 ] s2
         | s2 = len_ProducerSnapshotEntryFacts [%#scompleted_producer'26] {rows}
-            (fun (_x: UInt64.t) -> [ &_149 <- _x ] s3)
-        | s3 = [ &_147 <- source = _149 ] s4
-        | s4 = any [ br0 -> {_147 = false} (! bb26) | br1 -> {_147} (! bb25) ] ]
-      | bb25 = s0 [ s0 = [ &_146 <- incoming ] s1 | s1 = bb28 ]
+            (fun (_x: UInt64.t) -> [ &_150 <- _x ] s3)
+        | s3 = [ &_148 <- source = _150 ] s4
+        | s4 = any [ br0 -> {_148 = false} (! bb26) | br1 -> {_148} (! bb25) ] ]
+      | bb25 = s0 [ s0 = [ &_147 <- incoming ] s1 | s1 = bb28 ]
       | bb26 = s0
-        [ s0 = [ &_151 <- source ] s1
-        | s1 = [ &_152 <- Slice64.length rows ] s2
-        | s2 = [ &_153 <- UInt64.lt _151 _152 ] s3
-        | s3 = {[@expl:index in bounds] [%#scompleted_producer'27] _153} s4
-        | s4 = Slice64.get [%#scompleted_producer'27] <t_ProducerSnapshotEntryFacts> {rows} {_151}
-            (fun (r: t_ProducerSnapshotEntryFacts) -> [ &_146 <- r ] s5)
+        [ s0 = [ &_152 <- source ] s1
+        | s1 = [ &_153 <- Slice64.length rows ] s2
+        | s2 = [ &_154 <- UInt64.lt _152 _153 ] s3
+        | s3 = {[@expl:index in bounds] [%#scompleted_producer'27] _154} s4
+        | s4 = Slice64.get [%#scompleted_producer'27] <t_ProducerSnapshotEntryFacts> {rows} {_152}
+            (fun (r: t_ProducerSnapshotEntryFacts) -> [ &_147 <- r ] s5)
         | s5 = bb28 ]
       | bb28 = s0
         [ s0 = MutBorrow.borrow_mut <t_Vec_ProducerSnapshotEntryFacts_Global> {kept}
             (fun (_bor: MutBorrow.t t_Vec_ProducerSnapshotEntryFacts_Global) ->
-              [ &_145 <- _bor ] [ &kept <- _bor.final ] s1)
-        | s1 = push_ProducerSnapshotEntryFacts [%#scompleted_producer'28] {_145} {_146}
-            (fun (_x: ()) -> [ &_144 <- _x ] s2)
+              [ &_146 <- _bor ] [ &kept <- _bor.final ] s1)
+        | s1 = push_ProducerSnapshotEntryFacts [%#scompleted_producer'28] {_146} {_147}
+            (fun (_x: ()) -> [ &_145 <- _x ] s2)
         | s2 = UInt64.add [%#scompleted_producer'30] {j} {[%#scompleted_producer'29] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &j <- _x ] s3)
         | s3 = bb19 ] ] ]
@@ -667,22 +667,22 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
         /\ Int32.to_int (Seq.get (view_Vec_ProducerSnapshotEntryFacts_Global kept) k).last_sequence
         = sequence_modulo_2_31 (Int32.to_int request.f1'0 + Int32.to_int request.f2'0))}
       s1
-    | s1 = [ &_170 <- kept ] s2
-    | s2 = deref_Vec_ProducerSnapshotEntryFacts_Global [%#scompleted_producer'32] {_170}
-        (fun (_x: Slice64.slice t_ProducerSnapshotEntryFacts) -> [ &_168 <- _x ] s3)
-    | s3 = [ &_171 <- { f0'3 = request.f0'0;
+    | s1 = [ &_171 <- kept ] s2
+    | s2 = deref_Vec_ProducerSnapshotEntryFacts_Global [%#scompleted_producer'32] {_171}
+        (fun (_x: Slice64.slice t_ProducerSnapshotEntryFacts) -> [ &_169 <- _x ] s3)
+    | s3 = [ &_172 <- { f0'3 = request.f0'0;
                         f1'3 = request.f1'0;
                         f2'3 = request.f2'0;
                         f3'3 = ([%#scompleted_producer'33] false) } ] s4
-    | s4 = rebuilt_data_window_bounds_retry [%#scompleted_producer'34] {end'} {hwm} {_168} {_171}
-        (fun (_x: tup3_usize_ProducerDecision_Option_tup4_usize_i64_i64_bool) -> [ &_164 <- _x ] s5)
-    | s5 = [ &decision'0 <- _164.f1'4 ] s6
-    | s6 = [ &witness <- _164.f2'4 ] s7
+    | s4 = rebuilt_data_window_bounds_retry [%#scompleted_producer'34] {end'} {hwm} {_169} {_172}
+        (fun (_x: tup3_usize_ProducerDecision_Option_tup4_usize_i64_i64_bool) -> [ &_165 <- _x ] s5)
+    | s5 = [ &decision'0 <- _165.f1'4 ] s6
+    | s6 = [ &witness <- _165.f2'4 ] s7
     | s7 = any
       [ br0 -> {witness = None'2} (! bb33) | br1 (x0: tup4_usize_i64_i64_bool) -> {witness = Some'2 x0} (! bb36) ] ]
   | bb33 = s0
-    [ s0 = [ &_179 <- None'2 ] s1
-    | s1 = [ &_ret <- { f0'2 = accepted; f1'2 = selected; f2'2 = decision'0; f3'2 = _179 } ] s2
+    [ s0 = [ &_180 <- None'2 ] s1
+    | s1 = [ &_ret <- { f0'2 = accepted; f1'2 = selected; f2'2 = decision'0; f3'2 = _180 } ] s2
     | s2 = return {_ret} ]
   | bb36 = s0
     [ s0 = elim_Some {witness} (fun (r0: tup4_usize_i64_i64_bool) -> [ &index <- r0.f0'1 ] s1)
@@ -690,11 +690,11 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
     | s2 = elim_Some {witness} (fun (r0: tup4_usize_i64_i64_bool) -> [ &frontier <- r0.f2'1 ] s3)
     | s3 = elim_Some {witness} (fun (r0: tup4_usize_i64_i64_bool) -> [ &ready <- r0.f3'1 ] s4)
     | s4 = index_Vec_usize_Global [%#scompleted_producer'35] {selected} {index}
-        (fun (_x: UInt64.t) -> [ &_186 <- _x ] s5)
-    | s5 = [ &source'0 <- _186 ] s6
-    | s6 = [ &_193 <- { f0'1 = source'0; f1'1 = base; f2'1 = frontier; f3'1 = ready } ] s7
-    | s7 = [ &_192 <- Some'2 _193 ] s8
-    | s8 = [ &_ret <- { f0'2 = accepted; f1'2 = selected; f2'2 = decision'0; f3'2 = _192 } ] s9
+        (fun (_x: UInt64.t) -> [ &_187 <- _x ] s5)
+    | s5 = [ &source'0 <- _187 ] s6
+    | s6 = [ &_194 <- { f0'1 = source'0; f1'1 = base; f2'1 = frontier; f3'1 = ready } ] s7
+    | s7 = [ &_193 <- Some'2 _194 ] s8
+    | s8 = [ &_ret <- { f0'2 = accepted; f1'2 = selected; f2'2 = decision'0; f3'2 = _193 } ] s9
     | s9 = return {_ret} ] ]
   [ & _ret: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool = Any.any_l ()
   | & end': Int64.t = end'
@@ -705,58 +705,58 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
   | & request: tup3_i16_i32_i32 = request
   | & ends: t_Vec_i64_Global = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _73: bool = Any.any_l ()
-  | & _75: UInt64.t = Any.any_l ()
-  | & _77: () = Any.any_l ()
-  | & _78: MutBorrow.t t_Vec_i64_Global = Any.any_l ()
-  | & _79: Int64.t = Any.any_l ()
-  | & _80: UInt64.t = Any.any_l ()
+  | & _74: bool = Any.any_l ()
+  | & _76: UInt64.t = Any.any_l ()
+  | & _78: () = Any.any_l ()
+  | & _79: MutBorrow.t t_Vec_i64_Global = Any.any_l ()
+  | & _80: Int64.t = Any.any_l ()
   | & _81: UInt64.t = Any.any_l ()
-  | & _82: bool = Any.any_l ()
+  | & _82: UInt64.t = Any.any_l ()
+  | & _83: bool = Any.any_l ()
   | & accepted: bool = Any.any_l ()
   | & selected: t_Vec_usize_Global = Any.any_l ()
-  | & _86: tup2_bool_Vec_usize_Global = Any.any_l ()
-  | & _90: Slice64.slice Int64.t = Any.any_l ()
-  | & _92: t_Vec_i64_Global = Any.any_l ()
+  | & _87: tup2_bool_Vec_usize_Global = Any.any_l ()
+  | & _91: Slice64.slice Int64.t = Any.any_l ()
+  | & _93: t_Vec_i64_Global = Any.any_l ()
   | & count: UInt64.t = Any.any_l ()
-  | & _97: bool = Any.any_l ()
+  | & _98: bool = Any.any_l ()
   | & epoch: Int16.t = Any.any_l ()
   | & decision: t_ProducerDecision = Any.any_l ()
-  | & _103: t_Option_ProducerEntryFacts = Any.any_l ()
-  | & _104: t_ProducerEntryFacts = Any.any_l ()
-  | & _108: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
-  | & _113: bool = Any.any_l ()
-  | & _118: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
+  | & _104: t_Option_ProducerEntryFacts = Any.any_l ()
+  | & _105: t_ProducerEntryFacts = Any.any_l ()
+  | & _109: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _114: bool = Any.any_l ()
+  | & _119: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
   | & kept: t_Vec_ProducerSnapshotEntryFacts_Global = Any.any_l ()
   | & j: UInt64.t = Any.any_l ()
-  | & _136: bool = Any.any_l ()
-  | & _138: UInt64.t = Any.any_l ()
+  | & _137: bool = Any.any_l ()
+  | & _139: UInt64.t = Any.any_l ()
   | & source: UInt64.t = Any.any_l ()
-  | & _141: UInt64.t = Any.any_l ()
-  | & _144: () = Any.any_l ()
-  | & _145: MutBorrow.t t_Vec_ProducerSnapshotEntryFacts_Global = Any.any_l ()
-  | & _146: t_ProducerSnapshotEntryFacts = Any.any_l ()
-  | & _147: bool = Any.any_l ()
-  | & _149: UInt64.t = Any.any_l ()
-  | & _151: UInt64.t = Any.any_l ()
+  | & _142: UInt64.t = Any.any_l ()
+  | & _145: () = Any.any_l ()
+  | & _146: MutBorrow.t t_Vec_ProducerSnapshotEntryFacts_Global = Any.any_l ()
+  | & _147: t_ProducerSnapshotEntryFacts = Any.any_l ()
+  | & _148: bool = Any.any_l ()
+  | & _150: UInt64.t = Any.any_l ()
   | & _152: UInt64.t = Any.any_l ()
-  | & _153: bool = Any.any_l ()
+  | & _153: UInt64.t = Any.any_l ()
+  | & _154: bool = Any.any_l ()
   | & decision'0: t_ProducerDecision = Any.any_l ()
   | & witness: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
-  | & _164: tup3_usize_ProducerDecision_Option_tup4_usize_i64_i64_bool = Any.any_l ()
-  | & _168: Slice64.slice t_ProducerSnapshotEntryFacts = Any.any_l ()
-  | & _170: t_Vec_ProducerSnapshotEntryFacts_Global = Any.any_l ()
-  | & _171: tup4_i16_i32_i32_bool = Any.any_l ()
-  | & _179: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
+  | & _165: tup3_usize_ProducerDecision_Option_tup4_usize_i64_i64_bool = Any.any_l ()
+  | & _169: Slice64.slice t_ProducerSnapshotEntryFacts = Any.any_l ()
+  | & _171: t_Vec_ProducerSnapshotEntryFacts_Global = Any.any_l ()
+  | & _172: tup4_i16_i32_i32_bool = Any.any_l ()
+  | & _180: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
   | & index: UInt64.t = Any.any_l ()
   | & base: Int64.t = Any.any_l ()
   | & frontier: Int64.t = Any.any_l ()
   | & ready: bool = Any.any_l ()
   | & source'0: UInt64.t = Any.any_l ()
-  | & _186: UInt64.t = Any.any_l ()
-  | & _192: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
-  | & _193: tup4_usize_i64_i64_bool = Any.any_l ()
-  | & _198: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+  | & _187: UInt64.t = Any.any_l ()
+  | & _193: t_Option_tup4_usize_i64_i64_bool = Any.any_l ()
+  | & _194: tup4_usize_i64_i64_bool = Any.any_l ()
+  | & _199: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
   | & variant_old_bb2: int = Any.any_l ()
   | & variant_old_bb19: int = Any.any_l () ])
   [ return (result: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool) ->
@@ -781,11 +781,33 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
 
           | None -> incoming.producer_epoch
           end)
-    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #3] [%#scompleted_producer'44] forall i: int, j: int. 0
-            <= i
-          /\ i < j /\ j < Seq.length (view_Vec_usize_Global result.f1'2)
-        -> Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) i))).last_offset
-        < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) j))).last_offset)
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #3] [%#scompleted_producer'44] (forall i: int, j: int. 0
+              <= i
+            /\ i < j /\ j < Seq.length (view_Vec_usize_Global result.f1'2)
+          -> Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) i))).last_offset
+          < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) j))).last_offset)
+      /\ (forall i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view rows)
+            /\ match current' with
+                | Some epoch -> Int16.to_int incoming.producer_epoch <= Int16.to_int epoch
+                | None -> false
+                end
+            /\ not (exists j: int. 0 <= j
+              /\ j < Seq.length (view_Vec_usize_Global result.f1'2)
+              /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) j) = i)
+          -> Seq.length (view_Vec_usize_Global result.f1'2) = 5
+          /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1'2)
+            -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
+            < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) j))).last_offset))
+      /\ (result.f0'2
+        /\ not (exists j: int. 0 <= j
+          /\ j < Seq.length (view_Vec_usize_Global result.f1'2)
+          /\ (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) j))).last_offset
+          = incoming.last_offset)
+      -> Seq.length (view_Vec_usize_Global result.f1'2) = 5
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1'2)
+        -> Int64.to_int incoming.last_offset
+        < Int64.to_int (completed_row (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) j))).last_offset)))
     /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #4] [%#scompleted_producer'45] not result.f0'2
       -> Seq.length (view_Vec_usize_Global result.f1'2) = Seq.length (Slice64.view rows)
       /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view rows)

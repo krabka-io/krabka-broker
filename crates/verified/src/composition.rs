@@ -176,6 +176,9 @@ use producer_window::rebuilt_data_window_bounds_retry;
 mod completed_producer;
 use completed_producer::completed_batches_preserve_first_retry;
 
+mod completed_eviction;
+use completed_eviction::completed_eviction_bounds_waiters;
+
 mod truncated_producer;
 use truncated_producer::truncated_replay_bounds_first_retry;
 
