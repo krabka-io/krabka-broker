@@ -96,3 +96,9 @@ threads-required = 'num-test-threads'
 filter = 'package(krabka-broker) & binary(tiered_storage_multi_broker)'
 test-group = 'broker-tiered-multi-broker'
 threads-required = 'num-test-threads'
+
+# Match their Bazel cpu:4 scheduling so other suites cannot starve
+# Raft election heartbeats or diskless follower catch-up.
+[[profile.ci.overrides]]
+filter = '(package(krabka-raft) & binary(kraft_engine_sim)) | (package(krabka-broker) & binary(diskless_e2e))'
+threads-required = 'num-test-threads'
