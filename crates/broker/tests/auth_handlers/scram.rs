@@ -643,7 +643,7 @@ async fn scram_in_band_reauth_with_different_principal_closes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
     let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::secs(1)).await;
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -682,7 +682,7 @@ async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round()
             reauth.error_message
         );
         check!(
-            (200..=300).contains(&reauth.session_lifetime_ms),
+            (900..=1_000).contains(&reauth.session_lifetime_ms),
             "re-auth round {round} must re-arm the window, got {}",
             reauth.session_lifetime_ms
         );
