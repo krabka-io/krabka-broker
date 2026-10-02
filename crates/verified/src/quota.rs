@@ -12,6 +12,9 @@ use crate::throttle::{
 mod refill;
 pub use refill::quota_refill;
 
+mod debt_cap;
+pub use debt_cap::quota_debt_cap;
+
 mod request;
 pub use request::quota_whole_request;
 

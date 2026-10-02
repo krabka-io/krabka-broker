@@ -5,6 +5,7 @@ use super::*;
 mod abort_union;
 mod consume_trace;
 mod list_offsets;
+mod quota_time;
 mod refill;
 mod tiered_timestamp;
 mod typed_timestamp;
