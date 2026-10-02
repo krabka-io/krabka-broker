@@ -1,0 +1,353 @@
+(* #"/workspace/crates/verified/src/composition/rotation_marker.rs" 31 0 38 18 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 142 10 142 52
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 143 10 147 5
+let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 148 10 152 5
+let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 153 10 160 5
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 108 8 115 9
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 86 8 91 9
+let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 131 8 146 9
+let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 65 8 70 9
+let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
+let%span sdecision = "/workspace/crates/verified/src/producer/decision.rs" 38 10 45 1
+let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 39 10 40 27
+let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 41 10 44 42
+let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 45 10 51 41
+let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 52 10 58 51
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 226 53 226 54
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 50
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 54
+let%span srotation_marker = "/workspace/crates/verified/src/composition/rotation_marker.rs" 39 31 39 32
+let%span srotation_marker'0 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 39 20 39 28
+let%span srotation_marker'1 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 39 20 39 32
+let%span srotation_marker'2 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 40 41 40 45
+let%span srotation_marker'3 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 40 47 40 52
+let%span srotation_marker'4 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 40 18 40 90
+let%span srotation_marker'5 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 40 18 40 99
+let%span srotation_marker'6 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 41 25 43 5
+let%span srotation_marker'7 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 44 42 44 46
+let%span srotation_marker'8 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 44 48 44 53
+let%span srotation_marker'9 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 44 19 44 82
+let%span srotation_marker'10 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 44 19 44 91
+let%span srotation_marker'11 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 45 25 47 5
+let%span srotation_marker'12 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 48 22 50 5
+let%span srotation_marker'13 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 54 40 54 41
+let%span srotation_marker'14 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 54 15 54 42
+let%span srotation_marker'15 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 55 23 55 25
+let%span srotation_marker'16 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 57 19 65 5
+let%span srotation_marker'17 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 66 61 66 62
+let%span srotation_marker'18 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 66 21 66 98
+let%span srotation_marker'19 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 24 11 24 67
+let%span srotation_marker'20 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 25 11 25 38
+let%span srotation_marker'21 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 26 10 26 78
+let%span srotation_marker'22 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 27 10 27 59
+let%span srotation_marker'23 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 28 10 28 60
+let%span srotation_marker'24 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 29 10 29 59
+let%span srotation_marker'25 = "/workspace/crates/verified/src/composition/rotation_marker.rs" 30 10 30 86
+
+use creusot.int.Int16
+use creusot.int.Int64
+use creusot.prelude.Any
+use creusot.int.Int32
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use int.EuclideanDivision
+use int.Int
+
+constant const_MAX: Int16.t = (32767: Int16.t)
+
+type t_Option_i64 = None | Some Int64.t
+
+type tup2_i64_i16 = { f0: Int64.t; f1: Int16.t }
+
+type t_Option_tup2_i64_i16 = None'0 | Some'0 tup2_i64_i16
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+type tup2_Option_tup2_i64_i16_Option_i64 = { f0'0: t_Option_tup2_i64_i16; f1'0: t_Option_i64 }
+
+let next_producer_identity (verified: bool) (recovery: bool) (pid: Int64.t) (epoch: Int16.t) (fresh: t_Option_i64)
+  (return (x: t_Option_tup2_i64_i16)) = any
+  [ return (result: t_Option_tup2_i64_i16) ->
+  {[@stop_split] [@expl:next_producer_identity ensures] ([@stop_split] [@expl:next_producer_identity ensures #0] [%#snext_producer_identity] not verified
+      -> result = Some'0 { f0 = pid; f1 = epoch })
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #1] [%#snext_producer_identity'0] verified
+        /\ not recovery /\ Int16.to_int epoch < Int16.to_int const_MAX - 1
+      -> match result with
+        | Some'0 {f0 = result_pid; f1 = result_epoch} -> result_pid = pid
+        /\ Int16.to_int result_epoch = Int16.to_int epoch + 1
+        | None'0 -> false
+        end)
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #2] [%#snext_producer_identity'1] verified
+        /\ recovery /\ Int16.to_int epoch < Int16.to_int const_MAX
+      -> match result with
+        | Some'0 {f0 = result_pid; f1 = result_epoch} -> result_pid = pid
+        /\ Int16.to_int result_epoch = Int16.to_int epoch + 1
+        | None'0 -> false
+        end)
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #3] [%#snext_producer_identity'2] verified
+      /\ (not recovery /\ ge_log_Int (Int16.to_int epoch) (Int16.to_int const_MAX - 1)
+      \/ recovery /\ ge_log_Int (Int16.to_int epoch) (Int16.to_int const_MAX))
+    -> match { f0'0 = result; f1'0 = fresh } with
+      | {f0'0 = Some'0 {f0 = result_pid; f1 = result_epoch}; f1'0 = Some fresh_pid} -> result_pid = fresh_pid
+      /\ Int16.to_int result_epoch = 0
+      | {f0'0 = None'0; f1'0 = None} -> true
+      | _ -> false
+      end)}
+    (! return {result}) ]
+
+let unwrap_tup2_i64_i16 (self_: t_Option_tup2_i64_i16) (return (x: tup2_i64_i16)) =
+{[@stop_split] [@expl:unwrap requires] [%#soption] self_ <> None'0}
+  any
+  [ return (result: tup2_i64_i16) -> {[@stop_split] [@expl:unwrap ensures] [%#soption'0] Some'0 result = self_}
+    (! return {result}) ]
+
+type t_InitProducerIdIdentityDecision = BumpWithoutIdentity | Bump | Retry | Fenced
+
+type tup2_i16_bool = { f0'1: Int16.t; f1'1: bool }
+
+constant const_EXHAUSTED_PRODUCER_EPOCH [#"/workspace/crates/verified/src/transaction.rs" 226 0 226 39] : Int16.t
+
+let set_EXHAUSTED_PRODUCER_EPOCH (return) = bb0
+  [ bb0 = s0
+    [ s0 =
+      [ &_1 <- let (_fst, _snd) = Int16.sub_with_overflow ([%#stransaction'0] const_MAX) ([%#stransaction] (1: Int16.t)) in { f0'1 = _fst;
+                                                                                                                              f1'1 = _snd } ]
+      s1
+    | s1 = {[@expl:Sub overflow] [%#stransaction'1] not _1.f1'1} s2
+    | s2 = [ &_ret <- _1.f0'1 ] s3
+    | s3 = return {_ret} ] ] [ & _ret: Int16.t = Any.any_l () | & _1: tup2_i16_bool = Any.any_l () ]
+  [ return (_const: Int16.t) -> -{const_EXHAUSTED_PRODUCER_EPOCH = _const}- return ]
+
+let init_producer_id_identity_decision (entry_pid: Int64.t) (entry_epoch: Int16.t) (last_epoch: Int16.t)
+  (prev_pid: Int64.t) (request_pid: Int64.t) (request_epoch: Int16.t) (return (x: t_InitProducerIdIdentityDecision)) =
+any
+  [ return (result: t_InitProducerIdIdentityDecision) ->
+  {[@stop_split] [@expl:init_producer_id_identity_decision ensures] ([@stop_split] [@expl:init_producer_id_identity_decision ensures #0] [%#sproducer_identity] (result
+        = BumpWithoutIdentity)
+      = (Int64.to_int request_pid = - 1))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #1] [%#sproducer_identity'0] (result = Bump)
+      = (Int64.to_int request_pid <> - 1
+      /\ Int64.to_int request_pid = Int64.to_int entry_pid /\ Int16.to_int request_epoch = Int16.to_int entry_epoch))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #2] [%#sproducer_identity'1] (result = Retry)
+      = (Int64.to_int request_pid <> - 1
+      /\ (Int64.to_int request_pid = Int64.to_int entry_pid
+        \/ Int64.to_int request_pid = Int64.to_int prev_pid
+        /\ ge_log_Int (Int16.to_int request_epoch) (Int16.to_int const_EXHAUSTED_PRODUCER_EPOCH))
+      /\ not (Int64.to_int request_pid = Int64.to_int entry_pid
+        /\ Int16.to_int request_epoch = Int16.to_int entry_epoch)
+      /\ Int16.to_int request_epoch = Int16.to_int last_epoch))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #3] [%#sproducer_identity'2] (result = Fenced)
+    = (Int64.to_int request_pid <> - 1
+    /\ (not (Int64.to_int request_pid = Int64.to_int entry_pid
+      \/ Int64.to_int request_pid = Int64.to_int prev_pid
+      /\ ge_log_Int (Int16.to_int request_epoch) (Int16.to_int const_EXHAUSTED_PRODUCER_EPOCH))
+    \/ not (Int64.to_int request_pid = Int64.to_int entry_pid /\ Int16.to_int request_epoch = Int16.to_int entry_epoch)
+    /\ Int16.to_int request_epoch <> Int16.to_int last_epoch)))}
+    (! return {result}) ]
+
+constant const_MIN: Int16.t = (-32768: Int16.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_add (self_: Int16.t) (rhs: Int16.t) (return (x: Int16.t)) = any
+  [ return (result: Int16.t) ->
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] ge_log_Int (Int16.to_int self_
+          + Int16.to_int rhs) (Int16.to_int const_MIN)
+        /\ Int16.to_int self_ + Int16.to_int rhs <= Int16.to_int const_MAX
+      -> Int16.to_int result = Int16.to_int self_ + Int16.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'0] Int16.to_int self_ + Int16.to_int rhs
+        < Int16.to_int const_MIN -> Int16.to_int result = Int16.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] gt_log_Int (Int16.to_int self_
+      + Int16.to_int rhs) (Int16.to_int const_MAX) -> Int16.to_int result = Int16.to_int const_MAX)}
+    (! return {result}) ]
+
+type t_ProducerEntryFacts = { epoch: Int16.t; last_sequence: Int32.t }
+
+type t_Option_ProducerEntryFacts = None'1 | Some'1 t_ProducerEntryFacts
+
+type t_RetainedSequenceRange = { base_sequence'0: Int32.t; last_sequence'0: Int32.t }
+
+type t_Option_RetainedSequenceRange = None'2 | Some'2 t_RetainedSequenceRange
+
+type tup3_i16_i32_i32 = { f0'2: Int16.t; f1'2: Int32.t; f2'2: Int32.t }
+
+type t_ProducerDecision = Append'0 | Duplicate'0 UInt64.t | OutOfOrder'0 | Fenced'0
+
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
+ = [%#ssequence_decision'3] EuclideanDivision.mod sequence 2147483648
+
+predicate retained_matches [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 59 0 63 9] (slot: t_Option_RetainedSequenceRange) (base_sequence: Int32.t) (last_offset_delta: Int32.t) =
+  [%#ssequence_decision'2] match slot with
+    | Some'2 range -> Int32.to_int range.base_sequence'0 = Int32.to_int base_sequence
+    /\ Int32.to_int range.last_sequence'0
+    = sequence_modulo_2_31 (Int32.to_int base_sequence + Int32.to_int last_offset_delta)
+    | None'2 -> false
+    end
+
+predicate first_retained_duplicate [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 99 0 106 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) (index: int) =
+  [%#ssequence_decision] match entry with
+    | Some'1 tracked -> Int16.to_int tracked.epoch = Int16.to_int producer_epoch
+    /\ 0 <= index
+    /\ index < Seq.length retained
+    /\ retained_matches (Seq.get retained index) base_sequence last_offset_delta
+    /\ (forall j: int. 0 <= j /\ j < index -> not retained_matches (Seq.get retained j) base_sequence last_offset_delta)
+    | None'1 -> false
+    end
+
+predicate retained_duplicate_exists [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 78 0 84 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) =
+  [%#ssequence_decision'0] match entry with
+    | Some'1 tracked -> Int16.to_int tracked.epoch = Int16.to_int producer_epoch
+    /\ (exists i: int. 0 <= i
+      /\ i < Seq.length retained /\ retained_matches (Seq.get retained i) base_sequence last_offset_delta)
+    | None'1 -> false
+    end
+
+function sequence_decision [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 123 0 129 21] (entry: t_Option_ProducerEntryFacts) (producer_epoch: Int16.t) (base_sequence: Int32.t) (log_empty: bool) (trunk_rules: bool) : t_ProducerDecision
+ = [%#ssequence_decision'1] match entry with
+    | None'1 -> if trunk_rules /\ log_empty /\ Int32.to_int base_sequence <> 0 then OutOfOrder'0 else Append'0
+    | Some'1 tracked -> if Int16.to_int producer_epoch < Int16.to_int tracked.epoch then
+      Fenced'0
+    else
+      if gt_log_Int (Int16.to_int producer_epoch) (Int16.to_int tracked.epoch) then
+        if Int32.to_int base_sequence = 0 then Append'0 else OutOfOrder'0
+      else
+        if Int32.to_int base_sequence = sequence_modulo_2_31 (Int32.to_int tracked.last_sequence + 1) then
+          Append'0
+        else
+          OutOfOrder'0
+
+
+
+    end
+
+let producer_decision (entry: t_Option_ProducerEntryFacts) (retained: Slice64.slice t_Option_RetainedSequenceRange)
+  (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) (log_empty: bool) (trunk_rules: bool)
+  (return (x: t_ProducerDecision)) = any
+  [ return (result: t_ProducerDecision) ->
+  {[@stop_split] [@expl:producer_decision ensures] [%#sdecision] match result with
+      | Duplicate'0 index -> first_retained_duplicate entry (Slice64.view retained) producer_epoch base_sequence last_offset_delta (UInt64.t'int index)
+      | _ -> not retained_duplicate_exists entry (Slice64.view retained) producer_epoch base_sequence last_offset_delta
+      /\ result = sequence_decision entry producer_epoch base_sequence log_empty trunk_rules
+      end}
+    (! return {result}) ]
+
+type tup6_tup2_i64_i16_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_ProducerDecision_ProducerDecision = {
+  f0'3: tup2_i64_i16;
+  f1'3: t_InitProducerIdIdentityDecision;
+  f2'3: t_InitProducerIdIdentityDecision;
+  f3'3: t_InitProducerIdIdentityDecision;
+  f4'3: t_ProducerDecision;
+  f5'3: t_ProducerDecision }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let rotation_marker_bounds_identity_retry [#"/workspace/crates/verified/src/composition/rotation_marker.rs" 31 0 38 18]
+  (old_pid: Int64.t) (fresh_pid: Int64.t) (retained: Slice64.slice t_Option_RetainedSequenceRange)
+  (request: tup3_i16_i32_i32) (log_empty: bool) (trunk_rules: bool)
+  (return (x: tup6_tup2_i64_i16_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_ProducerDecision_ProducerDecision)) =
+{[@stop_split] [@expl:rotation_marker_bounds_identity_retry requires] ([@stop_split] [@expl:rotation_marker_bounds_identity_retry requires #0] [%#srotation_marker'19] ge_log_Int (Int64.to_int old_pid) 0
+    /\ ge_log_Int (Int64.to_int fresh_pid) 0 /\ old_pid <> fresh_pid)
+  /\ ([@stop_split] [@expl:rotation_marker_bounds_identity_retry requires #1] [%#srotation_marker'20] Int16.to_int request.f0'2
+  <= Int16.to_int const_MAX - 1)}
+  (! set_EXHAUSTED_PRODUCER_EPOCH
+    (bb0
+    [ bb0 = s0
+      [ s0 = Int16.sub [%#srotation_marker'1] {[%#srotation_marker'0] const_MAX} {[%#srotation_marker] (1: Int16.t)}
+          (fun (_x: Int16.t) -> [ &old_epoch <- _x ] s1)
+      | s1 = [ &_24 <- Some fresh_pid ] s2
+      | s2 = next_producer_identity [%#srotation_marker'4] {[%#srotation_marker'2] true} {[%#srotation_marker'3] false}
+          {old_pid} {old_epoch} {_24} (fun (_x: t_Option_tup2_i64_i16) -> [ &_21 <- _x ] s3)
+      | s3 = unwrap_tup2_i64_i16 [%#srotation_marker'5] {_21} (fun (_x: tup2_i64_i16) -> [ &rotated <- _x ] s4)
+      | s4 = init_producer_id_identity_decision [%#srotation_marker'6] {rotated.f0} {rotated.f1} {old_epoch} {old_pid}
+          {old_pid} {old_epoch} (fun (_x: t_InitProducerIdIdentityDecision) -> [ &identity_retry <- _x ] s5)
+      | s5 = [ &_37 <- None ] s6
+      | s6 = next_producer_identity [%#srotation_marker'9] {[%#srotation_marker'7] true} {[%#srotation_marker'8] false}
+          {rotated.f0} {rotated.f1} {_37} (fun (_x: t_Option_tup2_i64_i16) -> [ &_34 <- _x ] s7)
+      | s7 = unwrap_tup2_i64_i16 [%#srotation_marker'10] {_34} (fun (_x: tup2_i64_i16) -> [ &advanced <- _x ] s8)
+      | s8 = init_producer_id_identity_decision [%#srotation_marker'11] {advanced.f0} {advanced.f1} {rotated.f1}
+          {old_pid} {old_pid} {old_epoch} (fun (_x: t_InitProducerIdIdentityDecision) -> [ &old_after_bump <- _x ] s9)
+      | s9 = init_producer_id_identity_decision [%#srotation_marker'12] {advanced.f0} {advanced.f1} {rotated.f1}
+          {old_pid} {rotated.f0} {rotated.f1} (fun (_x: t_InitProducerIdIdentityDecision) -> [ &fresh_retry <- _x ] s10)
+      | s10 = saturating_add [%#srotation_marker'14] {old_epoch} {[%#srotation_marker'13] (1: Int16.t)}
+          (fun (_x: Int16.t) -> [ &_53 <- _x ] s11)
+      | s11 = [ &marker <- { epoch = _53; last_sequence = ([%#srotation_marker'15] (-1: Int32.t)) } ] s12
+      | s12 = [ &_56 <- Some'1 marker ] s13
+      | s13 = producer_decision [%#srotation_marker'16] {_56} {retained} {request.f0'2} {request.f1'2} {request.f2'2}
+          {log_empty} {trunk_rules} (fun (_x: t_ProducerDecision) -> [ &old_data <- _x ] s14)
+      | s14 = [ &_65 <- None'1 ] s15
+      | s15 = bb0'0
+        [ bb0'0 = s0'0
+          [ s0'0 = any
+            [ any_ (__arr_temp: Slice64.array t_Option_RetainedSequenceRange) -> (! -{Seq.length __arr_temp.Slice64.elts
+              = 0}-
+              [ &_1 <- __arr_temp ] s1'0) ]
+          | s1'0 = [ &_ret'0 <- _1 ] s2'0
+          | s2'0 = _const_ret {_ret'0} ] ]
+        [ & _ret'0: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+        | & _1: Slice64.array t_Option_RetainedSequenceRange = Any.any_l () ]
+        [ _const_ret (_const: Slice64.array t_Option_RetainedSequenceRange) -> [ &_80 <- _const ] s16 ]
+      | s16 = [ &_68 <- _80 ] s17
+      | s17 = producer_decision [%#srotation_marker'18] {_65} {_68} {rotated.f1} {[%#srotation_marker'17] (0: Int32.t)}
+          {request.f2'2} {log_empty} {trunk_rules} (fun (_x: t_ProducerDecision) -> [ &fresh_data <- _x ] s18)
+      | s18 = [ &_ret <- { f0'3 = rotated;
+                           f1'3 = identity_retry;
+                           f2'3 = old_after_bump;
+                           f3'3 = fresh_retry;
+                           f4'3 = old_data;
+                           f5'3 = fresh_data } ] s19
+      | s19 = return {_ret} ] ]
+    [ & _ret: tup6_tup2_i64_i16_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_ProducerDecision_ProducerDecision = Any.any_l ()
+    | & old_pid: Int64.t = old_pid
+    | & fresh_pid: Int64.t = fresh_pid
+    | & retained: Slice64.slice t_Option_RetainedSequenceRange = retained
+    | & request: tup3_i16_i32_i32 = request
+    | & log_empty: bool = log_empty
+    | & trunk_rules: bool = trunk_rules
+    | & old_epoch: Int16.t = Any.any_l ()
+    | & rotated: tup2_i64_i16 = Any.any_l ()
+    | & _21: t_Option_tup2_i64_i16 = Any.any_l ()
+    | & _24: t_Option_i64 = Any.any_l ()
+    | & identity_retry: t_InitProducerIdIdentityDecision = Any.any_l ()
+    | & advanced: tup2_i64_i16 = Any.any_l ()
+    | & _34: t_Option_tup2_i64_i16 = Any.any_l ()
+    | & _37: t_Option_i64 = Any.any_l ()
+    | & old_after_bump: t_InitProducerIdIdentityDecision = Any.any_l ()
+    | & fresh_retry: t_InitProducerIdIdentityDecision = Any.any_l ()
+    | & marker: t_ProducerEntryFacts = Any.any_l ()
+    | & _53: Int16.t = Any.any_l ()
+    | & old_data: t_ProducerDecision = Any.any_l ()
+    | & _56: t_Option_ProducerEntryFacts = Any.any_l ()
+    | & fresh_data: t_ProducerDecision = Any.any_l ()
+    | & _65: t_Option_ProducerEntryFacts = Any.any_l ()
+    | & _68: Slice64.array t_Option_RetainedSequenceRange = Any.any_l ()
+    | & _80: Slice64.array t_Option_RetainedSequenceRange = Any.any_l () ]))
+  [ return
+    (result: tup6_tup2_i64_i16_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_InitProducerIdIdentityDecision_ProducerDecision_ProducerDecision) ->
+  {[@stop_split] [@expl:rotation_marker_bounds_identity_retry ensures] ([@stop_split] [@expl:rotation_marker_bounds_identity_retry ensures #0] [%#srotation_marker'21] result.f0'3.f0
+        = fresh_pid
+      /\ Int16.to_int result.f0'3.f1 = 0 /\ result.f0'3.f0 <> old_pid)
+    /\ ([@stop_split] [@expl:rotation_marker_bounds_identity_retry ensures #1] [%#srotation_marker'22] result.f1'3
+      = Retry)
+    /\ ([@stop_split] [@expl:rotation_marker_bounds_identity_retry ensures #2] [%#srotation_marker'23] result.f2'3
+      = Fenced)
+    /\ ([@stop_split] [@expl:rotation_marker_bounds_identity_retry ensures #3] [%#srotation_marker'24] result.f3'3
+      = Retry)
+    /\ ([@stop_split] [@expl:rotation_marker_bounds_identity_retry ensures #4] [%#srotation_marker'25] result.f4'3
+      = Fenced'0
+    /\ result.f5'3 = Append'0)}
+    (! return {result}) ]
