@@ -177,10 +177,10 @@ async fn boot_with_ongoing_txn(
         .begin_transaction_owned()
         .await
         .unwrap();
-    // `send` enqueues into the producer's local batch; without
+    // `enqueue` enqueues into the producer's local batch; without
     // `flush()` the AddPartitionsToTxn round-trip that registers
     // `(topic, partition)` on the coordinator's TxnEntry may not run
-    // before the admin call. The drop pattern around `send` is
+    // before the admin call. The drop pattern around `enqueue` is
     // intentional — it's a future-of-record-metadata handle we don't
     // need (commits will never fire on this test path).
     drop(
@@ -193,7 +193,7 @@ async fn boot_with_ongoing_txn(
     // Don't commit/abort — we want the txn to stay Ongoing.
 
     // `flush()` returning does not mean the coordinator has finished the
-    // AddPartitionsToTxn round-trip that `send` triggered, so its `TxnEntry`
+    // AddPartitionsToTxn round-trip that `enqueue` triggered, so its `TxnEntry`
     // can still read `Empty` with no partitions for a moment afterwards. Wait
     // for it here rather than in each caller: every test below asserts against
     // the `Ongoing` state this helper's name promises, and the one that did not

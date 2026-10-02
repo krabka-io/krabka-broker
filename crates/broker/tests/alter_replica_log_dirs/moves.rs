@@ -109,7 +109,7 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
         .await
         .expect("producer build");
     for i in 0..50i32 {
-        // `Producer::send` returns a `oneshot::Receiver` for the ack;
+        // `Producer::enqueue` returns a delivery handle for the ack;
         // drop it and let `flush` synchronize before the alter. This
         // matches the pattern in `crates/broker/tests/durability.rs`.
         drop(
