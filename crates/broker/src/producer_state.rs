@@ -24,6 +24,8 @@ mod replication_mirror;
 #[cfg(test)]
 mod restart_agreement;
 #[cfg(test)]
+mod snapshot_tail;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod truncation_replay;

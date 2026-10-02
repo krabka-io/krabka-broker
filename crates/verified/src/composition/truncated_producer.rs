@@ -1,10 +1,9 @@
 use creusot_std::prelude::*;
 
 use super::{
-    ProducerDecision, ProducerSnapshotEntryFacts, producer_decision,
-    replayed_window_preserves_first_retry_coordinates, whole_batch_truncation_bounds_controls,
+    ProducerDecision, ProducerSnapshotEntryFacts, rebuilt_data_window_bounds_retry,
+    whole_batch_truncation_bounds_controls,
 };
-use crate::raft::frontier_reaches;
 
 // Actual end, retained history count, rebuilt window start, decision, retry witness.
 type TruncatedRetry = (
@@ -104,55 +103,18 @@ pub(super) fn truncated_replay_bounds_first_retry(
     );
     proof_assert!(forall<j: Int> 0 <= j && j < rows@.len() ==>
         (j < count@) == (rows@[j].last_offset@ < cut@));
-    if count == 0 {
-        let decision = producer_decision(
-            None,
-            &[],
-            request.0,
-            request.1,
-            request.2,
-            end == 0,
-            request.3,
-        );
-        return (end, 0, 0, decision, None);
-    }
-    let epoch = rows[count - 1].producer_epoch;
-    let mut first = count;
-    #[invariant(first@ <= count@ && count@ - first@ <= 5)]
-    #[invariant(forall<j: Int> first@ <= j && j < count@ ==> rows@[j].producer_epoch == epoch)]
-    #[variant(first)]
-    while first > 0 && count - first < 5 && rows[first - 1].producer_epoch == epoch {
-        first -= 1;
-    }
-    proof_assert!(first@ < count@);
-    let mut kept: Vec<ProducerSnapshotEntryFacts> = Vec::new();
-    let mut i = first;
-    #[invariant(first@ <= i@ && i@ <= count@ && kept@.len() == i@ - first@)]
-    #[invariant(forall<j: Int> 0 <= j && j < kept@.len() ==>
-        kept@[j] == rows@[first@ + j]
-        && crate::producer_snapshot::snapshot_entry_valid_model(end@, kept@[j]))]
+    let mut prefix: Vec<ProducerSnapshotEntryFacts> = Vec::new();
+    let mut i = 0usize;
+    #[invariant(i@ <= count@ && prefix@.len() == i@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
+        prefix@[j] == rows@[j]
+        && crate::producer_snapshot::snapshot_entry_valid_model(end@, prefix@[j]))]
     #[variant(count@ - i@)]
     while i < count {
         proof_assert!(crate::producer_snapshot::snapshot_entry_valid_model(end@, rows@[i@]));
-        kept.push(rows[i]);
+        prefix.push(rows[i]);
         i += 1;
     }
-    let (decision, coordinates) = replayed_window_preserves_first_retry_coordinates(
-        end,
-        &kept,
-        (request.0, request.1, request.2),
-    );
-    proof_assert!(forall<j: Int> first@ <= j && j < count@ ==>
-        rows@[j] == kept@[j - first@]);
-    let Some((origin, base, frontier)) = coordinates else {
-        return (end, count, first, decision, None);
-    };
-    let ready = frontier_reaches(hwm, frontier);
-    (
-        end,
-        count,
-        first,
-        decision,
-        Some((first + origin, base, frontier, ready)),
-    )
+    let (first, decision, witness) = rebuilt_data_window_bounds_retry(end, hwm, &prefix, request);
+    (end, count, first, decision, witness)
 }
