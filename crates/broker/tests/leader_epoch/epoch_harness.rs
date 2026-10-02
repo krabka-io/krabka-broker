@@ -68,6 +68,22 @@ pub(crate) async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &
     broker.wait_until_partition_present(name, 0).await;
 }
 
+pub(crate) async fn set_leader_epoch(broker: &BrokerHandle, name: &str, epoch: i32) {
+    // Keep reconciliation on the same epoch as the appends under test.
+    let mut partition = broker
+        .partition_record_for_test(name, 0)
+        .expect("partition");
+    partition.leader_epoch = krabka_metadata::LeaderEpoch(epoch);
+    let leader = partition.leader;
+    broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(partition))
+        .await
+        .expect("set leader epoch");
+    broker
+        .wait_until_local_partition_leader(name, 0, leader)
+        .await;
+}
+
 pub(crate) fn record(value: &str) -> RecordBatch {
     let mut b = RecordBatch::default();
     b.records.push(Record {

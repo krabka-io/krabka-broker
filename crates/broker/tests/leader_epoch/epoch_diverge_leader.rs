@@ -13,7 +13,7 @@ use krabka_protocol::owned::{
     produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
 };
 
-use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
+use crate::epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for};
 
 /// KIP-320 leader side. A follower-style Fetch, with `replica_id >= 0`, that
 /// advertises a stale `last_fetched_epoch` whose epoch ends *before* the
@@ -22,8 +22,8 @@ use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
 ///
 /// The test builds the leader's epoch history deterministically:
 ///   * produce `k = 2` records at epoch 0, which gives checkpoint `0 -> 0`,
-///   * bump the leader epoch to 1, with the split-brain shim that the fence
-///     test uses, then produce 2 more, which gives checkpoint `1 -> 2`.
+///   * install leader epoch 1 through metadata, then produce 2 more, which
+///     gives checkpoint `1 -> 2`.
 ///
 /// The cache is then `e0 -> [0, 2)` and `e1 -> [2, 4)`, and the log end is 4.
 ///
@@ -78,7 +78,7 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
     produce_one("e0-b").await;
 
     // Bump leader epoch to 1, produce 2 more → checkpoint row `1 2`, LEO = 4.
-    broker.test_set_leader_epoch("diverge", 0, 1);
+    set_leader_epoch(&broker, "diverge", 1).await;
     produce_one("e1-a").await;
     produce_one("e1-b").await;
     let n: i64 = 4;
