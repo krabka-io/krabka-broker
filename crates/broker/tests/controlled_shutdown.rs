@@ -267,9 +267,8 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
     // Pop the target out of the cluster vec — `controlled_shutdown`
     // consumes the handle, and we need to keep the surviving brokers
     // alive afterward to verify the post-shutdown image.
-    let (target_handle, target_cfg, target_dir) = cluster.remove(target_idx);
+    let (target_handle, target_cfg, _target_dir) = cluster.remove(target_idx);
     drop(target_cfg);
-    drop(target_dir);
 
     // Drive controlled shutdown. The handler-side leader transfer
     // submits records on each heartbeat tick (default 200ms in
