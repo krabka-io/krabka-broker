@@ -12,7 +12,7 @@ use krabka_protocol::owned::{
     produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
 };
 
-use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
+use crate::epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fenced_leader_epoch_truncates_zombie_writes() {
@@ -45,8 +45,8 @@ async fn fenced_leader_epoch_truncates_zombie_writes() {
         .await
         .expect("produce");
 
-    // Force the partition's epoch up to 5 (simulate "split brain").
-    broker.test_set_leader_epoch("fence", 0, 5);
+    // Advance the partition's epoch to fence the old leader.
+    set_leader_epoch(&broker, "fence", 5).await;
 
     // Fetch with current_leader_epoch=2 → FENCED_LEADER_EPOCH (code 74).
     let resp = client
