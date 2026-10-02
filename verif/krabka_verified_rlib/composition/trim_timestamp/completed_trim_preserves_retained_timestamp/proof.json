@@ -1,0 +1,33 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_admitted_trim_bounds_reload_and_retry": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      },
+      "vc_branch_Result_tup3_i64_Option_usize_i64_DeleteRecordsTrimDecision": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      },
+      "vc_completed_trim_preserves_retained_timestamp": {
+        "prover": "z3",
+        "time": 0.014
+      },
+      "vc_constructed_index_retained_candidate": {
+        "prover": "alt-ergo",
+        "time": 0.013
+      },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_from_DeleteRecordsTrimDecision": {
+        "prover": "alt-ergo",
+        "time": 0.015
+      },
+      "vc_from_residual_Result_tup4_i64_Option_usize_i64_Option_usize_DeleteRecordsTrimDecision": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      }
+    }
+  }
+}

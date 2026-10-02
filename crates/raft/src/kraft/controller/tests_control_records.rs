@@ -857,3 +857,41 @@ fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
     let (_, grew) = run(true, VoterChange::FinalizeKraftVersion(1));
     check!(grew, "the real upgrade appends");
 }
+
+#[tokio::test]
+async fn version_finalization_waits_for_the_unchanged_voters_record() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    engine.on_event(Event::ElectionTimeout);
+    for epoch in [0, 1] {
+        engine.on_event(Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch,
+            vote_granted: true,
+        });
+    }
+    assert!(engine.core.role().is_leader());
+    engine.advance_and_apply(engine.log.log_end_offset());
+    let base = engine.log.log_end_offset();
+    let before = engine.controls.committed_voters.clone();
+    let (reply, mut rx) = oneshot::channel();
+    engine.on_reconfigure(VoterChange::FinalizeKraftVersion(1), reply);
+    assert!(engine.log.log_end_offset() == Offset(base.0 + 2));
+    assert!(engine.pending_reconfig.as_ref().unwrap().need_offset == Offset(base.0 + 2));
+
+    engine.advance_and_apply(Offset(base.0 + 1));
+    assert!(engine.controls.committed_version == 1);
+    assert!(engine.controls.committed_voters == before);
+    assert!(engine.controls.latest_voters() == &engine.controls.committed_voters);
+    assert!(engine.controls.voter_history.last_key_value().unwrap().0 == &(base.0 + 1));
+    assert!(engine.pending_reconfig.is_some());
+    assert!(matches!(
+        rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+
+    engine.advance_and_apply(Offset(base.0 + 2));
+    assert!(engine.pending_reconfig.is_none());
+    assert!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
+}

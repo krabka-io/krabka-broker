@@ -4,14 +4,12 @@
     "Coma": {
       "vc_constructed_time_index_preserves_first": {
         "prover": "alt-ergo",
-        "time": 0.115
+        "time": 0.241
       },
       "vc_deref_Vec_tup2_i64_u32_Global": {
         "prover": "alt-ergo",
         "time": 0.008
       },
-      "vc_eq_Option_usize": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.005 },
       "vc_indexed_timestamp_scan_finds_first": {
         "prover": "alt-ergo",
         "time": 0.005

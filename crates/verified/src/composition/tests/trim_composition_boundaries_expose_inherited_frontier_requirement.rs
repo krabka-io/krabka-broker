@@ -34,12 +34,12 @@ fn trim_composition_boundaries_expose_inherited_frontier_requirement() {
         }
     }
     for requested in [-2, -1, 0, 3, 5, 6] {
-        assert!(admitted_trim_bounds_reload_and_retry(
+        trim_witnesses::check_logical(
             DeleteRecordsTrimFacts { requested, ..facts },
             3,
             2,
-            &[0, 3, 5, 10, 11]
-        ));
+            &[0, 3, 5, 10, 11],
+        );
     }
     // Snapshot validity preserves historical producer state, even when
     // its last batch is below the new logical start. It is not a data read.
@@ -56,14 +56,7 @@ fn trim_composition_boundaries_expose_inherited_frontier_requirement() {
         10, historical
     ));
     for lag in [-1, 0, 2, 5, 6, i64::MAX] {
-        assert!(diskless_trim_reconciliation_preserves_coverage(
-            5,
-            i64::MAX,
-            lag,
-            0,
-            1,
-            &[false, true, true]
-        ));
+        trim_witnesses::check_physical(5, i64::MAX, lag, 0, 1, &[false, true, true]);
     }
 }
 
@@ -81,15 +74,16 @@ fn remote_timestamp_composition_handles_padding_and_conservative_rows() {
         &[(i64::MIN, 0), (0, 0)],
     ] {
         for target in [i64::MIN, 100, 200, 300, 301, 500, i64::MAX] {
-            assert!(remote_timestamp_scan_preserves_first(
-                entries,
-                &offsets,
-                &timestamps,
-                target
-            ));
-            assert!(validated_remote_and_local_time_starts_agree(
-                entries, 6, target
-            ));
+            let (count, floor) = validated_time_scan::prefix_oracle(entries, target);
+            let expected = timestamps.iter().position(|time| *time >= target);
+            assert!(
+                remote_timestamp_scan_preserves_first(entries, &offsets, &timestamps, target)
+                    == (count, floor, expected)
+            );
+            let validated = validated_time_scan::archive_oracle(entries, 6)
+                .then_some((count, floor, floor))
+                .ok_or(());
+            assert!(validated_remote_and_local_time_starts_agree(entries, 6, target) == validated);
         }
     }
     // Structural validity alone cannot establish a truthful running maximum.

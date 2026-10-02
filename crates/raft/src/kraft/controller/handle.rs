@@ -217,9 +217,13 @@ impl KraftController {
             .map_err(|_| RaftError::Shutdown)
     }
 
-    /// Stop the engine task.
+    /// Stop the engine task and wait for its log to close.
     pub async fn shutdown(&self) {
+        let mut image = self.image_rx.clone();
         let _ = self.cmd_tx.send(Command::Shutdown).await;
+        // The engine owns the image sender. Wait for it to drop before callers
+        // can reopen or remove the log directory.
+        while image.changed().await.is_ok() {}
     }
 
     /// Test-only: append `records` as a committed batch and apply them through

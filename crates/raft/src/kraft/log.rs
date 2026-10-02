@@ -202,7 +202,11 @@ impl KraftLog {
     /// Returns [`RaftError`] if the underlying truncation fails.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), RaftError> {
         self.log.truncate_to(offset)?;
-        self.hwm = self.hwm.min(offset);
+        // A cut inside a batch can leave the physical end below the request.
+        self.hwm = Offset(krabka_verified::truncation_frontier(
+            self.hwm.0,
+            self.log.log_end_offset().0,
+        ));
         self.persist_hwm();
         Ok(())
     }
@@ -618,6 +622,30 @@ mod tests {
         log.truncate_to(Offset(2)).unwrap();
         assert2::assert!(log.log_end_offset().0 == 2);
         assert2::assert!(log.hwm().0 == 2);
+    }
+
+    #[test]
+    fn truncation_inside_a_batch_clamps_hwm_to_the_retained_end() {
+        for hwm in [0, 1, 2, 3] {
+            let (mut log, dir) = open_tmp();
+            log.append(&mut batch(0, 1, b"retained"), 0).unwrap();
+            let mut tail = batch(0, 1, b"discarded");
+            tail.last_offset_delta = 1;
+            let mut second = tail.records[0].clone();
+            second.offset_delta = 1;
+            tail.records.push(second);
+            log.append(&mut tail, 0).unwrap();
+            log.advance_hwm(Offset(hwm));
+            log.truncate_to(Offset(2)).unwrap();
+            assert2::assert!(log.log_end_offset() == Offset(1));
+            assert2::assert!(log.hwm() == Offset(hwm.min(1)));
+            log.advance_hwm(Offset(2));
+            assert2::assert!(log.hwm() == Offset(1));
+            drop(log);
+            let reopened = KraftLog::open(dir.path()).unwrap();
+            assert2::assert!(reopened.log_end_offset() == Offset(1));
+            assert2::assert!(reopened.hwm() == Offset(1));
+        }
     }
 
     /// Kafka's `KafkaRaftLog.truncateTo` hands the cut to

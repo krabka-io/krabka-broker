@@ -1,0 +1,1233 @@
+(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 70 0 78 21 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 413 18 413 53
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 414 18 414 77
+let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 67 20 67 29
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 9 10 22 1
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 174 28 180 1
+let%span sprepare = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 80 8 80 87
+let%span sprepare'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 80 8 80 88
+let%span sprepare'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 82 33 82 43
+let%span sprepare'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 84 31 84 41
+let%span sprepare'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 86 8 86 24
+let%span sprepare'4 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 89 8 89 24
+let%span sprepare'5 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 91 47 91 60
+let%span sprepare'6 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 91 17 91 61
+let%span sprepare'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 91 17 91 62
+let%span sprepare'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 92 16 92 29
+let%span sprepare'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 92 16 92 30
+let%span sprepare'10 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 93 19 93 61
+let%span sprepare'11 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 93 19 93 62
+let%span sprepare'12 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 94 39 94 49
+let%span sprepare'13 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 95 16 95 22
+let%span sprepare'14 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 99 14 99 33
+let%span sprepare'15 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 100 14 100 27
+let%span sprepare'16 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 97 16 98 90
+let%span sprepare'17 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 96 16 96 58
+let%span sprepare'18 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 101 20 101 30
+let%span sprepare'19 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 101 20 101 32
+let%span sprepare'20 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 101 41 101 51
+let%span sprepare'21 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 101 41 101 53
+let%span sprepare'22 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 101 8 101 62
+let%span sprepare'23 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 102 13 102 14
+let%span sprepare'24 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 102 8 102 14
+let%span sprepare'25 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 105 86 105 92
+let%span sprepare'26 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 105 8 105 93
+let%span sprepare'27 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 105 8 105 94
+let%span sprepare'28 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 107 8 107 105
+let%span sprepare'29 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 114 17 114 24
+let%span sprepare'30 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 32 11 32 45
+let%span sprepare'31 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 33 11 33 43
+let%span sprepare'32 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 34 10 46 65
+let%span sprepare'33 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 47 10 69 1
+let%span smembership = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 22 11 22 45
+let%span smembership'0 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 23 10 27 6
+let%span smembership'1 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 28 10 41 1
+let%span squorum = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 31 11 31 45
+let%span squorum'0 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 32 11 32 41
+let%span squorum'1 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 33 10 37 6
+let%span squorum'2 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 38 10 53 1
+let%span squorum'3 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 54 10 59 1
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 66 10 66 15
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 59 11 59 77
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 60 11 61 80
+let%span sspec'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 62 11 63 54
+let%span sspec'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 64 10 65 62
+let%span sspec'4 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 20 16 21 63
+let%span sspec'5 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 34 16 35 85
+let%span sspec'6 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 11 16 15 5
+let%span sspec'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 32 10 32 15
+let%span sspec'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 42 16 51 5
+let%span sspec'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 23 16 24 54
+let%span sspec'10 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
+let%span sspec'11 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 49 16 53 5
+let%span sspec'12 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 70 10 70 15
+let%span sspec'13 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 79 16 86 5
+let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 100 8 159 9
+let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 177 8 192 9
+let%span sadmitted_plan'1 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 19 8 22 47
+let%span sadmitted_plan'2 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 51 8 51 87
+let%span sadmitted_plan'3 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 70 8 71 67
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use creusot.int.UInt16
+use seq.Seq
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.MutBorrow
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+type t_ReconfigurationLeadership = { is_leader: bool; no_pending_change: bool; epoch_committed: bool }
+
+type t_CurrentVoterSet = {
+  voter_count: UInt64.t;
+  kraft_version: UInt16.t;
+  latest_controls_committed: bool;
+  all_voters_support_requested: bool }
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+type t_VoterChangeRequest = { kind: t_VoterChangeKind; requested_kraft_version: UInt16.t }
+
+type t_TargetMembership = Absent | PresentUnknownDirectory | PresentSameDirectory | PresentOtherDirectory
+
+type t_TargetVoter = { membership: t_TargetMembership; version_compatible: bool; caught_up: bool }
+
+type tup2_ReconfigurationLeadership_CurrentVoterSet = { f0: t_ReconfigurationLeadership; f1: t_CurrentVoterSet }
+
+type t_VoterReconfigurationPlan = {
+  next_voter_count: UInt64.t;
+  next_kraft_version: UInt16.t;
+  write_voters: bool;
+  write_kraft_version: bool;
+  preflight_only: bool }
+
+type t_Vec_u64_Global
+
+type tup2_VoterReconfigurationPlan_Vec_u64_Global = { f0'0: t_VoterReconfigurationPlan; f1'0: t_Vec_u64_Global }
+
+type t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global = None | Some tup2_VoterReconfigurationPlan_Vec_u64_Global
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate valid_old [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 19 0 19 41] (nodes: Seq.seq UInt64.t) =
+  [%#sspec'4] gt_log_Int (Seq.length nodes) 0
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length nodes -> Seq.get nodes i <> Seq.get nodes j)
+
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+  [%#sspec'10] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+
+predicate membership_coherent [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 28 0 33 9] (nodes: Seq.seq UInt64.t) (node: UInt64.t) (membership'0: t_TargetMembership) (kind'0: t_VoterChangeKind) =
+  [%#sspec'5] kind'0 = FinalizeKraftVersion \/ has_node nodes (Seq.length nodes) node = (membership'0 <> Absent)
+
+type t_VoterReconfigurationDecision =
+  | NotLeader
+  | InProgress
+  | EpochUncommitted
+  | EmptyCurrentVoterSet
+  | UnsupportedKraftVersion
+  | DuplicateVoter
+  | IncompatibleVoter
+  | VoterNotCaughtUp
+  | VoterNotFound
+  | DirectoryMismatch
+  | InvalidVersionTransition
+  | Admit t_VoterReconfigurationPlan
+
+type t_Option_VoterReconfigurationDecision = None'0 | Some'0 t_VoterReconfigurationDecision
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+predicate voter_set_removes [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 49 0 49 87] (membership'0: t_TargetMembership) (voters: t_CurrentVoterSet) =
+  [%#sadmitted_plan'2] membership'0 = PresentSameDirectory /\ gt_log_Int (UInt64.t'int voters.voter_count) 1
+
+predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 68 0 68 63] (membership'0: t_TargetMembership) =
+  [%#sadmitted_plan'3] membership'0 = PresentUnknownDirectory \/ membership'0 = PresentSameDirectory
+
+function voter_reconfiguration_rejection [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 93 0 98 41] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) (request: t_VoterChangeRequest) (target: t_TargetVoter) : t_Option_VoterReconfigurationDecision
+ = [%#sadmitted_plan] if not leadership.is_leader then
+    Some'0 (NotLeader)
+  else
+    if not leadership.no_pending_change then
+      Some'0 (InProgress)
+    else
+      if not leadership.epoch_committed then
+        Some'0 (EpochUncommitted)
+      else
+        if not voters.latest_controls_committed then
+          Some'0 (InProgress)
+        else
+          if UInt64.t'int voters.voter_count = 0 then
+            Some'0 (EmptyCurrentVoterSet)
+          else
+            if gt_log_Int (UInt16.t'int voters.kraft_version) 1 then
+              Some'0 (InvalidVersionTransition)
+            else
+              match request.kind with
+                | Add -> if UInt16.t'int voters.kraft_version <> 1 then
+                  Some'0 (UnsupportedKraftVersion)
+                else
+                  if target.membership <> Absent then
+                    Some'0 (DuplicateVoter)
+                  else
+                    if not target.version_compatible then
+                      Some'0 (IncompatibleVoter)
+                    else
+                      if not target.caught_up then
+                        Some'0 (VoterNotCaughtUp)
+                      else
+                        if UInt64.t'int voters.voter_count = UInt64.t'int const_MAX then
+                          Some'0 (InvalidVersionTransition)
+                        else
+                          None'0
+
+
+
+
+
+                | Remove -> if UInt16.t'int voters.kraft_version <> 1 then
+                  Some'0 (UnsupportedKraftVersion)
+                else
+                  if not voter_set_removes target.membership voters then Some'0 (VoterNotFound) else None'0
+
+                | Update -> if not target.version_compatible then
+                  Some'0 (IncompatibleVoter)
+                else
+                  if target.membership = Absent then
+                    Some'0 (VoterNotFound)
+                  else
+                    if not update_key_matches target.membership then Some'0 (DirectoryMismatch) else None'0
+
+
+                | FinalizeKraftVersion -> if UInt16.t'int voters.kraft_version <> 0
+                \/ UInt16.t'int request.requested_kraft_version <> 1 then
+                  Some'0 (InvalidVersionTransition)
+                else
+                  if not voters.all_voters_support_requested then Some'0 (IncompatibleVoter) else None'0
+
+                end
+
+
+
+
+
+
+
+predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 171 0 175 9] (voters: t_CurrentVoterSet) (kind'0: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
+  [%#sadmitted_plan'0] match kind'0 with
+    | Add -> UInt64.t'int plan.next_voter_count = UInt64.t'int voters.voter_count + 1
+    /\ plan.next_kraft_version = voters.kraft_version
+    /\ plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+    | Remove -> UInt64.t'int plan.next_voter_count + 1 = UInt64.t'int voters.voter_count
+    /\ plan.next_kraft_version = voters.kraft_version
+    /\ plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+    | Update -> plan.next_voter_count = voters.voter_count
+    /\ plan.next_kraft_version = voters.kraft_version
+    /\ plan.write_voters = (UInt16.t'int voters.kraft_version <> 0)
+    /\ not plan.write_kraft_version /\ plan.preflight_only = (UInt16.t'int voters.kraft_version = 0)
+    | FinalizeKraftVersion -> plan.next_voter_count = voters.voter_count
+    /\ UInt16.t'int plan.next_kraft_version = 1
+    /\ plan.write_voters /\ plan.write_kraft_version /\ not plan.preflight_only
+    end
+
+predicate may_reconfigure [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 17 0 17 94] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) =
+  [%#sadmitted_plan'1] leadership.is_leader
+  /\ leadership.no_pending_change /\ leadership.epoch_committed /\ voters.latest_controls_committed
+
+function view_Vec_u64_Global (self: t_Vec_u64_Global) : Seq.seq UInt64.t
+
+axiom view_Vec_u64_Global_spec:
+  forall self: t_Vec_u64_Global [view_Vec_u64_Global self]. [%#svec'3] Seq.length (view_Vec_u64_Global self)
+    <= UInt64.t'int const_MAX
+
+predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 42 0 48 9] (nodes: Seq.seq UInt64.t) (count: int) (kind'0: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
+  [%#sspec'11] match kind'0 with
+    | Add -> has_node nodes count node \/ node = target
+    | Remove -> has_node nodes count node /\ node <> target
+    | Update | FinalizeKraftVersion -> has_node nodes count node
+    end
+
+let constructed_voter_reconfiguration (old': Slice64.slice UInt64.t) (leadership: t_ReconfigurationLeadership)
+  (context: t_CurrentVoterSet) (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter)
+  (return (x: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global)) =
+{[@stop_split] [@expl:constructed_voter_reconfiguration requires] [%#smembership] UInt64.t'int context.voter_count
+  = Seq.length (Slice64.view old')}
+  any
+  [ return (result: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) ->
+  {[@stop_split] [@expl:constructed_voter_reconfiguration ensures] ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #0] [%#smembership'0] match result with
+          | None -> false
+          | Some _ -> true
+          end
+      = (valid_old (Slice64.view old')
+      /\ membership_coherent (Slice64.view old') node target.membership request.kind
+      /\ match voter_reconfiguration_rejection leadership context request target with
+        | None'0 -> true
+        | Some'0 _ -> false
+        end))
+    /\ ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #1] [%#smembership'1] match result with
+      | None -> true
+      | Some {f0'0 = plan; f1'0 = next} -> admitted_plan context request.kind plan
+      /\ may_reconfigure leadership context
+      /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
+      /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
+      /\ Seq.length (Slice64.view old') - 1 <= Seq.length (view_Vec_u64_Global next)
+      /\ Seq.length (view_Vec_u64_Global next) <= Seq.length (Slice64.view old') + 1
+      /\ (forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
+          = expected_member (Slice64.view old') (Seq.length (Slice64.view old')) request.kind node id)
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global next)
+          -> Seq.get (view_Vec_u64_Global next) i <> Seq.get (view_Vec_u64_Global next) j)
+      /\ match request.kind with
+        | Add -> Seq.length (view_Vec_u64_Global next) = Seq.length (Slice64.view old') + 1
+        | Remove -> Seq.length (view_Vec_u64_Global next) + 1 = Seq.length (Slice64.view old')
+        | Update | FinalizeKraftVersion -> Seq.length (view_Vec_u64_Global next) = Seq.length (Slice64.view old')
+        end
+      end)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global =
+  | Continue tup2_VoterReconfigurationPlan_Vec_u64_Global
+  | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0'1 -> inv_Infallible f0'1
+      end
+
+predicate inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global (_1: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global [inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global x]. inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global x
+    = match x with
+      | Continue f0'1 -> true
+      | Break f0'1 -> inv_Option_Infallible f0'1
+      end
+
+let branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global
+  (self_: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global) ->
+  {[@stop_split] [@expl:branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+  (return (f0'1: t_Option_Infallible)) = any
+  [ _k (f0'1: t_Option_Infallible) -> {Break f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Vec_i32_Global
+
+type tup2_usize_usize = { f0'1: UInt64.t; f1'1: UInt64.t }
+
+type tup3_i64_tup2_usize_usize_u64 = { f0'2: Int64.t; f1'2: tup2_usize_usize; f2'2: UInt64.t }
+
+type t_Option_tup3_i64_tup2_usize_usize_u64 = None'2 | Some'2 tup3_i64_tup2_usize_usize_u64
+
+type tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 = {
+  f0'3: t_VoterReconfigurationPlan;
+  f1'3: t_Vec_u64_Global;
+  f2'3: t_Vec_i32_Global;
+  f3'3: t_Option_tup3_i64_tup2_usize_usize_u64 }
+
+type t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 =
+  | None'3
+  | Some'3 tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64
+
+let from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64
+  (residual: t_Option_Infallible)
+  (return (x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return
+    (result: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+  {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None'3}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
+  (return (f0'4: tup2_VoterReconfigurationPlan_Vec_u64_Global)) = any
+  [ _k (f0'4: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> {Continue f0'4 = _x} (! return {f0'4})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+function view_Vec_i32_Global (self: t_Vec_i32_Global) : Seq.seq Int32.t
+
+axiom view_Vec_i32_Global_spec:
+  forall self: t_Vec_i32_Global [view_Vec_i32_Global self]. [%#svec'3] Seq.length (view_Vec_i32_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_i32 (return (x: t_Vec_i32_Global)) = any
+  [ return (result: t_Vec_i32_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_i32_Global result) = 0}
+    (! return {result}) ]
+
+type t_Vec_unit_Global
+
+function view_Vec_unit_Global (self: t_Vec_unit_Global) : Seq.seq ()
+
+axiom view_Vec_unit_Global_spec:
+  forall self: t_Vec_unit_Global [view_Vec_unit_Global self]. [%#svec'3] Seq.length (view_Vec_unit_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_unit (return (x: t_Vec_unit_Global)) = any
+  [ return (result: t_Vec_unit_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_unit_Global result) = 0}
+    (! return {result}) ]
+
+let push_unit (self_: MutBorrow.t t_Vec_unit_Global) (v: ()) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'0] view_Vec_unit_Global self_.final
+    = Seq.snoc (view_Vec_unit_Global self_.current) v}
+    (! return {result}) ]
+
+let len_unit (self_: t_Vec_unit_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#svec'1] UInt64.t'int result
+    = Seq.length (view_Vec_unit_Global self_)}
+    (! return {result}) ]
+
+type t_Option_Vec_i32_Global = None'4 | Some'4 t_Vec_i32_Global
+
+constant const_MAX'0: Int32.t = (2147483647: Int32.t)
+
+let metadata_record_offset_deltas (record_count: UInt64.t) (return (x: t_Option_Vec_i32_Global)) = any
+  [ return (result: t_Option_Vec_i32_Global) ->
+  {[@stop_split] [@expl:metadata_record_offset_deltas ensures] [%#smetadata_record_offset_deltas] match result with
+      | Some'4 deltas -> gt_log_Int (UInt64.t'int record_count) 0
+      /\ UInt64.t'int record_count <= Int32.to_int const_MAX'0 + 1
+      /\ Seq.length (view_Vec_i32_Global deltas) = UInt64.t'int record_count
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_i32_Global deltas)
+        -> Int32.to_int (Seq.get (view_Vec_i32_Global deltas) i) = i)
+      | None'4 -> UInt64.t'int record_count = 0 \/ gt_log_Int (UInt64.t'int record_count) (Int32.to_int const_MAX'0 + 1)
+      end}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_Vec_i32_Global = Continue'0 t_Vec_i32_Global | Break'0 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_Vec_i32_Global (_1: t_ControlFlow_Option_Infallible_Vec_i32_Global)
+
+axiom inv_axiom'1 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_Vec_i32_Global [inv_ControlFlow_Option_Infallible_Vec_i32_Global x]. inv_ControlFlow_Option_Infallible_Vec_i32_Global x
+    = match x with
+      | Continue'0 f0'4 -> true
+      | Break'0 f0'4 -> inv_Option_Infallible f0'4
+      end
+
+let branch_Option_Vec_i32_Global (self_: t_Option_Vec_i32_Global)
+  (return (x: t_ControlFlow_Option_Infallible_Vec_i32_Global)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_Vec_i32_Global) ->
+  {[@stop_split] [@expl:branch_Option_Vec_i32_Global ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_Vec_i32_Global result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'4 v -> result = Continue'0 v
+      | None'4 -> result = Break'0 (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) (return (f0'4: t_Option_Infallible)) = any
+  [ _k (f0'4: t_Option_Infallible) -> {Break'0 f0'4 = _x} (! return {f0'4})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) (return (f0'4: t_Vec_i32_Global)) = any
+  [ _k (f0'4: t_Vec_i32_Global) -> {Continue'0 f0'4 = _x} (! return {f0'4})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let deref_Vec_i32_Global (self_: t_Vec_i32_Global) (return (x: Slice64.slice Int32.t)) = any
+  [ return (result: Slice64.slice Int32.t) -> {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result
+    = view_Vec_i32_Global self_}
+    (! return {result}) ]
+
+type t_Option_ref_i32 = None'5 | Some'5 Int32.t
+
+function index_slice_i32 [@inline:trivial] (self: Slice64.slice Int32.t) (ix: int) : Int32.t =
+  [%#sslice'2] Seq.get (Slice64.view self) ix
+
+meta "rewrite_def" function index_slice_i32
+
+let last_i32 (self_: Slice64.slice Int32.t) (return (x: t_Option_ref_i32)) = any
+  [ return (result: t_Option_ref_i32) ->
+  {[@stop_split] [@expl:last_i32 ensures] ([@stop_split] [@expl:last ensures #0] [%#sslice] result = None'5
+      -> Seq.length (Slice64.view self_) = 0)
+    /\ ([@stop_split] [@expl:last ensures #1] [%#sslice'0] forall x: Int32.t. result = Some'5 x
+      -> index_slice_i32 self_ (Seq.length (Slice64.view self_) - 1) = x)}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_ref_i32 = Continue'1 Int32.t | Break'1 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_ref_i32 (_1: t_ControlFlow_Option_Infallible_ref_i32)
+
+axiom inv_axiom'2 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_ref_i32 [inv_ControlFlow_Option_Infallible_ref_i32 x]. inv_ControlFlow_Option_Infallible_ref_i32 x
+    = match x with
+      | Continue'1 f0'4 -> true
+      | Break'1 f0'4 -> inv_Option_Infallible f0'4
+      end
+
+let branch_Option_ref_i32 (self_: t_Option_ref_i32) (return (x: t_ControlFlow_Option_Infallible_ref_i32)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_ref_i32) ->
+  {[@stop_split] [@expl:branch_Option_ref_i32 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_ref_i32 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'5 v -> result = Continue'1 v
+      | None'5 -> result = Break'1 (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'1 (_x: t_ControlFlow_Option_Infallible_ref_i32) (return (f0'4: t_Option_Infallible)) = any
+  [ _k (f0'4: t_Option_Infallible) -> {Break'1 f0'4 = _x} (! return {f0'4})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'1 (_x: t_ControlFlow_Option_Infallible_ref_i32) (return (f0'4: Int32.t)) = any
+  [ _k (f0'4: Int32.t) -> {Continue'1 f0'4 = _x} (! return {f0'4})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_i64_i64 = { f0'4: Int64.t; f1'4: Int64.t }
+
+type t_Option_tup2_i64_i64 = None'6 | Some'6 tup2_i64_i64
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MAX'1: Int64.t = (9223372036854775807: Int64.t)
+
+let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (last_offset_delta: Int32.t)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:local_append_coordinates ensures] [%#sfuture_log_swap_admission] match result with
+      | Some'6 {f0'4 = last; f1'4 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      /\ ge_log_Int (Int64.to_int supplied_base) (Int64.to_int expected_base)
+      /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+      /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
+      /\ Int64.to_int next = Int64.to_int last + 1
+      /\ Int64.to_int supplied_base <= Int64.to_int last /\ Int64.to_int last < Int64.to_int next
+      | None'6 -> Int64.to_int expected_base < 0
+      \/ Int64.to_int supplied_base < Int64.to_int expected_base
+      \/ Int32.to_int last_offset_delta < 0
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta) (Int64.to_int const_MAX'1)
+      \/ gt_log_Int (Int64.to_int supplied_base + Int32.to_int last_offset_delta + 1) (Int64.to_int const_MAX'1)
+      end}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_tup2_i64_i64 = Continue'2 tup2_i64_i64 | Break'2 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_tup2_i64_i64 (_1: t_ControlFlow_Option_Infallible_tup2_i64_i64)
+
+axiom inv_axiom'3 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup2_i64_i64 [inv_ControlFlow_Option_Infallible_tup2_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_i64 x
+    = match x with
+      | Continue'2 f0'5 -> true
+      | Break'2 f0'5 -> inv_Option_Infallible f0'5
+      end
+
+let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
+  (return (x: t_ControlFlow_Option_Infallible_tup2_i64_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_tup2_i64_i64) ->
+  {[@stop_split] [@expl:branch_Option_tup2_i64_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup2_i64_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'6 v -> result = Continue'2 v
+      | None'6 -> result = Break'2 (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'5: t_Option_Infallible)) = any
+  [ _k (f0'5: t_Option_Infallible) -> {Break'2 f0'5 = _x} (! return {f0'5})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'2 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'5: tup2_i64_i64)) = any
+  [ _k (f0'5: tup2_i64_i64) -> {Continue'2 f0'5 = _x} (! return {f0'5})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'2 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Vec_tup2_bool_bool_Global
+
+type tup2_bool_bool = { f0'5: bool; f1'5: bool }
+
+function view_Vec_tup2_bool_bool_Global (self: t_Vec_tup2_bool_bool_Global) : Seq.seq tup2_bool_bool
+
+axiom view_Vec_tup2_bool_bool_Global_spec:
+  forall self: t_Vec_tup2_bool_bool_Global [view_Vec_tup2_bool_bool_Global self]. [%#svec'3] Seq.length (view_Vec_tup2_bool_bool_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_tup2_bool_bool (return (x: t_Vec_tup2_bool_bool_Global)) = any
+  [ return (result: t_Vec_tup2_bool_bool_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_tup2_bool_bool_Global result) = 0}
+    (! return {result}) ]
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_tup2_i64_i64 (self_: Slice64.slice tup2_i64_i64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice'1] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let push_tup2_bool_bool (self_: MutBorrow.t t_Vec_tup2_bool_bool_Global) (v: tup2_bool_bool) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'0] view_Vec_tup2_bool_bool_Global self_.final
+    = Seq.snoc (view_Vec_tup2_bool_bool_Global self_.current) v}
+    (! return {result}) ]
+
+let deref_Vec_tup2_bool_bool_Global (self_: t_Vec_tup2_bool_bool_Global) (return (x: Slice64.slice tup2_bool_bool)) =
+any
+  [ return (result: Slice64.slice tup2_bool_bool) -> {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result
+    = view_Vec_tup2_bool_bool_Global self_}
+    (! return {result}) ]
+
+type t_Option_u64 = None'7 | Some'7 UInt64.t
+
+type tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = {
+  f0'6: t_VoterReconfigurationPlan;
+  f1'6: t_Vec_u64_Global;
+  f2'6: tup2_usize_usize;
+  f3'6: tup2_bool_bool;
+  f4'6: t_Option_u64 }
+
+type t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 =
+  | None'8
+  | Some'8 tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
+
+function grant_count [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 71 0 78 8] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (node: UInt64.t) (new: bool) (count: int) : int
+
+axiom grant_count_def:
+  forall old': Seq.seq UInt64.t, next: Seq.seq UInt64.t, votes: Seq.seq tup2_bool_bool, node: UInt64.t, new: bool, count: int [grant_count old' next votes node new count]. grant_count old' next votes node new count
+    = ([%#sspec'13] if count <= 0 then
+      0
+    else
+      grant_count old' next votes node new (count - 1)
+      + (if new then
+        if (Seq.get votes (count - 1)).f1'5
+        /\ (if count - 1 < Seq.length old' then
+          has_node next (Seq.length next) (Seq.get old' (count - 1))
+        else
+          not has_node old' (Seq.length old') node /\ has_node next (Seq.length next) node
+        ) then
+          1
+        else
+          0
+
+      else
+        if count - 1 < Seq.length old' /\ (Seq.get votes (count - 1)).f0'5 then 1 else 0
+      )
+    )
+
+let reconfigured_majorities_overlap (old': Slice64.slice UInt64.t) (leadership: t_ReconfigurationLeadership)
+  (context: t_CurrentVoterSet) (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter)
+  (votes: Slice64.slice tup2_bool_bool)
+  (return (x: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) =
+{[@stop_split] [@expl:reconfigured_majorities_overlap requires] ([@stop_split] [@expl:reconfigured_majorities_overlap requires #0] [%#squorum] UInt64.t'int context.voter_count
+    = Seq.length (Slice64.view old'))
+  /\ ([@stop_split] [@expl:reconfigured_majorities_overlap requires #1] [%#squorum'0] Seq.length (Slice64.view votes)
+  = Seq.length (Slice64.view old') + 1)}
+  any
+  [ return (result: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+  {[@stop_split] [@expl:reconfigured_majorities_overlap ensures] ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #0] [%#squorum'1] match result with
+          | None'8 -> false
+          | Some'8 _ -> true
+          end
+      = (valid_old (Slice64.view old')
+      /\ membership_coherent (Slice64.view old') node target.membership request.kind
+      /\ match voter_reconfiguration_rejection leadership context request target with
+        | None'0 -> true
+        | Some'0 _ -> false
+        end))
+    /\ ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #1] [%#squorum'2] match result with
+        | None'8 -> true
+        | Some'8 {f0'6 = plan; f1'6 = next; f2'6 = counts; f3'6 = quorums; f4'6 = common} -> admitted_plan context request.kind plan
+        /\ may_reconfigure leadership context
+        /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
+        /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
+        /\ UInt64.t'int counts.f0'1 <= Seq.length (Slice64.view old')
+        /\ UInt64.t'int counts.f1'1 <= Seq.length (view_Vec_u64_Global next)
+        /\ UInt64.t'int counts.f0'1
+          = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node false (Seq.length (Slice64.view votes))
+        /\ UInt64.t'int counts.f1'1
+          = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node true (Seq.length (Slice64.view votes))
+        /\ quorums.f0'5
+          = ge_log_Int (UInt64.t'int counts.f0'1) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
+        /\ quorums.f1'5
+          = ge_log_Int (UInt64.t'int counts.f1'1) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
+        /\ (quorums.f0'5 /\ quorums.f1'5
+          -> match common with
+            | None'7 -> false
+            | Some'7 _ -> true
+            end)
+        /\ (common = None'7)
+          = (not (exists i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view old')
+            /\ (Seq.get (Slice64.view votes) i).f0'5
+            /\ (Seq.get (Slice64.view votes) i).f1'5
+            /\ has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) (Seq.get (Slice64.view old') i)))
+        /\ match common with
+          | None'7 -> true
+          | Some'7 id -> exists i: int. 0 <= i
+            /\ i < Seq.length (Slice64.view old')
+            /\ Seq.get (Slice64.view old') i = id
+            /\ (Seq.get (Slice64.view votes) i).f0'5
+            /\ (Seq.get (Slice64.view votes) i).f1'5
+            /\ (exists j: int. 0 <= j
+              /\ j < Seq.length (view_Vec_u64_Global next) /\ Seq.get (view_Vec_u64_Global next) j = id)
+          end
+        end)
+    /\ ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #2] [%#squorum'3] match result with
+      | None'8 -> true
+      | Some'8 {f1'6 = next} -> Seq.length (Slice64.view old') - 1 <= Seq.length (view_Vec_u64_Global next)
+      /\ Seq.length (view_Vec_u64_Global next) <= Seq.length (Slice64.view old') + 1
+      /\ (forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
+          = expected_member (Slice64.view old') (Seq.length (Slice64.view old')) request.kind node id)
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global next)
+        -> Seq.get (view_Vec_u64_Global next) i <> Seq.get (view_Vec_u64_Global next) j)
+      end)}
+    (! return {result}) ]
+
+type t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 =
+  | Continue'3 tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
+  | Break'3 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 (_1: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)
+
+axiom inv_axiom'4 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 [inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 x]. inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 x
+    = match x with
+      | Continue'3 f0'7 -> true
+      | Break'3 f0'7 -> inv_Option_Infallible f0'7
+      end
+
+let branch_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
+  (self_: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)
+  (return (x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) =
+any
+  [ return
+    (result: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+  {[@stop_split] [@expl:branch_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'8 v -> result = Continue'3 v
+      | None'8 -> result = Break'3 (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'3
+  (_x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)
+  (return (f0'7: t_Option_Infallible)) = any
+  [ _k (f0'7: t_Option_Infallible) -> {Break'3 f0'7 = _x} (! return {f0'7})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'3 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'3
+  (_x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)
+  (return (f0'7: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) = any
+  [ _k (f0'7: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+  {Continue'3 f0'7 = _x}
+    (! return {f0'7})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'3 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
+
+axiom prefix_count_def:
+  forall old': Seq.seq UInt64.t, reports: Seq.seq tup2_i64_i64, kind'0: t_VoterChangeKind, node: UInt64.t, end': int, new: bool, count: int [prefix_count old' reports kind'0 node end' new count]. prefix_count old' reports kind'0 node end' new count
+    = ([%#sspec'8] if count <= 0 then
+      0
+    else
+      prefix_count old' reports kind'0 node end' new (count - 1)
+      + (if count - 1 < Seq.length old' then
+        if new then
+          if ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f1'4) end'
+          /\ expected_member old' (Seq.length old') kind'0 node (Seq.get old' (count - 1)) then
+            1
+          else
+            0
+
+        else
+          if ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f0'4) end' then 1 else 0
+
+      else
+        if new
+        /\ ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f1'4) end'
+        /\ not has_node old' (Seq.length old') node /\ expected_member old' (Seq.length old') kind'0 node node then
+          1
+        else
+          0
+
+      )
+    )
+
+function prefix_grants_agree [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 67 0 77 1] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : ()
+
+axiom prefix_grants_agree_spec:
+  forall old': Seq.seq UInt64.t, next: Seq.seq UInt64.t, votes: Seq.seq tup2_bool_bool, reports: Seq.seq tup2_i64_i64, kind'0: t_VoterChangeKind, node: UInt64.t, end': int, new: bool, count: int. ([%#sspec'0] 0
+        <= count
+      /\ count <= Seq.length votes /\ Seq.length votes = Seq.length reports)
+    -> ([%#sspec'1] forall i: int. 0 <= i /\ i < Seq.length votes
+        -> (Seq.get votes i).f0'5 = ge_log_Int (Int64.to_int (Seq.get reports i).f0'4) end'
+        /\ (Seq.get votes i).f1'5 = ge_log_Int (Int64.to_int (Seq.get reports i).f1'4) end')
+    -> ([%#sspec'2] forall id: UInt64.t. has_node next (Seq.length next) id
+        = expected_member old' (Seq.length old') kind'0 node id)
+    -> ([%#sspec'3] grant_count old' next votes node new count = prefix_count old' reports kind'0 node end' new count)
+
+type t_ControlFlow_Option_Infallible_u64 = Continue'4 UInt64.t | Break'4 t_Option_Infallible
+
+predicate inv_ControlFlow_Option_Infallible_u64 (_1: t_ControlFlow_Option_Infallible_u64)
+
+axiom inv_axiom'5 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_u64 [inv_ControlFlow_Option_Infallible_u64 x]. inv_ControlFlow_Option_Infallible_u64 x
+    = match x with
+      | Continue'4 f0'7 -> true
+      | Break'4 f0'7 -> inv_Option_Infallible f0'7
+      end
+
+let branch_Option_u64 (self_: t_Option_u64) (return (x: t_ControlFlow_Option_Infallible_u64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_u64) ->
+  {[@stop_split] [@expl:branch_Option_u64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_u64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'7 v -> result = Continue'4 v
+      | None'7 -> result = Break'4 (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break'4 (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'7: t_Option_Infallible)) = any
+  [ _k (f0'7: t_Option_Infallible) -> {Break'4 f0'7 = _x} (! return {f0'7})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break'4 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Continue'4 (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'7: UInt64.t)) = any
+  [ _k (f0'7: UInt64.t) -> {Continue'4 f0'7 = _x} (! return {f0'7})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue'4 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+function control_record_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 10 0 10 71] (version: UInt16.t) (kind'0: t_VoterChangeKind) : int
+ = [%#sspec'6] match kind'0 with
+    | FinalizeKraftVersion -> 2
+    | Update -> if UInt16.t'int version = 0 then 0 else 1
+    | Add | Remove -> 1
+    end
+
+function next_size [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 22 0 22 58] (count: int) (kind'0: t_VoterChangeKind) : int
+ = [%#sspec'9] match kind'0 with
+    | Add -> count + 1
+    | Remove -> count - 1
+    | _ -> count
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 70 0 78 21]
+  (old': Slice64.slice UInt64.t) (state: tup2_ReconfigurationLeadership_CurrentVoterSet) (request: t_VoterChangeRequest)
+  (node: UInt64.t) (target: t_TargetVoter) (base: Int64.t) (reports: Slice64.slice tup2_i64_i64)
+  (return (x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64)) =
+{[@stop_split] [@expl:reconfiguration_control_prefix_support requires] ([@stop_split] [@expl:reconfiguration_control_prefix_support requires #0] [%#sprepare'30] UInt64.t'int state.f1.voter_count
+    = Seq.length (Slice64.view old'))
+  /\ ([@stop_split] [@expl:reconfiguration_control_prefix_support requires #1] [%#sprepare'31] Seq.length (Slice64.view reports)
+  = Seq.length (Slice64.view old') + 1)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = constructed_voter_reconfiguration [%#sprepare] {old'} {state.f0} {state.f1} {request} {node} {target}
+        (fun (_x: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &_34 <- _x ] s1)
+    | s1 = branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global [%#sprepare'0] {_34}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &_33 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> {_33 = Continue x0} (! bb5)
+      | br1 (x0: t_Option_Infallible) -> {_33 = Break x0} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = elim_Break {_33} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 [%#sprepare'0]
+        {residual}
+        (fun (_x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = elim_Continue {_33} (fun (r0: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> [ &val' <- r0 ] s1)
+    | s1 = [ &_32 <- val' ] s2
+    | s2 = [ &plan <- _32.f0'0 ] s3
+    | s3 = [ &next <- _32.f1'0 ] s4
+    | s4 = any [ br0 -> {plan.preflight_only = false} (! bb16) | br1 -> {plan.preflight_only} (! bb11) ] ]
+  | bb11 = s0
+    [ s0 = new_i32 [%#sprepare'1] (fun (_x: t_Vec_i32_Global) -> [ &_52 <- _x ] s1)
+    | s1 = [ &_53 <- None'2 ] s2
+    | s2 = [ &_49 <- { f0'3 = plan; f1'3 = next; f2'3 = _52; f3'3 = _53 } ] s3
+    | s3 = [ &_ret <- Some'3 _49 ] s4
+    | s4 = return {_ret} ]
+  | bb16 = s0
+    [ s0 = new_unit [%#sprepare'2] (fun (_x: t_Vec_unit_Global) -> [ &records <- _x ] s1)
+    | s1 = any [ br0 -> {plan.write_kraft_version = false} (! bb21) | br1 -> {plan.write_kraft_version} (! bb18) ] ]
+  | bb18 = s0
+    [ s0 = MutBorrow.borrow_mut <t_Vec_unit_Global> {records}
+        (fun (_bor: MutBorrow.t t_Vec_unit_Global) -> [ &_58 <- _bor ] [ &records <- _bor.final ] s1)
+    | s1 = push_unit [%#sprepare'3] {_58} {_59} (fun (_x: ()) -> [ &_57 <- _x ] s2)
+    | s2 = bb21 ]
+  | bb21 = any [ br0 -> {plan.write_voters = false} (! bb25) | br1 -> {plan.write_voters} (! bb22) ]
+  | bb22 = s0
+    [ s0 = MutBorrow.borrow_mut <t_Vec_unit_Global> {records}
+        (fun (_bor: MutBorrow.t t_Vec_unit_Global) -> [ &_63 <- _bor ] [ &records <- _bor.final ] s1)
+    | s1 = push_unit [%#sprepare'4] {_63} {_64} (fun (_x: ()) -> [ &_62 <- _x ] s2)
+    | s2 = bb25 ]
+  | bb25 = s0
+    [ s0 = len_unit [%#sprepare'5] {records} (fun (_x: UInt64.t) -> [ &_68 <- _x ] s1)
+    | s1 = metadata_record_offset_deltas [%#sprepare'6] {_68} (fun (_x: t_Option_Vec_i32_Global) -> [ &_67 <- _x ] s2)
+    | s2 = branch_Option_Vec_i32_Global [%#sprepare'7] {_67}
+        (fun (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) -> [ &_66 <- _x ] s3)
+    | s3 = any
+      [ br0 (x0: t_Vec_i32_Global) -> {_66 = Continue'0 x0} (! bb31)
+      | br1 (x0: t_Option_Infallible) -> {_66 = Break'0 x0} (! bb32) ] ]
+  | bb32 = s0
+    [ s0 = elim_Break'0 {_66} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 [%#sprepare'7]
+        {residual'0}
+        (fun (_x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb31 = s0
+    [ s0 = elim_Continue'0 {_66} (fun (r0: t_Vec_i32_Global) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &deltas <- val''0 ] s2
+    | s2 = deref_Vec_i32_Global [%#sprepare'8] {deltas} (fun (_x: Slice64.slice Int32.t) -> [ &_80 <- _x ] s3)
+    | s3 = last_i32 [%#sprepare'8] {_80} (fun (_x: t_Option_ref_i32) -> [ &_78 <- _x ] s4)
+    | s4 = branch_Option_ref_i32 [%#sprepare'9] {_78}
+        (fun (_x: t_ControlFlow_Option_Infallible_ref_i32) -> [ &_77 <- _x ] s5)
+    | s5 = any
+      [ br0 (x0: Int32.t) -> {_77 = Continue'1 x0} (! bb41)
+      | br1 (x0: t_Option_Infallible) -> {_77 = Break'1 x0} (! bb42) ] ]
+  | bb42 = s0
+    [ s0 = elim_Break'1 {_77} (fun (r0: t_Option_Infallible) -> [ &residual'1 <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 [%#sprepare'9]
+        {residual'1}
+        (fun (_x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb41 = s0
+    [ s0 = elim_Continue'1 {_77} (fun (r0: Int32.t) -> [ &val''1 <- r0 ] s1)
+    | s1 = [ &_76 <- val''1 ] s2
+    | s2 = [ &last <- _76 ] s3
+    | s3 = local_append_coordinates [%#sprepare'10] {base} {base} {last}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_90 <- _x ] s4)
+    | s4 = branch_Option_tup2_i64_i64 [%#sprepare'11] {_90}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) -> [ &_89 <- _x ] s5)
+    | s5 = any
+      [ br0 (x0: tup2_i64_i64) -> {_89 = Continue'2 x0} (! bb48)
+      | br1 (x0: t_Option_Infallible) -> {_89 = Break'2 x0} (! bb49) ] ]
+  | bb49 = s0
+    [ s0 = elim_Break'2 {_89} (fun (r0: t_Option_Infallible) -> [ &residual'2 <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 [%#sprepare'11]
+        {residual'2}
+        (fun (_x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb48 = s0
+    [ s0 = elim_Continue'2 {_89} (fun (r0: tup2_i64_i64) -> [ &val''2 <- r0 ] s1)
+    | s1 = [ &_88 <- val''2 ] s2
+    | s2 = [ &end' <- _88.f1'4 ] s3
+    | s3 = new_tup2_bool_bool [%#sprepare'12] (fun (_x: t_Vec_tup2_bool_bool_Global) -> [ &votes <- _x ] s4)
+    | s4 = [ &i <- [%#sprepare'13] (0: UInt64.t) ] s5
+    | s5 = bb52 ]
+  | bb52 = bb52invariant
+    [ bb52 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb52 ([%#sprepare'14] Seq.length (Slice64.view reports)
+      - UInt64.t'int i)}
+      bb52invariant
+    | bb52invariant = {[@expl:loop invariant #0] [%#sprepare'17] UInt64.t'int i <= Seq.length (Slice64.view reports)
+      /\ Seq.length (view_Vec_tup2_bool_bool_Global votes) = UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#sprepare'16] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (Seq.get (view_Vec_tup2_bool_bool_Global votes) j).f0'5
+          = ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) j).f0'4) (Int64.to_int end')
+        /\ (Seq.get (view_Vec_tup2_bool_bool_Global votes) j).f1'5
+        = ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) j).f1'4) (Int64.to_int end')}
+      (! [ &variant_old_bb52 <- [%#sprepare'14] Seq.length (Slice64.view reports) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_i64_i64 [%#sprepare'15] {reports} (fun (_x: UInt64.t) -> [ &_118 <- _x ] s1)
+      | s1 = [ &_116 <- UInt64.lt i _118 ] s2
+      | s2 = any [ br0 -> {_116 = false} (! bb59) | br1 -> {_116} (! bb55) ] ]
+      [ bb55 = s0
+        [ s0 = [ &_125 <- i ] s1
+        | s1 = [ &_126 <- Slice64.length reports ] s2
+        | s2 = [ &_127 <- UInt64.lt _125 _126 ] s3
+        | s3 = {[@expl:index in bounds] [%#sprepare'18] _127} s4
+        | s4 = Slice64.get [%#sprepare'19] <tup2_i64_i64> {reports} {_125}
+            (fun (r: tup2_i64_i64) -> [ &_124 <- r.f0'4 ] s5)
+        | s5 = [ &_123 <- Int64.ge _124 end' ] s6
+        | s6 = [ &_131 <- i ] s7
+        | s7 = [ &_132 <- Slice64.length reports ] s8
+        | s8 = [ &_133 <- UInt64.lt _131 _132 ] s9
+        | s9 = {[@expl:index in bounds] [%#sprepare'20] _133} s10
+        | s10 = Slice64.get [%#sprepare'21] <tup2_i64_i64> {reports} {_131}
+            (fun (r: tup2_i64_i64) -> [ &_130 <- r.f1'4 ] s11)
+        | s11 = [ &_129 <- Int64.ge _130 end' ] s12
+        | s12 = [ &_122 <- { f0'5 = _123; f1'5 = _129 } ] s13
+        | s13 = MutBorrow.borrow_mut <t_Vec_tup2_bool_bool_Global> {votes}
+            (fun (_bor: MutBorrow.t t_Vec_tup2_bool_bool_Global) -> [ &_121 <- _bor ] [ &votes <- _bor.final ] s14)
+        | s14 = push_tup2_bool_bool [%#sprepare'22] {_121} {_122} (fun (_x: ()) -> [ &_120 <- _x ] s15)
+        | s15 = UInt64.add [%#sprepare'24] {i} {[%#sprepare'23] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s16)
+        | s16 = bb52 ] ] ]
+  | bb59 = s0
+    [ s0 = [ &_153 <- votes ] s1
+    | s1 = deref_Vec_tup2_bool_bool_Global [%#sprepare'25] {_153}
+        (fun (_x: Slice64.slice tup2_bool_bool) -> [ &_151 <- _x ] s2)
+    | s2 = reconfigured_majorities_overlap [%#sprepare'26] {old'} {state.f0} {state.f1} {request} {node} {target} {_151}
+        (fun (_x: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+          [ &_143 <- _x ] s3)
+    | s3 =
+      branch_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 [%#sprepare'27]
+        {_143}
+        (fun (_x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+          [ &_142 <- _x ] s4)
+    | s4 = any
+      [ br0 (x0: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) -> {_142
+        = Continue'3 x0}
+        (! bb65)
+      | br1 (x0: t_Option_Infallible) -> {_142 = Break'3 x0} (! bb66) ] ]
+  | bb66 = s0
+    [ s0 = elim_Break'3 {_142} (fun (r0: t_Option_Infallible) -> [ &residual'3 <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 [%#sprepare'27]
+        {residual'3}
+        (fun (_x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb65 = s0
+    [ s0 = elim_Continue'3 {_142}
+        (fun (r0: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+          [ &val''3 <- r0 ] s1)
+    | s1 = [ &_141 <- val''3 ] s2
+    | s2 = [ &plan'0 <- _141.f0'6 ] s3
+    | s3 = [ &next'0 <- _141.f1'6 ] s4
+    | s4 = [ &counts <- _141.f2'6 ] s5
+    | s5 = [ &quorums <- _141.f3'6 ] s6
+    | s6 = [ &common <- _141.f4'6 ] s7
+    | s7 =
+      {[@expl:assertion] [%#sprepare'28] let _ = prefix_grants_agree (Slice64.view old') (view_Vec_u64_Global next'0) (view_Vec_tup2_bool_bool_Global votes) (Slice64.view reports) request.kind node (Int64.to_int end') false (Seq.length (view_Vec_tup2_bool_bool_Global votes)) in let _ = prefix_grants_agree (Slice64.view old') (view_Vec_u64_Global next'0) (view_Vec_tup2_bool_bool_Global votes) (Slice64.view reports) request.kind node (Int64.to_int end') true (Seq.length (view_Vec_tup2_bool_bool_Global votes)) in true}
+      s8
+    | s8 = any [ br0 -> {quorums.f0'5 = false} (! bb72) | br1 -> {quorums.f0'5} (! bb71) ] ]
+  | bb71 = any [ br0 -> {quorums.f1'5 = false} (! bb72) | br1 -> {quorums.f1'5} (! bb73) ]
+  | bb73 = s0
+    [ s0 = branch_Option_u64 [%#sprepare'29] {common}
+        (fun (_x: t_ControlFlow_Option_Infallible_u64) -> [ &_173 <- _x ] s1)
+    | s1 = any
+      [ br0 (x0: UInt64.t) -> {_173 = Continue'4 x0} (! bb77)
+      | br1 (x0: t_Option_Infallible) -> {_173 = Break'4 x0} (! bb78) ] ]
+  | bb78 = s0
+    [ s0 = elim_Break'4 {_173} (fun (r0: t_Option_Infallible) -> [ &residual'4 <- r0 ] s1)
+    | s1 =
+      from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 [%#sprepare'29]
+        {residual'4}
+        (fun (_x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+          [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb77 = s0
+    [ s0 = elim_Continue'4 {_173} (fun (r0: UInt64.t) -> [ &val''4 <- r0 ] s1)
+    | s1 = [ &common'0 <- val''4 ] s2
+    | s2 = [ &_185 <- { f0'2 = end'; f1'2 = counts; f2'2 = common'0 } ] s3
+    | s3 = [ &_184 <- Some'2 _185 ] s4
+    | s4 = [ &_180 <- { f0'3 = plan'0; f1'3 = next'0; f2'3 = deltas; f3'3 = _184 } ] s5
+    | s5 = [ &_ret <- Some'3 _180 ] s6
+    | s6 = return {_ret} ]
+  | bb72 = s0 [ s0 = [ &_ret <- None'3 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 = Any.any_l ()
+  | & old': Slice64.slice UInt64.t = old'
+  | & state: tup2_ReconfigurationLeadership_CurrentVoterSet = state
+  | & request: t_VoterChangeRequest = request
+  | & node: UInt64.t = node
+  | & target: t_TargetVoter = target
+  | & base: Int64.t = base
+  | & reports: Slice64.slice tup2_i64_i64 = reports
+  | & plan: t_VoterReconfigurationPlan = Any.any_l ()
+  | & next: t_Vec_u64_Global = Any.any_l ()
+  | & _32: tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & _33: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & _34: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': tup2_VoterReconfigurationPlan_Vec_u64_Global = Any.any_l ()
+  | & _49: tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 = Any.any_l ()
+  | & _52: t_Vec_i32_Global = Any.any_l ()
+  | & _53: t_Option_tup3_i64_tup2_usize_usize_u64 = Any.any_l ()
+  | & records: t_Vec_unit_Global = Any.any_l ()
+  | & _57: () = Any.any_l ()
+  | & _58: MutBorrow.t t_Vec_unit_Global = Any.any_l ()
+  | & _59: () = Any.any_l ()
+  | & _62: () = Any.any_l ()
+  | & _63: MutBorrow.t t_Vec_unit_Global = Any.any_l ()
+  | & _64: () = Any.any_l ()
+  | & deltas: t_Vec_i32_Global = Any.any_l ()
+  | & _66: t_ControlFlow_Option_Infallible_Vec_i32_Global = Any.any_l ()
+  | & _67: t_Option_Vec_i32_Global = Any.any_l ()
+  | & _68: UInt64.t = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: t_Vec_i32_Global = Any.any_l ()
+  | & last: Int32.t = Any.any_l ()
+  | & _76: Int32.t = Any.any_l ()
+  | & _77: t_ControlFlow_Option_Infallible_ref_i32 = Any.any_l ()
+  | & _78: t_Option_ref_i32 = Any.any_l ()
+  | & _80: Slice64.slice Int32.t = Any.any_l ()
+  | & residual'1: t_Option_Infallible = Any.any_l ()
+  | & val''1: Int32.t = Any.any_l ()
+  | & end': Int64.t = Any.any_l ()
+  | & _88: tup2_i64_i64 = Any.any_l ()
+  | & _89: t_ControlFlow_Option_Infallible_tup2_i64_i64 = Any.any_l ()
+  | & _90: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & residual'2: t_Option_Infallible = Any.any_l ()
+  | & val''2: tup2_i64_i64 = Any.any_l ()
+  | & votes: t_Vec_tup2_bool_bool_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _116: bool = Any.any_l ()
+  | & _118: UInt64.t = Any.any_l ()
+  | & _120: () = Any.any_l ()
+  | & _121: MutBorrow.t t_Vec_tup2_bool_bool_Global = Any.any_l ()
+  | & _122: tup2_bool_bool = Any.any_l ()
+  | & _123: bool = Any.any_l ()
+  | & _124: Int64.t = Any.any_l ()
+  | & _125: UInt64.t = Any.any_l ()
+  | & _126: UInt64.t = Any.any_l ()
+  | & _127: bool = Any.any_l ()
+  | & _129: bool = Any.any_l ()
+  | & _130: Int64.t = Any.any_l ()
+  | & _131: UInt64.t = Any.any_l ()
+  | & _132: UInt64.t = Any.any_l ()
+  | & _133: bool = Any.any_l ()
+  | & plan'0: t_VoterReconfigurationPlan = Any.any_l ()
+  | & next'0: t_Vec_u64_Global = Any.any_l ()
+  | & counts: tup2_usize_usize = Any.any_l ()
+  | & quorums: tup2_bool_bool = Any.any_l ()
+  | & common: t_Option_u64 = Any.any_l ()
+  | & _141: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = Any.any_l ()
+  | & _142: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = Any.any_l ()
+  | & _143: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = Any.any_l ()
+  | & _151: Slice64.slice tup2_bool_bool = Any.any_l ()
+  | & _153: t_Vec_tup2_bool_bool_Global = Any.any_l ()
+  | & residual'3: t_Option_Infallible = Any.any_l ()
+  | & val''3: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = Any.any_l ()
+  | & common'0: UInt64.t = Any.any_l ()
+  | & _173: t_ControlFlow_Option_Infallible_u64 = Any.any_l ()
+  | & residual'4: t_Option_Infallible = Any.any_l ()
+  | & val''4: UInt64.t = Any.any_l ()
+  | & _180: tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 = Any.any_l ()
+  | & _184: t_Option_tup3_i64_tup2_usize_usize_u64 = Any.any_l ()
+  | & _185: tup3_i64_tup2_usize_usize_u64 = Any.any_l ()
+  | & variant_old_bb52: int = Any.any_l () ])
+  [ return
+    (result: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
+  {[@stop_split] [@expl:reconfiguration_control_prefix_support ensures] ([@stop_split] [@expl:reconfiguration_control_prefix_support ensures #0] [%#sprepare'32] match result with
+          | None'3 -> false
+          | Some'3 _ -> true
+          end
+      = (valid_old (Slice64.view old')
+      /\ membership_coherent (Slice64.view old') node target.membership request.kind
+      /\ match voter_reconfiguration_rejection state.f0 state.f1 request target with
+          | Some'0 _ -> false
+          | None'0 -> true
+          end
+      /\ (control_record_count state.f1.kraft_version request.kind = 0
+      \/ ge_log_Int (Int64.to_int base) 0
+      /\ Int64.to_int base + control_record_count state.f1.kraft_version request.kind <= Int64.to_int const_MAX'1
+      /\ ge_log_Int (prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int base
+        + control_record_count state.f1.kraft_version request.kind) false (Seq.length (Slice64.view reports))) (ComputerDivision.div (Seq.length (Slice64.view old')) 2
+        + 1)
+      /\ ge_log_Int (prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int base
+      + control_record_count state.f1.kraft_version request.kind) true (Seq.length (Slice64.view reports))) (ComputerDivision.div (next_size (Seq.length (Slice64.view old')) request.kind) 2
+      + 1))))
+    /\ ([@stop_split] [@expl:reconfiguration_control_prefix_support ensures #1] [%#sprepare'33] match result with
+      | None'3 -> true
+      | Some'3 {f0'3 = plan; f1'3 = next; f2'3 = deltas; f3'3 = support} -> admitted_plan state.f1 request.kind plan
+      /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
+      /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
+      /\ (forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
+          = expected_member (Slice64.view old') (Seq.length (Slice64.view old')) request.kind node id)
+      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global next)
+          -> Seq.get (view_Vec_u64_Global next) i <> Seq.get (view_Vec_u64_Global next) j)
+      /\ Seq.length (view_Vec_i32_Global deltas) = control_record_count state.f1.kraft_version request.kind
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_i32_Global deltas)
+          -> Int32.to_int (Seq.get (view_Vec_i32_Global deltas) i) = i)
+      /\ (support = None'2) = (Seq.length (view_Vec_i32_Global deltas) = 0)
+      /\ match support with
+        | None'2 -> plan.preflight_only
+        | Some'2 {f0'2 = end'; f1'2 = counts; f2'2 = common} -> not plan.preflight_only
+        /\ ge_log_Int (Int64.to_int base) 0
+        /\ Int64.to_int end' = Int64.to_int base + Seq.length (view_Vec_i32_Global deltas)
+        /\ Int64.to_int base < Int64.to_int end'
+        /\ UInt64.t'int counts.f0'1 <= Seq.length (Slice64.view old')
+        /\ UInt64.t'int counts.f1'1 <= Seq.length (view_Vec_u64_Global next)
+        /\ UInt64.t'int counts.f0'1
+          = prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int end') false (Seq.length (Slice64.view reports))
+        /\ UInt64.t'int counts.f1'1
+          = prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int end') true (Seq.length (Slice64.view reports))
+        /\ ge_log_Int (UInt64.t'int counts.f0'1) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
+        /\ ge_log_Int (UInt64.t'int counts.f1'1) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
+        /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view old')
+          /\ Seq.get (Slice64.view old') i = common
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) i).f0'4) (Int64.to_int end')
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) i).f1'4) (Int64.to_int end')
+          /\ has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) common
+          /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_i32_Global deltas)
+            -> Int64.to_int base + Int32.to_int (Seq.get (view_Vec_i32_Global deltas) j) < Int64.to_int end'))
+        end
+      end)}
+    (! return {result}) ]

@@ -136,6 +136,8 @@ mod tests_snapshotting;
 mod tests_submit;
 #[cfg(test)]
 mod tests_timing;
+#[cfg(test)]
+mod tests_truncation;
 
 /// Filename of the node-local durable quorum-state file.
 const QUORUM_STATE_FILE: &str = "quorum-state";

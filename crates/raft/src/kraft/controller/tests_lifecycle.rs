@@ -206,13 +206,8 @@ async fn controller_handle_reports_node_id_probe_and_shuts_down() {
         Err(RaftError::ChangeRejected(_))
     ));
     ctrl.shutdown().await;
-    let mut shutdown_observed = false;
-    for _ in 0..50 {
-        if ctrl.inject_event(Event::ElectionTimeout).await.is_err() {
-            shutdown_observed = true;
-            break;
-        }
-        tokio::time::sleep(StdDuration::from_millis(5)).await;
-    }
-    check!(shutdown_observed);
+    check!(matches!(
+        ctrl.inject_event(Event::ElectionTimeout).await,
+        Err(RaftError::Shutdown)
+    ));
 }

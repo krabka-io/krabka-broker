@@ -51,22 +51,7 @@ use crate::{api_catalog::UnstableApiVersions, partition::Partition};
 pub(crate) fn remote_covered_through(finished: &[(i64, i64)], local_start: i64) -> Option<i64> {
     let mut ranges: Vec<(i64, i64)> = finished.to_vec();
     ranges.sort_unstable();
-    let mut covered: Option<i64> = None;
-    for (start, end) in ranges {
-        match covered {
-            // The remote tier must reach back to the oldest local segment,
-            // or the prefix this pass would delete is not covered at all.
-            None if start <= local_start => covered = Some(end),
-            None => {}
-            // Sorted by start, so the first segment that does not abut what is
-            // already covered is a gap, and every later one starts past it.
-            Some(through) if start <= through.saturating_add(1) => {
-                covered = Some(through.max(end));
-            }
-            Some(_) => break,
-        }
-    }
-    covered
+    krabka_verified::retention::remote_covered_through(&ranges, local_start)
 }
 
 /// Compute the highest `target` to pass to
@@ -440,6 +425,18 @@ mod tests {
     #[test]
     fn remote_covered_through_walks_an_unbroken_prefix() {
         let cases = [
+            CoverCase {
+                label: "obsolete disconnected prefix cannot suppress the local anchor",
+                finished: &[(0, 9), (20, 29)],
+                local_start: 20,
+                expected: Some(29),
+            },
+            CoverCase {
+                label: "obsolete ranges alone do not cover the local anchor",
+                finished: &[(0, 9)],
+                local_start: 20,
+                expected: None,
+            },
             CoverCase {
                 label: "nothing copied",
                 finished: &[],

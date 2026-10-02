@@ -127,14 +127,14 @@ pub fn diskless_batch_step(
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open)]
-fn effective_trim_lag(safety_lag: i64) -> Int {
+pub fn effective_trim_lag(safety_lag: i64) -> Int {
     pearlite! { if safety_lag@ < 0 { 0 } else { safety_lag@ } }
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open)]
 fn trim_target(frontier: i64, high_watermark: i64, safety_lag: i64) -> Int {
     pearlite! {
         let high_watermark_floor = high_watermark@ - effective_trim_lag(safety_lag);

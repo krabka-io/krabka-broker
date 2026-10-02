@@ -41,8 +41,7 @@ use crate::{
     },
     producer_snapshot::{
         ProducerReloadRange, ProducerSnapshotEntryFacts, producer_snapshot_entry_valid,
-        producer_snapshot_latest_index, producer_snapshot_reload_keeps,
-        producer_snapshot_replay_start,
+        producer_snapshot_latest_index, producer_snapshot_replay_start,
     },
     quota::{quota_charge, quota_credit},
     raft::{advance_high_watermark, in_half_open_window},
@@ -165,6 +164,33 @@ use scheduled_stability::scheduled_stable_prefix_bounds_fetch;
 mod replication;
 use replication::fenced_replication_bounds_fetch;
 
+mod control_truncation;
+use control_truncation::whole_batch_truncation_bounds_controls;
+
+mod snapshot_tail;
+use snapshot_tail::loaded_snapshot_bounds_truncated_retry;
+
+mod producer_window;
+use producer_window::rebuilt_data_window_bounds_retry;
+
+mod completed_producer;
+use completed_producer::completed_batches_preserve_first_retry;
+
+mod completed_eviction;
+use completed_eviction::completed_eviction_bounds_waiters;
+
+mod epoch_handoff;
+use epoch_handoff::epoch_handoff_distinguishes_identity_and_data_retry;
+
+mod epoch_delayed;
+use epoch_delayed::epoch_handoff_survives_delayed_completions;
+
+mod rotation_marker;
+use rotation_marker::rotation_marker_bounds_identity_retry;
+
+mod truncated_producer;
+use truncated_producer::truncated_replay_bounds_first_retry;
+
 mod restore_retry;
 use restore_retry::filtered_restore_preserves_producer_retry;
 
@@ -200,3 +226,48 @@ use consume_trace::metered_consumes_conserve_elapsed_credit;
 
 mod stable_abort;
 use stable_abort::stable_abort_sources_cover_fetch;
+
+// Complete ordered relative offsets, decoded timestamps, sparse (indexed, through) rows.
+type SparseTimestampWindow<'a> = (&'a [u32], &'a [i64], &'a [(usize, usize)]);
+
+mod retained_timestamp;
+use retained_timestamp::constructed_index_retained_candidate;
+
+mod constructed_tiered_timestamp;
+use constructed_tiered_timestamp::constructed_tiered_timestamp_preserves_first;
+
+mod validated_time_scan;
+use validated_time_scan::validated_retained_time_scan_agrees;
+
+mod trim_timestamp;
+use trim_timestamp::completed_trim_preserves_retained_timestamp;
+
+mod eviction_timestamp;
+use eviction_timestamp::physical_eviction_routes_retained_timestamp;
+
+mod time_range;
+use time_range::constructed_time_range_preserves_first;
+
+mod stable_time_range;
+use stable_time_range::stable_time_range_preserves_first;
+
+mod covered_retention;
+use covered_retention::remote_coverage_bounds_local_retention;
+
+mod remote_breach;
+use remote_breach::published_trim_bounds_remote_breach_cleanup;
+
+mod remote_delete;
+use remote_delete::completed_remote_retention_bounds_floor;
+
+mod schema_walk;
+use schema_walk::{SchemaWalkField, framed_schema_walk_admission};
+
+mod schema_produce;
+use schema_produce::schema_checked_produce_frontier;
+
+mod reconfiguration;
+use reconfiguration::{
+    constructed_voter_reconfiguration, reconfiguration_control_commit_waiter,
+    reconfiguration_control_prefix_support, reconfigured_majorities_overlap,
+};

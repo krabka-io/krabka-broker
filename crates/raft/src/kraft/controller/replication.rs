@@ -255,7 +255,7 @@ impl Engine {
                 if let Err(e) = self.log.truncate_to(Offset(truncate_to)) {
                     tracing::error!(?e, "kraft: follower truncate failed");
                 } else {
-                    self.restore_control_state_after_truncation(truncate_to);
+                    self.restore_control_state_after_truncation(self.log.log_end_offset().0);
                 }
             }
             FetchResponseMutation::Append => {

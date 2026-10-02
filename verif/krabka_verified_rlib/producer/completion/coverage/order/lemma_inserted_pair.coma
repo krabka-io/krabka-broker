@@ -1,0 +1,54 @@
+(* #"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 29 0 35 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
+let%span sorder = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 21 11 21 50
+let%span sorder'0 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 22 11 22 61
+let%span sorder'1 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 23 11 23 91
+let%span sorder'2 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 24 11 24 73
+let%span sorder'3 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 25 11 25 82
+let%span sorder'4 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 26 10 26 16
+let%span sorder'5 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 27 10 28 86
+let%span sorder'6 = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 10 16 11 63
+
+use creusot.int.Int64
+use seq.Seq
+use int.Int
+
+function completion_offset [#"/workspace/crates/verified/src/producer/completion.rs" 10 0 10 74] (ends: Seq.seq Int64.t) (incoming: Int64.t) (index: int) : int
+ = [%#scompletion] if index = Seq.length ends then Int64.to_int incoming else Int64.to_int (Seq.get ends index)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function insertion_source [#"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 9 0 9 71] (count: int) (position: int) (ordinal: int) : int
+ = [%#sorder'6] if ordinal = position then count else if gt_log_Int ordinal position then ordinal - 1 else ordinal
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant ends : Seq.seq Int64.t
+
+constant incoming : Int64.t
+
+constant position : int
+
+constant lower : int
+
+constant upper : int
+
+predicate lemma_inserted_pair [#"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 29 0 35 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (lower: int) (upper: int)
+
+goal vc_lemma_inserted_pair: ([%#sorder] 0 <= position /\ position <= Seq.length ends)
+  -> ([%#sorder'0] 0 <= lower /\ lower < upper /\ upper <= Seq.length ends)
+  -> ([%#sorder'1] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+  -> ([%#sorder'2] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+  -> ([%#sorder'3] forall i: int. position <= i /\ i < Seq.length ends
+      -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
+  -> (let result = true in [@stop_split] [@expl:lemma_inserted_pair ensures] ([@stop_split] [@expl:lemma_inserted_pair ensures #0] [%#sorder'4] result)
+  /\ ([@stop_split] [@expl:lemma_inserted_pair ensures #1] [%#sorder'5] result
+  -> completion_offset ends incoming (insertion_source (Seq.length ends) position lower)
+  < completion_offset ends incoming (insertion_source (Seq.length ends) position upper)))

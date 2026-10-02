@@ -77,3 +77,41 @@ mod wal_placement;
 mod epoch_replay;
 
 mod offset_seek;
+
+mod constructed_tiered_timestamp;
+
+mod validated_time_scan;
+
+mod trim_witnesses;
+
+mod time_range;
+
+mod stable_time_range;
+
+mod covered_retention;
+
+mod remote_breach;
+
+mod remote_delete;
+
+mod schema_walk;
+
+mod schema_produce;
+
+mod reconfiguration;
+
+mod control_truncation;
+
+mod truncated_producer;
+
+mod snapshot_tail;
+
+mod completed_producer;
+
+mod completed_eviction;
+
+mod epoch_handoff;
+
+mod epoch_delayed;
+
+mod rotation_marker;

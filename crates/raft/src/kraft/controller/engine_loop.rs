@@ -312,7 +312,7 @@ impl Engine {
                 if let Err(e) = self.log.truncate_to(Offset(point.offset)) {
                     tracing::error!(?e, "kraft: truncate failed");
                 } else {
-                    self.restore_control_state_after_truncation(point.offset);
+                    self.restore_control_state_after_truncation(self.log.log_end_offset().0);
                 }
             }
             Action::PersistQuorumState => {

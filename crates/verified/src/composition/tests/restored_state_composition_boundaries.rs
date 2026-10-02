@@ -15,25 +15,11 @@ fn restored_state_composition_boundaries() {
         &[(10, 11)],
     ] {
         for (lower, upper) in [(i64::MIN, 9), (10, 10), (10, 20), (20, i64::MAX)] {
-            assert!(validated_time_cursors_are_monotone(
-                entries, 100, 110, lower, upper
-            ));
+            time_range::check_cursors(entries, 100, 110, lower, upper);
         }
     }
-    assert!(validated_time_cursors_are_monotone(
-        &[(10, u32::MAX)],
-        0,
-        i64::from(u32::MAX),
-        0,
-        10,
-    ));
-    assert!(validated_time_cursors_are_monotone(
-        &[(10, 1)],
-        i64::MAX - 1,
-        i64::MAX,
-        0,
-        10,
-    ));
+    time_range::check_cursors(&[(10, u32::MAX)], 0, i64::from(u32::MAX), 0, 10);
+    time_range::check_cursors(&[(10, 1)], i64::MAX - 1, i64::MAX, 0, 10);
     let epochs = [
         EpochEntry {
             epoch: LeaderEpoch(2),

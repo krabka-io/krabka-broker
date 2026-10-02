@@ -1123,6 +1123,20 @@ mod tests {
     fn coverage_merges_ranges_and_places_the_resume_point() {
         let cases = [
             CoverageCase {
+                label: "obsolete ranges cannot move copy resumption below the local start",
+                finished: &[(0, 9)],
+                local_start: 20,
+                merged: &[(0, 9)],
+                copy_start: 20,
+            },
+            CoverageCase {
+                label: "obsolete disconnected prefix cannot suppress later anchored coverage",
+                finished: &[(0, 9), (20, 29)],
+                local_start: 20,
+                merged: &[(0, 9), (20, 29)],
+                copy_start: 30,
+            },
+            CoverageCase {
                 label: "an empty tier resumes at the oldest local offset",
                 finished: &[],
                 local_start: 40,

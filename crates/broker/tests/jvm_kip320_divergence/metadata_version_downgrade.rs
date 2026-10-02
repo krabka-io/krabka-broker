@@ -98,6 +98,28 @@ async fn metadata_version_downgrade_refuses_lossy_levels() {
     wait_for_jvm_metadata_max(&cluster, UPPER_LEVEL).await;
     wait_for_voter_registrations(&cluster).await;
     create_mixed_topic(&cluster.bootstrap_all, EXISTING_TOPIC).await;
+    // The JVM reports its replica directory asynchronously after topic
+    // creation. Wait for that report before capturing the metadata baseline;
+    // other replicas of this empty topic may retain an unassigned slot.
+    for (broker, _) in &cluster.krabka {
+        broker
+            .wait_for_image(|image| {
+                image.partition(EXISTING_TOPIC, 0).is_some_and(|partition| {
+                    partition
+                        .replicas
+                        .iter()
+                        .position(|id| id.0 == 3)
+                        .and_then(|slot| partition.directories.get(slot))
+                        .is_some_and(|directory| {
+                            !directory.is_nil()
+                                && image.broker(krabka_broker::NodeId(3)).is_some_and(
+                                    |registration| registration.log_dirs.contains(directory),
+                                )
+                        })
+                })
+            })
+            .await;
+    }
     let state = |broker: &BrokerHandle| {
         let image = broker.controller_image_for_test();
         (

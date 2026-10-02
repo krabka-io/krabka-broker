@@ -121,6 +121,11 @@ fn proposal_at(
         } else {
             IsrMemberRole::OutOfSyncFollower
         };
+        if matches!(role, IsrMemberRole::OutOfSyncFollower)
+            && !stats.is_some_and(|stats| stats.fetched_since_isr_exit)
+        {
+            continue;
+        }
         // A replica with no recorded progress has log end -1 and is out of
         // sync, as Kafka's `Partition.isFollowerOutOfSync` treats a replica
         // it has no state for.
@@ -247,6 +252,7 @@ mod tests {
             last_fetch_leader_leo: Offset(leo),
             last_caught_up: caught_up_ms_ago.map(ago),
             broker_epoch: Some(5),
+            fetched_since_isr_exit: fetched_ms_ago.is_some(),
         }
     }
 
@@ -385,6 +391,33 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn a_shrunk_follower_needs_a_new_fetch_before_rejoining() {
+        let now = Instant::now() + Duration::from_secs(60);
+        let mut committed = record(&[1, 2, 3], &[1, 2, 3]);
+        let mut st = installed(&committed, now, policy());
+        st.per_follower
+            .insert(NodeId(2), follower(now, 90, Some(500), Some(500)));
+        st.per_follower
+            .insert(NodeId(3), follower(now, 90, Some(1_001), Some(1_001)));
+        assert2::assert!(
+            proposal_at(&st, &committed, LEADER_LEO, EPOCH_START, now)
+                == Some(proposal(&[1, 2, 3], &[1, 2]))
+        );
+        committed.isr = nodes(&[1, 2]);
+        st.install_isr(&committed.isr, &committed.replicas, committed.leader, now);
+        let later = now + Duration::from_secs(1);
+        assert2::assert!(
+            proposal_at(&st, &committed, LEADER_LEO, EPOCH_START, later)
+                == Some(proposal(&[1, 2], &[1]))
+        );
+        st.update_follower_leo(NodeId(3), HW, LEADER_LEO, later);
+        assert2::assert!(
+            proposal_at(&st, &committed, LEADER_LEO, EPOCH_START, later)
+                == Some(proposal(&[1, 2], &[1, 3]))
+        );
     }
 
     /// Kafka's `Partition.isFollowerInSync` also asks for the start of the

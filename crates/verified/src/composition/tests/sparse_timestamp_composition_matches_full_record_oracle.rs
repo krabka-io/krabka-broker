@@ -19,9 +19,10 @@ proptest! {
             running_maximum_index_entry(&offsets, &timestamps, *indexed, *through)).collect();
         let expected = timestamps.iter().position(|timestamp| *timestamp >= target);
         assert!(indexed_timestamp_scan_finds_first(&entries, &offsets, &timestamps, target) == expected);
-        assert!(constructed_time_index_preserves_first(&offsets, &timestamps, &rows, target));
-        assert!(remote_timestamp_scan_preserves_first(&entries, &offsets, &timestamps, target));
-        assert!(validated_remote_and_local_time_starts_agree(&entries, i64::from(u32::MAX), target));
+        assert!(constructed_time_index_preserves_first(&offsets, &timestamps, &rows, target) == (entries.clone(), expected));
+        let (count, floor) = validated_time_scan::prefix_oracle(&entries, target);
+        assert!(remote_timestamp_scan_preserves_first(&entries, &offsets, &timestamps, target) == (count, floor, expected));
+        assert!(validated_remote_and_local_time_starts_agree(&entries, i64::from(u32::MAX), target) == Ok((count, floor, floor)));
     }
 }
 
@@ -49,8 +50,8 @@ proptest! {
             has_delivery_watermark: true,
             delivery_watermark: wal.max(local),
         };
-        assert!(admitted_trim_bounds_reload_and_retry(facts, wal, local, &snapshots));
-        assert!(diskless_trim_reconciliation_preserves_coverage(frontier, frontier, 0, wal, local, &applied));
+        trim_witnesses::check_logical(facts, wal, local, &snapshots);
+        trim_witnesses::check_physical(frontier, frontier, 0, wal, local, &applied);
     }
 }
 

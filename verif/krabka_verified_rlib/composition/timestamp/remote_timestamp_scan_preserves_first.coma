@@ -1,44 +1,43 @@
-(* #"/workspace/crates/verified/src/composition/timestamp.rs" 77 0 82 9 *)
+(* #"/workspace/crates/verified/src/composition/timestamp.rs" 91 0 96 32 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 469 19 469 38
 let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 470 18 470 46
 let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 216 20 216 42
 let%span sslice'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 221 20 221 57
 let%span sslice'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 168 20 168 70
 let%span sslice'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 173 20 173 67
-let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 83 16 83 66
-let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 84 43 84 44
-let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 85 23 85 24
-let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 85 20 85 25
-let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 85 9 85 10
-let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 25 87 26
-let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 17 87 26
-let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 9 87 27
-let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 9 87 29
-let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 48 87 49
-let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 40 87 49
-let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 87 39 87 57
-let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 91 16 91 55
-let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 92 11 92 84
-let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 93 15 93 56
-let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 92 11 93 56
-let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 91 4 93 56
-let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 70 11 70 46
-let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 71 11 72 35
-let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 73 11 75 41
-let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 76 10 76 16
-let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 34 11 34 46
-let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 35 11 36 35
-let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 37 11 38 40
-let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 39 11 41 41
-let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 42 10 46 1
-let%span stimestamp'25 = "/workspace/crates/verified/src/timestamp.rs" 8 10 13 1
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
-let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 97 16 97 66
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 98 43 98 44
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 99 23 99 24
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 99 20 99 25
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 99 9 99 10
+let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 25 101 26
+let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 17 101 26
+let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 9 101 27
+let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 9 101 29
+let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 48 101 49
+let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 40 101 49
+let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 101 39 101 57
+let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 105 23 105 62
+let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 106 18 106 42
+let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 107 18 107 91
+let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 72 11 72 46
+let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 73 11 74 35
+let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 75 11 77 41
+let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 78 10 78 37
+let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 79 10 79 77
+let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 80 10 80 88
+let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 81 10 82 78
+let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 83 10 83 83
+let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 84 10 85 33
+let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 86 10 90 1
+let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 35 11 35 46
+let%span stimestamp'25 = "/workspace/crates/verified/src/composition/timestamp.rs" 36 11 37 35
+let%span stimestamp'26 = "/workspace/crates/verified/src/composition/timestamp.rs" 38 11 39 40
+let%span stimestamp'27 = "/workspace/crates/verified/src/composition/timestamp.rs" 40 11 42 41
+let%span stimestamp'28 = "/workspace/crates/verified/src/composition/timestamp.rs" 43 10 47 1
 let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 85 11 86 40
 let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 87 10 92 52
 let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 93 10 94 20
@@ -57,11 +56,11 @@ use int.Int
 
 type tup2_i64_u32 = { f0: Int64.t; f1: UInt32.t }
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
 
 meta "rewrite_def" predicate gt_log_Int
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
 
@@ -147,17 +146,17 @@ type t_Option_usize = None | Some UInt64.t
 
 let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t)
   (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) =
-{[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp'20] Seq.length (Slice64.view offsets)
+{[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp'24] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'21] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'25] forall i: int, j: int. 0
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view offsets)
       -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'22] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'26] forall i: int, j: int. 0
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view entries)
       -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0)
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #3] [%#stimestamp'23] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #3] [%#stimestamp'27] forall i: int, j: int. 0
         <= i
       /\ i < Seq.length (Slice64.view entries)
       /\ 0 <= j
@@ -166,7 +165,7 @@ let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (of
     -> Int64.to_int (Seq.get (Slice64.view timestamps) j) <= Int64.to_int (Seq.get (Slice64.view entries) i).f0)}
   any
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'24] match result with
+  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'28] match result with
       | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
       /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
       /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
@@ -176,55 +175,22 @@ let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (of
       end}
     (! return {result}) ]
 
-let first_timestamp_index (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) = any
-  [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:first_timestamp_index ensures] [%#stimestamp'25] match result with
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end}
-    (! return {result}) ]
-
-type t_Option_Int = None'0 | Some'0 int
-
-function deep_model_usize [@inline:trivial] (self: UInt64.t) : int = [%#snum] UInt64.t'int self
-
-meta "rewrite_def" function deep_model_usize
-
-function deep_model_Option_usize [@inline:trivial] (self: t_Option_usize) : t_Option_Int = [%#soption] match self with
-    | Some t -> Some'0 (deep_model_usize t)
-    | None -> None'0
-    end
-
-meta "rewrite_def" function deep_model_Option_usize
-
-function deep_model_ref_Option_usize [@inline:trivial] (self: t_Option_usize) : t_Option_Int =
-  [%#smodel] deep_model_Option_usize self
-
-meta "rewrite_def" function deep_model_ref_Option_usize
-
-let eq_Option_usize (self_: t_Option_usize) (rhs: t_Option_usize) (return (x: bool)) = any
-  [ return (result: bool) -> {[@stop_split] [@expl:eq ensures] [%#scmp] result
-    = (deep_model_ref_Option_usize self_ = deep_model_ref_Option_usize rhs)}
-    (! return {result}) ]
+type tup3_usize_u32_Option_usize = { f0'1: UInt64.t; f1'1: UInt32.t; f2'1: t_Option_usize }
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_timestamp_scan_preserves_first [#"/workspace/crates/verified/src/composition/timestamp.rs" 77 0 82 9]
+let remote_timestamp_scan_preserves_first [#"/workspace/crates/verified/src/composition/timestamp.rs" 91 0 96 32]
   (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t)
-  (target: Int64.t) (return (x: bool)) =
-{[@stop_split] [@expl:remote_timestamp_scan_preserves_first requires] ([@stop_split] [@expl:remote_timestamp_scan_preserves_first requires #0] [%#stimestamp'16] Seq.length (Slice64.view offsets)
+  (target: Int64.t) (return (x: tup3_usize_u32_Option_usize)) =
+{[@stop_split] [@expl:remote_timestamp_scan_preserves_first requires] ([@stop_split] [@expl:remote_timestamp_scan_preserves_first requires #0] [%#stimestamp'14] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first requires #1] [%#stimestamp'17] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first requires #1] [%#stimestamp'15] forall i: int, j: int. 0
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view offsets)
       -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
-  /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first requires #2] [%#stimestamp'18] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first requires #2] [%#stimestamp'16] forall i: int, j: int. 0
         <= i
       /\ i < Seq.length (Slice64.view entries)
       /\ 0 <= j
@@ -235,42 +201,39 @@ let remote_timestamp_scan_preserves_first [#"/workspace/crates/verified/src/comp
   [ bb0 = s0
     [ s0 = remote_time_index_candidate_count [%#stimestamp] {entries} {target}
         (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
-    | s1 = [ &_21 <- count = ([%#stimestamp'0] (0: UInt64.t)) ] s2
-    | s2 = any [ br0 -> {_21 = false} (! bb4) | br1 -> {_21} (! bb2) ] ]
+    | s1 = [ &_39 <- count = ([%#stimestamp'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_39 = false} (! bb4) | br1 -> {_39} (! bb2) ] ]
   | bb2 = s0
-    [ s0 = [ &_26 <- { end' = ([%#stimestamp'1] (0: UInt64.t)) } ] s1
-    | s1 = index_slice_tup2_i64_u32 [%#stimestamp'2] {entries} {_26}
-        (fun (_x: Slice64.slice tup2_i64_u32) -> [ &_24 <- _x ] s2)
-    | s2 = [ &_20 <- { f0'0 = ([%#stimestamp'3] (0: UInt32.t)); f1'0 = _24 } ] s3
+    [ s0 = [ &_44 <- { end' = ([%#stimestamp'1] (0: UInt64.t)) } ] s1
+    | s1 = index_slice_tup2_i64_u32 [%#stimestamp'2] {entries} {_44}
+        (fun (_x: Slice64.slice tup2_i64_u32) -> [ &_42 <- _x ] s2)
+    | s2 = [ &_38 <- { f0'0 = ([%#stimestamp'3] (0: UInt32.t)); f1'0 = _42 } ] s3
     | s3 = bb7 ]
   | bb4 = s0
     [ s0 = UInt64.sub [%#stimestamp'5] {count} {[%#stimestamp'4] (1: UInt64.t)}
-        (fun (_x: UInt64.t) -> [ &_28 <- _x ] s1)
-    | s1 = [ &_30 <- Slice64.length entries ] s2
-    | s2 = [ &_31 <- UInt64.lt _28 _30 ] s3
-    | s3 = {[@expl:index in bounds] [%#stimestamp'6] _31} s4
-    | s4 = Slice64.get [%#stimestamp'7] <tup2_i64_u32> {entries} {_28} (fun (r: tup2_i64_u32) -> [ &_27 <- r.f1 ] s5)
+        (fun (_x: UInt64.t) -> [ &_46 <- _x ] s1)
+    | s1 = [ &_48 <- Slice64.length entries ] s2
+    | s2 = [ &_49 <- UInt64.lt _46 _48 ] s3
+    | s3 = {[@expl:index in bounds] [%#stimestamp'6] _49} s4
+    | s4 = Slice64.get [%#stimestamp'7] <tup2_i64_u32> {entries} {_46} (fun (r: tup2_i64_u32) -> [ &_45 <- r.f1 ] s5)
     | s5 = UInt64.sub [%#stimestamp'9] {count} {[%#stimestamp'8] (1: UInt64.t)}
-        (fun (_x: UInt64.t) -> [ &_36 <- _x ] s6)
-    | s6 = [ &_35 <- { start'0 = _36; end''0 = count } ] s7
-    | s7 = index_slice_tup2_i64_u32'0 [%#stimestamp'10] {entries} {_35}
-        (fun (_x: Slice64.slice tup2_i64_u32) -> [ &_33 <- _x ] s8)
-    | s8 = [ &_20 <- { f0'0 = _27; f1'0 = _33 } ] s9
+        (fun (_x: UInt64.t) -> [ &_54 <- _x ] s6)
+    | s6 = [ &_53 <- { start'0 = _54; end''0 = count } ] s7
+    | s7 = index_slice_tup2_i64_u32'0 [%#stimestamp'10] {entries} {_53}
+        (fun (_x: Slice64.slice tup2_i64_u32) -> [ &_51 <- _x ] s8)
+    | s8 = [ &_38 <- { f0'0 = _45; f1'0 = _51 } ] s9
     | s9 = bb7 ]
   | bb7 = s0
-    [ s0 = [ &relative <- _20.f0'0 ] s1
-    | s1 = [ &selected <- _20.f1'0 ] s2
-    | s2 = time_index_scan_start [%#stimestamp'11] {selected} {target} (fun (_x: UInt32.t) -> [ &_41 <- _x ] s3)
-    | s3 = [ &_39 <- relative = _41 ] s4
-    | s4 = any [ br0 -> {_39 = false} (! bb10) | br1 -> {_39} (! bb9) ] ]
-  | bb9 = s0
-    [ s0 = indexed_timestamp_scan_finds_first [%#stimestamp'12] {selected} {offsets} {timestamps} {target}
-        (fun (_x: t_Option_usize) -> [ &_45 <- _x ] s1)
-    | s1 = first_timestamp_index [%#stimestamp'13] {timestamps} {target} (fun (_x: t_Option_usize) -> [ &_51 <- _x ] s2)
-    | s2 = eq_Option_usize [%#stimestamp'14] {_45} {_51} (fun (_x: bool) -> [ &_ret <- _x ] s3)
-    | s3 = return {_ret} ]
-  | bb10 = s0 [ s0 = [ &_ret <- [%#stimestamp'15] false ] s1 | s1 = return {_ret} ] ]
-  [ & _ret: bool = Any.any_l ()
+    [ s0 = [ &relative <- _38.f0'0 ] s1
+    | s1 = [ &selected <- _38.f1'0 ] s2
+    | s2 = time_index_scan_start [%#stimestamp'11] {selected} {target}
+        (fun (_x: UInt32.t) -> [ &_local_floor <- _x ] s3)
+    | s3 = {[@expl:assertion] [%#stimestamp'12] relative = _local_floor} s4
+    | s4 = indexed_timestamp_scan_finds_first [%#stimestamp'13] {selected} {offsets} {timestamps} {target}
+        (fun (_x: t_Option_usize) -> [ &matched <- _x ] s5)
+    | s5 = [ &_ret <- { f0'1 = count; f1'1 = relative; f2'1 = matched } ] s6
+    | s6 = return {_ret} ] ]
+  [ & _ret: tup3_usize_u32_Option_usize = Any.any_l ()
   | & entries: Slice64.slice tup2_i64_u32 = entries
   | & offsets: Slice64.slice UInt32.t = offsets
   | & timestamps: Slice64.slice Int64.t = timestamps
@@ -278,21 +241,50 @@ let remote_timestamp_scan_preserves_first [#"/workspace/crates/verified/src/comp
   | & count: UInt64.t = Any.any_l ()
   | & relative: UInt32.t = Any.any_l ()
   | & selected: Slice64.slice tup2_i64_u32 = Any.any_l ()
-  | & _20: tup2_u32_ref_slice_tup2_i64_u32 = Any.any_l ()
-  | & _21: bool = Any.any_l ()
-  | & _24: Slice64.slice tup2_i64_u32 = Any.any_l ()
-  | & _26: t_RangeTo_usize = Any.any_l ()
-  | & _27: UInt32.t = Any.any_l ()
-  | & _28: UInt64.t = Any.any_l ()
-  | & _30: UInt64.t = Any.any_l ()
-  | & _31: bool = Any.any_l ()
-  | & _33: Slice64.slice tup2_i64_u32 = Any.any_l ()
-  | & _35: t_Range_usize = Any.any_l ()
-  | & _36: UInt64.t = Any.any_l ()
+  | & _38: tup2_u32_ref_slice_tup2_i64_u32 = Any.any_l ()
   | & _39: bool = Any.any_l ()
-  | & _41: UInt32.t = Any.any_l ()
-  | & _45: t_Option_usize = Any.any_l ()
-  | & _51: t_Option_usize = Any.any_l () ])
-  [ return (result: bool) ->
-  {[@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures] [%#stimestamp'19] result}
+  | & _42: Slice64.slice tup2_i64_u32 = Any.any_l ()
+  | & _44: t_RangeTo_usize = Any.any_l ()
+  | & _45: UInt32.t = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _49: bool = Any.any_l ()
+  | & _51: Slice64.slice tup2_i64_u32 = Any.any_l ()
+  | & _53: t_Range_usize = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _local_floor: UInt32.t = Any.any_l ()
+  | & matched: t_Option_usize = Any.any_l () ])
+  [ return (result: tup3_usize_u32_Option_usize) ->
+  {[@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures] ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #0] [%#stimestamp'17] UInt64.t'int result.f0'1
+      <= Seq.length (Slice64.view entries))
+    /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #1] [%#stimestamp'18] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result.f0'1 -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target)
+    /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #2] [%#stimestamp'19] forall i: int. 1 <= i
+          /\ i < UInt64.t'int result.f0'1
+        -> UInt32.t'int (Seq.get (Slice64.view entries) (i - 1)).f1
+        < UInt32.t'int (Seq.get (Slice64.view entries) i).f1)
+    /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #3] [%#stimestamp'20] UInt64.t'int result.f0'1
+        < Seq.length (Slice64.view entries)
+      -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int result.f0'1)).f0) (Int64.to_int target)
+      \/ gt_log_Int (UInt64.t'int result.f0'1) 0
+      /\ UInt32.t'int (Seq.get (Slice64.view entries) (UInt64.t'int result.f0'1)).f1
+      <= UInt32.t'int (Seq.get (Slice64.view entries) (UInt64.t'int result.f0'1 - 1)).f1)
+    /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #4] [%#stimestamp'21] result.f1'1
+      = (if UInt64.t'int result.f0'1 = 0 then
+        (0: UInt32.t)
+      else
+        (Seq.get (Slice64.view entries) (UInt64.t'int result.f0'1 - 1)).f1
+      ))
+    /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #5] [%#stimestamp'22] forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view offsets)
+          /\ UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int result.f1'1
+        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
+    /\ ([@stop_split] [@expl:remote_timestamp_scan_preserves_first ensures #6] [%#stimestamp'23] match result.f2'1 with
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
+        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
+      end)}
     (! return {result}) ]
