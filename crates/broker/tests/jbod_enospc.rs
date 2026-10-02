@@ -814,12 +814,10 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
     let healthy_key = "healthy-primary".to_owned();
     let healthy_producer = producer(&bootstrap).await;
     assert!(
-        matches!(
-            healthy_producer
-                .send(record(healthy, healthy_key.clone(), 16))
-                .await,
-            Ok(_)
-        ),
+        healthy_producer
+            .send(record(healthy, healthy_key.clone(), 16))
+            .await
+            .is_ok(),
         "a partition on node 1's healthy directory must remain writable"
     );
     acked.insert(healthy_key);
