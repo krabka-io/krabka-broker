@@ -525,11 +525,22 @@ async fn quiet_probes_leave_no_denial_behind_and_a_named_refusal_does() {
             .get()
     };
 
-    // An all-topics request hides the topic the principal may not describe.
-    fixture.grants.set(&[]);
-    let response = fixture.metadata(12, &MetadataRequest::default()).await;
-    assert!(response.topics == Vec::<MetadataResponseTopic>::new());
-    assert!(denied("Describe", "Topic") == 0);
+    // An all-topics request includes an allowed topic and quietly hides one
+    // the principal may not describe.
+    let existing = fixture.existing_row(12).await;
+    let all_topics = MetadataRequest {
+        topics: None,
+        ..Default::default()
+    };
+    for (grants, expected) in [
+        (vec![topic(EXISTING, Describe)], vec![existing]),
+        (vec![], vec![]),
+    ] {
+        fixture.grants.set(&grants);
+        let response = fixture.metadata(12, &all_topics).await;
+        assert!(response.topics == expected);
+        assert!(denied("Describe", "Topic") == 0);
+    }
 
     // Auto-creation with topic `Create` alone: the cluster `Create` probe is
     // denied, and the per-topic check allows the topic.

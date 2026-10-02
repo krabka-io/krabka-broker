@@ -46,8 +46,6 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
                 timestamp_ms: None,
             })
             .await
-            .await
-            .unwrap()
             .unwrap();
     }
     producer.flush().await.unwrap();

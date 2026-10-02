@@ -37,7 +37,12 @@ async fn commit_then_read_committed_sees_records() {
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["a", "b", "c"] {
-        drop(producer.send(rec("t", v)).await);
+        drop(
+            producer
+                .enqueue(rec("t", v))
+                .await
+                .expect("record is queued"),
+        );
     }
     txn.commit().await.unwrap();
 
@@ -239,7 +244,12 @@ async fn interleaved_commit_and_abort() {
     // First txn: commit ["a", "b", "c"].
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["a", "b", "c"] {
-        drop(producer.send(rec("ti", v)).await);
+        drop(
+            producer
+                .enqueue(rec("ti", v))
+                .await
+                .expect("record is queued"),
+        );
     }
     txn.commit().await.unwrap();
 
@@ -255,7 +265,12 @@ async fn interleaved_commit_and_abort() {
     // Third txn: commit ["d", "e", "f", "g"].
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["d", "e", "f", "g"] {
-        drop(producer.send(rec("ti", v)).await);
+        drop(
+            producer
+                .enqueue(rec("ti", v))
+                .await
+                .expect("record is queued"),
+        );
     }
     txn.commit().await.unwrap();
 

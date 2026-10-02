@@ -66,6 +66,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+krabka-client-core = { version = "0.4.0", features = ["mock"] }
 # Runs bench/scenarios/*.yaml as one test case per file, so a scenario that
 # stops parsing names itself.
 libtest-mimic = "0.8"

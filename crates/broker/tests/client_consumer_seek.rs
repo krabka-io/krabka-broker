@@ -29,8 +29,6 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
                 timestamp_ms: None,
             })
             .await
-            .await
-            .unwrap()
             .unwrap();
     }
     producer.flush().await.unwrap();

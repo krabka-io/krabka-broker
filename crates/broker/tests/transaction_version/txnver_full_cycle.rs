@@ -49,8 +49,6 @@ async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, gro
         producer
             .send(rec(topic, v))
             .await
-            .await
-            .expect("producer delivery channel open")
             .expect("produce acknowledged");
     }
     txn.commit().await.unwrap();

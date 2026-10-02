@@ -50,8 +50,6 @@ async fn fetch_v3_drops_control_batch() {
             ..Default::default()
         })
         .await
-        .await
-        .expect("delivery channel")
         .expect("transactional produce");
     transaction.commit().await.expect("commit transaction");
     p.broker

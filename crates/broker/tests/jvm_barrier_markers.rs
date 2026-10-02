@@ -79,8 +79,6 @@ async fn produce_round(producer: &Producer, round: i32) {
                     timestamp_ms: None,
                 })
                 .await
-                .await
-                .expect("producer ack channel")
                 .expect("produce");
         }
     }

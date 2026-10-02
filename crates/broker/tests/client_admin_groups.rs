@@ -46,8 +46,6 @@ async fn lists_groups_and_committed_offsets() {
             timestamp_ms: None,
         })
         .await
-        .await
-        .unwrap()
         .unwrap();
     producer.flush().await.unwrap();
 

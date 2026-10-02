@@ -451,12 +451,13 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
         .expect("begin transaction");
     drop(
         open_producer
-            .send(ProducerRecord {
+            .enqueue(ProducerRecord {
                 topic: HANGING_TOPIC.into(),
                 value: Some(Bytes::from_static(b"open")),
                 ..Default::default()
             })
-            .await,
+            .await
+            .expect("record is queued"),
     );
     open_producer
         .flush()

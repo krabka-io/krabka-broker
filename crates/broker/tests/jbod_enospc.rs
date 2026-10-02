@@ -781,12 +781,8 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
     let mut acked = BTreeSet::new();
     for sequence in 0..128 {
         let key = format!("fill-{sequence}");
-        match fill
-            .send(record(doomed, key.clone(), 256 * 1024))
-            .await
-            .await
-        {
-            Ok(Ok(_)) => {
+        match fill.send(record(doomed, key.clone(), 256 * 1024)).await {
+            Ok(_) => {
                 acked.insert(key);
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -818,13 +814,10 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
     let healthy_key = "healthy-primary".to_owned();
     let healthy_producer = producer(&bootstrap).await;
     assert!(
-        matches!(
-            healthy_producer
-                .send(record(healthy, healthy_key.clone(), 16))
-                .await
-                .await,
-            Ok(Ok(_))
-        ),
+        healthy_producer
+            .send(record(healthy, healthy_key.clone(), 16))
+            .await
+            .is_ok(),
         "a partition on node 1's healthy directory must remain writable"
     );
     acked.insert(healthy_key);
@@ -835,9 +828,8 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
         match primary_fill
             .send(record(healthy, key.clone(), 256 * 1024))
             .await
-            .await
         {
-            Ok(Ok(_)) => {
+            Ok(_) => {
                 acked.insert(key);
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }

@@ -51,8 +51,6 @@ async fn consumer_record_carries_headers() {
             timestamp_ms: None,
         })
         .await
-        .await
-        .unwrap()
         .unwrap();
     producer.flush().await.unwrap();
     let mut consumer = Consumer::builder()

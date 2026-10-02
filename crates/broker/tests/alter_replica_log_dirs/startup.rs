@@ -45,12 +45,13 @@ async fn startup_resumes_move_for_existing_partition() {
     for i in 0..5i32 {
         drop(
             producer
-                .send(ProducerRecord {
+                .enqueue(ProducerRecord {
                     topic: "t".into(),
                     value: Some(Bytes::from(format!("v{i}"))),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .expect("record is queued"),
         );
     }
     producer.flush().await.expect("flush");
