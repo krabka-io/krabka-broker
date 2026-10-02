@@ -2,7 +2,7 @@ use assert2::assert;
 
 use super::*;
 
-fn logical_oracle(
+pub(super) fn logical_oracle(
     f: DeleteRecordsTrimFacts,
     wal: i64,
     local: i64,

@@ -226,3 +226,6 @@ use stable_time_range::stable_time_range_preserves_first;
 
 mod covered_retention;
 use covered_retention::remote_coverage_bounds_local_retention;
+
+mod remote_breach;
+use remote_breach::published_trim_bounds_remote_breach_cleanup;

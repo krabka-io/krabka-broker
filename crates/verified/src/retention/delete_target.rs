@@ -2,7 +2,7 @@ use creusot_std::prelude::*;
 
 use super::RemoteRetentionSegment;
 #[cfg(creusot)]
-use super::remote_retention_model;
+use super::{remote_prefix_charge, remote_retention_model};
 
 /// Count the oldest finished remote segments that Kafka's remote retention
 /// deletes.
@@ -12,13 +12,25 @@ use super::remote_retention_model;
 /// (`deletes_allowed` false) selects nothing.
 ///
 /// The result equals `remote_retention_model` from the oldest segment.
-/// That fold states the Kafka rule.
+/// That fold states the Kafka rule. Independent bounds justify every selected
+/// row by a floor/time breach or a funded charged prefix, and require the first
+/// kept row to fail all three axes. Zero debt cannot delete an unbreached empty
+/// row; an expired oversized row exhausts debt without restarting size deletion.
 #[ensures(result@ == if deletes_allowed {
     remote_retention_model(segments@, 0, size_debt@)
 } else {
     0
 })]
 #[ensures(result@ <= segments@.len())]
+#[ensures(!deletes_allowed ==> result@ == 0)]
+#[ensures(forall<i: Int> 0 <= i && i < result@ ==> segments@[i].log_start_breached
+    || segments@[i].time_expired || (size_debt@ > 0
+        && remote_prefix_charge(segments@, i) < size_debt@
+        && remote_prefix_charge(segments@, i + 1) <= size_debt@))]
+#[ensures(deletes_allowed && result@ < segments@.len()
+    ==> !segments@[result@].log_start_breached && !segments@[result@].time_expired
+        && (size_debt@ == 0 || remote_prefix_charge(segments@, result@) >= size_debt@
+            || remote_prefix_charge(segments@, result@ + 1) > size_debt@))]
 #[must_use]
 pub fn remote_retention_prefix(
     deletes_allowed: bool,
@@ -31,6 +43,14 @@ pub fn remote_retention_prefix(
     let mut debt = size_debt;
     let mut len = 0usize;
     #[invariant(len@ <= segments@.len())]
+    #[invariant(remote_prefix_charge(segments@, len@) >= 0)]
+    #[invariant(debt@ == if remote_prefix_charge(segments@, len@) <= size_debt@ {
+        size_debt@ - remote_prefix_charge(segments@, len@)
+    } else { 0 })]
+    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> segments@[i].log_start_breached
+        || segments@[i].time_expired || (size_debt@ > 0
+            && remote_prefix_charge(segments@, i) < size_debt@
+            && remote_prefix_charge(segments@, i + 1) <= size_debt@))]
     #[invariant(remote_retention_model(segments@, len@, debt@)
         == remote_retention_model(segments@, 0, size_debt@))]
     #[variant(segments@.len() - len@)]

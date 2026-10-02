@@ -41,3 +41,5 @@ const fn remote(log_start_breached: bool, time_expired: bool, size: u64) -> Remo
 mod barrier_cut_expiry_is_exact_and_fails_closed_at_extremes;
 
 mod delete_target_rejects_offset_exhaustion;
+
+mod remote_charge;

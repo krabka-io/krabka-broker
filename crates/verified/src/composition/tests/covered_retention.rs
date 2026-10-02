@@ -163,3 +163,38 @@ fn maximum_offset_can_be_selected_but_has_no_representable_delete_target() {
         );
     }
 }
+
+#[test]
+fn funded_prefixes_use_whole_byte_cost_and_cannot_restart_after_expiry() {
+    for (sizes, expiry) in [
+        ([2, 3, 0], [false; 3]),
+        ([0, 0, 0], [false; 3]),
+        ([u64::MAX, 1, 0], [false; 3]),
+        ([u64::MAX, 1, 0], [true, true, false]),
+        ([u64::MAX, 0, 0], [true, false, false]),
+        ([0, u64::MAX, 1], [false, true, false]),
+    ] {
+        let local: Vec<_> = sizes
+            .iter()
+            .zip(expiry)
+            .enumerate()
+            .map(|(i, (&size, expired))| {
+                let start = i64::try_from(i).unwrap() * 3;
+                (start, start + 1, size, expired)
+            })
+            .collect();
+        for debt in [
+            None,
+            Some(0),
+            Some(4),
+            Some(5),
+            Some(u64::MAX - 1),
+            Some(u64::MAX),
+        ] {
+            for active in [0, 1, u64::MAX] {
+                check(&[(0, 100)], &local, debt, active);
+                check(&[(0, 1), (6, 100)], &local, debt, active);
+            }
+        }
+    }
+}

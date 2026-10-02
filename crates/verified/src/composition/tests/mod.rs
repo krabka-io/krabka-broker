@@ -89,3 +89,5 @@ mod time_range;
 mod stable_time_range;
 
 mod covered_retention;
+
+mod remote_breach;

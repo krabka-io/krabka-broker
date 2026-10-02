@@ -1,0 +1,614 @@
+(* #"/workspace/crates/verified/src/composition/remote_breach.rs" 64 0 72 56 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 17 4 22 65
+let%span strim_admission'0 = "/workspace/crates/verified/src/broker/trim_admission.rs" 101 4 107 6
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span strim = "/workspace/crates/verified/src/composition/trim.rs" 14 11 14 66
+let%span strim'0 = "/workspace/crates/verified/src/composition/trim.rs" 15 10 15 62
+let%span strim'1 = "/workspace/crates/verified/src/composition/trim.rs" 16 10 16 96
+let%span strim'2 = "/workspace/crates/verified/src/composition/trim.rs" 17 10 18 64
+let%span strim'3 = "/workspace/crates/verified/src/composition/trim.rs" 19 10 20 65
+let%span strim'4 = "/workspace/crates/verified/src/composition/trim.rs" 21 10 24 68
+let%span strim'5 = "/workspace/crates/verified/src/composition/trim.rs" 25 10 26 42
+let%span strim'6 = "/workspace/crates/verified/src/composition/trim.rs" 67 16 69 91
+let%span strim'7 = "/workspace/crates/verified/src/composition/trim.rs" 78 8 78 101
+let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 190 10 190 28
+let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 193 8 207 9
+let%span sdelete_target = "/workspace/crates/verified/src/retention/delete_target.rs" 19 10 23 1
+let%span sdelete_target'0 = "/workspace/crates/verified/src/retention/delete_target.rs" 24 10 24 36
+let%span sdelete_target'1 = "/workspace/crates/verified/src/retention/delete_target.rs" 25 10 25 43
+let%span sdelete_target'2 = "/workspace/crates/verified/src/retention/delete_target.rs" 26 10 29 64
+let%span sdelete_target'3 = "/workspace/crates/verified/src/retention/delete_target.rs" 30 10 33 73
+let%span sremote_breach = "/workspace/crates/verified/src/composition/remote_breach.rs" 73 25 73 60
+let%span sremote_breach'0 = "/workspace/crates/verified/src/composition/remote_breach.rs" 78 20 78 42
+let%span sremote_breach'1 = "/workspace/crates/verified/src/composition/remote_breach.rs" 78 20 78 56
+let%span sremote_breach'2 = "/workspace/crates/verified/src/composition/remote_breach.rs" 79 19 79 77
+let%span sremote_breach'3 = "/workspace/crates/verified/src/composition/remote_breach.rs" 81 8 81 73
+let%span sremote_breach'4 = "/workspace/crates/verified/src/composition/remote_breach.rs" 84 18 84 82
+let%span sremote_breach'5 = "/workspace/crates/verified/src/composition/remote_breach.rs" 90 48 90 58
+let%span sremote_breach'6 = "/workspace/crates/verified/src/composition/remote_breach.rs" 91 16 91 22
+let%span sremote_breach'7 = "/workspace/crates/verified/src/composition/remote_breach.rs" 97 14 97 34
+let%span sremote_breach'8 = "/workspace/crates/verified/src/composition/remote_breach.rs" 98 14 98 28
+let%span sremote_breach'9 = "/workspace/crates/verified/src/composition/remote_breach.rs" 93 16 96 9
+let%span sremote_breach'10 = "/workspace/crates/verified/src/composition/remote_breach.rs" 92 16 92 58
+let%span sremote_breach'11 = "/workspace/crates/verified/src/composition/remote_breach.rs" 100 68 100 79
+let%span sremote_breach'12 = "/workspace/crates/verified/src/composition/remote_breach.rs" 100 68 100 81
+let%span sremote_breach'13 = "/workspace/crates/verified/src/composition/remote_breach.rs" 102 18 102 29
+let%span sremote_breach'14 = "/workspace/crates/verified/src/composition/remote_breach.rs" 102 18 102 31
+let%span sremote_breach'15 = "/workspace/crates/verified/src/composition/remote_breach.rs" 101 26 101 31
+let%span sremote_breach'16 = "/workspace/crates/verified/src/composition/remote_breach.rs" 99 8 103 10
+let%span sremote_breach'17 = "/workspace/crates/verified/src/composition/remote_breach.rs" 104 13 104 14
+let%span sremote_breach'18 = "/workspace/crates/verified/src/composition/remote_breach.rs" 104 8 104 14
+let%span sremote_breach'19 = "/workspace/crates/verified/src/composition/remote_breach.rs" 106 57 106 62
+let%span sremote_breach'20 = "/workspace/crates/verified/src/composition/remote_breach.rs" 106 64 106 65
+let%span sremote_breach'21 = "/workspace/crates/verified/src/composition/remote_breach.rs" 106 16 106 66
+let%span sremote_breach'22 = "/workspace/crates/verified/src/composition/remote_breach.rs" 107 18 107 85
+let%span sremote_breach'23 = "/workspace/crates/verified/src/composition/remote_breach.rs" 108 18 108 99
+let%span sremote_breach'24 = "/workspace/crates/verified/src/composition/remote_breach.rs" 25 11 25 94
+let%span sremote_breach'25 = "/workspace/crates/verified/src/composition/remote_breach.rs" 26 11 26 94
+let%span sremote_breach'26 = "/workspace/crates/verified/src/composition/remote_breach.rs" 27 11 27 124
+let%span sremote_breach'27 = "/workspace/crates/verified/src/composition/remote_breach.rs" 28 11 28 116
+let%span sremote_breach'28 = "/workspace/crates/verified/src/composition/remote_breach.rs" 29 11 29 118
+let%span sremote_breach'29 = "/workspace/crates/verified/src/composition/remote_breach.rs" 30 10 63 1
+let%span sremote_bytes = "/workspace/crates/verified/src/retention/remote_bytes.rs" 11 10 11 15
+let%span sremote_bytes'0 = "/workspace/crates/verified/src/retention/remote_bytes.rs" 14 8 17 9
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use int.MinMax
+use seq.Seq
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type t_DeleteRecordsTrimFacts = {
+  requested: Int64.t;
+  high_watermark: Int64.t;
+  log_end: Int64.t;
+  current_start: Int64.t;
+  has_delivery_watermark: bool;
+  delivery_watermark: Int64.t }
+
+type t_DeleteRecordsTrimDecision = RejectMalformed | RejectOutOfRange | Noop Int64.t | Apply Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let delete_records_trim_decision (facts: t_DeleteRecordsTrimFacts) (return (x: t_DeleteRecordsTrimDecision)) = any
+  [ return (result: t_DeleteRecordsTrimDecision) ->
+  {[@stop_split] [@expl:delete_records_trim_decision ensures] [%#strim_admission] let malformed = Int64.to_int facts.requested
+      < - 1
+    \/ Int64.to_int facts.current_start < 0
+    \/ Int64.to_int facts.high_watermark < Int64.to_int facts.current_start
+    \/ Int64.to_int facts.log_end < Int64.to_int facts.high_watermark
+    \/ facts.has_delivery_watermark
+    /\ Int64.to_int facts.delivery_watermark < Int64.to_int facts.current_start in let out_of_range = not malformed
+    /\ Int64.to_int facts.requested <> - 1
+    /\ gt_log_Int (Int64.to_int facts.requested) (Int64.to_int facts.high_watermark) in let resolved = if Int64.to_int facts.requested
+    = - 1 then
+      Int64.to_int facts.high_watermark
+    else
+      Int64.to_int facts.requested
+     in let bounded = if facts.has_delivery_watermark /\ Int64.to_int facts.delivery_watermark < resolved then
+      Int64.to_int facts.delivery_watermark
+    else
+      resolved
+     in match result with
+      | RejectMalformed -> malformed
+      | RejectOutOfRange -> out_of_range
+      | Noop frontier -> not malformed
+      /\ not out_of_range
+      /\ bounded <= Int64.to_int facts.current_start /\ Int64.to_int frontier = Int64.to_int facts.current_start
+      | Apply frontier -> not malformed
+      /\ not out_of_range
+      /\ gt_log_Int bounded (Int64.to_int facts.current_start)
+      /\ Int64.to_int frontier = bounded
+      /\ Int64.to_int frontier <= Int64.to_int facts.high_watermark
+      /\ Int64.to_int frontier <= Int64.to_int facts.log_end
+      /\ (not facts.has_delivery_watermark \/ Int64.to_int frontier <= Int64.to_int facts.delivery_watermark)
+      end}
+    (! return {result}) ]
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_Vec_RemoteRetentionSegment_Global
+
+type tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize = {
+  f0'0: Int64.t;
+  f1'0: tup2_i64_i64;
+  f2'0: t_Option_i64;
+  f3'0: t_Vec_RemoteRetentionSegment_Global;
+  f4'0: UInt64.t }
+
+type t_Result_tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize_DeleteRecordsTrimDecision =
+  | Ok tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize
+  | Err t_DeleteRecordsTrimDecision
+
+let elim_Apply (_x: t_DeleteRecordsTrimDecision) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {Apply frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim Apply] match _x with
+      | Apply _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let elim_Noop (_x: t_DeleteRecordsTrimDecision) (return (frontier: Int64.t)) = any
+  [ _k (frontier: Int64.t) -> {Noop frontier = _x} (! return {frontier})
+  | _chk -> (! {[@expl:elim Noop] match _x with
+      | Noop _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let max_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:max_i64 ensures] ([@stop_split] [@expl:max ensures #0] [%#scmp] ge_log_Int (deep_model_i64 result) (deep_model_i64 self_))
+    /\ ([@stop_split] [@expl:max ensures #1] [%#scmp'0] ge_log_Int (deep_model_i64 result) (deep_model_i64 o))
+    /\ ([@stop_split] [@expl:max ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:max ensures #3] [%#scmp'2] deep_model_i64 self_ <= deep_model_i64 o -> result = o)
+    /\ ([@stop_split] [@expl:max ensures #4] [%#scmp'3] deep_model_i64 o < deep_model_i64 self_ -> result = self_)}
+    (! return {result}) ]
+
+let trim_steps_converge (requested'0: Int64.t) (wal_start: Int64.t) (local_start: Int64.t) (applied: Slice64.slice bool)
+  (return (x: tup2_i64_i64)) =
+{[@stop_split] [@expl:trim_steps_converge requires] [%#strim] ge_log_Int (Int64.to_int requested'0) 0
+  /\ ge_log_Int (Int64.to_int wal_start) 0 /\ ge_log_Int (Int64.to_int local_start) 0}
+  any
+  [ return (result: tup2_i64_i64) ->
+  {[@stop_split] [@expl:trim_steps_converge ensures] ([@stop_split] [@expl:trim_steps_converge ensures #0] [%#strim'0] Int64.to_int wal_start
+        <= Int64.to_int result.f0
+      /\ Int64.to_int local_start <= Int64.to_int result.f1)
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #1] [%#strim'1] gt_log_Int (Int64.to_int result.f1) (Int64.to_int local_start)
+      -> Int64.to_int result.f0
+      = MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #2] [%#strim'2] Int64.to_int result.f0
+        <= MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start)
+      /\ Int64.to_int result.f1
+      <= MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #3] [%#strim'3] (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view applied) /\ Seq.get (Slice64.view applied) i)
+      -> Int64.to_int result.f0
+      = MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #4] [%#strim'4] (exists i: int, j: int. 0 <= i
+          /\ i < j
+          /\ j < Seq.length (Slice64.view applied)
+          /\ Seq.get (Slice64.view applied) i /\ Seq.get (Slice64.view applied) j)
+      -> result.f0 = result.f1
+      /\ Int64.to_int result.f1
+      = MinMax.max (MinMax.max (Int64.to_int requested'0) (Int64.to_int wal_start)) (Int64.to_int local_start))
+    /\ ([@stop_split] [@expl:trim_steps_converge ensures #5] [%#strim'5] (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view applied) -> not Seq.get (Slice64.view applied) i)
+    -> result = { f0 = wal_start; f1 = local_start })}
+    (! return {result}) ]
+
+type t_DeleteRecordsTrimApplication = RejectMalformed'0 | TrimWal'0 Int64.t | TrimLocal'0 Int64.t | Complete'0 Int64.t
+
+let delete_records_trim_application (requested'0: Int64.t) (wal_start: Int64.t) (local_start: Int64.t)
+  (return (x: t_DeleteRecordsTrimApplication)) = any
+  [ return (result: t_DeleteRecordsTrimApplication) ->
+  {[@stop_split] [@expl:delete_records_trim_application ensures] [%#strim_admission'0] let frontier = if gt_log_Int (Int64.to_int requested'0) (Int64.to_int wal_start) then
+      if gt_log_Int (Int64.to_int requested'0) (Int64.to_int local_start) then
+        Int64.to_int requested'0
+      else
+        Int64.to_int local_start
+
+    else
+      if gt_log_Int (Int64.to_int wal_start) (Int64.to_int local_start) then
+        Int64.to_int wal_start
+      else
+        Int64.to_int local_start
+
+     in match result with
+      | RejectMalformed'0 -> Int64.to_int requested'0 < 0 \/ Int64.to_int wal_start < 0 \/ Int64.to_int local_start < 0
+      | TrimWal'0 next -> ge_log_Int (Int64.to_int requested'0) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0 /\ Int64.to_int wal_start < frontier /\ Int64.to_int next = frontier
+      | TrimLocal'0 next -> ge_log_Int (Int64.to_int requested'0) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0
+      /\ Int64.to_int wal_start = frontier /\ Int64.to_int local_start < frontier /\ Int64.to_int next = frontier
+      | Complete'0 done' -> ge_log_Int (Int64.to_int requested'0) 0
+      /\ ge_log_Int (Int64.to_int wal_start) 0
+      /\ ge_log_Int (Int64.to_int local_start) 0
+      /\ Int64.to_int wal_start = frontier /\ Int64.to_int local_start = frontier /\ Int64.to_int done' = frontier
+      end}
+    (! return {result}) ]
+
+type t_RemoteRetentionSegment = { log_start_breached: bool; time_expired: bool; size: UInt64.t }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_RemoteRetentionSegment_Global (self: t_Vec_RemoteRetentionSegment_Global) : Seq.seq t_RemoteRetentionSegment
+
+axiom view_Vec_RemoteRetentionSegment_Global_spec:
+  forall self: t_Vec_RemoteRetentionSegment_Global [view_Vec_RemoteRetentionSegment_Global self]. [%#svec'0] Seq.length (view_Vec_RemoteRetentionSegment_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_RemoteRetentionSegment (return (x: t_Vec_RemoteRetentionSegment_Global)) = any
+  [ return (result: t_Vec_RemoteRetentionSegment_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_RemoteRetentionSegment_Global result) = 0}
+    (! return {result}) ]
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup3_i64_i64_u64 = { f0'1: Int64.t; f1'1: Int64.t; f2'1: UInt64.t }
+
+let len_tup3_i64_i64_u64 (self_: Slice64.slice tup3_i64_i64_u64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0'2: Int64.t)) = any
+  [ _k (f0'2: Int64.t) -> {Some f0'2 = _x} (! return {f0'2})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let push_RemoteRetentionSegment (self_: MutBorrow.t t_Vec_RemoteRetentionSegment_Global) (v: t_RemoteRetentionSegment)
+  (return (x: ())) = any
+  [ return (result: ()) ->
+  {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_RemoteRetentionSegment_Global self_.final
+    = Seq.snoc (view_Vec_RemoteRetentionSegment_Global self_.current) v}
+    (! return {result}) ]
+
+let deref_Vec_RemoteRetentionSegment_Global (self_: t_Vec_RemoteRetentionSegment_Global)
+  (return (x: Slice64.slice t_RemoteRetentionSegment)) = any
+  [ return (result: Slice64.slice t_RemoteRetentionSegment) ->
+  {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result = view_Vec_RemoteRetentionSegment_Global self_}
+    (! return {result}) ]
+
+function remote_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 191 0 191 94] (segments: Seq.seq t_RemoteRetentionSegment) (i: int) (debt: int) : int
+
+axiom remote_retention_model_def:
+  forall segments: Seq.seq t_RemoteRetentionSegment, i: int, debt: int [remote_retention_model segments i debt]. remote_retention_model segments i debt
+    = ([%#sremote_retention_model'0] if ge_log_Int i (Seq.length segments) then
+      i
+    else
+      if (Seq.get segments i).log_start_breached then
+        remote_retention_model segments (i + 1) debt
+      else
+        if (Seq.get segments i).time_expired then
+          remote_retention_model segments (i + 1) (if UInt64.t'int (Seq.get segments i).size <= debt then
+            debt - UInt64.t'int (Seq.get segments i).size
+          else
+            0
+          )
+        else
+          if gt_log_Int debt 0 /\ UInt64.t'int (Seq.get segments i).size <= debt then
+            remote_retention_model segments (i + 1) (debt - UInt64.t'int (Seq.get segments i).size)
+          else
+            i
+
+
+
+    )
+
+function remote_prefix_charge [#"/workspace/crates/verified/src/retention/remote_bytes.rs" 12 0 12 85] (segments: Seq.seq t_RemoteRetentionSegment) (count: int) : int
+
+axiom remote_prefix_charge_def:
+  forall segments: Seq.seq t_RemoteRetentionSegment, count: int [remote_prefix_charge segments count]. remote_prefix_charge segments count
+    = ([%#sremote_bytes'0] if count <= 0 then
+      0
+    else
+      remote_prefix_charge segments (count - 1)
+      + (if (Seq.get segments (count - 1)).log_start_breached then
+        0
+      else
+        UInt64.t'int (Seq.get segments (count - 1)).size
+      )
+    )
+
+let remote_retention_prefix (deletes_allowed: bool) (segments: Slice64.slice t_RemoteRetentionSegment)
+  (size_debt: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:remote_retention_prefix ensures] ([@stop_split] [@expl:remote_retention_prefix ensures #0] [%#sdelete_target] UInt64.t'int result
+      = (if deletes_allowed then remote_retention_model (Slice64.view segments) 0 (UInt64.t'int size_debt) else 0))
+    /\ ([@stop_split] [@expl:remote_retention_prefix ensures #1] [%#sdelete_target'0] UInt64.t'int result
+      <= Seq.length (Slice64.view segments))
+    /\ ([@stop_split] [@expl:remote_retention_prefix ensures #2] [%#sdelete_target'1] not deletes_allowed
+      -> UInt64.t'int result = 0)
+    /\ ([@stop_split] [@expl:remote_retention_prefix ensures #3] [%#sdelete_target'2] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result
+        -> (Seq.get (Slice64.view segments) i).log_start_breached
+        \/ (Seq.get (Slice64.view segments) i).time_expired
+        \/ gt_log_Int (UInt64.t'int size_debt) 0
+        /\ remote_prefix_charge (Slice64.view segments) i < UInt64.t'int size_debt
+        /\ remote_prefix_charge (Slice64.view segments) (i + 1) <= UInt64.t'int size_debt)
+    /\ ([@stop_split] [@expl:remote_retention_prefix ensures #4] [%#sdelete_target'3] deletes_allowed
+      /\ UInt64.t'int result < Seq.length (Slice64.view segments)
+    -> not (Seq.get (Slice64.view segments) (UInt64.t'int result)).log_start_breached
+    /\ not (Seq.get (Slice64.view segments) (UInt64.t'int result)).time_expired
+    /\ (UInt64.t'int size_debt = 0
+    \/ ge_log_Int (remote_prefix_charge (Slice64.view segments) (UInt64.t'int result)) (UInt64.t'int size_debt)
+    \/ gt_log_Int (remote_prefix_charge (Slice64.view segments) (UInt64.t'int result + 1)) (UInt64.t'int size_debt)))}
+    (! return {result}) ]
+
+predicate trim_well_formed [#"/workspace/crates/verified/src/composition/trim.rs" 66 0 66 62] (facts: t_DeleteRecordsTrimFacts) =
+  [%#strim'6] ge_log_Int (Int64.to_int facts.requested) (- 1)
+  /\ ge_log_Int (Int64.to_int facts.current_start) 0
+  /\ Int64.to_int facts.current_start <= Int64.to_int facts.high_watermark
+  /\ Int64.to_int facts.high_watermark <= Int64.to_int facts.log_end
+  /\ (not facts.has_delivery_watermark \/ Int64.to_int facts.current_start <= Int64.to_int facts.delivery_watermark)
+
+function trim_frontier [#"/workspace/crates/verified/src/composition/trim.rs" 76 0 76 58] (facts: t_DeleteRecordsTrimFacts) : int
+ = [%#strim'7] let resolved = if Int64.to_int facts.requested = - 1 then
+    Int64.to_int facts.high_watermark
+  else
+    Int64.to_int facts.requested
+   in let bounded = if facts.has_delivery_watermark then
+    MinMax.min resolved (Int64.to_int facts.delivery_watermark)
+  else
+    resolved
+   in MinMax.max bounded (Int64.to_int facts.current_start)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let published_trim_bounds_remote_breach_cleanup [#"/workspace/crates/verified/src/composition/remote_breach.rs" 64 0 72 56]
+  (facts: t_DeleteRecordsTrimFacts) (stores: tup2_i64_i64) (previous: t_Option_i64) (applied: Slice64.slice bool)
+  (published: bool) (deletes_allowed: bool) (finished: Slice64.slice tup3_i64_i64_u64)
+  (return (x: t_Result_tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize_DeleteRecordsTrimDecision)) =
+{[@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup requires] ([@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup requires #0] [%#sremote_breach'24] 0
+      <= Int64.to_int stores.f0
+    /\ Int64.to_int stores.f0 <= Int64.to_int facts.high_watermark
+    /\ Int64.to_int stores.f0 <= Int64.to_int facts.log_end)
+  /\ ([@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup requires #1] [%#sremote_breach'25] 0
+      <= Int64.to_int stores.f1
+    /\ Int64.to_int stores.f1 <= Int64.to_int facts.high_watermark
+    /\ Int64.to_int stores.f1 <= Int64.to_int facts.log_end)
+  /\ ([@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup requires #2] [%#sremote_breach'26] facts.has_delivery_watermark
+    -> Int64.to_int stores.f0 <= Int64.to_int facts.delivery_watermark
+    /\ Int64.to_int stores.f1 <= Int64.to_int facts.delivery_watermark)
+  /\ ([@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup requires #3] [%#sremote_breach'27] match previous with
+      | None -> true
+      | Some floor -> 0 <= Int64.to_int floor
+      /\ Int64.to_int floor <= Int64.to_int stores.f0 /\ Int64.to_int floor <= Int64.to_int stores.f1
+      end)
+  /\ ([@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup requires #4] [%#sremote_breach'28] forall i: int. 0
+        <= i
+      /\ i < Seq.length (Slice64.view finished)
+    -> 0 <= Int64.to_int (Seq.get (Slice64.view finished) i).f0'1
+    /\ Int64.to_int (Seq.get (Slice64.view finished) i).f0'1 <= Int64.to_int (Seq.get (Slice64.view finished) i).f1'1)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = delete_records_trim_decision [%#sremote_breach] {facts}
+        (fun (_x: t_DeleteRecordsTrimDecision) -> [ &_36 <- _x ] s1)
+    | s1 = any
+      [ br0 -> {_36 = RejectMalformed} (! bb2)
+      | br1 -> {_36 = RejectOutOfRange} (! bb2)
+      | br2 (x0: Int64.t) -> {_36 = Noop x0} (! bb5)
+      | br3 (x0: Int64.t) -> {_36 = Apply x0} (! bb6) ] ]
+  | bb2 = s0 [ s0 = [ &error <- _36 ] s1 | s1 = [ &_ret <- Err error ] s2 | s2 = return {_ret} ]
+  | bb6 = s0 [ s0 = elim_Apply {_36} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb7 ]
+  | bb5 = s0 [ s0 = elim_Noop {_36} (fun (rfrontier: Int64.t) -> [ &frontier <- rfrontier ] s1) | s1 = bb7 ]
+  | bb7 = s0
+    [ s0 = [ &accepted <- frontier ] s1
+    | s1 = max_i64 [%#sremote_breach'0] {accepted} {stores.f0} (fun (_x: Int64.t) -> [ &_44 <- _x ] s2)
+    | s2 = max_i64 [%#sremote_breach'1] {_44} {stores.f1} (fun (_x: Int64.t) -> [ &canonical <- _x ] s3)
+    | s3 = trim_steps_converge [%#sremote_breach'2] {accepted} {stores.f0} {stores.f1} {applied}
+        (fun (_x: tup2_i64_i64) -> [ &observed <- _x ] s4)
+    | s4 = delete_records_trim_application [%#sremote_breach'3] {accepted} {observed.f0} {observed.f1}
+        (fun (_x: t_DeleteRecordsTrimApplication) -> [ &_54 <- _x ] s5)
+    | s5 = any
+      [ br0 -> {_54 = RejectMalformed'0} (! bb12)
+      | br1 (x0: Int64.t) -> {_54 = TrimWal'0 x0} (! bb12)
+      | br2 (x0: Int64.t) -> {_54 = TrimLocal'0 x0} (! bb12)
+      | br3 (x0: Int64.t) -> {_54 = Complete'0 x0} (! bb14) ] ]
+  | bb12 = s0 [ s0 = [ &complete <- false ] s1 | s1 = bb15 ]
+  | bb14 = s0 [ s0 = [ &complete <- true ] s1 | s1 = bb15 ]
+  | bb15 = s0
+    [ s0 = {[@expl:assertion] [%#sremote_breach'4] complete = (observed.f0 = canonical /\ observed.f1 = canonical)} s1
+    | s1 = any [ br0 -> {published = false} (! bb18) | br1 -> {published} (! bb16) ] ]
+  | bb16 = any [ br0 -> {complete = false} (! bb18) | br1 -> {complete} (! bb17) ]
+  | bb17 = s0 [ s0 = [ &checkpoint <- Some canonical ] s1 | s1 = bb19 ]
+  | bb18 = s0 [ s0 = [ &checkpoint <- previous ] s1 | s1 = bb19 ]
+  | bb19 = s0
+    [ s0 = new_RemoteRetentionSegment [%#sremote_breach'5]
+        (fun (_x: t_Vec_RemoteRetentionSegment_Global) -> [ &rows <- _x ] s1)
+    | s1 = [ &i <- [%#sremote_breach'6] (0: UInt64.t) ] s2
+    | s2 = bb21 ]
+  | bb21 = bb21invariant
+    [ bb21 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb21 ([%#sremote_breach'7] Seq.length (Slice64.view finished)
+      - UInt64.t'int i)}
+      bb21invariant
+    | bb21invariant = {[@expl:loop invariant #0] [%#sremote_breach'10] UInt64.t'int i
+        <= Seq.length (Slice64.view finished)
+      /\ Seq.length (view_Vec_RemoteRetentionSegment_Global rows) = UInt64.t'int i}
+      {[@expl:loop invariant #1] [%#sremote_breach'9] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (Seq.get (view_Vec_RemoteRetentionSegment_Global rows) j).size = (Seq.get (Slice64.view finished) j).f2'1
+        /\ not (Seq.get (view_Vec_RemoteRetentionSegment_Global rows) j).time_expired
+        /\ (Seq.get (view_Vec_RemoteRetentionSegment_Global rows) j).log_start_breached
+        = match checkpoint with
+          | None -> false
+          | Some floor'1 -> Int64.to_int (Seq.get (Slice64.view finished) j).f1'1 < Int64.to_int floor'1
+          end}
+      (! [ &variant_old_bb21 <- [%#sremote_breach'7] Seq.length (Slice64.view finished) - UInt64.t'int i ] s0)
+      [ s0 = len_tup3_i64_i64_u64 [%#sremote_breach'8] {finished} (fun (_x: UInt64.t) -> [ &_88 <- _x ] s1)
+      | s1 = [ &_86 <- UInt64.lt i _88 ] s2
+      | s2 = any [ br0 -> {_86 = false} (! bb34) | br1 -> {_86} (! bb24) ] ]
+      [ bb24 = any [ br0 -> {checkpoint = None} (! bb25) | br1 (x0: Int64.t) -> {checkpoint = Some x0} (! bb27) ]
+      | bb27 = s0
+        [ s0 = elim_Some {checkpoint} (fun (r0: Int64.t) -> [ &floor'0 <- r0 ] s1)
+        | s1 = [ &_100 <- i ] s2
+        | s2 = [ &_101 <- Slice64.length finished ] s3
+        | s3 = [ &_102 <- UInt64.lt _100 _101 ] s4
+        | s4 = {[@expl:index in bounds] [%#sremote_breach'11] _102} s5
+        | s5 = Slice64.get [%#sremote_breach'12] <tup3_i64_i64_u64> {finished} {_100}
+            (fun (r: tup3_i64_i64_u64) -> [ &_99 <- r.f1'1 ] s6)
+        | s6 = [ &_98 <- Int64.lt _99 floor'0 ] s7
+        | s7 = any [ br0 -> {_98 = false} (! bb25) | br1 -> {_98} (! bb29) ] ]
+      | bb29 = s0
+        [ s0 = elim_Some {checkpoint} (fun (r0: Int64.t) -> [ &floor <- r0 ] s1)
+        | s1 = [ &_93 <- true ] s2
+        | s2 = bb31 ]
+      | bb25 = s0 [ s0 = [ &_93 <- false ] s1 | s1 = bb31 ]
+      | bb31 = s0
+        [ s0 = [ &_105 <- i ] s1
+        | s1 = [ &_106 <- Slice64.length finished ] s2
+        | s2 = [ &_107 <- UInt64.lt _105 _106 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_breach'13] _107} s4
+        | s4 = Slice64.get [%#sremote_breach'14] <tup3_i64_i64_u64> {finished} {_105}
+            (fun (r: tup3_i64_i64_u64) -> [ &_104 <- r.f2'1 ] s5)
+        | s5 = [ &_92 <- { log_start_breached = _93; time_expired = ([%#sremote_breach'15] false); size = _104 } ] s6
+        | s6 = MutBorrow.borrow_mut <t_Vec_RemoteRetentionSegment_Global> {rows}
+            (fun (_bor: MutBorrow.t t_Vec_RemoteRetentionSegment_Global) -> [ &_91 <- _bor ] [ &rows <- _bor.final ] s7)
+        | s7 = push_RemoteRetentionSegment [%#sremote_breach'16] {_91} {_92} (fun (_x: ()) -> [ &_90 <- _x ] s8)
+        | s8 = UInt64.add [%#sremote_breach'18] {i} {[%#sremote_breach'17] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s9)
+        | s9 = bb21 ] ] ]
+  | bb34 = s0
+    [ s0 = [ &_114 <- rows ] s1
+    | s1 = deref_Vec_RemoteRetentionSegment_Global [%#sremote_breach'19] {_114}
+        (fun (_x: Slice64.slice t_RemoteRetentionSegment) -> [ &_112 <- _x ] s2)
+    | s2 = remote_retention_prefix [%#sremote_breach'21] {deletes_allowed} {_112} {[%#sremote_breach'20] (0: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &count <- _x ] s3)
+    | s3 = {[@expl:assertion] [%#sremote_breach'22] forall j: int. 0 <= j /\ j < UInt64.t'int count
+        -> (Seq.get (view_Vec_RemoteRetentionSegment_Global rows) j).log_start_breached}
+      s4
+    | s4 = {[@expl:assertion] [%#sremote_breach'23] deletes_allowed
+        /\ UInt64.t'int count < Seq.length (Slice64.view finished)
+      -> not (Seq.get (view_Vec_RemoteRetentionSegment_Global rows) (UInt64.t'int count)).log_start_breached}
+      s5
+    | s5 = [ &_125 <- { f0'0 = canonical; f1'0 = observed; f2'0 = checkpoint; f3'0 = rows; f4'0 = count } ] s6
+    | s6 = [ &_ret <- Ok _125 ] s7
+    | s7 = return {_ret} ] ]
+  [ & _ret: t_Result_tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize_DeleteRecordsTrimDecision = Any.any_l ()
+  | & facts: t_DeleteRecordsTrimFacts = facts
+  | & stores: tup2_i64_i64 = stores
+  | & previous: t_Option_i64 = previous
+  | & applied: Slice64.slice bool = applied
+  | & published: bool = published
+  | & deletes_allowed: bool = deletes_allowed
+  | & finished: Slice64.slice tup3_i64_i64_u64 = finished
+  | & accepted: Int64.t = Any.any_l ()
+  | & _36: t_DeleteRecordsTrimDecision = Any.any_l ()
+  | & frontier: Int64.t = Any.any_l ()
+  | & error: t_DeleteRecordsTrimDecision = Any.any_l ()
+  | & canonical: Int64.t = Any.any_l ()
+  | & _44: Int64.t = Any.any_l ()
+  | & observed: tup2_i64_i64 = Any.any_l ()
+  | & complete: bool = Any.any_l ()
+  | & _54: t_DeleteRecordsTrimApplication = Any.any_l ()
+  | & checkpoint: t_Option_i64 = Any.any_l ()
+  | & rows: t_Vec_RemoteRetentionSegment_Global = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _86: bool = Any.any_l ()
+  | & _88: UInt64.t = Any.any_l ()
+  | & _90: () = Any.any_l ()
+  | & _91: MutBorrow.t t_Vec_RemoteRetentionSegment_Global = Any.any_l ()
+  | & _92: t_RemoteRetentionSegment = Any.any_l ()
+  | & _93: bool = Any.any_l ()
+  | & floor: Int64.t = Any.any_l ()
+  | & floor'0: Int64.t = Any.any_l ()
+  | & _98: bool = Any.any_l ()
+  | & _99: Int64.t = Any.any_l ()
+  | & _100: UInt64.t = Any.any_l ()
+  | & _101: UInt64.t = Any.any_l ()
+  | & _102: bool = Any.any_l ()
+  | & _104: UInt64.t = Any.any_l ()
+  | & _105: UInt64.t = Any.any_l ()
+  | & _106: UInt64.t = Any.any_l ()
+  | & _107: bool = Any.any_l ()
+  | & count: UInt64.t = Any.any_l ()
+  | & _112: Slice64.slice t_RemoteRetentionSegment = Any.any_l ()
+  | & _114: t_Vec_RemoteRetentionSegment_Global = Any.any_l ()
+  | & _125: tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize = Any.any_l ()
+  | & variant_old_bb21: int = Any.any_l () ])
+  [ return
+    (result: t_Result_tup5_i64_tup2_i64_i64_Option_i64_Vec_RemoteRetentionSegment_Global_usize_DeleteRecordsTrimDecision) ->
+  {[@stop_split] [@expl:published_trim_bounds_remote_breach_cleanup ensures] [%#sremote_breach'29] match result with
+      | Err error -> match error with
+        | RejectMalformed -> not trim_well_formed facts
+        | RejectOutOfRange -> trim_well_formed facts
+        /\ Int64.to_int facts.requested <> - 1
+        /\ gt_log_Int (Int64.to_int facts.requested) (Int64.to_int facts.high_watermark)
+        | _ -> false
+        end
+      | Ok plan -> let canonical = MinMax.max (MinMax.max (trim_frontier facts) (Int64.to_int stores.f0)) (Int64.to_int stores.f1) in trim_well_formed facts
+      /\ (Int64.to_int facts.requested = - 1 \/ Int64.to_int facts.requested <= Int64.to_int facts.high_watermark)
+      /\ Int64.to_int plan.f0'0 = canonical
+      /\ 0 <= canonical
+      /\ canonical <= Int64.to_int facts.high_watermark
+      /\ canonical <= Int64.to_int facts.log_end
+      /\ (not facts.has_delivery_watermark \/ canonical <= Int64.to_int facts.delivery_watermark)
+      /\ Int64.to_int stores.f0 <= Int64.to_int plan.f1'0.f0
+      /\ Int64.to_int plan.f1'0.f0 <= canonical
+      /\ Int64.to_int stores.f1 <= Int64.to_int plan.f1'0.f1
+      /\ Int64.to_int plan.f1'0.f1 <= canonical
+      /\ (gt_log_Int (Int64.to_int plan.f1'0.f1) (Int64.to_int stores.f1) -> Int64.to_int plan.f1'0.f0 = canonical)
+      /\ ((forall i: int. 0 <= i /\ i < Seq.length (Slice64.view applied) -> not Seq.get (Slice64.view applied) i)
+        -> plan.f1'0 = stores)
+      /\ ((exists i: int, j: int. 0 <= i
+            /\ i < j
+            /\ j < Seq.length (Slice64.view applied)
+            /\ Seq.get (Slice64.view applied) i /\ Seq.get (Slice64.view applied) j)
+        -> Int64.to_int plan.f1'0.f0 = canonical /\ Int64.to_int plan.f1'0.f1 = canonical)
+      /\ plan.f2'0
+        = (if published /\ Int64.to_int plan.f1'0.f0 = canonical /\ Int64.to_int plan.f1'0.f1 = canonical then
+          Some (plan.f0'0)
+        else
+          previous
+        )
+      /\ (forall old': Int64.t. previous = Some old'
+          -> (exists next: Int64.t. plan.f2'0 = Some next /\ Int64.to_int old' <= Int64.to_int next))
+      /\ Seq.length (view_Vec_RemoteRetentionSegment_Global plan.f3'0) = Seq.length (Slice64.view finished)
+      /\ UInt64.t'int plan.f4'0 <= Seq.length (Slice64.view finished)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view finished)
+          -> (Seq.get (view_Vec_RemoteRetentionSegment_Global plan.f3'0) i).size
+            = (Seq.get (Slice64.view finished) i).f2'1
+          /\ not (Seq.get (view_Vec_RemoteRetentionSegment_Global plan.f3'0) i).time_expired
+          /\ (Seq.get (view_Vec_RemoteRetentionSegment_Global plan.f3'0) i).log_start_breached
+          = match plan.f2'0 with
+            | None -> false
+            | Some floor -> Int64.to_int (Seq.get (Slice64.view finished) i).f1'1 < Int64.to_int floor
+            end)
+      /\ (not deletes_allowed -> UInt64.t'int plan.f4'0 = 0)
+      /\ match plan.f2'0 with
+        | None -> UInt64.t'int plan.f4'0 = 0
+        | Some floor -> 0 <= Int64.to_int floor
+        /\ Int64.to_int floor <= canonical
+        /\ (forall i: int. 0 <= i /\ i < UInt64.t'int plan.f4'0
+            -> Int64.to_int (Seq.get (Slice64.view finished) i).f1'1 < Int64.to_int floor)
+        /\ (deletes_allowed /\ UInt64.t'int plan.f4'0 < Seq.length (Slice64.view finished)
+          -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view finished) (UInt64.t'int plan.f4'0)).f1'1) (Int64.to_int floor))
+        /\ (forall n: int. deletes_allowed
+            /\ 0 <= n
+            /\ n <= Seq.length (Slice64.view finished)
+            /\ (forall i: int. 0 <= i /\ i < n
+              -> Int64.to_int (Seq.get (Slice64.view finished) i).f1'1 < Int64.to_int floor)
+          -> n <= UInt64.t'int plan.f4'0)
+        end
+      end}
+    (! return {result}) ]
