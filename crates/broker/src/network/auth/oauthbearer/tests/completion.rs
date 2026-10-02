@@ -36,7 +36,7 @@ async fn oauth_completion_uses_the_current_clock_for_lifetime_and_expiry() {
     let expiry = 2_000_000;
     let request = oauthbearer_client_response("opaque-token");
     for reauth in [false, true] {
-        for completed in [started + 500, expiry, started - 1] {
+        for completed in [started + 500, expiry, expiry + 500, started - 1] {
             let clock = Arc::new(AtomicI64::new(started));
             let client = Arc::new(CompletingIntrospection {
                 clock: Arc::clone(&clock),
@@ -92,6 +92,43 @@ async fn oauth_completion_uses_the_current_clock_for_lifetime_and_expiry() {
                     !auth.is_authenticated(),
                     "reauth={reauth} completed={completed}"
                 );
+                assert_success_authenticate_response(
+                    &response,
+                    br#"{"status":"invalid_token"}"#,
+                    0,
+                );
+                assert!(matches!(
+                    auth,
+                    ConnectionAuth::Negotiating {
+                        exchange: SaslExchange::OAuthBearerFailed,
+                        ..
+                    } | ConnectionAuth::Reauthenticating {
+                        exchange: SaslExchange::OAuthBearerFailed,
+                        ..
+                    }
+                ));
+                let reply = SaslAuthenticateRequest {
+                    auth_bytes: bytes::Bytes::from_static(b"\x01"),
+                    ..Default::default()
+                };
+                let failure = handle_authenticate_oauthbearer(
+                    &reply,
+                    &mut auth,
+                    &validator,
+                    || clock.load(Ordering::Acquire),
+                    None,
+                )
+                .await;
+                assert_failed_authenticate_response(
+                    &failure,
+                    Some(r#"{"status":"invalid_token"}"#),
+                );
+                if reauth {
+                    assert!(matches!(auth, ConnectionAuth::Authenticated {
+                        expires_at_ms: Some(at), authenticated_via_token: false, ..
+                    } if at == expiry));
+                    assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
+                }
             } else {
                 assert_success_authenticate_response(&response, b"", expiry - completed);
                 assert!(

@@ -349,6 +349,14 @@ async fn validate_bearer(
     if !krabka_verified::oauth::oauth_validation_admission(now_ms, completed_ms, completed_cache) {
         return Err("validation snapshot is stale or clock moved backwards");
     }
+    // Expiry during validation is a rejected token, so both authentication
+    // arms must send the RFC 7628 challenge before the client's final reply.
+    if outcome
+        .expires_at_ms
+        .is_some_and(|expiry| expiry <= completed_ms)
+    {
+        return Err("OAuth credential expired during validation");
+    }
     if let Some(authzid) = parsed.authzid
         && authzid != outcome.principal.name
     {
