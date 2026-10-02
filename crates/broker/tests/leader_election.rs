@@ -387,7 +387,15 @@ async fn isr_expand_on_catchup() {
     // rather than passing the already-bound IP address back to the joiner.
     reborn_cfg.bootstrap_servers = vec![format!("localhost:{}", bootstrap_controller.port())];
     reborn_cfg.auto_join = true;
+    let occupied = tokio::net::TcpListener::bind(reborn_cfg.listen_addr)
+        .await
+        .expect("occupy the vacated port");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        drop(occupied);
+    });
     let reborn = support::start_reusing_addrs(&reborn_cfg, "reborn follower").await;
+    release.await.expect("release the occupied port");
     eprintln!("KRABKA[test] reborn follower {victim_node_id} started");
 
     // 5. Wait for the partition's ISR to expand back to {1, 2, 3}.
