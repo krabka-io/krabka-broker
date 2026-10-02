@@ -1,0 +1,26 @@
+(* #"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 97 0 97 54 *)
+
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 94 11 94 44
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 95 10 96 57
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
+
+use creusot.int.UInt64
+use seq.Seq
+use int.Int
+
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+  [%#sspec'1] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant nodes : Seq.seq UInt64.t
+
+constant count : int
+
+function prefix_node_extend [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 97 0 97 54] (nodes: Seq.seq UInt64.t) (count: int) : ()
+
+goal vc_prefix_node_extend: ([%#sspec] 0 <= count /\ count < Seq.length nodes)
+  -> ([@stop_split] [@expl:prefix_node_extend ensures] [%#sspec'0] forall id: UInt64.t. has_node nodes (count + 1) id
+    = (has_node nodes count id \/ Seq.get nodes count = id))

@@ -238,3 +238,6 @@ use schema_walk::{SchemaWalkField, framed_schema_walk_admission};
 
 mod schema_produce;
 use schema_produce::schema_checked_produce_frontier;
+
+mod reconfiguration;
+use reconfiguration::{constructed_voter_reconfiguration, reconfigured_majorities_overlap};

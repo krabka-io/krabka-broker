@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_adjacent_majorities_exceed_union": {
+        "prover": "alt-ergo",
+        "time": 0.022
+      }
+    }
+  }
+}

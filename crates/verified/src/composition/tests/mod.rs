@@ -97,3 +97,5 @@ mod remote_delete;
 mod schema_walk;
 
 mod schema_produce;
+
+mod reconfiguration;

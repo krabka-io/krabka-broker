@@ -1590,3 +1590,83 @@ This work remains local on `codex/proof-schema-walk`, above PR #1267. The parent
 passes at `a0600a966fefa23f6520e7b3c822c6449fea3d91` after retrying an image-mirror
 blob failure before tests; all its checks are green. That published 551-file
 layer does not qualify this new 553-file layer.
+
+## Actual voter membership and adjacent quorum overlap
+
+The reconfiguration kernel proves an exact next voter count and control-record
+shape, but scalar counts do not identify the voters. Similarly,
+`election_has_quorum` assumes its grant count came from unique current voters.
+Neither fact alone proves that the old and next quorums share an actual node.
+The controller builds its committed membership from `VoterSet`'s `BTreeMap`
+and constructs one next set with `with_voter` or `without_voter`; it rejects
+any count disagreement before appending control records.
+
+[`constructed_voter_reconfiguration`](../crates/verified/src/composition/reconfiguration/membership.rs)
+consumes the existing unique-ID validator and reconfiguration policy, then
+constructs actual logical node IDs. It rejects empty/duplicate memberships
+and an incoherent target-presence projection. An admitted add introduces only
+the fresh target, a removal removes exactly that target, and update/finalization
+preserves membership. The constructed set is nonempty and unique, its length
+matches the proved plan, and the count changes by at most one. Admission is
+an equivalence, so rejecting every request cannot satisfy the contract.
+The first old ID anchors the reused validator; that reuse asserts neither
+leadership nor installation of a WAL voter set.
+
+[`reconfigured_majorities_overlap`](../crates/verified/src/composition/reconfiguration/quorum.rs)
+consumes that actual membership. It derives two grant ledgers from one slot per
+old ID plus a candidate slot, ignoring an already-present candidate and excluding
+the removed ID from the next quorum. The returned counts equal the mathematical
+ledger over actual membership. Each quorum uses its own actual set size. If both
+majorities exist, the result names an actual shared voter with both grants;
+absence of that witness is equivalent to absence of any shared grant. The proved
+arithmetic lemma shows that the two majority thresholds exceed the size of the
+union for a single change. It cannot establish that fact for arbitrary changes.
+
+The independent native oracle uses `BTreeSet` membership and grant intersections,
+not supplied counts or the proof's recursive ledger. It enumerates every pair of
+ballot masks for one through five voters, including odd/even add and removal,
+version-0 update preflight and finalization. Properties also cover duplicates,
+empty/unsorted sets, wrong target projections and admission flags. A concrete
+two-addition counterexample has old voters `{0,1,2}`, next voters `{0,1,2,3,4}`,
+and disjoint majorities `{0,1}` and `{2,3,4}`. Sequential adjacent overlap does
+not justify overlapping uncommitted changes or arbitrary history safety.
+
+These are logical NodeID claims. Captured IDs/counts, grants, directory matching,
+catch-up observations and epoch facts must be truthful. Unknown-directory
+binding does not prove physical storage continuity. Control-record commitment,
+durable replication, transport authentication and the complete Raft protocol
+remain host obligations. The compositions mirror the production set operations;
+they do not verify the external `BTreeMap` implementation or asynchronous adapter.
+
+Four scoped negative controls check the composition boundary. Hiding the
+constructor's exported membership guarantees leaves its proof and all 342 native
+tests passing, while the quorum consumer fails. Weakening both majority-size
+and quorum-gate contracts together with their bodies leaves both primitive
+proofs passing, but breaks the consumer and behavioral tests. Unconditional
+rejection fails the admission equivalence and tests; naming the change target
+instead of the actual common voter fails the witness proof and set oracle.
+All controls used cache-free proof search at depth two, where the positive five
+sessions also pass. A broader search without constructor exports timed out;
+that timeout is not counted as a proof rejection. Temporary source edits were
+restored byte-for-byte and failing-control seeds kept outside the repository.
+
+Pinned-image generation and cache-free canonical replay both prove all 558
+sessions. All 342 verified-crate tests, all 380 Raft tests, the three focused
+Bazel targets, workspace all-target Clippy with warnings denied, repository
+formatting and proof/mutation configuration checks pass. Five new proof
+sessions are retained, and all 1,106 parent artifact files are unchanged.
+Every verified Rust source remains below 300 lines (largest: 288), with 47
+composition topic files. This batch is local on `codex/proof-quorum-membership`,
+above published PR #1268; it has no remote qualification yet. The parent's
+[full CI](https://github.com/krabka-io/krabka-broker/actions/runs/36823054825)
+and benchmark workflows pass at `bbd81b8fe5b9493e2f25f2d87e8c55dab5f354af`.
+Those remote results qualify the parent's 553-session layer, not this local
+558-session layer.
+
+The membership constructor and overlap consumer also carry the admitted plan's
+exact version and control-record flags, and the single-flight leadership facts.
+Their bodies already obtained those guarantees from the production admission
+kernel, but previously stopped exporting them. The stronger interface is proved
+across all five reconfiguration sessions; all 342 native tests and workspace
+all-target Clippy still pass. This enables a consumer to derive zero, one or two
+actual control-record deltas from that same plan instead of trusting a count.

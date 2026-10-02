@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_prefix_node_extend": { "prover": "alt-ergo", "time": 0.009 }
+    }
+  }
+}
