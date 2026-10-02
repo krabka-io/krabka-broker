@@ -1,0 +1,314 @@
+(* #"/workspace/crates/verified/src/composition/jwks_publication.rs" 91 0 97 39 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span scompletion = "/workspace/crates/verified/src/oauth/completion.rs" 8 10 16 2
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 33 10 42 1
+let%span soauth = "/workspace/crates/verified/src/oauth.rs" 104 10 112 1
+let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 76 8 81 67
+let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 93 8 93 72
+let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 98 38 98 89
+let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 99 59 99 99
+let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 104 16 104 43
+let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 111 8 111 78
+let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 115 5 115 35
+let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 72 11 72 97
+let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 73 11 73 97
+let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 74 11 75 95
+let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 76 11 77 105
+let%span sjwks_publication'8 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 78 10 78 112
+let%span sjwks_publication'9 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 79 10 81 100
+let%span sjwks_publication'10 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 82 10 90 1
+let%span sjwks_publication'11 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 36 11 36 28
+let%span sjwks_publication'12 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 37 10 37 69
+let%span sjwks_publication'13 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 38 10 38 67
+let%span sjwks_publication'14 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 39 10 39 97
+let%span sjwks_publication'15 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 40 10 41 68
+let%span sjwks_publication'16 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
+let%span sjwks_publication'17 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
+let%span sjwks_publication'18 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
+let%span sjwks_publication'19 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
+let%span sjwks_publication'20 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 25 8 27 9
+let%span spublication = "/workspace/crates/verified/src/jwks/publication.rs" 7 10 7 83
+let%span spublication'0 = "/workspace/crates/verified/src/jwks/publication.rs" 8 10 13 1
+
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.int.Int64
+use int.ComputerDivision
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type t_JwksCacheFacts = {
+  generation_before: UInt64.t;
+  generation_after: UInt64.t;
+  last_successful_fetch_ms: Int64.t;
+  now_ms: Int64.t;
+  expiry_enabled: bool;
+  expiry_ms: Int64.t }
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+function successful_fetches [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 23 0 23 61] (fetches: Seq.seq bool) (prefix: int) : int
+
+axiom successful_fetches_def:
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'17] 0 <= prefix
+      /\ prefix <= Seq.length fetches)
+    -> successful_fetches fetches prefix
+    = ([%#sjwks_publication'20] if prefix = 0 then
+      0
+    else
+      successful_fetches fetches (prefix - 1) + (if Seq.get fetches (prefix - 1) then 1 else 0)
+    )
+
+axiom successful_fetches_spec:
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'17] 0 <= prefix
+      /\ prefix <= Seq.length fetches)
+    -> ([%#sjwks_publication'18] 0 <= successful_fetches fetches prefix /\ successful_fetches fetches prefix <= prefix)
+
+axiom successful_fetches_spec'0:
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'17] 0 <= prefix
+      /\ prefix <= Seq.length fetches)
+    -> ([%#sjwks_publication'19] (successful_fetches fetches prefix = 0)
+    = (forall i: int. 0 <= i /\ i < prefix -> not Seq.get fetches i))
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+let publication_trace (initial: UInt64.t) (fetches: Slice64.slice bool) (return (x: tup2_u64_u64)) =
+{[@stop_split] [@expl:publication_trace requires] [%#sjwks_publication'11] ComputerDivision.mod (UInt64.t'int initial) 2
+  = 0}
+  any
+  [ return (result: tup2_u64_u64) ->
+  {[@stop_split] [@expl:publication_trace ensures] ([@stop_split] [@expl:publication_trace ensures #0] [%#sjwks_publication'12] ComputerDivision.mod (UInt64.t'int result.f0) 2
+        = 0
+      /\ UInt64.t'int result.f0 = UInt64.t'int initial + 2 * UInt64.t'int result.f1)
+    /\ ([@stop_split] [@expl:publication_trace ensures #1] [%#sjwks_publication'13] UInt64.t'int result.f1
+      <= successful_fetches (Slice64.view fetches) (Seq.length (Slice64.view fetches)))
+    /\ ([@stop_split] [@expl:publication_trace ensures #2] [%#sjwks_publication'14] UInt64.t'int result.f1
+        = successful_fetches (Slice64.view fetches) (Seq.length (Slice64.view fetches))
+      \/ UInt64.t'int result.f0 = UInt64.t'int const_MAX - 1)
+    /\ ([@stop_split] [@expl:publication_trace ensures #3] [%#sjwks_publication'15] (UInt64.t'int result.f1 = 0)
+    = (UInt64.t'int initial = UInt64.t'int const_MAX - 1
+    \/ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view fetches) -> not Seq.get (Slice64.view fetches) i)))}
+    (! return {result}) ]
+
+type t_Option_tup2_u64_u64 = None | Some tup2_u64_u64
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let jwks_publication_generations (generation: UInt64.t) (return (x: t_Option_tup2_u64_u64)) = any
+  [ return (result: t_Option_tup2_u64_u64) ->
+  {[@stop_split] [@expl:jwks_publication_generations ensures] ([@stop_split] [@expl:jwks_publication_generations ensures #0] [%#spublication] (result
+        = None)
+      = (ComputerDivision.mod (UInt64.t'int generation) 2 <> 0
+      \/ gt_log_Int (UInt64.t'int generation) (UInt64.t'int const_MAX - 2)))
+    /\ ([@stop_split] [@expl:jwks_publication_generations ensures #1] [%#spublication'0] match result with
+      | None -> true
+      | Some {f0 = writing; f1 = committed} -> UInt64.t'int writing = UInt64.t'int generation + 1
+      /\ UInt64.t'int committed = UInt64.t'int generation + 2
+      /\ ComputerDivision.mod (UInt64.t'int generation) 2 = 0
+      /\ ComputerDivision.mod (UInt64.t'int writing) 2 = 1 /\ ComputerDivision.mod (UInt64.t'int committed) 2 = 0
+      end)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_tup2_u64_u64) (return (f0'0: tup2_u64_u64)) = any
+  [ _k (f0'0: tup2_u64_u64) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_JwksCacheDecision = Reject | Admit
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let jwks_cache_admission (facts: t_JwksCacheFacts) (return (x: t_JwksCacheDecision)) = any
+  [ return (result: t_JwksCacheDecision) -> {[@stop_split] [@expl:jwks_cache_admission ensures] [%#sjwks] (result
+      = Admit)
+    = (ComputerDivision.mod (UInt64.t'int facts.generation_before) 2 = 0
+    /\ UInt64.t'int facts.generation_before = UInt64.t'int facts.generation_after
+    /\ (not facts.expiry_enabled
+    \/ ge_log_Int (Int64.to_int facts.expiry_ms) 0
+    /\ gt_log_Int (Int64.to_int facts.last_successful_fetch_ms) 0
+    /\ ge_log_Int (Int64.to_int facts.now_ms) (Int64.to_int facts.last_successful_fetch_ms)
+    /\ Int64.to_int facts.now_ms - Int64.to_int facts.last_successful_fetch_ms <= Int64.to_int facts.expiry_ms))}
+    (! return {result}) ]
+
+type t_OAuthSessionDecision = Reject'0 | Admit'0 Int64.t Int64.t
+
+type tup2_OAuthSessionDecision_tup2_u64_u64 = { f0'0: t_OAuthSessionDecision; f1'0: tup2_u64_u64 }
+
+type t_Option_JwksCacheFacts = None'0 | Some'0 t_JwksCacheFacts
+
+type t_OAuthExpiryPresence = Missing | Present
+
+type t_OAuthSessionCap = Disabled | Enabled
+
+type t_OAuthAuthenticationKind = Initial | Reauthentication
+
+type t_OAuthPrincipalMatch = Matches | Differs
+
+type t_OAuthSessionFacts = {
+  expiry'0: t_OAuthExpiryPresence;
+  token_expires_at_ms'0: Int64.t;
+  now_ms'0: Int64.t;
+  cap'0: t_OAuthSessionCap;
+  cap_ms'0: Int64.t;
+  authentication'0: t_OAuthAuthenticationKind;
+  principal'0: t_OAuthPrincipalMatch }
+
+let oauth_validation_admission (started_ms: Int64.t) (completed_ms: Int64.t) (cache: t_Option_JwksCacheFacts)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:oauth_validation_admission ensures] [%#scompletion] result
+    = (ge_log_Int (Int64.to_int started_ms) 0
+    /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int started_ms)
+    /\ match cache with
+      | None'0 -> true
+      | Some'0 facts -> ComputerDivision.mod (UInt64.t'int facts.generation_before) 2 = 0
+      /\ UInt64.t'int facts.generation_before = UInt64.t'int facts.generation_after
+      /\ (not facts.expiry_enabled
+      \/ ge_log_Int (Int64.to_int facts.expiry_ms) 0
+      /\ gt_log_Int (Int64.to_int facts.last_successful_fetch_ms) 0
+      /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int facts.last_successful_fetch_ms)
+      /\ Int64.to_int completed_ms - Int64.to_int facts.last_successful_fetch_ms <= Int64.to_int facts.expiry_ms)
+      end)}
+    (! return {result}) ]
+
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
+
+predicate oauth_session_admissible [#"/workspace/crates/verified/src/oauth.rs" 74 0 74 65] (facts: t_OAuthSessionFacts) =
+  [%#soauth'0] facts.expiry'0 = Present
+  /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) (Int64.to_int facts.now_ms'0)
+  /\ Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int facts.now_ms'0 <= Int64.to_int const_MAX'0
+  /\ (facts.cap'0 = Disabled \/ gt_log_Int (Int64.to_int facts.cap_ms'0) 0)
+  /\ (facts.authentication'0 = Initial \/ facts.principal'0 = Matches)
+
+function oauth_session_lifetime [#"/workspace/crates/verified/src/oauth.rs" 91 0 91 62] (facts: t_OAuthSessionFacts) : int
+ = [%#soauth'1] let token_lifetime = Int64.to_int facts.token_expires_at_ms'0
+  - Int64.to_int facts.now_ms'0 in if facts.cap'0 = Enabled /\ Int64.to_int facts.cap_ms'0 < token_lifetime then
+    Int64.to_int facts.cap_ms'0
+  else
+    token_lifetime
+
+
+let oauth_session_admission (facts: t_OAuthSessionFacts) (return (x: t_OAuthSessionDecision)) = any
+  [ return (result: t_OAuthSessionDecision) ->
+  {[@stop_split] [@expl:oauth_session_admission ensures] [%#soauth] match result with
+      | Reject'0 -> not oauth_session_admissible facts
+      | Admit'0 session_lifetime_ms effective_expires_at_ms -> oauth_session_admissible facts
+      /\ Int64.to_int session_lifetime_ms = oauth_session_lifetime facts
+      /\ Int64.to_int effective_expires_at_ms = Int64.to_int facts.now_ms'0 + Int64.to_int session_lifetime_ms
+      end}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let published_keys_bound_oauth_session [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 91 0 97 39]
+  (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed_ms: Int64.t) (fetches: Slice64.slice bool)
+  (begin_unfinished_writer: bool) (return (x: tup2_OAuthSessionDecision_tup2_u64_u64)) =
+{[@stop_split] [@expl:published_keys_bound_oauth_session requires] ([@stop_split] [@expl:published_keys_bound_oauth_session requires #0] [%#sjwks_publication'4] Int64.to_int cache.now_ms
+      = Int64.to_int facts.now_ms'0
+    /\ ge_log_Int (Int64.to_int facts.now_ms'0) 0
+    /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int facts.now_ms'0))
+  /\ ([@stop_split] [@expl:published_keys_bound_oauth_session requires #1] [%#sjwks_publication'5] ComputerDivision.mod (UInt64.t'int cache.generation_before) 2
+      = 0
+    /\ cache.generation_after = cache.generation_before)
+  /\ ([@stop_split] [@expl:published_keys_bound_oauth_session requires #2] [%#sjwks_publication'6] not cache.expiry_enabled
+    \/ ge_log_Int (Int64.to_int cache.expiry_ms) 0
+    /\ gt_log_Int (Int64.to_int cache.last_successful_fetch_ms) 0
+    /\ Int64.to_int cache.last_successful_fetch_ms <= Int64.to_int facts.now_ms'0)
+  /\ ([@stop_split] [@expl:published_keys_bound_oauth_session requires #3] [%#sjwks_publication'7] facts.expiry'0
+    = Present
+  /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) (Int64.to_int completed_ms)
+  /\ facts.authentication'0 = Initial /\ facts.cap'0 = Disabled)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = publication_trace [%#sjwks_publication] {cache.generation_before} {fetches}
+        (fun (_x: tup2_u64_u64) -> [ &_41 <- _x ] s1)
+    | s1 = [ &generation <- _41.f0 ] s2
+    | s2 = [ &published <- _41.f1 ] s3
+    | s3 = any [ br0 -> {begin_unfinished_writer = false} (! bb8) | br1 -> {begin_unfinished_writer} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = jwks_publication_generations [%#sjwks_publication'0] {generation}
+        (fun (_x: t_Option_tup2_u64_u64) -> [ &_46 <- _x ] s1)
+    | s1 = any [ br0 -> {_46 = None} (! bb8) | br1 (x0: tup2_u64_u64) -> {_46 = Some x0} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = elim_Some {_46} (fun (r0: tup2_u64_u64) -> [ &writing <- r0.f0 ] s1)
+    | s1 = [ &generation <- writing ] s2
+    | s2 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &trace <- { f0 = generation; f1 = published } ] s1
+    | s1 = jwks_cache_admission [%#sjwks_publication'1] {cache} (fun (_x: t_JwksCacheDecision) -> [ &_56 <- _x ] s2)
+    | s2 = any [ br0 -> {_56 = Reject} (! bb12) | br1 -> {_56 = Admit} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_55 <- false ] s1 | s1 = bb13 ]
+  | bb12 = s0 [ s0 = [ &_55 <- true ] s1 | s1 = bb13 ]
+  | bb13 = any [ br0 -> {_55 = false} (! bb15) | br1 -> {_55} (! bb14) ]
+  | bb14 = s0 [ s0 = [ &_60 <- Reject'0 ] s1 | s1 = [ &_ret <- { f0'0 = _60; f1'0 = trace } ] s2 | s2 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &finished <- { generation_before = cache.generation_before;
+                            generation_after = generation;
+                            last_successful_fetch_ms = cache.last_successful_fetch_ms;
+                            now_ms = cache.now_ms;
+                            expiry_enabled = cache.expiry_enabled;
+                            expiry_ms = cache.expiry_ms } ] s1
+    | s1 = [ &_68 <- Some'0 finished ] s2
+    | s2 = oauth_validation_admission [%#sjwks_publication'2] {facts.now_ms'0} {completed_ms} {_68}
+        (fun (_x: bool) -> [ &_65 <- _x ] s3)
+    | s3 = any [ br0 -> {_65 = false} (! bb18) | br1 -> {_65} (! bb17) ] ]
+  | bb17 = s0
+    [ s0 = [ &facts <- { facts with now_ms'0 = completed_ms } ] s1
+    | s1 = oauth_session_admission [%#sjwks_publication'3] {facts}
+        (fun (_x: t_OAuthSessionDecision) -> [ &_74 <- _x ] s2)
+    | s2 = [ &_ret <- { f0'0 = _74; f1'0 = trace } ] s3
+    | s3 = return {_ret} ]
+  | bb18 = s0
+    [ s0 = [ &_71 <- Reject'0 ] s1 | s1 = [ &_ret <- { f0'0 = _71; f1'0 = trace } ] s2 | s2 = return {_ret} ] ]
+  [ & _ret: tup2_OAuthSessionDecision_tup2_u64_u64 = Any.any_l ()
+  | & facts: t_OAuthSessionFacts = facts
+  | & cache: t_JwksCacheFacts = cache
+  | & completed_ms: Int64.t = completed_ms
+  | & fetches: Slice64.slice bool = fetches
+  | & begin_unfinished_writer: bool = begin_unfinished_writer
+  | & generation: UInt64.t = Any.any_l ()
+  | & published: UInt64.t = Any.any_l ()
+  | & _41: tup2_u64_u64 = Any.any_l ()
+  | & _46: t_Option_tup2_u64_u64 = Any.any_l ()
+  | & writing: UInt64.t = Any.any_l ()
+  | & trace: tup2_u64_u64 = Any.any_l ()
+  | & _55: bool = Any.any_l ()
+  | & _56: t_JwksCacheDecision = Any.any_l ()
+  | & _60: t_OAuthSessionDecision = Any.any_l ()
+  | & finished: t_JwksCacheFacts = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & _68: t_Option_JwksCacheFacts = Any.any_l ()
+  | & _71: t_OAuthSessionDecision = Any.any_l ()
+  | & _74: t_OAuthSessionDecision = Any.any_l () ])
+  [ return (result: tup2_OAuthSessionDecision_tup2_u64_u64) ->
+  {[@stop_split] [@expl:published_keys_bound_oauth_session ensures] ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #0] [%#sjwks_publication'8] ge_log_Int (UInt64.t'int result.f1'0.f0) (UInt64.t'int cache.generation_before)
+      /\ UInt64.t'int result.f1'0.f1 <= successful_fetches (Slice64.view fetches) (Seq.length (Slice64.view fetches)))
+    /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #1] [%#sjwks_publication'9] (result.f0'0
+        = Reject'0)
+      = (gt_log_Int (UInt64.t'int result.f1'0.f1) 0
+      \/ begin_unfinished_writer /\ UInt64.t'int cache.generation_before < UInt64.t'int const_MAX - 1
+      \/ cache.expiry_enabled
+      /\ gt_log_Int (Int64.to_int completed_ms
+      - Int64.to_int cache.last_successful_fetch_ms) (Int64.to_int cache.expiry_ms)))
+    /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #2] [%#sjwks_publication'10] match result.f0'0 with
+      | Reject'0 -> true
+      | Admit'0 session_lifetime_ms effective_expires_at_ms -> result.f1'0.f0 = cache.generation_before
+      /\ UInt64.t'int result.f1'0.f1 = 0
+      /\ (UInt64.t'int cache.generation_before = UInt64.t'int const_MAX - 1
+        \/ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view fetches) -> not Seq.get (Slice64.view fetches) i))
+      /\ effective_expires_at_ms = facts.token_expires_at_ms'0
+      /\ Int64.to_int session_lifetime_ms = Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int completed_ms
+      /\ gt_log_Int (Int64.to_int session_lifetime_ms) 0
+      end)}
+    (! return {result}) ]

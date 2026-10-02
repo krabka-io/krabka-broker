@@ -25,8 +25,8 @@ use super::{
 };
 use crate::network::auth::{
     ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
-    handle_authenticate_oauthbearer, handle_authenticate_plain, handle_authenticate_scram,
-    handle_handshake,
+    handle_authenticate_oauthbearer_with_jwks_cache, handle_authenticate_plain,
+    handle_authenticate_scram, handle_handshake,
 };
 
 /// Initial per-connection auth state for an unauthenticated SASL peer.
@@ -217,10 +217,12 @@ pub(super) async fn run_inbound_sasl(
                         )
                     }
                     SaslMechanism::OAuthBearer => {
-                        handle_authenticate_oauthbearer(
+                        handle_authenticate_oauthbearer_with_jwks_cache(
                             &req,
                             &mut auth,
                             &cfg.oauthbearer_validator,
+                            &cfg.oauthbearer_jwks_cache_generation,
+                            &cfg.oauthbearer_jwks_last_successful_fetch_ms,
                             crate::time_util::now_ms,
                             CONTROLLER_MAX_REAUTH,
                         )
@@ -294,6 +296,9 @@ pub(super) async fn run_inbound_sasl(
         }
     }
 }
+
+#[cfg(test)]
+mod oauth_cache_tests;
 
 #[cfg(test)]
 mod tests {

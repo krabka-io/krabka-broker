@@ -1,0 +1,71 @@
+(* #"/workspace/crates/verified/src/composition/jwks_publication.rs" 23 0 23 61 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
+let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
+let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
+let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
+
+use seq.Seq
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant fetches : Seq.seq bool
+
+constant prefix : int
+
+function successful_fetches [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 23 0 23 61] (fetches: Seq.seq bool) (prefix: int) : int
+
+goal vc_successful_fetches: ([%#sjwks_publication'0] 0 <= prefix /\ prefix <= Seq.length fetches)
+  -> (if prefix = 0 then
+    let result = 0 in [@stop_split] [@expl:successful_fetches ensures] ([@stop_split] [@expl:successful_fetches ensures #0] [%#sjwks_publication'1] 0
+        <= result
+      /\ result <= prefix)
+    /\ ([@stop_split] [@expl:successful_fetches ensures #1] [%#sjwks_publication'2] (result = 0)
+    = (forall i: int. 0 <= i /\ i < prefix -> not Seq.get fetches i))
+  else
+    (([@stop_split] [@expl:successful_fetches requires] [%#sjwks_publication'0] 0 <= prefix - 1
+        /\ prefix - 1 <= Seq.length fetches)
+      /\ ([@expl:variant decreases] well_founded_relation_Int ([%#sjwks_publication] prefix) ([%#sjwks_publication] prefix
+      - 1)))
+    /\ (([@stop_split] [@expl:successful_fetches ensures] ([@stop_split] [@expl:successful_fetches ensures #0] [%#sjwks_publication'1] 0
+          <= successful_fetches fetches (prefix - 1)
+        /\ successful_fetches fetches (prefix - 1) <= prefix - 1)
+      /\ ([@stop_split] [@expl:successful_fetches ensures #1] [%#sjwks_publication'2] (successful_fetches fetches (prefix
+          - 1)
+        = 0)
+      = (forall i: int. 0 <= i /\ i < prefix - 1 -> not Seq.get fetches i)))
+    -> (if Seq.get fetches (prefix - 1) then
+      let result = successful_fetches fetches (prefix - 1)
+      + 1 in [@stop_split] [@expl:successful_fetches ensures] ([@stop_split] [@expl:successful_fetches ensures #0] [%#sjwks_publication'1] 0
+          <= result
+        /\ result <= prefix)
+      /\ ([@stop_split] [@expl:successful_fetches ensures #1] [%#sjwks_publication'2] (result = 0)
+      = (forall i: int. 0 <= i /\ i < prefix -> not Seq.get fetches i))
+    else
+      let result = successful_fetches fetches (prefix - 1)
+      + 0 in [@stop_split] [@expl:successful_fetches ensures] ([@stop_split] [@expl:successful_fetches ensures #0] [%#sjwks_publication'1] 0
+          <= result
+        /\ result <= prefix)
+      /\ ([@stop_split] [@expl:successful_fetches ensures #1] [%#sjwks_publication'2] (result = 0)
+      = (forall i: int. 0 <= i /\ i < prefix -> not Seq.get fetches i))
+    ))
+  )

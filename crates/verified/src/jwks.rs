@@ -1,11 +1,13 @@
 //! JWKS cache freshness and on-demand refresh decisions.
 
+mod publication;
 #[cfg(creusot)]
 use std::clone::Clone;
 
 use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, logic};
+pub use publication::jwks_publication_generations;
 
 /// Whether a validator may use one observed JWKS cache generation.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]

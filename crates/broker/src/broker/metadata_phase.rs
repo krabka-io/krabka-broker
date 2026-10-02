@@ -59,6 +59,10 @@ fn prepare_raft_transport(
         enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
         gssapi: config.gssapi.clone(),
         oauthbearer_validator: config.oauthbearer_validator.clone(),
+        oauthbearer_jwks_cache_generation: Arc::clone(&config.oauthbearer_jwks_cache_generation),
+        oauthbearer_jwks_last_successful_fetch_ms: Arc::clone(
+            &config.oauthbearer_jwks_last_successful_fetch_ms,
+        ),
         protocol: config.controller_listener_protocol,
         controller: Arc::clone(&controller_cell),
         delegation_token_secret_key: config.delegation_token_secret_key.clone(),

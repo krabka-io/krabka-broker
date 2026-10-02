@@ -88,6 +88,8 @@ pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
         gssapi: None,
         oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
+        oauthbearer_jwks_cache_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        oauthbearer_jwks_last_successful_fetch_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         protocol: ListenerProtocol::SaslPlaintext,
         controller: Arc::new(OnceCell::new()),
         delegation_token_secret_key: None,

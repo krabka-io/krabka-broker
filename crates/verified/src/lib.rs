@@ -134,7 +134,7 @@ pub use group_migration::{
 };
 pub use jwks::{
     JwksCacheDecision, JwksCacheFacts, JwksOnDemandDecision, jwks_cache_admission,
-    jwks_on_demand_refresh_decision,
+    jwks_on_demand_refresh_decision, jwks_publication_generations,
 };
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use list_offsets::{
