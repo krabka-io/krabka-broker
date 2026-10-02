@@ -4,14 +4,9 @@ let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creu
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span sconvert'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
 let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
 let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
 let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 12 10 28 1
 let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 29 10 35 1
 let%span stransaction_fetch'1 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 50 11 50 72
@@ -33,113 +28,61 @@ let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 65 8
 let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 102 8 104 71
 let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 86 8 87 71
 let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 119 8 119 92
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
 let%span sprogress = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 8 11 8 61
 let%span sprogress'0 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 9 11 9 75
 let%span sprogress'1 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 10 11 12 18
 let%span sprogress'2 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 13 10 13 16
 let%span sprogress'3 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 14 10 14 34
-let%span smarker_admission = "/workspace/crates/verified/src/composition/marker_admission.rs" 86 21 86 31
-let%span smarker_admission'0 = "/workspace/crates/verified/src/composition/marker_admission.rs" 87 16 87 22
-let%span smarker_admission'1 = "/workspace/crates/verified/src/composition/marker_admission.rs" 90 14 90 38
-let%span smarker_admission'2 = "/workspace/crates/verified/src/composition/marker_admission.rs" 91 14 91 32
-let%span smarker_admission'3 = "/workspace/crates/verified/src/composition/marker_admission.rs" 89 16 89 82
-let%span smarker_admission'4 = "/workspace/crates/verified/src/composition/marker_admission.rs" 88 16 88 64
-let%span smarker_admission'5 = "/workspace/crates/verified/src/composition/marker_admission.rs" 92 20 92 35
-let%span smarker_admission'6 = "/workspace/crates/verified/src/composition/marker_admission.rs" 92 8 92 36
-let%span smarker_admission'7 = "/workspace/crates/verified/src/composition/marker_admission.rs" 93 13 93 14
-let%span smarker_admission'8 = "/workspace/crates/verified/src/composition/marker_admission.rs" 93 8 93 14
-let%span smarker_admission'9 = "/workspace/crates/verified/src/composition/marker_admission.rs" 95 4 95 30
-let%span smarker_admission'10 = "/workspace/crates/verified/src/composition/marker_admission.rs" 96 18 99 47
-let%span smarker_admission'11 = "/workspace/crates/verified/src/composition/marker_admission.rs" 101 8 101 15
-let%span smarker_admission'12 = "/workspace/crates/verified/src/composition/marker_admission.rs" 103 23 103 24
-let%span smarker_admission'13 = "/workspace/crates/verified/src/composition/marker_admission.rs" 100 22 109 5
-let%span smarker_admission'14 = "/workspace/crates/verified/src/composition/marker_admission.rs" 100 22 110 13
-let%span smarker_admission'15 = "/workspace/crates/verified/src/composition/marker_admission.rs" 111 18 114 58
-let%span smarker_admission'16 = "/workspace/crates/verified/src/composition/marker_admission.rs" 115 18 117 37
-let%span smarker_admission'17 = "/workspace/crates/verified/src/composition/marker_admission.rs" 118 22 123 5
-let%span smarker_admission'18 = "/workspace/crates/verified/src/composition/marker_admission.rs" 126 8 126 69
-let%span smarker_admission'19 = "/workspace/crates/verified/src/composition/marker_admission.rs" 133 24 133 51
-let%span smarker_admission'20 = "/workspace/crates/verified/src/composition/marker_admission.rs" 133 15 133 16
-let%span smarker_admission'21 = "/workspace/crates/verified/src/composition/marker_admission.rs" 133 18 133 19
-let%span smarker_admission'22 = "/workspace/crates/verified/src/composition/marker_admission.rs" 133 21 133 22
-let%span smarker_admission'23 = "/workspace/crates/verified/src/composition/marker_admission.rs" 136 8 136 12
-let%span smarker_admission'24 = "/workspace/crates/verified/src/composition/marker_admission.rs" 134 27 141 5
-let%span smarker_admission'25 = "/workspace/crates/verified/src/composition/marker_admission.rs" 142 18 142 48
-let%span smarker_admission'26 = "/workspace/crates/verified/src/composition/marker_admission.rs" 143 28 143 45
-let%span smarker_admission'27 = "/workspace/crates/verified/src/composition/marker_admission.rs" 143 19 143 45
-let%span smarker_admission'28 = "/workspace/crates/verified/src/composition/marker_admission.rs" 144 22 144 46
-let%span smarker_admission'29 = "/workspace/crates/verified/src/composition/marker_admission.rs" 145 22 145 50
-let%span smarker_admission'30 = "/workspace/crates/verified/src/composition/marker_admission.rs" 147 18 152 28
-let%span smarker_admission'31 = "/workspace/crates/verified/src/composition/marker_admission.rs" 154 8 156 56
-let%span smarker_admission'32 = "/workspace/crates/verified/src/composition/marker_admission.rs" 42 11 43 39
-let%span smarker_admission'33 = "/workspace/crates/verified/src/composition/marker_admission.rs" 44 11 45 36
-let%span smarker_admission'34 = "/workspace/crates/verified/src/composition/marker_admission.rs" 46 11 47 62
-let%span smarker_admission'35 = "/workspace/crates/verified/src/composition/marker_admission.rs" 48 10 48 63
-let%span smarker_admission'36 = "/workspace/crates/verified/src/composition/marker_admission.rs" 49 10 50 41
-let%span smarker_admission'37 = "/workspace/crates/verified/src/composition/marker_admission.rs" 51 10 52 38
-let%span smarker_admission'38 = "/workspace/crates/verified/src/composition/marker_admission.rs" 53 10 55 61
-let%span smarker_admission'39 = "/workspace/crates/verified/src/composition/marker_admission.rs" 56 10 58 64
-let%span smarker_admission'40 = "/workspace/crates/verified/src/composition/marker_admission.rs" 59 10 59 37
-let%span smarker_admission'41 = "/workspace/crates/verified/src/composition/marker_admission.rs" 60 10 61 62
-let%span smarker_admission'42 = "/workspace/crates/verified/src/composition/marker_admission.rs" 62 10 66 1
-let%span smarker_admission'43 = "/workspace/crates/verified/src/composition/marker_admission.rs" 67 10 72 27
-let%span smarker_admission'44 = "/workspace/crates/verified/src/composition/marker_admission.rs" 73 10 76 29
-let%span smarker_admission'45 = "/workspace/crates/verified/src/composition/marker_admission.rs" 21 16 25 48
+let%span smarker_admission = "/workspace/crates/verified/src/composition/marker_admission.rs" 89 23 89 24
+let%span smarker_admission'0 = "/workspace/crates/verified/src/composition/marker_admission.rs" 86 32 95 5
+let%span smarker_admission'1 = "/workspace/crates/verified/src/composition/marker_admission.rs" 86 32 96 13
+let%span smarker_admission'2 = "/workspace/crates/verified/src/composition/marker_admission.rs" 97 17 97 65
+let%span smarker_admission'3 = "/workspace/crates/verified/src/composition/marker_admission.rs" 98 18 101 45
+let%span smarker_admission'4 = "/workspace/crates/verified/src/composition/marker_admission.rs" 102 18 104 24
+let%span smarker_admission'5 = "/workspace/crates/verified/src/composition/marker_admission.rs" 105 22 110 5
+let%span smarker_admission'6 = "/workspace/crates/verified/src/composition/marker_admission.rs" 113 8 113 69
+let%span smarker_admission'7 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 24 120 51
+let%span smarker_admission'8 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 15 120 16
+let%span smarker_admission'9 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 18 120 19
+let%span smarker_admission'10 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 21 120 22
+let%span smarker_admission'11 = "/workspace/crates/verified/src/composition/marker_admission.rs" 123 8 123 12
+let%span smarker_admission'12 = "/workspace/crates/verified/src/composition/marker_admission.rs" 121 27 128 5
+let%span smarker_admission'13 = "/workspace/crates/verified/src/composition/marker_admission.rs" 129 18 129 35
+let%span smarker_admission'14 = "/workspace/crates/verified/src/composition/marker_admission.rs" 130 28 130 45
+let%span smarker_admission'15 = "/workspace/crates/verified/src/composition/marker_admission.rs" 130 19 130 45
+let%span smarker_admission'16 = "/workspace/crates/verified/src/composition/marker_admission.rs" 131 22 131 46
+let%span smarker_admission'17 = "/workspace/crates/verified/src/composition/marker_admission.rs" 132 22 132 37
+let%span smarker_admission'18 = "/workspace/crates/verified/src/composition/marker_admission.rs" 134 18 139 28
+let%span smarker_admission'19 = "/workspace/crates/verified/src/composition/marker_admission.rs" 141 8 143 56
+let%span smarker_admission'20 = "/workspace/crates/verified/src/composition/marker_admission.rs" 42 11 43 39
+let%span smarker_admission'21 = "/workspace/crates/verified/src/composition/marker_admission.rs" 44 11 45 36
+let%span smarker_admission'22 = "/workspace/crates/verified/src/composition/marker_admission.rs" 46 11 47 62
+let%span smarker_admission'23 = "/workspace/crates/verified/src/composition/marker_admission.rs" 48 10 48 63
+let%span smarker_admission'24 = "/workspace/crates/verified/src/composition/marker_admission.rs" 49 10 50 41
+let%span smarker_admission'25 = "/workspace/crates/verified/src/composition/marker_admission.rs" 51 10 52 38
+let%span smarker_admission'26 = "/workspace/crates/verified/src/composition/marker_admission.rs" 53 10 55 61
+let%span smarker_admission'27 = "/workspace/crates/verified/src/composition/marker_admission.rs" 56 10 58 64
+let%span smarker_admission'28 = "/workspace/crates/verified/src/composition/marker_admission.rs" 59 10 59 37
+let%span smarker_admission'29 = "/workspace/crates/verified/src/composition/marker_admission.rs" 60 10 61 62
+let%span smarker_admission'30 = "/workspace/crates/verified/src/composition/marker_admission.rs" 62 10 66 1
+let%span smarker_admission'31 = "/workspace/crates/verified/src/composition/marker_admission.rs" 67 10 72 27
+let%span smarker_admission'32 = "/workspace/crates/verified/src/composition/marker_admission.rs" 73 10 76 29
+let%span smarker_admission'33 = "/workspace/crates/verified/src/composition/marker_admission.rs" 21 16 25 48
 
-use seq.Seq
 use creusot.int.Int64
-use creusot.int.UInt64
-use creusot.slice.Slice64
-use creusot.prelude.MutBorrow
 use creusot.int.Int32
+use creusot.slice.Slice64
+use seq.Seq
 use int.MinMax
 use creusot.int.Int16
 use creusot.int.UInt8
 use creusot.prelude.Any
 use int.Int
-
-type t_Vec_i64_Global
-
-constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
-
-function view_Vec_i64_Global (self: t_Vec_i64_Global) : Seq.seq Int64.t
-
-axiom view_Vec_i64_Global_spec:
-  forall self: t_Vec_i64_Global [view_Vec_i64_Global self]. [%#svec'0] Seq.length (view_Vec_i64_Global self)
-    <= UInt64.t'int const_MAX
-
-let new_i64 (return (x: t_Vec_i64_Global)) = any
-  [ return (result: t_Vec_i64_Global) ->
-  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_i64_Global result) = 0}
-    (! return {result}) ]
-
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
-
-meta "rewrite_def" predicate ge_log_Int
-
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
-
-meta "rewrite_def" predicate gt_log_Int
-
-predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
-  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
-
-meta "rewrite_def" predicate well_founded_relation_Int
-
-let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
-  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
-    = UInt64.t'int result}
-    (! return {result}) ]
-
-let push_i64 (self_: MutBorrow.t t_Vec_i64_Global) (v: Int64.t) (return (x: ())) = any
-  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_i64_Global self_.final
-    = Seq.snoc (view_Vec_i64_Global self_.current) v}
-    (! return {result}) ]
-
-let deref_Vec_i64_Global (self_: t_Vec_i64_Global) (return (x: Slice64.slice Int64.t)) = any
-  [ return (result: Slice64.slice Int64.t) -> {[@stop_split] [@expl:deref ensures] [%#svec'2] Slice64.view result
-    = view_Vec_i64_Global self_}
-    (! return {result}) ]
 
 type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
 
@@ -159,6 +102,14 @@ type t_FetchVisibility = {
 type tup2_i64_FetchVisibility = { f0'1: Int64.t; f1'1: t_FetchVisibility }
 
 type t_Option_tup2_i64_FetchVisibility = None | Some tup2_i64_FetchVisibility
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
 
 let committed_fetch_excludes_unstable (starts: Slice64.slice Int64.t) (w: t_FetchWatermarks)
   (return (x: t_Option_tup2_i64_FetchVisibility)) = any
@@ -206,6 +157,20 @@ let unwrap_tup2_i64_FetchVisibility (self_: t_Option_tup2_i64_FetchVisibility) (
     = self_}
     (! return {result}) ]
 
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
 type t_TransactionMarkerRequest = {
   producer_id: Int64.t;
   producer_epoch: Int16.t;
@@ -218,14 +183,14 @@ type t_TransactionMarkerPartitionState = {
   coordinator_epoch'0: Int32.t;
   has_pending_transaction'0: bool }
 
-constant const_MAX'0: Int16.t = (32767: Int16.t)
+constant const_MAX: Int16.t = (32767: Int16.t)
 
 let transaction_marker_equal_epoch_fenced (transaction_version: Int16.t) (producer_epoch'1: Int16.t)
   (current_producer_epoch: Int16.t) (has_pending_transaction: bool) (return (x: bool)) = any
   [ return (result: bool) -> {[@stop_split] [@expl:transaction_marker_equal_epoch_fenced ensures] [%#smarker] result
     = (ge_log_Int (Int16.to_int transaction_version) 2
     /\ producer_epoch'1 = current_producer_epoch
-    /\ has_pending_transaction /\ Int16.to_int producer_epoch'1 <> Int16.to_int const_MAX'0)}
+    /\ has_pending_transaction /\ Int16.to_int producer_epoch'1 <> Int16.to_int const_MAX)}
     (! return {result}) ]
 
 type t_TransactionMarkerMaterializationDecision =
@@ -300,14 +265,14 @@ type tup3_i64_i64_i64 = { f0'3: Int64.t; f1'3: Int64.t; f2'3: Int64.t }
 
 type tup2_i64_Option_tup2_i64_i64 = { f0'4: Int64.t; f1'4: t_Option_tup2_i64_i64 }
 
-constant const_MAX'1: Int64.t = (9223372036854775807: Int64.t)
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
 
 let control_marker_bounds_committed_fetch (key: Slice64.slice UInt8.t) (is_control: bool) (producer: tup3_i64_i64_i64)
   (span: tup2_i64_i32) (other_starts: Slice64.slice Int64.t) (bounds: tup2_i64_i64)
   (return (x: tup2_i64_Option_tup2_i64_i64)) =
 {[@stop_split] [@expl:control_marker_bounds_committed_fetch requires] ([@stop_split] [@expl:control_marker_bounds_committed_fetch requires #0] [%#stransaction_fetch'1] 0
       <= Int64.to_int span.f0'0
-    /\ 0 <= Int32.to_int span.f1'0 /\ Int64.to_int span.f0'0 + Int32.to_int span.f1'0 < Int64.to_int const_MAX'1)
+    /\ 0 <= Int32.to_int span.f1'0 /\ Int64.to_int span.f0'0 + Int32.to_int span.f1'0 < Int64.to_int const_MAX'0)
   /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch requires #1] [%#stransaction_fetch'2] ge_log_Int (Int64.to_int producer.f0'3) 0
     /\ 0 <= Int64.to_int producer.f2'3 /\ Int64.to_int producer.f2'3 <= Int64.to_int span.f0'0)
   /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch requires #2] [%#stransaction_fetch'3] forall i: int. 0
@@ -389,12 +354,12 @@ axiom lemma_maximal_prefix_advances_spec'0:
         -> v <= limit) -> ([%#sprogress'3] lemma_maximal_prefix_advances start caps others limit -> start < limit)
 
 predicate pending_marker_admitted [#"/workspace/crates/verified/src/composition/marker_admission.rs" 16 0 20 9] (version: Int16.t) (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
-  [%#smarker_admission'45] ge_log_Int (Int64.to_int request.producer_id) 0
+  [%#smarker_admission'33] ge_log_Int (Int64.to_int request.producer_id) 0
   /\ ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
   /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (Int32.to_int current'.coordinator_epoch'0)
   /\ (Int16.to_int version < 2
   \/ request.producer_epoch <> current'.producer_epoch'0
-  \/ Int16.to_int request.producer_epoch = Int16.to_int const_MAX'0)
+  \/ Int16.to_int request.producer_epoch = Int16.to_int const_MAX)
 
 meta "compute_max_steps" 1000000
 
@@ -404,128 +369,89 @@ let admitted_marker_bounds_committed_fetch [#"/workspace/crates/verified/src/com
   (version: Int16.t) (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState)
   (pending_start: Int64.t) (span: tup2_i64_i32) (other_starts: Slice64.slice Int64.t) (bounds: tup2_i64_i64)
   (return (x: tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64)) =
-{[@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires] ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #0] [%#smarker_admission'32] current'.has_pending_transaction'0
+{[@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires] ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #0] [%#smarker_admission'20] current'.has_pending_transaction'0
     /\ ge_log_Int (Int16.to_int current'.producer_epoch'0) 0
     /\ ge_log_Int (Int32.to_int current'.coordinator_epoch'0) (- 1))
-  /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #1] [%#smarker_admission'33] 0
+  /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #1] [%#smarker_admission'21] 0
       <= Int64.to_int pending_start
     /\ Int64.to_int pending_start <= Int64.to_int span.f0'0
-    /\ 0 <= Int32.to_int span.f1'0 /\ Int64.to_int span.f0'0 + Int32.to_int span.f1'0 < Int64.to_int const_MAX'1)
-  /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #2] [%#smarker_admission'34] forall i: int. 0
+    /\ 0 <= Int32.to_int span.f1'0 /\ Int64.to_int span.f0'0 + Int32.to_int span.f1'0 < Int64.to_int const_MAX'0)
+  /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #2] [%#smarker_admission'22] forall i: int. 0
         <= i
       /\ i < Seq.length (Slice64.view other_starts)
     -> 0 <= Int64.to_int (Seq.get (Slice64.view other_starts) i)
     /\ Int64.to_int (Seq.get (Slice64.view other_starts) i) <= Int64.to_int span.f0'0)}
   (! bb0
   [ bb0 = s0
-    [ s0 = new_i64 [%#smarker_admission] (fun (_x: t_Vec_i64_Global) -> [ &starts <- _x ] s1)
-    | s1 = [ &i <- [%#smarker_admission'0] (0: UInt64.t) ] s2
-    | s2 = bb2 ]
-  | bb2 = bb2invariant
-    [ bb2 =
-      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#smarker_admission'1] Seq.length (Slice64.view other_starts)
-      - UInt64.t'int i)}
-      bb2invariant
-    | bb2invariant = {[@expl:loop invariant #0] [%#smarker_admission'4] UInt64.t'int i
-        <= Seq.length (Slice64.view other_starts)
-      /\ Seq.length (view_Vec_i64_Global starts) = UInt64.t'int i}
-      {[@expl:loop invariant #1] [%#smarker_admission'3] forall j: int. 0 <= j /\ j < UInt64.t'int i
-        -> Seq.get (view_Vec_i64_Global starts) j = Seq.get (Slice64.view other_starts) j}
-      (! [ &variant_old_bb2 <- [%#smarker_admission'1] Seq.length (Slice64.view other_starts) - UInt64.t'int i ] s0)
-      [ s0 = len_i64 [%#smarker_admission'2] {other_starts} (fun (_x: UInt64.t) -> [ &_88 <- _x ] s1)
-      | s1 = [ &_86 <- UInt64.lt i _88 ] s2
-      | s2 = any [ br0 -> {_86 = false} (! bb8) | br1 -> {_86} (! bb5) ] ]
-      [ bb5 = s0
-        [ s0 = [ &_93 <- i ] s1
-        | s1 = [ &_94 <- Slice64.length other_starts ] s2
-        | s2 = [ &_95 <- UInt64.lt _93 _94 ] s3
-        | s3 = {[@expl:index in bounds] [%#smarker_admission'5] _95} s4
-        | s4 = Slice64.get [%#smarker_admission'5] <Int64.t> {other_starts} {_93} (fun (r: Int64.t) -> [ &_92 <- r ] s5)
-        | s5 = MutBorrow.borrow_mut <t_Vec_i64_Global> {starts}
-            (fun (_bor: MutBorrow.t t_Vec_i64_Global) -> [ &_91 <- _bor ] [ &starts <- _bor.final ] s6)
-        | s6 = push_i64 [%#smarker_admission'6] {_91} {_92} (fun (_x: ()) -> [ &_90 <- _x ] s7)
-        | s7 = UInt64.add [%#smarker_admission'8] {i} {[%#smarker_admission'7] (1: UInt64.t)}
-            (fun (_x: UInt64.t) -> [ &i <- _x ] s8)
-        | s8 = bb2 ] ] ]
-  | bb8 = s0
-    [ s0 = MutBorrow.borrow_mut <t_Vec_i64_Global> {starts}
-        (fun (_bor: MutBorrow.t t_Vec_i64_Global) -> [ &_98 <- _bor ] [ &starts <- _bor.final ] s1)
-    | s1 = push_i64 [%#smarker_admission'9] {_98} {pending_start} (fun (_x: ()) -> [ &_97 <- _x ] s2)
-    | s2 = {[@expl:assertion] [%#smarker_admission'10] Seq.length (view_Vec_i64_Global starts)
-        = Seq.length (Slice64.view other_starts) + 1
-      /\ Seq.get (view_Vec_i64_Global starts) (Seq.length (Slice64.view other_starts)) = pending_start
+    [ s0 = [ &_74 <- { log_start = ([%#smarker_admission] (0: Int64.t));
+                       hw = bounds.f0;
+                       lso = span.f0'0;
+                       log_end = span.f0'0;
+                       deliverable = bounds.f1 } ] s1
+    | s1 = committed_fetch_excludes_unstable [%#smarker_admission'0] {other_starts} {_74}
+        (fun (_x: t_Option_tup2_i64_FetchVisibility) -> [ &_72 <- _x ] s2)
+    | s2 = unwrap_tup2_i64_FetchVisibility [%#smarker_admission'1] {_72}
+        (fun (_x: tup2_i64_FetchVisibility) -> [ &_71 <- _x ] s3)
+    | s3 = [ &other_visibility <- _71.f1'1 ] s4
+    | s4 = min_i64 [%#smarker_admission'2] {other_visibility.limit_offset} {pending_start}
+        (fun (_x: Int64.t) -> [ &before <- _x ] s5)
+    | s5 = {[@expl:assertion] [%#smarker_admission'3] Int64.to_int before <= Int64.to_int pending_start
+      /\ Int64.to_int before <= Int64.to_int bounds.f0
+      /\ Int64.to_int before <= Int64.to_int bounds.f1
       /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
-        -> Seq.get (view_Vec_i64_Global starts) j = Seq.get (Slice64.view other_starts) j)}
-      s3
-    | s3 = [ &_111 <- starts ] s4
-    | s4 = deref_Vec_i64_Global [%#smarker_admission'11] {_111} (fun (_x: Slice64.slice Int64.t) -> [ &_109 <- _x ] s5)
-    | s5 = [ &_112 <- { log_start = ([%#smarker_admission'12] (0: Int64.t));
-                        hw = bounds.f0;
-                        lso = span.f0'0;
-                        log_end = span.f0'0;
-                        deliverable = bounds.f1 } ] s6
-    | s6 = committed_fetch_excludes_unstable [%#smarker_admission'13] {_109} {_112}
-        (fun (_x: t_Option_tup2_i64_FetchVisibility) -> [ &_107 <- _x ] s7)
-    | s7 = unwrap_tup2_i64_FetchVisibility [%#smarker_admission'14] {_107}
-        (fun (_x: tup2_i64_FetchVisibility) -> [ &_106 <- _x ] s8)
-    | s8 = [ &before <- _106.f1'1 ] s9
-    | s9 = {[@expl:assertion] [%#smarker_admission'15] Int64.to_int before.limit_offset <= Int64.to_int pending_start
-      /\ Int64.to_int before.limit_offset <= Int64.to_int bounds.f0
-      /\ Int64.to_int before.limit_offset <= Int64.to_int bounds.f1
-      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
-        -> Int64.to_int before.limit_offset <= Int64.to_int (Seq.get (Slice64.view other_starts) j))}
-      s10
-    | s10 = {[@expl:assertion] [%#smarker_admission'16] forall v: int. v <= Int64.to_int pending_start
+        -> Int64.to_int before <= Int64.to_int (Seq.get (Slice64.view other_starts) j))}
+      s6
+    | s6 = {[@expl:assertion] [%#smarker_admission'4] forall v: int. v <= Int64.to_int pending_start
           /\ v <= Int64.to_int bounds.f0
           /\ v <= Int64.to_int bounds.f1
           /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
-            -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) j)) -> v <= Int64.to_int before.limit_offset}
-      s11
-    | s11 = transaction_marker_equal_epoch_fenced [%#smarker_admission'17] {version} {request.producer_epoch}
-        {current'.producer_epoch'0} {current'.has_pending_transaction'0} (fun (_x: bool) -> [ &_132 <- _x ] s12)
-    | s12 = any [ br0 -> {_132 = false} (! bb15) | br1 -> {_132} (! bb14) ] ]
-  | bb14 = s0 [ s0 = [ &decision <- RejectProducerEpoch ] s1 | s1 = bb17 ]
-  | bb15 = s0
-    [ s0 = transaction_marker_materialization_decision [%#smarker_admission'18] {request} {current'}
+            -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) j)) -> v <= Int64.to_int before}
+      s7
+    | s7 = transaction_marker_equal_epoch_fenced [%#smarker_admission'5] {version} {request.producer_epoch}
+        {current'.producer_epoch'0} {current'.has_pending_transaction'0} (fun (_x: bool) -> [ &_97 <- _x ] s8)
+    | s8 = any [ br0 -> {_97 = false} (! bb6) | br1 -> {_97} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &decision <- RejectProducerEpoch ] s1 | s1 = bb8 ]
+  | bb6 = s0
+    [ s0 = transaction_marker_materialization_decision [%#smarker_admission'6] {request} {current'}
         (fun (_x: t_TransactionMarkerMaterializationDecision) -> [ &decision <- _x ] s1)
-    | s1 = bb17 ]
-  | bb17 = any
-    [ br0 -> {decision = RejectMalformed} (! bb18)
-    | br1 -> {decision = RejectProducerEpoch} (! bb18)
-    | br2 -> {decision = RejectCoordinatorEpoch} (! bb18)
-    | br3 -> {decision = Retry} (! bb18)
-    | br4 -> {decision = AppendWithoutOffsetPublication} (! bb20)
-    | br5 -> {decision = AppendAndPublishOffsets} (! bb20) ]
-  | bb18 = s0
-    [ s0 = [ &_145 <- None'0 ] s1
-    | s1 = [ &_ret <- { f0'2 = decision; f1'2 = before.limit_offset; f2'2 = before.limit_offset; f3'2 = _145 } ] s2
+    | s1 = bb8 ]
+  | bb8 = any
+    [ br0 -> {decision = RejectMalformed} (! bb9)
+    | br1 -> {decision = RejectProducerEpoch} (! bb9)
+    | br2 -> {decision = RejectCoordinatorEpoch} (! bb9)
+    | br3 -> {decision = Retry} (! bb9)
+    | br4 -> {decision = AppendWithoutOffsetPublication} (! bb11)
+    | br5 -> {decision = AppendAndPublishOffsets} (! bb11) ]
+  | bb9 = s0
+    [ s0 = [ &_110 <- None'0 ] s1
+    | s1 = [ &_ret <- { f0'2 = decision; f1'2 = before; f2'2 = before; f3'2 = _110 } ] s2
     | s2 = return {_ret} ]
-  | bb20 = s0
-    [ s0 = from_u8 [%#smarker_admission'19] {request.is_commit} (fun (_x: UInt8.t) -> [ &_147 <- _x ] s1)
+  | bb11 = s0
+    [ s0 = from_u8 [%#smarker_admission'7] {request.is_commit} (fun (_x: UInt8.t) -> [ &_112 <- _x ] s1)
     | s1 = any
       [ any_ (__arr_temp: Slice64.array UInt8.t) -> (! -{Seq.get __arr_temp.Slice64.elts 0
-          = ([%#smarker_admission'20] (0: UInt8.t))
-        /\ Seq.get __arr_temp.Slice64.elts 1 = ([%#smarker_admission'21] (0: UInt8.t))
-        /\ Seq.get __arr_temp.Slice64.elts 2 = ([%#smarker_admission'22] (0: UInt8.t))
-        /\ Seq.get __arr_temp.Slice64.elts 3 = _147 /\ Seq.length __arr_temp.Slice64.elts = 4}-
+          = ([%#smarker_admission'8] (0: UInt8.t))
+        /\ Seq.get __arr_temp.Slice64.elts 1 = ([%#smarker_admission'9] (0: UInt8.t))
+        /\ Seq.get __arr_temp.Slice64.elts 2 = ([%#smarker_admission'10] (0: UInt8.t))
+        /\ Seq.get __arr_temp.Slice64.elts 3 = _112 /\ Seq.length __arr_temp.Slice64.elts = 4}-
         [ &key <- __arr_temp ] s2) ]
-    | s2 = [ &_154 <- key ] s3
-    | s3 = [ &_155 <- { f0'3 = request.producer_id; f1'3 = request.producer_id; f2'3 = pending_start } ] s4
-    | s4 = control_marker_bounds_committed_fetch [%#smarker_admission'24] {_154} {[%#smarker_admission'23] true} {_155}
-        {span} {other_starts} {bounds} (fun (_x: tup2_i64_Option_tup2_i64_i64) -> [ &_151 <- _x ] s5)
-    | s5 = [ &after <- _151.f0'4 ] s6
-    | s6 = [ &aborted <- _151.f1'4 ] s7
-    | s7 = {[@expl:assertion] [%#smarker_admission'25] Int64.to_int before.limit_offset <= Int64.to_int after} s8
-    | s8 = from_i64 [%#smarker_admission'26] {span.f1'0} (fun (_x: Int64.t) -> [ &_171 <- _x ] s9)
-    | s9 = Int64.add [%#smarker_admission'27] {span.f0'0} {_171} (fun (_x: Int64.t) -> [ &_169 <- _x ] s10)
-    | s10 = [ &_167 <- Int64.le bounds.f0 _169 ] s11
-    | s11 = any [ br0 -> {_167 = false} (! bb26) | br1 -> {_167} (! bb24) ] ]
-  | bb24 = s0
-    [ s0 = {[@expl:assertion] [%#smarker_admission'28] Int64.to_int after <= Int64.to_int pending_start} s1
-    | s1 = {[@expl:assertion] [%#smarker_admission'29] after = before.limit_offset} s2
-    | s2 = bb26 ]
-  | bb26 = s0
-    [ s0 = {[@expl:assertion] [%#smarker_admission'30] gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0
+    | s2 = [ &_119 <- key ] s3
+    | s3 = [ &_120 <- { f0'3 = request.producer_id; f1'3 = request.producer_id; f2'3 = pending_start } ] s4
+    | s4 = control_marker_bounds_committed_fetch [%#smarker_admission'12] {_119} {[%#smarker_admission'11] true} {_120}
+        {span} {other_starts} {bounds} (fun (_x: tup2_i64_Option_tup2_i64_i64) -> [ &_116 <- _x ] s5)
+    | s5 = [ &after <- _116.f0'4 ] s6
+    | s6 = [ &aborted <- _116.f1'4 ] s7
+    | s7 = {[@expl:assertion] [%#smarker_admission'13] Int64.to_int before <= Int64.to_int after} s8
+    | s8 = from_i64 [%#smarker_admission'14] {span.f1'0} (fun (_x: Int64.t) -> [ &_136 <- _x ] s9)
+    | s9 = Int64.add [%#smarker_admission'15] {span.f0'0} {_136} (fun (_x: Int64.t) -> [ &_134 <- _x ] s10)
+    | s10 = [ &_132 <- Int64.le bounds.f0 _134 ] s11
+    | s11 = any [ br0 -> {_132 = false} (! bb17) | br1 -> {_132} (! bb15) ] ]
+  | bb15 = s0
+    [ s0 = {[@expl:assertion] [%#smarker_admission'16] Int64.to_int after <= Int64.to_int pending_start} s1
+    | s1 = {[@expl:assertion] [%#smarker_admission'17] after = before} s2
+    | s2 = bb17 ]
+  | bb17 = s0
+    [ s0 = {[@expl:assertion] [%#smarker_admission'18] gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0
         + Int32.to_int span.f1'0)
       -> (forall v: int. v <= Int64.to_int bounds.f0
           /\ v <= Int64.to_int bounds.f1
@@ -534,7 +460,7 @@ let admitted_marker_bounds_committed_fetch [#"/workspace/crates/verified/src/com
             -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) j)) -> v <= Int64.to_int after)}
       s1
     | s1 =
-      {[@expl:assertion] [%#smarker_admission'31] let advances = gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0
+      {[@expl:assertion] [%#smarker_admission'19] let advances = gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0
         + Int32.to_int span.f1'0)
       /\ gt_log_Int (Int64.to_int bounds.f1) (Int64.to_int pending_start)
       /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
@@ -545,7 +471,7 @@ let admitted_marker_bounds_committed_fetch [#"/workspace/crates/verified/src/com
                                                                         + Int32.to_int span.f1'0
                                                                       + 1 } (Slice64.view other_starts) (Int64.to_int after)}
       s2
-    | s2 = [ &_ret <- { f0'2 = decision; f1'2 = before.limit_offset; f2'2 = after; f3'2 = aborted } ] s3
+    | s2 = [ &_ret <- { f0'2 = decision; f1'2 = before; f2'2 = after; f3'2 = aborted } ] s3
     | s3 = return {_ret} ] ]
   [ & _ret: tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64 = Any.any_l ()
   | & version: Int16.t = version
@@ -555,74 +481,60 @@ let admitted_marker_bounds_committed_fetch [#"/workspace/crates/verified/src/com
   | & span: tup2_i64_i32 = span
   | & other_starts: Slice64.slice Int64.t = other_starts
   | & bounds: tup2_i64_i64 = bounds
-  | & starts: t_Vec_i64_Global = Any.any_l ()
-  | & i: UInt64.t = Any.any_l ()
-  | & _86: bool = Any.any_l ()
-  | & _88: UInt64.t = Any.any_l ()
-  | & _90: () = Any.any_l ()
-  | & _91: MutBorrow.t t_Vec_i64_Global = Any.any_l ()
-  | & _92: Int64.t = Any.any_l ()
-  | & _93: UInt64.t = Any.any_l ()
-  | & _94: UInt64.t = Any.any_l ()
-  | & _95: bool = Any.any_l ()
-  | & _97: () = Any.any_l ()
-  | & _98: MutBorrow.t t_Vec_i64_Global = Any.any_l ()
-  | & before: t_FetchVisibility = Any.any_l ()
-  | & _106: tup2_i64_FetchVisibility = Any.any_l ()
-  | & _107: t_Option_tup2_i64_FetchVisibility = Any.any_l ()
-  | & _109: Slice64.slice Int64.t = Any.any_l ()
-  | & _111: t_Vec_i64_Global = Any.any_l ()
-  | & _112: t_FetchWatermarks = Any.any_l ()
+  | & other_visibility: t_FetchVisibility = Any.any_l ()
+  | & _71: tup2_i64_FetchVisibility = Any.any_l ()
+  | & _72: t_Option_tup2_i64_FetchVisibility = Any.any_l ()
+  | & _74: t_FetchWatermarks = Any.any_l ()
+  | & before: Int64.t = Any.any_l ()
   | & decision: t_TransactionMarkerMaterializationDecision = Any.any_l ()
-  | & _132: bool = Any.any_l ()
-  | & _145: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _97: bool = Any.any_l ()
+  | & _110: t_Option_tup2_i64_i64 = Any.any_l ()
   | & key: Slice64.array UInt8.t = Any.any_l ()
-  | & _147: UInt8.t = Any.any_l ()
+  | & _112: UInt8.t = Any.any_l ()
   | & after: Int64.t = Any.any_l ()
   | & aborted: t_Option_tup2_i64_i64 = Any.any_l ()
-  | & _151: tup2_i64_Option_tup2_i64_i64 = Any.any_l ()
-  | & _154: Slice64.array UInt8.t = Any.any_l ()
-  | & _155: tup3_i64_i64_i64 = Any.any_l ()
-  | & _167: bool = Any.any_l ()
-  | & _169: Int64.t = Any.any_l ()
-  | & _171: Int64.t = Any.any_l ()
-  | & variant_old_bb2: int = Any.any_l () ])
+  | & _116: tup2_i64_Option_tup2_i64_i64 = Any.any_l ()
+  | & _119: Slice64.array UInt8.t = Any.any_l ()
+  | & _120: tup3_i64_i64_i64 = Any.any_l ()
+  | & _132: bool = Any.any_l ()
+  | & _134: Int64.t = Any.any_l ()
+  | & _136: Int64.t = Any.any_l () ])
   [ return (result: tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64) ->
-  {[@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures] ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #0] [%#smarker_admission'35] Int64.to_int result.f1'2
+  {[@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures] ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #0] [%#smarker_admission'23] Int64.to_int result.f1'2
         <= Int64.to_int pending_start
       /\ Int64.to_int result.f1'2 <= Int64.to_int result.f2'2)
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #1] [%#smarker_admission'36] Int64.to_int result.f2'2
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #1] [%#smarker_admission'24] Int64.to_int result.f2'2
         <= Int64.to_int bounds.f0
       /\ Int64.to_int result.f2'2 <= Int64.to_int bounds.f1
       /\ Int64.to_int result.f2'2 <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1)
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #2] [%#smarker_admission'37] forall i: int. 0
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #2] [%#smarker_admission'25] forall i: int. 0
             <= i
           /\ i < Seq.length (Slice64.view other_starts)
         -> Int64.to_int result.f2'2 <= Int64.to_int (Seq.get (Slice64.view other_starts) i))
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #3] [%#smarker_admission'38] (result.f0'2
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #3] [%#smarker_admission'26] (result.f0'2
         = AppendAndPublishOffsets)
       = (pending_marker_admitted version request current' /\ request.is_commit /\ request.is_offsets_partition))
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #4] [%#smarker_admission'39] (result.f0'2
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #4] [%#smarker_admission'27] (result.f0'2
         = AppendWithoutOffsetPublication)
       = (pending_marker_admitted version request current' /\ not (request.is_commit /\ request.is_offsets_partition)))
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #5] [%#smarker_admission'40] result.f0'2
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #5] [%#smarker_admission'28] result.f0'2
       <> Retry)
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #6] [%#smarker_admission'41] not pending_marker_admitted version request current'
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #6] [%#smarker_admission'29] not pending_marker_admitted version request current'
         \/ Int64.to_int bounds.f0 <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 -> result.f2'2 = result.f1'2)
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #7] [%#smarker_admission'42] match result.f3'2 with
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #7] [%#smarker_admission'30] match result.f3'2 with
         | Some'0 {f0 = start; f1 = last} -> pending_marker_admitted version request current'
         /\ not request.is_commit
         /\ start = pending_start /\ Int64.to_int last = Int64.to_int span.f0'0 + Int32.to_int span.f1'0
         | None'0 -> not pending_marker_admitted version request current' \/ request.is_commit
         end)
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #8] [%#smarker_admission'43] pending_marker_admitted version request current'
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #8] [%#smarker_admission'31] pending_marker_admitted version request current'
         /\ gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0 + Int32.to_int span.f1'0)
       -> (forall v: int. v <= Int64.to_int bounds.f0
           /\ v <= Int64.to_int bounds.f1
           /\ v <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1
           /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view other_starts)
             -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) i)) -> v <= Int64.to_int result.f2'2))
-    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #9] [%#smarker_admission'44] pending_marker_admitted version request current'
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #9] [%#smarker_admission'32] pending_marker_admitted version request current'
       /\ gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0 + Int32.to_int span.f1'0)
       /\ gt_log_Int (Int64.to_int bounds.f1) (Int64.to_int pending_start)
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view other_starts)

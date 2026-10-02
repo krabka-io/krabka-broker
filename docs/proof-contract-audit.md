@@ -2464,3 +2464,34 @@ its 1,024-file limit before coordinator readiness. All 1,154 parent artifacts
 remain byte-identical. All 302 authored verified Rust sources remain below
 300 lines (maximum 288). Remote CI must qualify the published revision
 separately.
+
+
+### Marker proof CI follow-up
+
+The published marker revision's [proof job](https://github.com/krabka-io/krabka-broker/actions/runs/37052206887/job/110988100975)
+passes setup and runs the pinned image, but leaves the new composition at
+32 of 33 obligations. The new composition's largest local recorded attempt
+was 0.765 seconds. Its temporary complete-start vector mixed copy invariants
+and quantified frontier comparisons into the marker's admission context.
+
+The composition now obtains the other transactions' frontier from the same
+verified Fetch helper and caps it with this transaction's pending start. This
+is the same minimum over the complete set, without an allocation or copy loop.
+All preconditions and postconditions remain byte-identical, including maximal
+visibility, no release before the marker's last offset, admission completeness
+and strict progress. No production behavior changes. Forced pinned replay
+passes the three affected sessions with four CPUs and with one CPU. The four-CPU
+recorded maximum falls to 0.299 seconds.
+
+Repeated paired controls still prove their altered helper and fail the composed
+claim and native oracle: disabled fencing leaves 53/61 obligations, reject-all
+leaves 26/31, and release at the marker base leaves 20/22. All control sources
+are restored byte-for-byte. The repair requires fresh remote qualification;
+the initial failed job does not establish success for it.
+
+Repair qualification passes cache-free pinned source generation and read-only
+retained-ledger replay of all 580 files, all 380 native verified tests, strict
+verified Clippy, repository formatting and the diff check. The three paired
+controls still fail both the composed proof and native oracle. Only the repaired
+composition's two artifacts change; all 1,158 unrelated parent artifacts remain
+byte-identical. All 302 verified Rust sources remain below 300 lines.

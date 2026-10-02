@@ -83,22 +83,8 @@ pub(super) fn admitted_marker_bounds_committed_fetch(
     other_starts: &[i64],
     bounds: (i64, i64), // observed HW and delivery cap
 ) -> AdmittedMarkerFetch {
-    let mut starts = Vec::new();
-    let mut i = 0usize;
-    #[invariant(i@ <= other_starts@.len() && starts@.len() == i@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> starts@[j] == other_starts@[j])]
-    #[variant(other_starts@.len() - i@)]
-    while i < other_starts.len() {
-        starts.push(other_starts[i]);
-        i += 1;
-    }
-    starts.push(pending_start);
-    proof_assert!(starts@.len() == other_starts@.len() + 1
-        && starts@[other_starts@.len()] == pending_start
-        && (forall<j: Int> 0 <= j && j < other_starts@.len()
-            ==> starts@[j] == other_starts@[j]));
-    let (_, before) = committed_fetch_excludes_unstable(
-        &starts,
+    let (_, other_visibility) = committed_fetch_excludes_unstable(
+        other_starts,
         FetchWatermarks {
             log_start: 0,
             log_end: span.0,
@@ -108,13 +94,14 @@ pub(super) fn admitted_marker_bounds_committed_fetch(
         },
     )
     .unwrap();
-    proof_assert!(before.limit_offset@ <= pending_start@
-        && before.limit_offset@ <= bounds.0@ && before.limit_offset@ <= bounds.1@
+    let before = other_visibility.limit_offset.min(pending_start);
+    proof_assert!(before@ <= pending_start@
+        && before@ <= bounds.0@ && before@ <= bounds.1@
         && (forall<j: Int> 0 <= j && j < other_starts@.len()
-            ==> before.limit_offset@ <= other_starts@[j]@));
+            ==> before@ <= other_starts@[j]@));
     proof_assert!(forall<v: Int> v <= pending_start@ && v <= bounds.0@ && v <= bounds.1@
         && (forall<j: Int> 0 <= j && j < other_starts@.len() ==> v <= other_starts@[j]@)
-        ==> v <= before.limit_offset@);
+        ==> v <= before@);
     let decision = if transaction_marker_equal_epoch_fenced(
         version,
         request.producer_epoch,
@@ -127,7 +114,7 @@ pub(super) fn admitted_marker_bounds_committed_fetch(
     };
     match decision {
         Decision::AppendAndPublishOffsets | Decision::AppendWithoutOffsetPublication => {}
-        _ => return (decision, before.limit_offset, before.limit_offset, None),
+        _ => return (decision, before, before, None),
     }
     // build_marker_batch emits exactly one of these COMMIT/ABORT keys.
     let key = [0, 0, 0, u8::from(request.is_commit)];
@@ -139,10 +126,10 @@ pub(super) fn admitted_marker_bounds_committed_fetch(
         other_starts,
         bounds,
     );
-    proof_assert!(before.limit_offset@ <= after@);
+    proof_assert!(before@ <= after@);
     if bounds.0 <= span.0 + i64::from(span.1) {
         proof_assert!(after@ <= pending_start@);
-        proof_assert!(after == before.limit_offset);
+        proof_assert!(after == before);
     }
     proof_assert!(bounds.0@ > span.0@ + span.1@ ==>
         (forall<v: Int> v <= bounds.0@ && v <= bounds.1@
@@ -157,5 +144,5 @@ pub(super) fn admitted_marker_bounds_committed_fetch(
         advances ==> lemma_maximal_prefix_advances(pending_start@,
             (bounds.0@, bounds.1@, span.0@ + span.1@ + 1), other_starts@, after@)
     });
-    (decision, before.limit_offset, after, aborted)
+    (decision, before, after, aborted)
 }
