@@ -231,7 +231,10 @@ pub use marker::{
     has_identity, is_identity, marker_completed_retry, marker_generation_current,
     marker_publishes_offsets, marker_well_formed, snapshot_eq,
 };
-pub use marker::{log_batch_kind, transaction_marker_materialization_decision};
+pub use marker::{
+    log_batch_kind, transaction_marker_equal_epoch_fenced,
+    transaction_marker_materialization_decision,
+};
 
 mod reaper;
 pub use reaper::{

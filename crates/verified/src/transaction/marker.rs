@@ -7,6 +7,24 @@ use super::{
 #[cfg(creusot)]
 use super::{TransactionIdentity, TransactionSnapshot};
 
+/// Transaction version 2 requires an epoch bump for a pending transaction's
+/// marker, except at the final marker epoch. Completed retries remain allowed.
+#[ensures(result == (transaction_version@ >= 2
+    && producer_epoch == current_producer_epoch
+    && has_pending_transaction && producer_epoch@ != i16::MAX@))]
+#[must_use]
+pub fn transaction_marker_equal_epoch_fenced(
+    transaction_version: i16,
+    producer_epoch: i16,
+    current_producer_epoch: i16,
+    has_pending_transaction: bool,
+) -> bool {
+    transaction_version >= 2
+        && producer_epoch == current_producer_epoch
+        && has_pending_transaction
+        && producer_epoch != i16::MAX
+}
+
 #[ensures((result == LogBatchKind::Data) == !is_control)]
 #[ensures((result == LogBatchKind::Abort) ==
     (is_control && key@.len() >= 4 && key@[2]@ == 0 && key@[3]@ == 0))]

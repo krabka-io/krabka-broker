@@ -117,6 +117,9 @@ use producer_replay::{
 mod transaction_fetch;
 use transaction_fetch::{committed_fetch_excludes_unstable, control_marker_bounds_committed_fetch};
 
+mod marker_admission;
+use marker_admission::admitted_marker_bounds_committed_fetch;
+
 mod quorum_fetch;
 use quorum_fetch::{installed_wal_quorum_bounds_fetch, quorum_commit_bounds_fetch};
 
