@@ -71,7 +71,7 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
         &request.auth_bytes,
         &validator,
         Some((&generation, &last_successful)),
-        now_ms,
+        || now_ms,
     )
     .await;
     assert!(changing == Err("JWKS cache is stale or changing"));
@@ -82,7 +82,7 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
         &request.auth_bytes,
         &validator,
         Some((&generation, &last_successful)),
-        now_ms,
+        || now_ms,
     )
     .await;
     assert!(never_fetched == Err("JWKS cache is stale or changing"));
@@ -92,7 +92,7 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
         &request.auth_bytes,
         &validator,
         Some((&generation, &last_successful)),
-        now_ms,
+        || now_ms,
     )
     .await;
     assert!(stale == Err("JWKS cache is stale or changing"));
@@ -110,7 +110,7 @@ async fn signed_validator_uses_a_fresh_stable_jwks_cache() {
         &request.auth_bytes,
         &validator,
         Some((&generation, &last_successful)),
-        now_ms,
+        || now_ms,
     )
     .await;
 
@@ -131,7 +131,7 @@ async fn oauthbearer_valid_token_authenticates() {
         &oauthbearer_client_response(&token),
         &mut auth,
         &validator,
-        now_ms,
+        || now_ms,
         None,
     )
     .await;
@@ -172,7 +172,7 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
         &oauthbearer_client_response(&token),
         &mut auth,
         &validator,
-        now_ms,
+        || now_ms,
         None,
     )
     .await;
@@ -196,7 +196,8 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
         auth_bytes: bytes::Bytes::from_static(&[1u8]),
         ..Default::default()
     };
-    let resp2 = handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, now_ms, None).await;
+    let resp2 =
+        handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, || now_ms, None).await;
     assert_failed_authenticate_response(&resp2, Some(r#"{"status":"invalid_token"}"#));
     assert!(!auth.is_authenticated());
 }
@@ -214,7 +215,8 @@ async fn oauthbearer_malformed_response_returns_error_json() {
         ..Default::default()
     };
     let resp =
-        handle_authenticate_oauthbearer(&req, &mut auth, &validator, 1_000_000_000_000, None).await;
+        handle_authenticate_oauthbearer(&req, &mut auth, &validator, || 1_000_000_000_000, None)
+            .await;
     let expected = SaslAuthenticateResponse {
         error_code: 0,
         error_message: None,
@@ -242,7 +244,7 @@ async fn oauthbearer_authzid_mismatch_fails() {
         ),
         ..Default::default()
     };
-    let resp = handle_authenticate_oauthbearer(&req, &mut auth, &validator, now_ms, None).await;
+    let resp = handle_authenticate_oauthbearer(&req, &mut auth, &validator, || now_ms, None).await;
     let expected = SaslAuthenticateResponse {
         error_code: 0,
         error_message: None,
@@ -280,7 +282,7 @@ async fn authenticate_during_reauth_same_principal_transitions_back_to_authentic
         &oauthbearer_client_response(&token),
         &mut auth,
         &validator,
-        now_ms,
+        || now_ms,
         None,
     )
     .await;
@@ -330,7 +332,7 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
         &oauthbearer_client_response(&token),
         &mut auth,
         &validator,
-        now_ms,
+        || now_ms,
         None,
     )
     .await;
@@ -370,7 +372,7 @@ async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_js
         ..Default::default()
     };
     let challenge =
-        handle_authenticate_oauthbearer(&garbage, &mut auth, &validator, now_ms, None).await;
+        handle_authenticate_oauthbearer(&garbage, &mut auth, &validator, || now_ms, None).await;
     assert_success_authenticate_response(&challenge, br#"{"status":"invalid_token"}"#, 0);
 
     let dummy = SaslAuthenticateRequest {
@@ -378,7 +380,7 @@ async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_js
         ..Default::default()
     };
     let failure =
-        handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, now_ms, None).await;
+        handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, || now_ms, None).await;
     assert_failed_authenticate_response(&failure, Some(r#"{"status":"invalid_token"}"#));
     assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 }
@@ -413,7 +415,8 @@ async fn handle_authenticate_oauthbearer_applies_max_session_lifetime_cap() {
             exchange: SaslExchange::OAuthBearer,
             pending_token_expiry_ms: None,
         };
-        let resp = handle_authenticate_oauthbearer(&req, &mut auth, &validator, now_ms, cap).await;
+        let resp =
+            handle_authenticate_oauthbearer(&req, &mut auth, &validator, || now_ms, cap).await;
         check!(resp.error_code == 0, "cap {cap:?}");
         check!(resp.session_lifetime_ms == want_lifetime_ms, "cap {cap:?}");
         match auth {
@@ -443,7 +446,7 @@ async fn handle_authenticate_oauthbearer_rejects_a_zero_session_cap() {
         &oauthbearer_client_response(&token),
         &mut auth,
         &validator,
-        now_ms,
+        || now_ms,
         Some(secs(0)),
     )
     .await;
@@ -459,3 +462,5 @@ async fn handle_authenticate_oauthbearer_rejects_a_zero_session_cap() {
         }
     ));
 }
+
+mod completion;

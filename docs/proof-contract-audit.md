@@ -2678,3 +2678,63 @@ targets and the four proof/mutation configuration gates. The final tree retains
 only the upgraded creation session and four new sessions; all 1,152 unrelated
 parent artifact files are byte-identical. All 303 authored verified Rust sources
 remain under 300 lines (largest: 288).
+
+### OAuth validation completion through current cache and session bounds
+
+The host reused its starting timestamp after asynchronous token validation,
+including introspection and userinfo calls. A token that expired during that
+work could enter `Authenticated`, and a successful response could overstate its
+remaining lifetime. The post-validation JWKS generation check likewise reused
+the starting cache age. Request-time expiry was a later defense; it did not
+make the successful authentication or advertised lifetime accurate.
+
+Both broker and controller callers now provide the existing clock function,
+and the common validation path observes it before and after validation. The
+verified `oauth_validation_admission` rejects backward/negative clocks and,
+when a cache observation is supplied, checks the final generation and freshness
+at completion. The returned completion timestamp anchors session admission and
+the response lifetime. Initial and reauthentication paths share this boundary.
+No new clock abstraction or validator implementation is introduced.
+
+`validated_oauth_snapshot_bounds_session` composes the initial JWKS guard, the
+completion guard, and the existing OAuth session kernel. It rejects a snapshot
+that becomes stale during validation or changes generation, requires a strictly
+future token expiry at completion and preserves reauthentication principal
+binding. An admitted receipt has the exact smaller of the remaining credential
+lifetime and the enabled cap; its absolute deadline cannot exceed token expiry.
+Exact rejection conditions also require admission for every admissible
+snapshot, excluding a reject-all helper.
+
+The first consumer attempt left 16 of 38 obligations unproved while the
+individual helpers proved: `oauth_session_admissible` and
+`oauth_session_lifetime` were public but opaque across modules. Both existing
+policy definitions are now open within the crate. Their runtime algorithm and
+policy are unchanged; exposing definitions lets the consumer derive concrete
+lifetime and principal guarantees instead of repeating an opaque predicate.
+
+Actual cryptographic success, decoded claims/principal relationships, atomic
+publication and accurate clock observations remain host obligations. Equality
+of generation observations assumes no ABA. The optional cache gate does not
+prove freshness when a caller supplies no cache observation; the controller's
+current handshake configuration still uses that path. These bounds concern the
+completion snapshot, not an idle connection's future scheduling or receipt of
+the authentication response.
+
+Two paired negative controls change a helper and its own contract consistently.
+Ignoring completion cache age still proves the completion helper, but leaves
+its consumer unproved and fails the independent native oracle. Allowing expiry
+at equality still proves the OAuth session helper, but likewise fails the
+consumer's strictly positive lifetime/exact admission guarantees and native
+oracle. Source bytes are restored before positive qualification. An async
+introspection fixture advances its clock while validation yields, checking
+remaining lifetime, expiry-at-completion and rollback for initial and repeat
+authentication; the prior starting-time behavior fails the lifetime regression.
+
+Final qualification passes pinned Creusot 0.13.0 source generation and read-only
+cache-free replay of all 579 sessions, including a final consumer regeneration
+and replay after proof-only import cleanup. All 380 verified-crate tests,
+14 OAuth tests and 18 controller-handshake tests pass, along with strict
+all-target Clippy for both changed crates, formatting, two verified-crate Bazel
+targets and all four proof/mutation configuration gates. Only two new proof
+sessions are retained; all 1,154 parent artifact files remain byte-identical.
+All 302 authored verified Rust sources stay under 300 lines (largest: 288).

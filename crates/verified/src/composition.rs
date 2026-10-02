@@ -286,3 +286,6 @@ use token_session::created_token_session_bounds_requests;
 
 mod session_cap;
 use session_cap::credential_free_session_cap_bounds_requests;
+
+mod oauth_completion;
+use oauth_completion::validated_oauth_snapshot_bounds_session;

@@ -1,0 +1,18 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_jwks_cache_admission": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_oauth_session_admission": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_oauth_validation_admission": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_validated_oauth_snapshot_bounds_session": {
+        "prover": "z3",
+        "time": 0.011
+      }
+    }
+  }
+}

@@ -1,8 +1,7 @@
 //! SASL/OAUTHBEARER (KIP-255, RFC 7628) and the KIP-368 re-auth arm.
 //!
-//! OAUTHBEARER is the only mechanism whose session carries an expiry, so this
-//! module also holds the session-lifetime clamp that KIP-368 re-authentication
-//! reads, together with the two-message failure handshake RFC 7628 requires.
+//! This module binds OAuth credential expiry to the KIP-368 session lifetime
+//! and implements the two-message failure handshake RFC 7628 requires.
 
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
@@ -22,7 +21,8 @@ use super::{
 /// Round 1 (client initial response):
 ///   - `auth_bytes` is `n,,\x01auth=Bearer <token>\x01\x01`. The handler
 ///     parses the bearer token and validates it with `validator` against
-///     `now_ms`. On success, `auth` moves to `Authenticated` and the response
+///     the starting clock observation, then checks the completion snapshot.
+///     On success, `auth` moves to `Authenticated` and the response
 ///     carries empty `auth_bytes` with `error_code = 0`. That is a
 ///     single-round success.
 ///   - On any parse or validation failure, the handler returns the RFC 7628
@@ -41,11 +41,18 @@ pub async fn handle_authenticate_oauthbearer(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     validator: &krabka_security::OAuthBearerValidator,
-    now_ms: i64,
+    clock_ms: impl Fn() -> i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
-    handle_authenticate_oauthbearer_inner(req, auth, validator, None, now_ms, max_session_lifetime)
-        .await
+    handle_authenticate_oauthbearer_inner(
+        req,
+        auth,
+        validator,
+        None,
+        clock_ms,
+        max_session_lifetime,
+    )
+    .await
 }
 
 pub async fn handle_authenticate_oauthbearer_with_jwks_cache(
@@ -54,7 +61,7 @@ pub async fn handle_authenticate_oauthbearer_with_jwks_cache(
     validator: &krabka_security::OAuthBearerValidator,
     cache_generation: &AtomicU64,
     last_successful_fetch_ms: &AtomicI64,
-    now_ms: i64,
+    clock_ms: impl Fn() -> i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
     handle_authenticate_oauthbearer_inner(
@@ -62,7 +69,7 @@ pub async fn handle_authenticate_oauthbearer_with_jwks_cache(
         auth,
         validator,
         Some((cache_generation, last_successful_fetch_ms)),
-        now_ms,
+        clock_ms,
         max_session_lifetime,
     )
     .await
@@ -73,7 +80,7 @@ async fn handle_authenticate_oauthbearer_inner(
     auth: &mut ConnectionAuth,
     validator: &krabka_security::OAuthBearerValidator,
     jwks_cache: Option<(&AtomicU64, &AtomicI64)>,
-    now_ms: i64,
+    clock_ms: impl Fn() -> i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
     match auth {
@@ -86,12 +93,12 @@ async fn handle_authenticate_oauthbearer_inner(
             pending_token_expiry_ms: _,
         } => {
             let mech = *mechanism;
-            match validate_bearer(&req.auth_bytes, validator, jwks_cache, now_ms).await {
-                Ok(outcome) => {
+            match validate_bearer(&req.auth_bytes, validator, jwks_cache, &clock_ms).await {
+                Ok((outcome, now_ms)) => {
                     // Clamp `session_lifetime_ms` to the optional
                     // broker cap, then anchor `Authenticated.expires_at_ms`
                     // to the CLAMPED value. The dispatch loop reads
-                    // `expires_at_ms` to schedule the re-auth deadline — if
+                    // `expires_at_ms` to enforce the re-auth deadline — if
                     // we stored the raw token exp here, the broker would
                     // tolerate the connection past the value reported to
                     // the client.
@@ -153,8 +160,8 @@ async fn handle_authenticate_oauthbearer_inner(
         } => {
             let prev_mech = previous.mechanism;
             let prev_name = previous.principal.name.clone();
-            match validate_bearer(&req.auth_bytes, validator, jwks_cache, now_ms).await {
-                Ok(outcome) => {
+            match validate_bearer(&req.auth_bytes, validator, jwks_cache, &clock_ms).await {
+                Ok((outcome, now_ms)) => {
                     let principal_matches = outcome.principal.name == prev_name;
                     let decision = oauth_session_decision(
                         outcome.expires_at_ms,
@@ -297,8 +304,9 @@ async fn validate_bearer(
     auth_bytes: &[u8],
     validator: &krabka_security::OAuthBearerValidator,
     jwks_cache: Option<(&AtomicU64, &AtomicI64)>,
-    now_ms: i64,
-) -> Result<krabka_security::AuthOutcome, &'static str> {
+    clock_ms: impl Fn() -> i64,
+) -> Result<(krabka_security::AuthOutcome, i64), &'static str> {
+    let now_ms = clock_ms();
     let parsed = krabka_security::parse_client_initial_response(auth_bytes)
         .map_err(|_| "malformed OAUTHBEARER client response")?;
     let cache_guard = match (validator, jwks_cache) {
@@ -333,19 +341,20 @@ async fn validate_bearer(
         .validate(&parsed.token, now_ms)
         .await
         .map_err(|_| "token validation failed")?;
-    if let Some((generation, mut facts)) = cache_guard {
+    let completed_ms = clock_ms();
+    let completed_cache = cache_guard.map(|(generation, mut facts)| {
         facts.generation_after = generation.load(Ordering::Acquire);
-        if krabka_verified::jwks_cache_admission(facts) != krabka_verified::JwksCacheDecision::Admit
-        {
-            return Err("JWKS cache changed during validation");
-        }
+        facts
+    });
+    if !krabka_verified::oauth::oauth_validation_admission(now_ms, completed_ms, completed_cache) {
+        return Err("validation snapshot is stale or clock moved backwards");
     }
     if let Some(authzid) = parsed.authzid
         && authzid != outcome.principal.name
     {
         return Err("authzid does not match token principal");
     }
-    Ok(outcome)
+    Ok((outcome, completed_ms))
 }
 
 #[cfg(test)]
