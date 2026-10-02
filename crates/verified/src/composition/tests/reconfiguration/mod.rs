@@ -6,5 +6,6 @@ use crate::reconfiguration::{
 
 mod oracle;
 use oracle::{check_overlap, current, leading, target};
+mod commit_waiter;
 mod control_support;
 mod sets;
