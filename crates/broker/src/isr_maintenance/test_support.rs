@@ -85,6 +85,7 @@ pub(super) async fn set_replica_state(
                         .expect("test caught-up age is representable"),
                 ),
                 broker_epoch: None,
+                fetched_since_isr_exit: false,
             },
         );
     }
