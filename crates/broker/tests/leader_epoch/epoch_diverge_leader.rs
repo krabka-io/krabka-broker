@@ -9,21 +9,21 @@
 use assert2::{assert, check};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+    fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
     produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
 };
 
 use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
 
-/// KIP-320 leader side. A follower-style Fetch, with `replica_id >= 0`, that
+/// KIP-320 leader side. A Fetch from an assigned follower that
 /// advertises a stale `last_fetched_epoch` whose epoch ends *before* the
 /// requested `fetch_offset` must get a `diverging_epoch` that points at the
 /// epoch boundary, and NO records.
 ///
 /// The test builds the leader's epoch history deterministically:
 ///   * produce `k = 2` records at epoch 0, which gives checkpoint `0 -> 0`,
-///   * bump the leader epoch to 1, with the split-brain shim that the fence
-///     test uses, then produce 2 more, which gives checkpoint `1 -> 2`.
+///   * commit leader epoch 1 in metadata, then produce 2 more, which gives
+///     checkpoint `1 -> 2`.
 ///
 /// The cache is then `e0 -> [0, 2)` and `e1 -> [2, 4)`, and the log end is 4.
 ///
@@ -35,7 +35,7 @@ use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
 /// `diverging_epoch { epoch: 0, end_offset: 2 }` and serves nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
-    let (broker, bootstrap, _dir) = boot_single().await;
+    let (broker, bootstrap, dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "diverge").await;
 
     let client = Client::builder()
@@ -77,8 +77,33 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
     produce_one("e0-a").await;
     produce_one("e0-b").await;
 
-    // Bump leader epoch to 1, produce 2 more → checkpoint row `1 2`, LEO = 4.
-    broker.test_set_leader_epoch("diverge", 0, 1);
+    // Keep metadata and the local epoch in agreement: a later supervisor
+    // reconcile must not reinstall epoch 0 and erase this history. Declare
+    // follower 7 in the replica set so the Fetch exercises follower admission.
+    let mut partition = broker
+        .partition_record_for_test("diverge", 0)
+        .expect("partition metadata");
+    partition.leader_epoch = krabka_metadata::LeaderEpoch(1);
+    partition.replicas.push(krabka_broker::NodeId(7));
+    broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(partition))
+        .await
+        .expect("promote to epoch 1");
+    let checkpoint_path = dir.path().join("diverge-0").join("leader-epoch-checkpoint");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if std::fs::read_to_string(&checkpoint_path)
+                .is_ok_and(|checkpoint| checkpoint.lines().any(|line| line == "1 2"))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("supervisor records epoch 1 at offset 2");
+
+    // Produce 2 more → LEO = 4.
     produce_one("e1-a").await;
     produce_one("e1-b").await;
     let n: i64 = 4;
@@ -95,6 +120,10 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
     let resp = client
         .send(FetchRequest {
             replica_id: 7,
+            replica_state: ReplicaState {
+                replica_id: 7,
+                ..Default::default()
+            },
             max_wait_ms: 100,
             min_bytes: 1,
             max_bytes: 1 << 20,

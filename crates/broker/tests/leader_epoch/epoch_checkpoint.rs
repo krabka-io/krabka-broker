@@ -2,8 +2,8 @@
 //! a restarting broker both parse: a version header, a row count, and one
 //! `epoch offset` row per epoch.
 //!
-//! This is the only test in the suite that reads the file off disk rather than
-//! going over the wire, which is why it stands on its own.
+//! This test checks the file's byte format directly, separately from the
+//! leader-epoch behavior exercised over the wire.
 
 use assert2::check;
 use krabka_client_core::Client;
