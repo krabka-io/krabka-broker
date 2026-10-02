@@ -101,7 +101,24 @@ pub async fn start_n_node_with_retry(n: u64) -> Vec<(BrokerHandle, BrokerConfig,
 pub async fn start_reusing_addrs(cfg: &BrokerConfig, what: &str) -> BrokerHandle {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        match Broker::start(cfg.clone()).await {
+        let attempt = async {
+            // Hold reused ports before startup can initialize the metadata log.
+            // A bind failure then leaves a fresh Join log empty for the retry.
+            let controller = if cfg.is_controller() && cfg.controller_listen_addr.port() != 0 {
+                Some(tokio::net::TcpListener::bind(cfg.controller_listen_addr).await?)
+            } else {
+                None
+            };
+            let mut data = Vec::new();
+            for spec in cfg.effective_listeners() {
+                if spec.bind_addr.port() != 0 {
+                    data.push(tokio::net::TcpListener::bind(spec.bind_addr).await?);
+                }
+            }
+            Broker::start_with_listeners(cfg.clone(), controller, data).await
+        }
+        .await;
+        match attempt {
             Ok(handle) => return handle,
             Err(BrokerError::Io(e))
                 if e.kind() == std::io::ErrorKind::AddrInUse && Instant::now() < deadline =>
