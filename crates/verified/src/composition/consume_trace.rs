@@ -41,6 +41,9 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
     let mut last_clock = start;
     let mut granted = 0_u128;
     let mut lost = 0_u128;
+    // Keep the credit ledger linear; relate its grant sum to whole tokens separately.
+    #[cfg(creusot)]
+    let mut spent: Snapshot<Int> = snapshot!(0);
     let mut i: usize = 0;
     #[cfg_attr(creusot, invariant(i@ <= steps@.len()))]
     #[cfg_attr(creusot, invariant(available@ <= burst@ && (available@ == 0 || debt@ == 0)))]
@@ -49,12 +52,14 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
     #[cfg_attr(creusot, invariant(forall<k: Int> 0 <= k && k < i@ ==> last_clock@ >= steps@[k].0@))]
     #[cfg_attr(creusot, invariant(last_clock@ == start@ || exists<k: Int>
         0 <= k && k < i@ && last_clock@ == steps@[k].0@))]
-    #[cfg_attr(creusot, invariant(granted@ * units_per_token@ + available@ >= initial.0@))]
+    #[cfg_attr(creusot, invariant(granted@ * units_per_token@ == *spent))]
+    #[cfg_attr(creusot, invariant(*spent >= 0))]
+    #[cfg_attr(creusot, invariant(*spent + available@ >= initial.0@))]
     #[cfg_attr(creusot, invariant(lost@ <= initial.2@ + (last_clock@ - start@) * rate@))]
-    #[cfg_attr(creusot, invariant((granted@ * units_per_token@ + available@ - debt@) * 1_000_000_000
+    #[cfg_attr(creusot, invariant((*spent + available@ - debt@) * 1_000_000_000
         + fraction@ + lost@
         == (initial.0@ - initial.1@) * 1_000_000_000 + initial.2@ + (last_clock@ - start@) * rate@))]
-    #[cfg_attr(creusot, invariant(granted@ * units_per_token@ + available@ <= initial.0@
+    #[cfg_attr(creusot, invariant(*spent + available@ <= initial.0@
         + (initial.2@ + (last_clock@ - start@) * rate@) / 1_000_000_000))]
     #[cfg_attr(creusot, invariant(i@ > 0
         && steps@[i@ - 1].1@ >= burst@ / units_per_token@ ==> available@ < units_per_token@))]
@@ -91,17 +96,20 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
             == granted@ * units_per_token@ + grant.0@);
         proof_assert!({
             lemma_refill_grant_ledger(
-                granted@ * units_per_token@,
+                *spent,
                 (available@ - debt@, fraction@),
                 (refilled.0@ - refilled.1@, refilled.2@, discarded@),
                 (grant.0@, left.0@ - refilled.1@),
                 elapsed@ * rate@,
             );
-            ((granted@ + grant.0@ / units_per_token@) * units_per_token@
-                + left.0@ - refilled.1@) * 1_000_000_000 + refilled.2@ + discarded@
-                == (granted@ * units_per_token@ + available@ - debt@) * 1_000_000_000
+            (*spent + grant.0@ + left.0@ - refilled.1@) * 1_000_000_000 + refilled.2@ + discarded@
+                == (*spent + available@ - debt@) * 1_000_000_000
                     + fraction@ + elapsed@ * rate@
         });
+        #[cfg(creusot)]
+        {
+            spent = snapshot!(*spent + grant.0@);
+        }
         granted += u128::from(grant.0 / units_per_token);
         lost += discarded;
         available = left.0;

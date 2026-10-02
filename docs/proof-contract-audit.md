@@ -4,10 +4,10 @@ The proof suite contains substantial search, conservation, progress, and quorum 
 
 ## Scope and method
 
-This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds forty-nine cross-module compositions. The 28
+This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds fifty-one cross-module compositions. The 28
 sources with at least 300 lines now use matching subdirectories for kernels
 and tests; the public module paths remain the same. Composition theorems are
-grouped into 31 topic files. The layout-only move preserved all 305 function bodies and
+grouped into 33 topic files. The layout-only move preserved all 305 function bodies and
 contracts, passed all 264 tests, and preserved the 3,625-entry mutation
 inventory. Saved proof sessions and catalog links follow the new paths.
 Fresh generation and the final two-worker no-cache saved-session replay passed
@@ -138,7 +138,9 @@ A specification is not automatically weak because it resembles a short function.
 | `indexed_timestamp_scan_finds_first` | A strict-predecessor index cursor plus the existing record selector returns the global earliest qualifying record, or establishes no match. Timestamp regressions and offset gaps are allowed. | Every sparse maximum bounds records strictly before its offset; the scan reads the complete suffix of the same log. |
 | `remote_timestamp_scan_preserves_first` | The real remote candidate-count kernel and its floor adapter preserve the global first matching record, even with offset padding and unsorted conservative timestamps. | Every row with earlier records must bound those timestamps; zero-offset padding imposes no record bound. A complete suffix of the same log must be read. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
 | `validated_remote_and_local_time_starts_agree` | Folding the actual archive row validator establishes that remote linear-prefix selection and local strict binary search choose identical scan starts. | Validated rows exclude raw trailing padding. Agreement does not establish that maxima are truthful or that record bytes are complete. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
-| `constructed_time_index_preserves_first` | Building any length of sparse index from actual prefix maxima establishes the search preconditions and makes indexed lookup agree with a full record scan. | Ordered record offsets and ordered, valid batch-base/prefix-end row positions. Decoding, header accuracy, and windowed I/O remain host obligations. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `constructed_time_index_preserves_first` | Returns the actual sparse rows with exact attained prefix maxima, source offset coordinates, monotone row columns, global prefix bounds and the globally first matching record or complete absence. | Complete faithfully decoded ordered record offsets and valid indexed/through positions. Rows here name actual record coordinates; header-only or padding coordinates, file encoding and I/O remain external. |
+| `constructed_index_retained_candidate` | Consumes constructed index bounds to return the original index of the first retained matching record. A pruned match cannot hide a later retained match; no result excludes every retained match. | Coherent nonnegative base/floor and representable absolute record coordinates. Complete decoded windows and faithful row construction remain external. |
+| `constructed_tiered_timestamp_preserves_first` | Consumes each tier's retained result, chooses the least absolute offset in their union and applies exclusive ListOffsets visibility while preserving the chosen record's timestamp and supplied epoch. Unknown excludes all retained visible matches. | Individually ordered complete tier windows may overlap and timestamps may regress. Cross-tier record consistency, epoch lookup, frontiers, byte decoding, I/O errors and publication remain host obligations. |
 
 The implication-shaped checks explicitly return true on rejected input. They prove a property of admitted operations, not successful admission of every input. `composition_boundary_witnesses` and `restored_state_composition_boundaries` exercise successful paths, corruption, empty sets, exact boundaries, epoch gating, repeated timestamps, cross-segment/interleaved transactions, stale snapshots, and integer exhaustion. This separates legitimate conditional safety from a vacuous all-reject decision: the decision kernels themselves still have admission-completeness contracts, and the token negative control checks that distinction directly.
 
@@ -332,6 +334,16 @@ Creusot/mutation configuration checks pass.
 
 The arbitrary consume-trace composition combines the production refill, whole-token request selector, and grant kernel. An independent signed rational ledger checks small unsaturated balances, fractional credit, debt repayment, burst loss, repeated/backward clocks, empty traces, and 64-bit extremes. Production tests exercise spending between refills and debt repayment. A paired zero-selector/weak-contract control proves both the altered selector and the conservation-only trace, but fails the restored service guarantee, independent ledger tests, and production quantizer tests. All temporary mutations are restored before validation.
 
+CI repeatedly left the trace's accumulated conservation invariant unproved.
+Its induction now keeps a ghost sum of granted storage units, and separately
+proves that this sum equals the actual whole-token grants times their unit
+scale. The credit ledger stays additive instead of combining token products
+with all earlier cap losses. Public contracts and runtime bodies are unchanged.
+Removing that link leaves the trace at 56 of 60 obligations; the positive
+source is restored byte-for-byte. Pinned cache-free full generation passes all
+537 sessions, all 303 native verified tests pass, and each previously failing
+broker integration target passes three local runs. Fresh CI remains required.
+
 The final consume-trace batch passes fresh generation and the two-worker
 no-cache saved-session replay of all 519 proof files, 268 verified tests,
 34 throttle tests, eight bucket-model tests, nine broker Fetch-throttle tests,
@@ -489,7 +501,7 @@ restore/retry controls. At that checkpoint, replacing all fifteen boolean-only
 bodies with `true` proved all fifteen affected files and passed all 48 composition
 tests. The append and reservation entries now return concrete witnesses with
 exact relational postconditions and independent arithmetic oracles. The
-remaining six contracts still need exported relations or witnesses. The
+remaining five contracts still need exported relations or witnesses. The
 thirteen-function checkpoint control proved all thirteen replacements and passed
 all 53 composition tests. The read-committed Fetch entry has since been upgraded
 and consumed by the stability/abort-source composition below. At the twelve-entry checkpoint, repeating the
@@ -499,7 +511,9 @@ marker-admission composition below. Scheduled delivery now exports its derived
 frontier to the transaction-stability composition. Placement now exports its
 actual voter set and installer admission to the rack-loss witness. Epoch
 reconciliation now exports its resolved cut into retained snapshot replay. Offset
-index validation now exports its cursors into complete-batch first-match selection. Temporary
+index validation now exports its cursors into complete-batch first-match selection.
+Sparse construction now exports actual prefix maxima into retained lookup and
+cross-tier visibility. Temporary
 control changes and artifacts are
 restored byte-for-byte:
 
@@ -507,7 +521,6 @@ restored byte-for-byte:
 - `validated_time_cursors_are_monotone`
 - `remote_timestamp_scan_preserves_first`
 - `validated_remote_and_local_time_starts_agree`
-- `constructed_time_index_preserves_first`
 - `admitted_trim_bounds_reload_and_retry`
 - `diskless_trim_reconciliation_preserves_coverage`
 
@@ -865,8 +878,8 @@ Bazel CI and the full mutation sweep are separate from these local checks.
 
 ## Quota trace CI follow-up
 
-PR #1260's exact failed Creusot job left two obligations in one of its
-534 files, `metered_consumes_conserve_elapsed_credit` unproved. Setup's
+PR #1260's exact failed Creusot job left two obligations unproved in
+`metered_consumes_conserve_elapsed_credit`, one of its 534 files. Setup's
 unsupported command fell back successfully; the failure was in the solver's
 large conservation context. A private proved ledger lemma now lifts refill
 conservation through a whole-token grant before the trace composes it with
@@ -879,3 +892,62 @@ with four CPUs. Both affected proofs also pass a no-cache one-CPU run in that
 image. Existing independent quota ledger tests, all-target workspace Clippy
 with warnings denied, formatting and the Creusot/mutation skip gates pass.
 Remote CI for the repair is reported separately.
+
+## Constructed sparse indexes, retention and cross-tier visibility
+
+The former construction composition exported only `true`. Its witness now
+contains the actual sparse rows and first matching original record index. Every
+row's timestamp is an attained maximum of its complete prefix, its coordinate
+comes from the requested indexed record, both row columns obey global ordering,
+and its maximum bounds every record at/before its coordinate. These are exported
+relations derived from the existing maximum selector, not caller-supplied bounds.
+
+The fiftieth composition consumes those rows to search the retained suffix and
+returns the original first matching index exactly when a retained match exists.
+It cannot return a pruned raw first match and thereby suppress later matches.
+The fifty-first composition consumes both tiers' retained answers, derives their
+least absolute coordinate, preserves its actual timestamp and supplied epoch,
+and applies the exclusive ListOffsets visibility bound. Unknown means the union
+contains no retained visible match. Timestamps may regress and tiers may overlap.
+
+The actual time-index writer now uses the running header maximum and the last
+offset of the batch that set it; this construction witness ranges over rows at
+actual record coordinates. Header-only offsets or sparse padding coordinates
+are not established by this construction. Faithful header/record timestamps,
+complete decoding and enumeration, physical windowed reads, overlapping-record
+consistency, coherent floors/visibility and epoch lookup remain host obligations.
+The existing general scan theorem also admits truthful bounds at coordinates
+without records, but constructing those bounds requires a separate host bridge.
+
+Monotone timestamp cursors alone cannot safely bound a scan's tail by a second
+timestamp cursor: later timestamps can regress into the requested range. The
+new consumers scan the retained suffix and bound the resulting absolute offset,
+which is the ordering the visibility gate requires.
+
+Four independent maximum, retained-index and complete-union oracle tests cover
+pruned first matches, regressions after a maximum, sparse rows spanning records,
+empty indexes/windows, tied maxima, overlapping tiers, exact exclusive bounds
+and signed timestamp/maximum absolute-coordinate extremes. Four restored
+controls exercise the two-module dependency chain. Hiding construction bounds
+leaves its own proof and all four tests passing but fails retained lookup; hiding
+retained guarantees similarly fails tier selection. Returning the pruned raw
+first match fails proof and tests. A paired mutation makes the primitive and
+its contract return the indexed record's timestamp instead of the prefix maximum:
+that altered primitive proves, while construction and its independent oracle fail.
+
+A separate restored control replaces all five remaining boolean-only bodies
+with `true`: all affected module proofs and all 303 library tests still pass.
+That is evidence these five exported contracts remain too weak, not evidence
+that their full intended relationships have been verified. Temporary source
+changes, generated sessions and new failure seeds are restored or quarantined.
+
+Fresh pinned generation and full no-cache two-worker saved-session replay prove
+all 537 files. All 303 verified, 474 log and 167 remote-storage library tests
+pass, including real archived/local timestamp and retention-floor fixtures.
+Verified/log/remote-storage Bazel tests, verified doctests/rustdoc, formatting,
+workspace all-target Clippy with warnings denied and the Creusot/mutation gates
+pass. The two new consumers and upgraded construction appear in mutation
+discovery. Only their three sessions are refreshed; all 1,068 unrelated prior
+artifact files, including the published quota repair, remain byte-identical.
+Every verified Rust source remains below 300 lines. These timestamp compositions
+form a separate review layer above PR #1260's quota CI repair.

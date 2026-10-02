@@ -1,0 +1,30 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_closure1": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_constructed_index_retained_candidate": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_constructed_tiered_timestamp_preserves_first": {
+        "prover": "z3",
+        "time": 0.021
+      },
+      "vc_earliest_timestamp_candidate": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_list_offsets_kind": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_list_offsets_selection_decision": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_map_usize": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_map_usize'0": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_unwrap_or_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.008 }
+    }
+  }
+}
