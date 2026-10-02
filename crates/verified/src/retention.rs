@@ -69,3 +69,6 @@ pub use local_bytes::{local_prefix_bytes, local_prefix_bytes_monotone};
 mod remote_bytes;
 #[cfg(creusot)]
 pub use remote_bytes::remote_prefix_charge;
+
+mod remote_floor;
+pub use remote_floor::remote_retention_floor_step;

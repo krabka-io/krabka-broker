@@ -229,3 +229,6 @@ use covered_retention::remote_coverage_bounds_local_retention;
 
 mod remote_breach;
 use remote_breach::published_trim_bounds_remote_breach_cleanup;
+
+mod remote_delete;
+use remote_delete::completed_remote_retention_bounds_floor;
