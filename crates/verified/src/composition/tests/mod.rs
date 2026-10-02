@@ -87,3 +87,5 @@ mod trim_witnesses;
 mod time_range;
 
 mod stable_time_range;
+
+mod covered_retention;

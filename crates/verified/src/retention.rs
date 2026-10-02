@@ -57,3 +57,5 @@ mod tests;
 
 mod coverage;
 pub use coverage::remote_covered_through;
+#[cfg(creusot)]
+pub use coverage::{remote_covers_offset, remote_ranges_valid};
