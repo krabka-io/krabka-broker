@@ -275,6 +275,8 @@ async fn run_actor(
         // No ticker, no actor. Take the same exit the loop body takes below,
         // so the offset-retention clock is stamped once before we go away.
         group.observe_membership(chrono_now_ms());
+        rx.close();
+        while rx.recv().await.is_some() {}
         return group;
     };
     loop {
@@ -380,6 +382,10 @@ async fn run_actor(
             break;
         }
     }
+    // A sender can enqueue using a permit reserved before closure. Drain those
+    // sends too, dropping their replies, so callers cannot wait on a dead actor.
+    rx.close();
+    while rx.recv().await.is_some() {}
     group
 }
 

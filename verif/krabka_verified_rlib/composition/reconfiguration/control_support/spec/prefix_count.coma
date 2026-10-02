@@ -1,0 +1,65 @@
+(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 32 10 32 15
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 49 16 53 5
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.int.Int64
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+  [%#sspec'1] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+
+predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 42 0 48 9] (nodes: Seq.seq UInt64.t) (count: int) (kind: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
+  [%#sspec'0] match kind with
+    | Add -> has_node nodes count node \/ node = target
+    | Remove -> has_node nodes count node /\ node <> target
+    | Update | FinalizeKraftVersion -> has_node nodes count node
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant old' : Seq.seq UInt64.t
+
+constant reports : Seq.seq tup2_i64_i64
+
+constant kind : t_VoterChangeKind
+
+constant node : UInt64.t
+
+constant end' : int
+
+constant new : bool
+
+constant count : int
+
+function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
+
+goal vc_prefix_count: if count <= 0 then
+    true
+  else
+    [@expl:variant decreases] well_founded_relation_Int ([%#sspec] count) ([%#sspec] count - 1)

@@ -240,4 +240,7 @@ mod schema_produce;
 use schema_produce::schema_checked_produce_frontier;
 
 mod reconfiguration;
-use reconfiguration::{constructed_voter_reconfiguration, reconfigured_majorities_overlap};
+use reconfiguration::{
+    constructed_voter_reconfiguration, reconfiguration_control_prefix_support,
+    reconfigured_majorities_overlap,
+};

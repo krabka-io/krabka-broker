@@ -1670,3 +1670,67 @@ kernel, but previously stopped exporting them. The stronger interface is proved
 across all five reconfiguration sessions; all 342 native tests and workspace
 all-target Clippy still pass. This enables a consumer to derive zero, one or two
 actual control-record deltas from that same plan instead of trusting a count.
+
+## Control-record geometry carried by actual replication prefixes
+
+The logical voter-overlap proof accepts Boolean grants. Their counts and shared
+ID are exact, but that interface alone says nothing about which log prefix each
+grant covers. Metadata record deltas independently describe a contiguous batch;
+a supplied batch count can still disagree with a reconfiguration's actual plan.
+The controller builds its control records from the admitted plan flags, writes
+the KRaftVersion record before Voters when both are present, and uses the latest
+local voter view during replication. Version-0 update preflight writes no batch.
+
+[`reconfiguration_control_prefix_support`](../crates/verified/src/composition/reconfiguration/control_support/prepare.rs)
+constructs the record count from those actual flags and consumes the production
+metadata-delta and local-append-coordinate kernels. It obtains the exact
+exclusive end from the final actual delta, then constructs the old/new grant
+slots by comparing each node's reported prefix with that end. The existing
+membership/overlap composition derives the distinct counts and shared node.
+An appended witness exists exactly when admission, representable geometry and
+both actual prefix majorities qualify. Each returned record has its own exact
+delta, and the shared node's old and new reports reach past every record in the
+batch. A zero-record preflight returns an admitted empty-delta/no-append witness
+without demanding prefix votes or a representable append base.
+
+The admitted plan's version and control-record flags now survive both exported
+interfaces. That makes one-record add/remove/update and two-record finalization
+part of the aggregate guarantee. The independent native oracle derives the
+record count from expected plan flags, uses wide `i128` end arithmetic, and
+intersects actual `BTreeSet` prefix supporters. Exhaustive masks for one through
+five voters cover reports ending exactly at, or one offset short of, the whole
+batch; boundary tables cover negative bases and exclusive-end exhaustion near
+`i64::MAX`. They also preserve no-append preflight with unusable bases/reports.
+
+Reported positions must belong to those exact node IDs and matching logical
+log histories. The shared node's old/new observations must refer to the same
+physical storage identity. Complete prefix/control encoding, epoch and directory
+facts remain host obligations. The KRaft core tracks fetched prefixes; the WAL engine records
+fsynced offsets. Fsync follows only when the supplied observations establish it.
+This witness qualifies support in both logical memberships. The controller's
+latest-view commitment protocol, election histories, actual record bytes and
+crash durability remain outside this composition. Its real append path already
+uses `local_append_coordinates` to reject an unrepresentable successor before
+writing, so this proof introduces no runtime guard or protocol change.
+
+Four scoped controls test those dependencies. Hiding only the exported plan
+facts leaves the membership and overlap helper proofs plus all 345 native tests
+passing, while the control-prefix consumer fails. Returning all-zero metadata
+deltas with a matching weakened contract leaves the metadata helper provable,
+but fails the aggregate end/delta claim and native tests. Comparing reports to
+the batch base instead of its exclusive end fails the prefix bridge and native
+oracle. Rejecting every preflight fails the admission equivalence and tests.
+The positive three sessions pass at the same cache-free depth-two search used
+for the controls. All temporary edits were restored byte-for-byte, with failing
+control seeds retained outside the repository.
+
+Pinned-image generation and cache-free canonical replay both prove all 561
+sessions, including the parent's stronger plan exports. All 345 verified-crate
+tests, all 380 Raft tests, the three Bazel targets, workspace all-target Clippy
+with warnings denied, formatting and proof/mutation configuration checks pass.
+Three new sessions are retained; all 1,116 parent artifact files are unchanged.
+Every verified Rust source remains below 300 lines (largest: 288), across 50
+composition topic files. This layer remains local on
+`codex/proof-reconfigured-append-support`, above `codex/proof-quorum-membership`;
+neither local layer has a published PR or remote qualification. PR #1268 remains
+green at its published 553-session schema commit.
