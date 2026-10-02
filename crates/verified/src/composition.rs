@@ -232,3 +232,9 @@ use remote_breach::published_trim_bounds_remote_breach_cleanup;
 
 mod remote_delete;
 use remote_delete::completed_remote_retention_bounds_floor;
+
+mod schema_walk;
+use schema_walk::{SchemaWalkField, framed_schema_walk_admission};
+
+mod schema_produce;
+use schema_produce::schema_checked_produce_frontier;

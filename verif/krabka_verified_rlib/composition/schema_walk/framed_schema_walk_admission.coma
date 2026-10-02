@@ -1,0 +1,408 @@
+(* #"/workspace/crates/verified/src/composition/schema_walk.rs" 93 0 98 15 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sschema_walk = "/workspace/crates/verified/src/composition/schema_walk.rs" 99 64 99 74
+let%span sschema_walk'0 = "/workspace/crates/verified/src/composition/schema_walk.rs" 100 25 100 29
+let%span sschema_walk'1 = "/workspace/crates/verified/src/composition/schema_walk.rs" 101 23 101 27
+let%span sschema_walk'2 = "/workspace/crates/verified/src/composition/schema_walk.rs" 102 16 102 22
+let%span sschema_walk'3 = "/workspace/crates/verified/src/composition/schema_walk.rs" 116 14 116 32
+let%span sschema_walk'4 = "/workspace/crates/verified/src/composition/schema_walk.rs" 117 14 117 26
+let%span sschema_walk'5 = "/workspace/crates/verified/src/composition/schema_walk.rs" 114 16 115 68
+let%span sschema_walk'6 = "/workspace/crates/verified/src/composition/schema_walk.rs" 107 16 113 105
+let%span sschema_walk'7 = "/workspace/crates/verified/src/composition/schema_walk.rs" 105 16 106 59
+let%span sschema_walk'8 = "/workspace/crates/verified/src/composition/schema_walk.rs" 104 16 104 61
+let%span sschema_walk'9 = "/workspace/crates/verified/src/composition/schema_walk.rs" 103 16 103 56
+let%span sschema_walk'10 = "/workspace/crates/verified/src/composition/schema_walk.rs" 118 21 118 30
+let%span sschema_walk'11 = "/workspace/crates/verified/src/composition/schema_walk.rs" 118 20 118 30
+let%span sschema_walk'12 = "/workspace/crates/verified/src/composition/schema_walk.rs" 119 21 119 89
+let%span sschema_walk'13 = "/workspace/crates/verified/src/composition/schema_walk.rs" 121 27 121 31
+let%span sschema_walk'14 = "/workspace/crates/verified/src/composition/schema_walk.rs" 123 26 123 27
+let%span sschema_walk'15 = "/workspace/crates/verified/src/composition/schema_walk.rs" 123 12 123 27
+let%span sschema_walk'16 = "/workspace/crates/verified/src/composition/schema_walk.rs" 126 25 126 59
+let%span sschema_walk'17 = "/workspace/crates/verified/src/composition/schema_walk.rs" 128 27 128 39
+let%span sschema_walk'18 = "/workspace/crates/verified/src/composition/schema_walk.rs" 132 28 132 71
+let%span sschema_walk'19 = "/workspace/crates/verified/src/composition/schema_walk.rs" 128 27 135 21
+let%span sschema_walk'20 = "/workspace/crates/verified/src/composition/schema_walk.rs" 138 28 138 29
+let%span sschema_walk'21 = "/workspace/crates/verified/src/composition/schema_walk.rs" 138 16 138 29
+let%span sschema_walk'22 = "/workspace/crates/verified/src/composition/schema_walk.rs" 141 8 141 41
+let%span sschema_walk'23 = "/workspace/crates/verified/src/composition/schema_walk.rs" 142 13 142 14
+let%span sschema_walk'24 = "/workspace/crates/verified/src/composition/schema_walk.rs" 142 8 142 14
+let%span sschema_walk'25 = "/workspace/crates/verified/src/composition/schema_walk.rs" 146 8 146 67
+let%span sschema_walk'26 = "/workspace/crates/verified/src/composition/schema_walk.rs" 78 11 78 37
+let%span sschema_walk'27 = "/workspace/crates/verified/src/composition/schema_walk.rs" 79 10 79 42
+let%span sschema_walk'28 = "/workspace/crates/verified/src/composition/schema_walk.rs" 80 10 81 85
+let%span sschema_walk'29 = "/workspace/crates/verified/src/composition/schema_walk.rs" 82 10 87 101
+let%span sschema_walk'30 = "/workspace/crates/verified/src/composition/schema_walk.rs" 88 10 89 68
+let%span sschema_walk'31 = "/workspace/crates/verified/src/composition/schema_walk.rs" 90 10 92 72
+let%span sschema_walk'32 = "/workspace/crates/verified/src/composition/schema_walk.rs" 58 16 64 5
+let%span sschema_walk'33 = "/workspace/crates/verified/src/composition/schema_walk.rs" 44 16 49 10
+let%span sschema_walk'34 = "/workspace/crates/verified/src/composition/schema_walk.rs" 28 16 30 5
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 95 10 96 63
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 97 10 98 67
+let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 99 10 102 62
+let%span sschema'2 = "/workspace/crates/verified/src/schema.rs" 76 10 80 1
+let%span sschema'3 = "/workspace/crates/verified/src/schema.rs" 34 10 35 61
+let%span sschema'4 = "/workspace/crates/verified/src/schema.rs" 122 10 123 48
+
+use seq.Seq
+use creusot.int.UInt32
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.int.UInt8
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global
+
+type t_SchemaFieldAction = Skip | CheckKey | CheckValue
+
+type t_Option_u32 = None | Some UInt32.t
+
+type tup3_SchemaFieldAction_Option_u32_bool = { f0: t_SchemaFieldAction; f1: t_Option_u32; f2: bool }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global (self: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global) : Seq.seq tup3_SchemaFieldAction_Option_u32_bool
+
+axiom view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global_spec:
+  forall self: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global [view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global self]. [%#svec'0] Seq.length (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global self)
+    <= UInt64.t'int const_MAX
+
+let new_tup3_SchemaFieldAction_Option_u32_bool (return (x: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global)) = any
+  [ return (result: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global) ->
+  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result)
+    = 0}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_SchemaFieldRole = Key | Value
+
+type tup5_u8_u8_u8_u8_u8 = { f0'0: UInt8.t; f1'0: UInt8.t; f2'0: UInt8.t; f3'0: UInt8.t; f4'0: UInt8.t }
+
+type t_Option_tup5_u8_u8_u8_u8_u8 = None'0 | Some'0 tup5_u8_u8_u8_u8_u8
+
+type t_SchemaFailureKind = Unknown | Transient | Permanent | Malformed
+
+type t_Option_SchemaFailureKind = None'1 | Some'1 t_SchemaFailureKind
+
+type t_SchemaWalkField = {
+  role: t_SchemaFieldRole;
+  present: bool;
+  empty: bool;
+  prefix: t_Option_tup5_u8_u8_u8_u8_u8;
+  checked: bool;
+  failure: t_Option_SchemaFailureKind }
+
+let len_SchemaWalkField (self_: Slice64.slice t_SchemaWalkField) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type tup2_Option_tup5_u8_u8_u8_u8_u8_Option_u32 = { f0'1: t_Option_tup5_u8_u8_u8_u8_u8; f1'1: t_Option_u32 }
+
+predicate required [#"/workspace/crates/verified/src/composition/schema_walk.rs" 27 0 27 71] (field: t_SchemaWalkField) (key: bool) (value: bool) =
+  [%#sschema_walk'34] field.present
+  /\ match field.role with
+    | Key -> key
+    | Value -> value
+    end
+
+predicate decoded_id [#"/workspace/crates/verified/src/composition/schema_walk.rs" 57 0 57 97] (field: t_SchemaWalkField) (key: bool) (value: bool) (id: t_Option_u32) =
+  [%#sschema_walk'32] match { f0'1 = field.prefix; f1'1 = id } with
+    | {f0'1 = Some'0 {f0'0 = magic; f1'0 = a; f2'0 = b; f3'0 = c; f4'0 = d}; f1'1 = Some id'0} -> required field key value
+    /\ not field.empty
+    /\ UInt8.t'int magic = 0
+    /\ UInt32.t'int id'0 = UInt8.t'int a * 16777216 + UInt8.t'int b * 65536 + UInt8.t'int c * 256 + UInt8.t'int d
+    | {f0'1 = prefix'0; f1'1 = None} -> not required field key value
+    \/ field.empty
+    \/ match prefix'0 with
+      | None'0 -> true
+      | Some'0 {f0'0 = magic} -> UInt8.t'int magic <> 0
+      end
+    | {f0'1 = None'0; f1'1 = Some _} -> false
+    end
+
+type tup2_bool_bool = { f0'2: bool; f1'2: bool }
+
+predicate field_admitted [#"/workspace/crates/verified/src/composition/schema_walk.rs" 38 0 43 9] (field: t_SchemaWalkField) (key: bool) (value: bool) (fail_open: bool) =
+  [%#sschema_walk'33] not required field key value
+  \/ field.empty
+  \/ match field.prefix with
+      | Some'0 {f0'0 = magic} -> UInt8.t'int magic = 0
+      | None'0 -> false
+      end
+  /\ match field.failure with
+    | None'1 -> field.checked
+    | Some'1 failure'0 -> fail_open /\ failure'0 = Transient
+    end
+
+let schema_field_action (key_enabled: bool) (value_enabled: bool) (role'0: t_SchemaFieldRole) (present'0: bool)
+  (return (x: t_SchemaFieldAction)) = any
+  [ return (result: t_SchemaFieldAction) ->
+  {[@stop_split] [@expl:schema_field_action ensures] ([@stop_split] [@expl:schema_field_action ensures #0] [%#sschema] (result
+        = CheckKey)
+      = (key_enabled /\ present'0 /\ role'0 = Key))
+    /\ ([@stop_split] [@expl:schema_field_action ensures #1] [%#sschema'0] (result = CheckValue)
+      = (value_enabled /\ present'0 /\ role'0 = Value))
+    /\ ([@stop_split] [@expl:schema_field_action ensures #2] [%#sschema'1] (result = Skip)
+    = (not present'0 \/ role'0 = Key /\ not key_enabled \/ role'0 = Value /\ not value_enabled))}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_tup5_u8_u8_u8_u8_u8) (return (f0'3: tup5_u8_u8_u8_u8_u8)) = any
+  [ _k (f0'3: tup5_u8_u8_u8_u8_u8) -> {Some'0 f0'3 = _x} (! return {f0'3})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let schema_frame_id (magic: UInt8.t) (id_0: UInt8.t) (id_1: UInt8.t) (id_2: UInt8.t) (id_3: UInt8.t)
+  (return (x: t_Option_u32)) = any
+  [ return (result: t_Option_u32) -> {[@stop_split] [@expl:schema_frame_id ensures] [%#sschema'2] match result with
+      | None -> magic <> (0: UInt8.t)
+      | Some id -> magic = (0: UInt8.t)
+      /\ UInt32.t'int id
+      = UInt8.t'int id_0 * 16777216 + UInt8.t'int id_1 * 65536 + UInt8.t'int id_2 * 256 + UInt8.t'int id_3
+      end}
+    (! return {result}) ]
+
+let is_some_u32 (self_: t_Option_u32) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_some ensures] [%#soption] result = (self_ <> None)}
+    (! return {result}) ]
+
+let elim_Some'0 (_x: t_Option_SchemaFailureKind) (return (f0'3: t_SchemaFailureKind)) = any
+  [ _k (f0'3: t_SchemaFailureKind) -> {Some'1 f0'3 = _x} (! return {f0'3})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_SchemaFailureDecision = Reject | AllowUnvalidated
+
+let schema_failure_decision (fail_open: bool) (failure'0: t_SchemaFailureKind) (return (x: t_SchemaFailureDecision)) =
+any
+  [ return (result: t_SchemaFailureDecision) ->
+  {[@stop_split] [@expl:schema_failure_decision ensures] [%#sschema'3] (result = AllowUnvalidated)
+    = (fail_open /\ failure'0 = Transient)}
+    (! return {result}) ]
+
+let push_tup3_SchemaFieldAction_Option_u32_bool (self_: MutBorrow.t t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global)
+  (v: tup3_SchemaFieldAction_Option_u32_bool) (return (x: ())) = any
+  [ return (result: ()) ->
+  {[@stop_split] [@expl:push ensures] [%#svec'1] view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global self_.final
+    = Seq.snoc (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global self_.current) v}
+    (! return {result}) ]
+
+type t_SchemaBatchAdmission = Admit'0 | Reject'0
+
+let schema_batch_admission (walk_complete: bool) (applicable: UInt64.t) (admitted: UInt64.t)
+  (return (x: t_SchemaBatchAdmission)) = any
+  [ return (result: t_SchemaBatchAdmission) ->
+  {[@stop_split] [@expl:schema_batch_admission ensures] [%#sschema'4] (result = Admit'0)
+    = (walk_complete /\ applicable = admitted)}
+    (! return {result}) ]
+
+type tup2_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global_SchemaBatchAdmission = {
+  f0'3: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global;
+  f1'3: t_SchemaBatchAdmission }
+
+constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let framed_schema_walk_admission [#"/workspace/crates/verified/src/composition/schema_walk.rs" 93 0 98 15]
+  (fields: Slice64.slice t_SchemaWalkField) (enabled: tup2_bool_bool) (fail_open: bool) (walk_complete: bool)
+  (return (x: tup2_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global_SchemaBatchAdmission)) =
+{[@stop_split] [@expl:framed_schema_walk_admission requires] [%#sschema_walk'26] Seq.length (Slice64.view fields)
+  <= UInt64.t'int const_MAX'0}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = new_tup3_SchemaFieldAction_Option_u32_bool [%#sschema_walk]
+        (fun (_x: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global) -> [ &rows <- _x ] s1)
+    | s1 = [ &applicable <- [%#sschema_walk'0] (0: UInt64.t) ] s2
+    | s2 = [ &admitted <- [%#sschema_walk'1] (0: UInt64.t) ] s3
+    | s3 = [ &i <- [%#sschema_walk'2] (0: UInt64.t) ] s4
+    | s4 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#sschema_walk'3] Seq.length (Slice64.view fields)
+      - UInt64.t'int i)}
+      bb2invariant
+    | bb2invariant =
+      {[@expl:loop invariant #0] [%#sschema_walk'9] Seq.length (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows)
+        = UInt64.t'int i
+      /\ UInt64.t'int i <= Seq.length (Slice64.view fields)}
+      {[@expl:loop invariant #1] [%#sschema_walk'8] UInt64.t'int admitted <= UInt64.t'int applicable
+      /\ UInt64.t'int applicable <= UInt64.t'int i}
+      {[@expl:loop invariant #2] [%#sschema_walk'7] (applicable = admitted)
+      = (forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows) j).f2)}
+      {[@expl:loop invariant #3] [%#sschema_walk'6] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> (Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows) j).f2
+          = field_admitted (Seq.get (Slice64.view fields) j) enabled.f0'2 enabled.f1'2 fail_open
+        /\ ((Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows) j).f0 = Skip)
+          = (not required (Seq.get (Slice64.view fields) j) enabled.f0'2 enabled.f1'2)
+        /\ ((Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows) j).f0 = CheckKey)
+          = (required (Seq.get (Slice64.view fields) j) enabled.f0'2 enabled.f1'2
+          /\ (Seq.get (Slice64.view fields) j).role = Key)
+        /\ ((Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows) j).f0 = CheckValue)
+        = (required (Seq.get (Slice64.view fields) j) enabled.f0'2 enabled.f1'2
+        /\ (Seq.get (Slice64.view fields) j).role = Value)}
+      {[@expl:loop invariant #4] [%#sschema_walk'5] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> decoded_id (Seq.get (Slice64.view fields) j) enabled.f0'2 enabled.f1'2 (Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global rows) j).f1}
+      (! [ &variant_old_bb2 <- [%#sschema_walk'3] Seq.length (Slice64.view fields) - UInt64.t'int i ] s0)
+      [ s0 = len_SchemaWalkField [%#sschema_walk'4] {fields} (fun (_x: UInt64.t) -> [ &_66 <- _x ] s1)
+      | s1 = [ &_64 <- UInt64.lt i _66 ] s2
+      | s2 = any [ br0 -> {_64 = false} (! bb40) | br1 -> {_64} (! bb5) ] ]
+      [ bb5 = s0
+        [ s0 = [ &_69 <- i ] s1
+        | s1 = [ &_70 <- Slice64.length fields ] s2
+        | s2 = [ &_71 <- UInt64.lt _69 _70 ] s3
+        | s3 = {[@expl:index in bounds] [%#sschema_walk'10] _71} s4
+        | s4 = Slice64.get [%#sschema_walk'11] <t_SchemaWalkField> {fields} {_69}
+            (fun (r: t_SchemaWalkField) -> [ &field <- r ] s5)
+        | s5 = schema_field_action [%#sschema_walk'12] {enabled.f0'2} {enabled.f1'2} {field.role} {field.present}
+            (fun (_x: t_SchemaFieldAction) -> [ &action <- _x ] s6)
+        | s6 = [ &id <- None ] s7
+        | s7 = [ &accepted <- [%#sschema_walk'13] true ] s8
+        | s8 = any
+          [ br0 -> {action = Skip} (! bb10)
+          | br1 -> {action = CheckKey} (! bb8)
+          | br2 -> {action = CheckValue} (! bb8) ] ]
+      | bb8 = s0 [ s0 = [ &_80 <- false ] s1 | s1 = bb11 ]
+      | bb10 = s0 [ s0 = [ &_80 <- true ] s1 | s1 = bb11 ]
+      | bb11 = any [ br0 -> {_80 = false} (! bb12) | br1 -> {_80} (! bb38) ]
+      | bb12 = s0
+        [ s0 = UInt64.add [%#sschema_walk'15] {applicable} {[%#sschema_walk'14] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &applicable <- _x ] s1)
+        | s1 = any [ br0 -> {field.empty = false} (! bb13) | br1 -> {field.empty} (! bb33) ] ]
+      | bb13 = any
+        [ br0 -> {field.prefix = None'0} (! bb18)
+        | br1 (x0: tup5_u8_u8_u8_u8_u8) -> {field.prefix = Some'0 x0} (! bb15) ]
+      | bb15 = s0
+        [ s0 = elim_Some {field.prefix} (fun (r0: tup5_u8_u8_u8_u8_u8) -> [ &magic <- r0.f0'0 ] s1)
+        | s1 = elim_Some {field.prefix} (fun (r0: tup5_u8_u8_u8_u8_u8) -> [ &a <- r0.f1'0 ] s2)
+        | s2 = elim_Some {field.prefix} (fun (r0: tup5_u8_u8_u8_u8_u8) -> [ &b <- r0.f2'0 ] s3)
+        | s3 = elim_Some {field.prefix} (fun (r0: tup5_u8_u8_u8_u8_u8) -> [ &c <- r0.f3'0 ] s4)
+        | s4 = elim_Some {field.prefix} (fun (r0: tup5_u8_u8_u8_u8_u8) -> [ &d <- r0.f4'0 ] s5)
+        | s5 = schema_frame_id [%#sschema_walk'16] {magic} {a} {b} {c} {d} (fun (_x: t_Option_u32) -> [ &_91 <- _x ] s6)
+        | s6 = [ &id <- _91 ] s7
+        | s7 = bb18 ]
+      | bb18 = s0
+        [ s0 = is_some_u32 [%#sschema_walk'17] {id} (fun (_x: bool) -> [ &_98 <- _x ] s1)
+        | s1 = any [ br0 -> {_98 = false} (! bb21) | br1 -> {_98} (! bb20) ] ]
+      | bb20 = any
+        [ br0 -> {field.failure = None'1} (! bb25)
+        | br1 (x0: t_SchemaFailureKind) -> {field.failure = Some'1 x0} (! bb24) ]
+      | bb24 = s0
+        [ s0 = elim_Some'0 {field.failure} (fun (r0: t_SchemaFailureKind) -> [ &failure'0 <- r0 ] s1)
+        | s1 = schema_failure_decision [%#sschema_walk'18] {fail_open} {failure'0}
+            (fun (_x: t_SchemaFailureDecision) -> [ &_102 <- _x ] s2)
+        | s2 = any [ br0 -> {_102 = Reject} (! bb27) | br1 -> {_102 = AllowUnvalidated} (! bb29) ] ]
+      | bb27 = s0 [ s0 = [ &_97 <- false ] s1 | s1 = bb31 ]
+      | bb29 = s0 [ s0 = [ &_97 <- true ] s1 | s1 = bb31 ]
+      | bb25 = s0 [ s0 = [ &_97 <- field.checked ] s1 | s1 = bb31 ]
+      | bb21 = s0 [ s0 = [ &_97 <- [%#sschema_walk'19] false ] s1 | s1 = bb31 ]
+      | bb31 = s0 [ s0 = [ &accepted <- _97 ] s1 | s1 = bb33 ]
+      | bb33 = any [ br0 -> {accepted = false} (! bb38) | br1 -> {accepted} (! bb34) ]
+      | bb34 = s0
+        [ s0 = UInt64.add [%#sschema_walk'21] {admitted} {[%#sschema_walk'20] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &admitted <- _x ] s1)
+        | s1 = bb38 ]
+      | bb38 = s0
+        [ s0 = [ &_109 <- { f0 = action; f1 = id; f2 = accepted } ] s1
+        | s1 = MutBorrow.borrow_mut <t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global> {rows}
+            (fun (_bor: MutBorrow.t t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global) ->
+              [ &_108 <- _bor ] [ &rows <- _bor.final ] s2)
+        | s2 = push_tup3_SchemaFieldAction_Option_u32_bool [%#sschema_walk'22] {_108} {_109}
+            (fun (_x: ()) -> [ &_107 <- _x ] s3)
+        | s3 = UInt64.add [%#sschema_walk'24] {i} {[%#sschema_walk'23] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s4)
+        | s4 = bb2 ] ] ]
+  | bb40 = s0
+    [ s0 = schema_batch_admission [%#sschema_walk'25] {walk_complete} {applicable} {admitted}
+        (fun (_x: t_SchemaBatchAdmission) -> [ &_115 <- _x ] s1)
+    | s1 = [ &_ret <- { f0'3 = rows; f1'3 = _115 } ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: tup2_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global_SchemaBatchAdmission = Any.any_l ()
+  | & fields: Slice64.slice t_SchemaWalkField = fields
+  | & enabled: tup2_bool_bool = enabled
+  | & fail_open: bool = fail_open
+  | & walk_complete: bool = walk_complete
+  | & rows: t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global = Any.any_l ()
+  | & applicable: UInt64.t = Any.any_l ()
+  | & admitted: UInt64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _66: UInt64.t = Any.any_l ()
+  | & field: t_SchemaWalkField = Any.any_l ()
+  | & _69: UInt64.t = Any.any_l ()
+  | & _70: UInt64.t = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & action: t_SchemaFieldAction = Any.any_l ()
+  | & id: t_Option_u32 = Any.any_l ()
+  | & accepted: bool = Any.any_l ()
+  | & _80: bool = Any.any_l ()
+  | & magic: UInt8.t = Any.any_l ()
+  | & a: UInt8.t = Any.any_l ()
+  | & b: UInt8.t = Any.any_l ()
+  | & c: UInt8.t = Any.any_l ()
+  | & d: UInt8.t = Any.any_l ()
+  | & _91: t_Option_u32 = Any.any_l ()
+  | & _97: bool = Any.any_l ()
+  | & _98: bool = Any.any_l ()
+  | & failure'0: t_SchemaFailureKind = Any.any_l ()
+  | & _102: t_SchemaFailureDecision = Any.any_l ()
+  | & _107: () = Any.any_l ()
+  | & _108: MutBorrow.t t_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global = Any.any_l ()
+  | & _109: tup3_SchemaFieldAction_Option_u32_bool = Any.any_l ()
+  | & _115: t_SchemaBatchAdmission = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l () ])
+  [ return (result: tup2_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global_SchemaBatchAdmission) ->
+  {[@stop_split] [@expl:framed_schema_walk_admission ensures] ([@stop_split] [@expl:framed_schema_walk_admission ensures #0] [%#sschema_walk'27] Seq.length (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result.f0'3)
+      = Seq.length (Slice64.view fields))
+    /\ ([@stop_split] [@expl:framed_schema_walk_admission ensures #1] [%#sschema_walk'28] forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view fields)
+        -> (Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result.f0'3) i).f2
+        = field_admitted (Seq.get (Slice64.view fields) i) enabled.f0'2 enabled.f1'2 fail_open)
+    /\ ([@stop_split] [@expl:framed_schema_walk_admission ensures #2] [%#sschema_walk'29] forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view fields)
+        -> ((Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result.f0'3) i).f0 = Skip)
+          = (not required (Seq.get (Slice64.view fields) i) enabled.f0'2 enabled.f1'2)
+        /\ ((Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result.f0'3) i).f0 = CheckKey)
+          = (required (Seq.get (Slice64.view fields) i) enabled.f0'2 enabled.f1'2
+          /\ (Seq.get (Slice64.view fields) i).role = Key)
+        /\ ((Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result.f0'3) i).f0 = CheckValue)
+        = (required (Seq.get (Slice64.view fields) i) enabled.f0'2 enabled.f1'2
+        /\ (Seq.get (Slice64.view fields) i).role = Value))
+    /\ ([@stop_split] [@expl:framed_schema_walk_admission ensures #3] [%#sschema_walk'30] forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view fields)
+        -> decoded_id (Seq.get (Slice64.view fields) i) enabled.f0'2 enabled.f1'2 (Seq.get (view_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global result.f0'3) i).f1)
+    /\ ([@stop_split] [@expl:framed_schema_walk_admission ensures #4] [%#sschema_walk'31] (result.f1'3 = Admit'0)
+    = (walk_complete
+    /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view fields)
+      -> field_admitted (Seq.get (Slice64.view fields) i) enabled.f0'2 enabled.f1'2 fail_open)))}
+    (! return {result}) ]

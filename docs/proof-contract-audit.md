@@ -1511,3 +1511,82 @@ This batch is on `codex/proof-remote-delete-frontier`, above PR #1266. The paren
 Produce-readiness fixture repair is inherited from `d5bb60ed`; its remote proof
 job passes, while its full workflow is still running with one image-tool download
 HTTP 500 before tests. Parent CI does not qualify this new layer.
+
+## Schema field identity through Produce admission
+
+`schema_batch_admission` exports a scalar law over supplied counters. Equality
+does not identify the fields counted: counting the same successful field again
+could conceal a different rejected field. The production batch walk visits each
+record's key and value, while the validator skips empty non-null fields before
+framing or registry I/O. Those exemptions need to be included in any stronger
+claim; fail-open is not a substitute for framing a nonempty field.
+
+[`framed_schema_walk_admission`](../crates/verified/src/composition/schema_walk.rs)
+constructs both counters by visiting each input position. It consumes the actual
+field-selection, big-endian frame decoder, registry-failure policy and batch
+admission kernels. The returned witness has exactly one row per position, the
+correct key/value action, the exact four-byte schema ID when framing applies,
+and that position's acceptance outcome. Batch admission is equivalent to a
+complete walk in which every applicable position is admitted. Null and disabled
+fields are skipped, empty fields pass, and nonempty applicable fields require a
+valid frame plus successful validation or fail-open on a transient lookup failure.
+Unknown, permanent and malformed lookup failures never gain that exception.
+
+[`schema_checked_produce_frontier`](../crates/verified/src/composition/schema_produce.rs)
+consumes that witness together with Produce header admission and the checked
+durability frontier. It checks one key/value pair per decoded record and derives
+the record count from those pairs. An admitted result exists exactly when the
+pair shape, actual count/header relation, complete schema walk and representable
+frontier all pass. Its exclusive frontier is the append base plus the actual
+record count, and every returned position preserves its decoded ID and acceptance.
+This rules out accepting malformed/incomplete walks and implementations that
+always reject.
+
+These are pure compositions of existing production decisions, not a replacement
+for the asynchronous validator. Faithful enumeration of decoded physical fields,
+complete parsing/CRC checks, coherent header facts, correct registry-failure
+classification, subject/body validation and durable append remain host obligations.
+The `checked` observation means those required checks succeeded; it is not proof
+of serde or registry behavior. A failure observation overrides a contradictory
+success flag, and skipped/empty fields do not consult either observation.
+
+Native row oracles use `u32::from_be_bytes` and conjunction over actual positions
+instead of scalar admission counters. The Produce oracle independently compares
+the pair count to the header delta and uses `i128` frontier arithmetic. Tables and
+properties cover field-role order, null/empty/disabled fields, missing/bad frames,
+all four failure classes, definitive validation rejection, incomplete walks,
+count mismatches, control/timestamp/producer gates and offset exhaustion.
+
+Six scoped negative controls exercise the dependencies:
+
+- Repeating the first field at every position, with a matching weakened walk
+  contract, leaves that walk provable but breaks the Produce consumer and native
+  row/count oracles. Equal successful counters cannot conceal another field.
+- Hiding only the walk's batch-admission equivalence leaves its own proof and
+  all 339 native tests passing, while the Produce consumer fails.
+- Ignoring counter differences in both the scalar batch gate and its contract
+  leaves that gate provable, while the field-walk proof and tests fail.
+- Extending fail-open to every registry failure in both body and contract leaves
+  the failure policy provable, while per-position admission and tests fail.
+- Ignoring the record-count/header-delta relation in both Produce body and
+  contract leaves header admission provable, while the aggregate count/frontier
+  claim and behavioral tests fail.
+- Returning rejection for every prepared append fails both the aggregate
+  admission equivalence and the native oracle.
+
+All temporary source edits were restored byte-for-byte before final validation.
+The final aggregate also exports exact key/value actions for every returned
+position, preserving the subject role as well as the ID and acceptance outcome.
+Pinned-image generation and cache-free replay of the retained artifacts each
+prove 553 files. All 339 native tests, the three focused
+Bazel targets (including 81 broker schema tests), workspace all-target Clippy
+with warnings denied, repository formatting and proof/mutation configuration
+checks pass. Two new proof sessions are retained; all 1,102 previously published
+artifact files are preserved exactly. Every verified Rust source remains below
+300 lines (largest: 288), across 43 composition topic files.
+
+This work remains local on `codex/proof-schema-walk`, above PR #1267. The parent's
+[full CI retry](https://github.com/krabka-io/krabka-broker/actions/runs/36816668685)
+passes at `a0600a966fefa23f6520e7b3c822c6449fea3d91` after retrying an image-mirror
+blob failure before tests; all its checks are green. That published 551-file
+layer does not qualify this new 553-file layer.
