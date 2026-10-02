@@ -1444,6 +1444,206 @@ mod tests {
         }
     }
 
+    async fn producer_broker(
+        metadata_error: i16,
+        delivery_error: i16,
+    ) -> (
+        krabka_client_core::MockBroker,
+        tokio::sync::oneshot::Receiver<()>,
+        Arc<AtomicU64>,
+    ) {
+        use bytes::BytesMut;
+        use krabka_protocol::{
+            Decode as _, Encode as _,
+            owned::{
+                api_versions_request,
+                api_versions_response::{ApiVersion, ApiVersionsResponse},
+                metadata_request::{self, MetadataRequest},
+                metadata_response::{
+                    MetadataResponse, MetadataResponseBroker, MetadataResponsePartition,
+                    MetadataResponseTopic,
+                },
+                produce_request::{self, ProduceRequest},
+                produce_response::{
+                    PartitionProduceResponse, ProduceResponse, TopicProduceResponse,
+                },
+            },
+            records::RecordsPayload,
+        };
+
+        let port = Arc::new(std::sync::atomic::AtomicU16::new(0));
+        let handler_port = Arc::clone(&port);
+        let largest_batch = Arc::new(AtomicU64::new(0));
+        let observed_batch = Arc::clone(&largest_batch);
+        let (started, receiving) = tokio::sync::oneshot::channel();
+        let mut started = Some(started);
+        let broker = krabka_client_core::MockBroker::start(move |api, version, _, body| {
+            let mut encoded = BytesMut::new();
+            match api {
+                api_versions_request::API_KEY => ApiVersionsResponse {
+                    api_keys: [
+                        (metadata_request::API_KEY, 0),
+                        (produce_request::API_KEY, 3),
+                    ]
+                    .into_iter()
+                    .map(|(api_key, max_version)| ApiVersion {
+                        api_key,
+                        min_version: max_version,
+                        max_version,
+                        ..Default::default()
+                    })
+                    .collect(),
+                    ..Default::default()
+                }
+                .encode(&mut encoded, 0)
+                .unwrap(),
+                metadata_request::API_KEY => {
+                    let mut body = &body[2 + "bench-producer-0".len()..];
+                    let request = MetadataRequest::decode(&mut body, version).unwrap();
+                    let named = request.topics.is_some_and(|topics| !topics.is_empty());
+                    if named && let Some(started) = started.take() {
+                        let _ = started.send(());
+                    }
+                    MetadataResponse {
+                        brokers: vec![MetadataResponseBroker {
+                            node_id: 1,
+                            host: "127.0.0.1".into(),
+                            port: i32::from(handler_port.load(Ordering::SeqCst)),
+                            ..Default::default()
+                        }],
+                        topics: named
+                            .then(|| MetadataResponseTopic {
+                                name: Some("t".into()),
+                                error_code: metadata_error,
+                                partitions: vec![MetadataResponsePartition {
+                                    partition_index: 0,
+                                    leader_id: 1,
+                                    replica_nodes: vec![1],
+                                    isr_nodes: vec![1],
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    }
+                    .encode(&mut encoded, version)
+                    .unwrap();
+                }
+                produce_request::API_KEY => {
+                    let mut body = &body[2 + "bench-producer-0".len()..];
+                    let request = ProduceRequest::decode(&mut body, version).unwrap();
+                    ProduceResponse {
+                        responses: request
+                            .topic_data
+                            .into_iter()
+                            .map(|topic| TopicProduceResponse {
+                                name: topic.name,
+                                partition_responses: topic
+                                    .partition_data
+                                    .into_iter()
+                                    .map(|partition| {
+                                        let Some(RecordsPayload::V2(batches)) = partition.records
+                                        else {
+                                            panic!("benchmark sends v2 record batches");
+                                        };
+                                        for batch in batches {
+                                            observed_batch.fetch_max(
+                                                batch.records.len() as u64,
+                                                Ordering::SeqCst,
+                                            );
+                                        }
+                                        PartitionProduceResponse {
+                                            index: partition.index,
+                                            error_code: delivery_error,
+                                            base_offset: 0,
+                                            ..Default::default()
+                                        }
+                                    })
+                                    .collect(),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    }
+                    .encode(&mut encoded, version)
+                    .unwrap();
+                }
+                _ => panic!("unexpected benchmark API {api}"),
+            }
+            Some(encoded.to_vec())
+        })
+        .await;
+        port.store(broker.addr.port(), Ordering::SeqCst);
+        (broker, receiving, largest_batch)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn producer_pipeline_counts_delivery_and_admission_outcomes() {
+        for (metadata_error, delivery_error) in [(0, 0), (0, 29), (29, 0)] {
+            let (broker, started, largest_batch) =
+                producer_broker(metadata_error, delivery_error).await;
+            let mut scenario = scenario(1);
+            scenario.linger = millis(20);
+            let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
+            let first_ack = Arc::new(AtomicU64::new(0));
+            let producer = tokio::spawn(run_producer(ProducerTask {
+                idx: 0,
+                grid: Grid::new(Instant::now(), 0, &scenario, DEFAULT_SAMPLE_INTERVAL),
+                scenario,
+                bootstrap: broker.addr.to_string(),
+                topic: "t".into(),
+                scenario_id: 0,
+                stop: Arc::clone(&stop),
+                first_ack: Arc::clone(&first_ack),
+                kill_at: Arc::new(AtomicU64::new(0)),
+                security: None,
+                request_timeout: secs(1),
+                final_drain_timeout: secs(1),
+                dispatch_queue_capacity: ConnectionDispatchQueueCapacity::default(),
+                frame_max: ClientFrameMax::default(),
+            }));
+            tokio::time::timeout(secs(10).to_std(), started)
+                .await
+                .unwrap()
+                .expect("producer reaches topic admission");
+            // A short measurement window exercises the bounded pipeline and its
+            // final drain, using the same phase signal as a benchmark run.
+            tokio::time::sleep(millis(200).to_std()).await;
+            stop.store(STATE_STOP, Ordering::SeqCst);
+            let output = tokio::time::timeout(secs(10).to_std(), producer)
+                .await
+                .unwrap()
+                .unwrap();
+            broker.stop();
+
+            assert!(output.interval_msgs.iter().sum::<u64>() == output.msgs);
+            assert!(output.latency.len() == output.msgs);
+            assert!(output.bytes == output.msgs * 100);
+            if metadata_error == 0 && delivery_error == 0 {
+                assert!(output.msgs > 0);
+                assert!((output.dropped, output.error.as_str()) == (0, ""));
+                assert!(first_ack.load(Ordering::SeqCst) > 0);
+            } else {
+                assert!((output.msgs, output.bytes, first_ack.load(Ordering::SeqCst)) == (0, 0, 0));
+                assert!(output.dropped > 0);
+                assert!(output.error == "producer-0-err: broker error_code 29");
+            }
+            if metadata_error == 0 {
+                assert!(
+                    largest_batch.load(Ordering::SeqCst) > 1,
+                    "records are queued before awaiting delivery"
+                );
+            } else {
+                assert!(
+                    largest_batch.load(Ordering::SeqCst) == 0,
+                    "admission failures never reach Produce"
+                );
+            }
+        }
+    }
+
     #[test]
     fn client_request_timeout_defaults_preserve_policy() {
         check!(default_producer_request_timeout() == secs(2));
