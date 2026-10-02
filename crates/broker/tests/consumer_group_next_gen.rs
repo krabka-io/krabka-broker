@@ -21,9 +21,9 @@ use krabka_protocol::owned::{
 
 async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.heartbeat_timeout = krabka_units::secs(30);
+    let broker = Broker::start(config).await.unwrap();
     broker.wait_until_group_coordinator_ready().await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
