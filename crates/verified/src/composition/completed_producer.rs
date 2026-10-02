@@ -83,9 +83,11 @@ type CompletedRetry = (
             && (match result.2 { ProducerDecision::Duplicate { retained: slot } => slot@ == if j + 1 == result.1@.len() { 4 } else { j }, _ => false })
             && (forall<k: Int> 0 <= k && k < j ==> !matches_retry(rows@, incoming, result.1@[k]@, request))),
 })]
-#[ensures(result.1@.len() == 0 ==> result.2 ==
+#[ensures(((result.2 == ProducerDecision::Fenced) == (request.0@ <
+    (match current { Some(epoch) => if epoch@ > incoming.producer_epoch@ { epoch@ } else { incoming.producer_epoch@ }, None => incoming.producer_epoch@ })))
+    && (result.1@.len() == 0 ==> result.2 ==
     if request.0@ < (match current { Some(epoch) => epoch@, None => incoming.producer_epoch@ }) { ProducerDecision::Fenced }
-    else if request.1@ == 0 { ProducerDecision::Append } else { ProducerDecision::OutOfOrder })]
+    else if request.1@ == 0 { ProducerDecision::Append } else { ProducerDecision::OutOfOrder }))]
 #[ensures(rows@.len() > 0 && current == Some(incoming.producer_epoch)
     && incoming.last_offset@ <= rows@[rows@.len() - 1].last_offset@ ==>
     result.1@.len() > 0 && result.1@[result.1@.len() - 1]@ == rows@.len() - 1)]

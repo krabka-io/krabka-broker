@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/composition/completed_producer.rs" 92 0 99 19 *)
+(* #"/workspace/crates/verified/src/composition/completed_producer.rs" 94 0 101 19 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -27,43 +27,43 @@ let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/produce
 let%span sproducer_window = "/workspace/crates/verified/src/composition/producer_window.rs" 14 11 14 33
 let%span sproducer_window'0 = "/workspace/crates/verified/src/composition/producer_window.rs" 15 11 17 81
 let%span sproducer_window'1 = "/workspace/crates/verified/src/composition/producer_window.rs" 18 10 53 46
-let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 100 29 100 39
-let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 101 16 101 22
-let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 104 14 104 30
-let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 105 14 105 24
-let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 103 16 103 84
-let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 102 16 102 54
-let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 18 106 25
-let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 18 106 37
-let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 8 106 38
-let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 107 13 107 14
-let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 107 8 107 14
-let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 112 8 112 13
-let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 109 31 114 5
-let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 115 16 115 30
-let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 116 16 116 17
-let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 117 20 117 36
-let%span scompleted_producer'15 = "/workspace/crates/verified/src/composition/completed_producer.rs" 121 31 121 33
-let%span scompleted_producer'16 = "/workspace/crates/verified/src/composition/completed_producer.rs" 127 19 127 20
-let%span scompleted_producer'17 = "/workspace/crates/verified/src/composition/completed_producer.rs" 128 12 128 17
-let%span scompleted_producer'18 = "/workspace/crates/verified/src/composition/completed_producer.rs" 118 23 129 9
-let%span scompleted_producer'19 = "/workspace/crates/verified/src/composition/completed_producer.rs" 132 52 132 62
-let%span scompleted_producer'20 = "/workspace/crates/verified/src/composition/completed_producer.rs" 133 16 133 22
-let%span scompleted_producer'21 = "/workspace/crates/verified/src/composition/completed_producer.rs" 136 14 136 34
-let%span scompleted_producer'22 = "/workspace/crates/verified/src/composition/completed_producer.rs" 137 14 137 28
-let%span scompleted_producer'23 = "/workspace/crates/verified/src/composition/completed_producer.rs" 135 16 135 109
-let%span scompleted_producer'24 = "/workspace/crates/verified/src/composition/completed_producer.rs" 134 16 134 58
-let%span scompleted_producer'25 = "/workspace/crates/verified/src/composition/completed_producer.rs" 138 29 138 32
-let%span scompleted_producer'26 = "/workspace/crates/verified/src/composition/completed_producer.rs" 139 31 139 41
-let%span scompleted_producer'27 = "/workspace/crates/verified/src/composition/completed_producer.rs" 142 12 142 24
-let%span scompleted_producer'28 = "/workspace/crates/verified/src/composition/completed_producer.rs" 139 8 143 10
-let%span scompleted_producer'29 = "/workspace/crates/verified/src/composition/completed_producer.rs" 144 13 144 14
-let%span scompleted_producer'30 = "/workspace/crates/verified/src/composition/completed_producer.rs" 144 8 144 14
-let%span scompleted_producer'31 = "/workspace/crates/verified/src/composition/completed_producer.rs" 146 18 149 105
-let%span scompleted_producer'32 = "/workspace/crates/verified/src/composition/completed_producer.rs" 151 51 151 56
-let%span scompleted_producer'33 = "/workspace/crates/verified/src/composition/completed_producer.rs" 151 92 151 97
-let%span scompleted_producer'34 = "/workspace/crates/verified/src/composition/completed_producer.rs" 151 8 151 99
-let%span scompleted_producer'35 = "/workspace/crates/verified/src/composition/completed_producer.rs" 155 25 155 32
+let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 102 29 102 39
+let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 103 16 103 22
+let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 106 14 106 30
+let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 107 14 107 24
+let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 105 16 105 84
+let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 104 16 104 54
+let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 108 18 108 25
+let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 108 18 108 37
+let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 108 8 108 38
+let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 109 13 109 14
+let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 109 8 109 14
+let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 114 8 114 13
+let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 111 31 116 5
+let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 117 16 117 30
+let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 118 16 118 17
+let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 119 20 119 36
+let%span scompleted_producer'15 = "/workspace/crates/verified/src/composition/completed_producer.rs" 123 31 123 33
+let%span scompleted_producer'16 = "/workspace/crates/verified/src/composition/completed_producer.rs" 129 19 129 20
+let%span scompleted_producer'17 = "/workspace/crates/verified/src/composition/completed_producer.rs" 130 12 130 17
+let%span scompleted_producer'18 = "/workspace/crates/verified/src/composition/completed_producer.rs" 120 23 131 9
+let%span scompleted_producer'19 = "/workspace/crates/verified/src/composition/completed_producer.rs" 134 52 134 62
+let%span scompleted_producer'20 = "/workspace/crates/verified/src/composition/completed_producer.rs" 135 16 135 22
+let%span scompleted_producer'21 = "/workspace/crates/verified/src/composition/completed_producer.rs" 138 14 138 34
+let%span scompleted_producer'22 = "/workspace/crates/verified/src/composition/completed_producer.rs" 139 14 139 28
+let%span scompleted_producer'23 = "/workspace/crates/verified/src/composition/completed_producer.rs" 137 16 137 109
+let%span scompleted_producer'24 = "/workspace/crates/verified/src/composition/completed_producer.rs" 136 16 136 58
+let%span scompleted_producer'25 = "/workspace/crates/verified/src/composition/completed_producer.rs" 140 29 140 32
+let%span scompleted_producer'26 = "/workspace/crates/verified/src/composition/completed_producer.rs" 141 31 141 41
+let%span scompleted_producer'27 = "/workspace/crates/verified/src/composition/completed_producer.rs" 144 12 144 24
+let%span scompleted_producer'28 = "/workspace/crates/verified/src/composition/completed_producer.rs" 141 8 145 10
+let%span scompleted_producer'29 = "/workspace/crates/verified/src/composition/completed_producer.rs" 146 13 146 14
+let%span scompleted_producer'30 = "/workspace/crates/verified/src/composition/completed_producer.rs" 146 8 146 14
+let%span scompleted_producer'31 = "/workspace/crates/verified/src/composition/completed_producer.rs" 148 18 151 105
+let%span scompleted_producer'32 = "/workspace/crates/verified/src/composition/completed_producer.rs" 153 51 153 56
+let%span scompleted_producer'33 = "/workspace/crates/verified/src/composition/completed_producer.rs" 153 92 153 97
+let%span scompleted_producer'34 = "/workspace/crates/verified/src/composition/completed_producer.rs" 153 8 153 99
+let%span scompleted_producer'35 = "/workspace/crates/verified/src/composition/completed_producer.rs" 157 25 157 32
 let%span scompleted_producer'36 = "/workspace/crates/verified/src/composition/completed_producer.rs" 49 11 49 53
 let%span scompleted_producer'37 = "/workspace/crates/verified/src/composition/completed_producer.rs" 50 11 50 109
 let%span scompleted_producer'38 = "/workspace/crates/verified/src/composition/completed_producer.rs" 51 11 51 81
@@ -76,8 +76,8 @@ let%span scompleted_producer'44 = "/workspace/crates/verified/src/composition/co
 let%span scompleted_producer'45 = "/workspace/crates/verified/src/composition/completed_producer.rs" 72 10 73 72
 let%span scompleted_producer'46 = "/workspace/crates/verified/src/composition/completed_producer.rs" 74 10 75 108
 let%span scompleted_producer'47 = "/workspace/crates/verified/src/composition/completed_producer.rs" 76 10 85 1
-let%span scompleted_producer'48 = "/workspace/crates/verified/src/composition/completed_producer.rs" 86 10 88 94
-let%span scompleted_producer'49 = "/workspace/crates/verified/src/composition/completed_producer.rs" 89 10 91 77
+let%span scompleted_producer'48 = "/workspace/crates/verified/src/composition/completed_producer.rs" 86 10 90 95
+let%span scompleted_producer'49 = "/workspace/crates/verified/src/composition/completed_producer.rs" 91 10 93 77
 let%span scompleted_producer'50 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
 let%span scompleted_producer'51 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
 let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 30 11 30 27
@@ -525,7 +525,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 92 0 99 19]
+let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 94 0 101 19]
   (end': Int64.t) (hwm: Int64.t) (current': t_Option_i16) (rows: Slice64.slice t_ProducerSnapshotEntryFacts)
   (incoming: t_ProducerSnapshotEntryFacts) (request: tup3_i16_i32_i32)
   (return (x: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool)) =
@@ -850,8 +850,18 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
           /\ (forall k: int. 0 <= k /\ k < j
             -> not matches_retry (Slice64.view rows) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1'2) k)) request))
         end)
-    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #7] [%#scompleted_producer'48] Seq.length (view_Vec_usize_Global result.f1'2)
-        = 0
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #7] [%#scompleted_producer'48] (result.f2'2
+          = Fenced)
+        = (Int16.to_int request.f0'0
+        < match current' with
+          | Some epoch -> if gt_log_Int (Int16.to_int epoch) (Int16.to_int incoming.producer_epoch) then
+            Int16.to_int epoch
+          else
+            Int16.to_int incoming.producer_epoch
+
+          | None -> Int16.to_int incoming.producer_epoch
+          end)
+      /\ (Seq.length (view_Vec_usize_Global result.f1'2) = 0
       -> result.f2'2
       = (if Int16.to_int request.f0'0
       < match current' with
@@ -861,7 +871,7 @@ let completed_batches_preserve_first_retry [#"/workspace/crates/verified/src/com
         Fenced
       else
         if Int32.to_int request.f1'0 = 0 then Append else OutOfOrder
-      ))
+      )))
     /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #8] [%#scompleted_producer'49] gt_log_Int (Seq.length (Slice64.view rows)) 0
       /\ current' = Some (incoming.producer_epoch)
       /\ Int64.to_int incoming.last_offset
