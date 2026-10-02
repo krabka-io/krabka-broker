@@ -99,3 +99,5 @@ mod schema_walk;
 mod schema_produce;
 
 mod reconfiguration;
+
+mod control_truncation;
