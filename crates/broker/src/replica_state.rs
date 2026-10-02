@@ -41,6 +41,9 @@ pub(crate) struct FollowerStats {
     /// last Fetch carried (KIP-841), -1 for a Fetch that carried none, `None`
     /// until one is recorded.
     pub(crate) broker_epoch: Option<i64>,
+    /// A fetch has arrived since this follower last left the ISR. Cached
+    /// progress alone cannot trigger Kafka's fetch-driven ISR expansion.
+    pub(crate) fetched_since_isr_exit: bool,
 }
 
 impl FollowerStats {
@@ -52,6 +55,7 @@ impl FollowerStats {
         last_fetch_leader_leo: Offset(-1),
         last_caught_up: None,
         broker_epoch: None,
+        fetched_since_isr_exit: false,
     };
 
     /// An ISR member when this broker installs the ISR: Kafka's
@@ -90,6 +94,7 @@ impl FollowerStats {
         self.leo = fetch_offset.min(leader_leo);
         self.last_fetch_leader_leo = self.last_fetch_leader_leo.max(leader_leo);
         self.last_fetch = Some(now);
+        self.fetched_since_isr_exit = true;
     }
 }
 
@@ -243,7 +248,12 @@ impl ReplicaState {
         now: Instant,
     ) {
         self.leader = Some(leader);
-        self.isr = isr.iter().copied().collect();
+        let previous_isr = std::mem::replace(&mut self.isr, isr.iter().copied().collect());
+        for removed in previous_isr.difference(&self.isr) {
+            if let Some(stats) = self.per_follower.get_mut(removed) {
+                stats.fetched_since_isr_exit = false;
+            }
+        }
         self.replicas = replicas.iter().copied().collect();
         self.per_follower.remove(&leader);
         // Seed only ISR members, as Kafka's `Replica.resetReplicaState` does:
@@ -542,6 +552,7 @@ mod tests {
             last_fetch_leader_leo: Offset(-1),
             last_caught_up: Some(t),
             broker_epoch: None,
+            fetched_since_isr_exit: false,
         };
         // Only the non-leader followers (2 and 3) are seeded; the leader (1)
         // gets no per_follower entry.
@@ -808,6 +819,7 @@ mod tests {
             last_fetch_leader_leo: o(last_fetch_leader_leo),
             last_caught_up,
             broker_epoch: None,
+            fetched_since_isr_exit: true,
         };
         let mut s = fresh();
         s.install_isr(
@@ -891,6 +903,7 @@ mod tests {
                     last_fetch_leader_leo: o(10),
                     last_caught_up: None,
                     broker_epoch: None,
+                    fetched_since_isr_exit: true,
                 })
         );
 
@@ -903,6 +916,7 @@ mod tests {
                     last_fetch_leader_leo: o(10),
                     last_caught_up: Some(at(200)),
                     broker_epoch: None,
+                    fetched_since_isr_exit: true,
                 })
         );
     }
