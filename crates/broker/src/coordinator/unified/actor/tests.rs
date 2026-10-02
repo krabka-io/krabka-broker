@@ -74,6 +74,51 @@ async fn cross_protocol_get_or_create_returns_the_one_actor() {
     assert!(Arc::ptr_eq(&k_classic, &k_consumer));
 }
 
+#[tokio::test]
+async fn closing_an_actor_drains_messages_from_outstanding_mailbox_permits() {
+    use std::{future::Future as _, task::Poll};
+
+    for failed_registration in [false, true] {
+        let (coordinator, log) = make_coordinator();
+        let mut config = NextGenConfig::assigning_at_once();
+        if failed_registration {
+            config.timer = BrokenTimer::dead(TimerFailure::Registration).injectable();
+        }
+        let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
+        let permit = tx.reserve().await.expect("reserve before the actor exits");
+        let (stop, _stopped) = tokio::sync::oneshot::channel();
+        tx.try_send(GroupActorMessage::Shutdown(stop)).unwrap();
+        let actor = run_actor(
+            "g".to_string(),
+            GroupKindTag::Classic,
+            Arc::new(config),
+            empty_metadata(),
+            log,
+            coordinator,
+            rx,
+        );
+        tokio::pin!(actor);
+        let finished =
+            std::future::poll_fn(|cx| Poll::Ready(actor.as_mut().poll(cx).is_ready())).await;
+        assert!(tx.is_closed());
+
+        // A send reserved before closure can still enqueue after the actor stops.
+        let (reply, response) = tokio::sync::oneshot::channel();
+        permit.send(GroupActorMessage::FetchOffsets { reply });
+        if !finished {
+            tokio::time::timeout(Duration::from_secs(1), actor)
+                .await
+                .expect("the actor drains the reserved send");
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), response)
+                .await
+                .expect("the abandoned request receives a dropped reply")
+                .is_err()
+        );
+    }
+}
+
 /// Runs one next-gen actor on `timer` until it stops on its own, and hands
 /// back the group it left behind.
 ///
