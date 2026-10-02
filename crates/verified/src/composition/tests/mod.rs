@@ -83,3 +83,7 @@ mod constructed_tiered_timestamp;
 mod validated_time_scan;
 
 mod trim_witnesses;
+
+mod time_range;
+
+mod stable_time_range;

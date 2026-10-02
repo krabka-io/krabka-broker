@@ -4,10 +4,10 @@ The proof suite contains substantial search, conservation, progress, and quorum 
 
 ## Scope and method
 
-This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds fifty-four cross-module compositions. The 28
+This audit covers all 59 original modules in `crates/verified/src` at baseline `560ffc3a906b`, including logical helpers and contracts nested inside `cfg_attr`. The module table names every non-logical function found in those modules, including private helpers and executable proof lemmas. Derive-generated Clone obligations are plumbing and are not counted as separate safety achievements. The new `composition` module adds fifty-six cross-module compositions. The 28
 sources with at least 300 lines now use matching subdirectories for kernels
 and tests; the public module paths remain the same. Composition theorems are
-grouped into 36 topic files. The layout-only move preserved all 305 function bodies and
+grouped into 38 topic files. The layout-only move preserved all 305 function bodies and
 contracts, passed all 264 tests, and preserved the 3,625-entry mutation
 inventory. Saved proof sessions and catalog links follow the new paths.
 Fresh generation and the final two-worker no-cache saved-session replay passed
@@ -116,7 +116,7 @@ A specification is not automatically weak because it resembles a short function.
 | `indexed_offset_scan_preserves_first_batch` | Connects sparse rows to complete physical batch rows, consumes validated cursors and reuses the scalar first-match kernel. Every matching batch lies at or after the floor; the indexed scan returns the globally first qualifying batch, bounded by a present ceiling. | Complete faithfully decoded last-offset/byte-position batch rows. Actual header lengths, the host's extra batch skip, windowed decoding and I/O remain external. |
 | `loss_settlement_is_idempotent` | Returns the settled and replayed states, proves exact remaining count and generation, and establishes that replay preserves both fields. | Generation is below `u64::MAX`; saturation can otherwise reuse a generation with a remainder. Durability/marker parsing remain external. |
 | `admitted_loss_marker_preserves_pending` | Consumes that witness with actual marker admission to conserve pending losses, reject duplicate admission, and admit a fresh generation exactly when losses remain. | Matching snapshot generation, snapshot count at most pending count, and no generation exhaustion. Parsed shape facts and durable publication remain host obligations. |
-| `validated_time_cursors_are_monotone` | Segment-span and time-index row validation establish the global order required by time lookup. Increasing the target never moves the absolute cursor backwards or outside the segment, including repeated timestamps and the u32/i64 boundaries. | Targets are ordered; the decoded entries and segment extent stay unchanged. A sparse cursor bound does not prove that a scan skips no matching record. Boolean-only exported contract; the body check has no returned witness or relational postcondition. |
+| `validated_time_cursors_are_monotone` | Returns actual absolute inclusive lower/upper cursors and a strict predecessor scan start, with complete extent/archive admission and exact last-row relations. | Canonical structural validity alone does not establish truthful record prefix bounds. An upper cursor cannot safely exclude later timestamp regressions. |
 | `validated_epochs_bound_truncated_fetch` | Returns invalid-history rejection, an unplaceable epoch, or the actual Kafka epoch cut with exact clamped watermarks and consumer view. Complete row validation establishes lookup ordering; no resolved cut grows the log or exposes its discarded tail. | Complete faithfully decoded epoch history and an accurate original end. Batch-aligned cuts, reset below retained floors, durable application and coherent publication remain host obligations. |
 | `resolved_epoch_bounds_retained_replay` | Consumes that cut to select a globally newest surviving snapshot and exact replay cursor. Rejects replay below either retained floor; a discarded-tail snapshot cannot suppress reconstruction. Invalid history and unplaceable epochs retain distinct outcomes. | Complete snapshot enumeration, trustworthy snapshot bytes and floors, batch-aligned truncation and actual replay/I/O remain external. Rejection below a floor means this retained-history path cannot be used; the production full-reset path is outside the theorem. |
 | `truncated_snapshot_selection_bounds_replay` | Selection returns a globally newest eligible snapshot, or no selection exactly when none survives. Replay starts at exactly the maximum of the local floor and selected snapshot, or the logical floor when there is no snapshot. A valid call always returns a witness; discarded-tail selection, artificial empty selection, and unnecessary replay skipping are excluded. | Log/local starts are nonnegative and no greater than the cut, which is at or below the old end. Snapshot bytes, pruning persistence, and actual replay remain external. |
@@ -144,6 +144,8 @@ A specification is not automatically weak because it resembles a short function.
 | `validated_retained_time_scan_agrees` | Checks decoded record shape, order, extent and every row’s prefix bound; consumes actual remote/local cursors to return the original first retained match, or exclude every retained match. Invalid inputs are rejected exactly. | Complete faithful decoding and enumeration, archived-byte parsing and physical reads remain external. Structural validity cannot substitute for the semantic bound checks. |
 | `completed_trim_preserves_retained_timestamp` | Consumes the completed logical trim and snapshot replay witness to preserve the first retained timestamp match, including matches below the producer replay cursor. | Complete decoded windows, snapshot contents and coherent durable trim completion remain external. |
 | `physical_eviction_routes_retained_timestamp` | Consumes physical frontiers to route the unchanged logical first match to surviving cache or committed remote coverage, preserving coverage/lag bounds. | Both inherited physical frontiers obey those bounds. Correct object coverage, complete record decoding and successful physical I/O remain external. |
+| `constructed_time_range_preserves_first` | Consumes constructed prefix maxima and validated inclusive/strict cursors to return the globally first retained record in a closed timestamp interval, or complete absence. Invalid segment extents and out-of-range records reject exactly. | Complete faithfully decoded record enumeration, valid sparse row positions and coherent logical floors are external. Timestamps may regress; the upper cursor cannot crop the scan tail. |
+| `stable_time_range_preserves_first` | Consumes the derived transaction/HW/delivery prefix and constructed interval scan to return the globally first retained match strictly below the actual visibility limit, or complete absence. Its limit is maximal under the supplied gates; inherited LSO is ignored. | Complete decoded records, a valid minimum-equivalent transaction snapshot, coherent publication, physical reads and client-side abort filtering remain external. Omitted transaction entries are not validated by the supplied-start guard. |
 
 The implication-shaped checks explicitly return true on rejected input. They prove a property of admitted operations, not successful admission of every input. `composition_boundary_witnesses` and `restored_state_composition_boundaries` exercise successful paths, corruption, empty sets, exact boundaries, epoch gating, repeated timestamps, cross-segment/interleaved transactions, stale snapshots, and integer exhaustion. This separates legitimate conditional safety from a vacuous all-reject decision: the decision kernels themselves still have admission-completeness contracts, and the token negative control checks that distinction directly.
 
@@ -504,7 +506,9 @@ restore/retry controls. At that checkpoint, replacing all fifteen boolean-only
 bodies with `true` proved all fifteen affected files and passed all 48 composition
 tests. The append and reservation entries now return concrete witnesses with
 exact relational postconditions and independent arithmetic oracles. The
-remaining time-cursor contract still needs exported relations or witnesses. The
+time-cursor contract now exports exact validated inclusive/strict cursors into
+a complete retained interval scan. No boolean-only exported composition contracts
+remain; that closes this specific vacuity gap, not the outstanding host obligations. The
 thirteen-function checkpoint control proved all thirteen replacements and passed
 all 53 composition tests. The read-committed Fetch entry has since been upgraded
 and consumed by the stability/abort-source composition below. At the twelve-entry checkpoint, repeating the
@@ -519,9 +523,6 @@ Sparse construction now exports actual prefix maxima into retained lookup and
 cross-tier visibility. Temporary
 control changes and artifacts are
 restored byte-for-byte:
-
-
-- `validated_time_cursors_are_monotone`
 
 
 The forty-third-composition batch passes fresh pinned generation and full
@@ -987,7 +988,8 @@ hiding either helper's contract keeps its own five-file proof and all tests
 passing but fails the consumer; removing the semantic check, bypassing retention
 or rejecting every input fails both the consumer proof and independent tests.
 New failure seeds are quarantined and all temporary source changes are restored.
-Three boolean-only composition contracts remain explicitly listed above.
+Three boolean-only composition contracts remained at this checkpoint; the
+subsequent trim and time-cursor repairs close them.
 
 Fresh pinned Creusot 0.13.0 generation and the full no-cache two-worker replay
 prove all 538 files. Workspace all-target Clippy with warnings denied, the four
@@ -1035,8 +1037,8 @@ missing snapshots, arbitrary paused/completed traces, retained matches below
 replay/cache frontiers, disabled unsafe cache state and integer extremes. All 311
 verified library tests pass. Faithful decoding, complete enumeration, actual
 committed object coverage, snapshot contents, whole-batch replay and crash-safe
-checkpoint completion remain host obligations. Only time-cursor monotonicity
-still has a boolean-only exported contract.
+checkpoint completion remain host obligations. Time-cursor monotonicity was
+the remaining boolean-only export at this checkpoint; the repair below closes it.
 
 Six restored negative controls distinguish the contracts from their runtime
 oracles. Hiding either trim export keeps the helper's three-file proof and all
@@ -1058,3 +1060,161 @@ previous unpublished timestamp batch, remain byte-identical. Every verified
 Rust source remains below 300 lines. Both batches form a review layer above
 PR #1261, whose published snapshot separately passed its remote CI gate.
 These local checks do not establish remote CI for this new layer.
+
+## Validated time cursors compose into complete retained interval scans
+
+The last boolean-only export now returns its actual absolute inclusive lower
+and upper lookup cursors plus the strict predecessor start needed for a
+`timestamp >= lower` scan. Invalid segment extents or canonical archive rows
+are rejected exactly. Accepted outputs stay inside the segment, are ordered,
+and identify the final qualifying inclusive/strict rows, with an exact zero
+fallback. The composition reuses the existing archive validator rather than
+copying its validation loop. Its input domain still admits repeated row maxima,
+empty indexes and signed timestamp extremes.
+
+The fifty-fifth composition constructs truthful sparse prefix maxima, consumes
+these cursors, and returns the original globally first retained record in a
+closed timestamp interval. Absence excludes every retained match. Invalid
+segment extents and any record outside the segment reject exactly, including
+unindexed tail records. The strict start excludes no potential match. There is
+no assumed ordering of decoded record timestamps.
+
+Inclusive cursor monotonicity cannot crop a record scan. For records at offsets
+`[0, 3, 6]` with timestamps `[100, 300, 200]`, both inclusive cursors for
+`[200, 250]` are zero, while the first interval match is at offset six. Repeated
+maxima also require a strict lower start: timestamps `[100, 100, 300]` give an
+inclusive lower cursor of three for `[100, 100]`, but the first match is at zero.
+A logical retention floor is applied independently of these sparse cursors.
+
+Four independent tests use adjacent archive ordering, last-row linear lookup,
+actual prefix maxima and a complete retained record scan. Generated valid and
+malformed archives, arbitrary regressing timestamps, empty and sparse rows,
+logical floors, unindexed out-of-range tails and signed/absolute-coordinate
+extremes are covered. This mask-based interval composition is proof/test-only;
+it adds no production allocation or interval API. Complete faithful decoding,
+physical reads, coherent floors and truthful header-to-record adaptation remain
+host obligations. Removing boolean-only exports does not close those obligations.
+
+Five restored negative controls distinguish useful exports from locally passing
+code. Hiding either cursor guarantees or constructed prefix bounds leaves the
+respective helper proof and all 315 tests passing while breaking the new
+consumer. Cropping the scan at the upper cursor or substituting the inclusive
+lower cursor for its strict start fails both proof and independent tests.
+Rejecting every cursor request also fails both. Temporary source edits are
+restored and new failure seeds are quarantined. These are scoped controls,
+not a completed full mutation sweep.
+
+Fresh pinned Creusot 0.13.0 generation and full no-cache two-worker saved-session
+replay prove all 541 files. All 315 verified library tests, the four verified/
+log/remote-storage Bazel targets including verified doctests, workspace all-target
+Clippy with warnings denied and Creusot/mutation configuration checks pass.
+Both witness functions appear in mutation discovery. Only these two sessions
+are refreshed; all 1,078 unrelated artifact files, including the published
+checked-scan/trim layer, remain byte-identical. Every verified Rust source stays
+below 300 lines. The archive validator's stale writer comment is also corrected:
+current writes require newer maxima, while the structural contract deliberately
+admits valid repeated rows without asserting truthful prefix bounds. Its body,
+contract and source line positions are unchanged. This new batch remains local;
+PR #1263's published snapshot separately passed its remote Creusot job, with
+its remaining CI still pending at that checkpoint. The published snapshot has
+since passed its complete CI gate at `bb3ce3280f769802e7ab6d66a6b1fb782e026a3c`.
+
+## Stable offset prefixes safely gate regressing timestamp intervals
+
+The fifty-sixth composition consumes both the constructed interval witness and
+the actual read-committed visibility witness. It returns the derived LSO, maximal
+exclusive offset limit and original first retained interval match below that
+limit. No result excludes every eligible record in the supplied window. Invalid
+segment extents, out-of-range records and transaction starts beyond log end are
+rejected exactly. There are no new HWM/LSO ordering assumptions; negative raw
+frontiers conservatively hide the window, and arbitrary inherited LSO is ignored.
+
+Unlike a timestamp cursor, an offset visibility limit safely gates the tail:
+strict record offset order puts every record after a hidden first interval
+candidate at or beyond the same limit. For offsets `[0, 3, 6]` and timestamps
+`[100, 300, 200]`, interval `[200, 250]` still finds offset six when the derived
+limit is seven. A pending start or delivery/HWM cap at six excludes that same
+candidate by strict offset equality. An inherited LSO of zero cannot hide a
+stable candidate, nor can a larger inherited LSO expose an unstable one.
+The Fetch `empty` optimization is not a complete stability predicate: it ignores
+LSO when comparing the fetch offset with HW/delivery. The actual returned limit
+must gate the candidate.
+
+Production `Log::refresh_lso` enumerates every open transaction plus only the
+earliest unreplicated start. This projection preserves the minimum of a coherent
+valid snapshot, which suffices for prefix visibility; it is not complete
+validation of omitted entries. A supplied snapshot containing starts `[3, 8]`
+at log end seven rejects, whereas its minimum-only projection `[3]` is admitted
+and preserves limit three. The composition's complete rejection statement is
+about supplied starts only. Faithful decoding, omitted-state validity, coherent
+publication, physical reads and client-side aborted-record filtering remain
+outside it. This is stable-prefix gating, not a proof that aborted data is absent.
+
+Four independent oracle tests compare complete record scans with a minimum over
+log end, HW, delivery and every supplied transaction start. They cover accepted
+and rejected inputs, timestamp regressions, repeated maxima, retention floors,
+HWM/delivery/transaction equality, stale inherited LSO, negative raw starts and
+frontiers, unindexed invalid tails and absolute/signed extremes. The snapshot
+projection example above is an explicit regression. All 319 verified tests pass.
+
+Six restored negative controls distinguish the exports from body checks. Hiding
+either stability or interval guarantees leaves its helper proof and all tests
+passing but breaks this consumer. Substituting inherited LSO, admitting equality
+at the exclusive offset cap, treating `!empty` as sufficient candidate visibility,
+or rejecting every scan fails proof and independent tests. All temporary sources are restored and
+new failure seeds are quarantined. These are scoped controls, not a completed
+full mutation sweep.
+
+Fresh pinned Creusot 0.13.0 generation and full no-cache two-worker saved-session
+replay prove all 542 files. All 319 verified library tests, the four verified/
+log/remote-storage Bazel targets including verified doctests, workspace all-target
+Clippy with warnings denied and Creusot/mutation configuration checks pass.
+The new witness appears in mutation discovery. Only its session is refreshed;
+all 1,082 prior artifact files, including the previous local interval batch,
+remain byte-identical. The catalog agrees with all 56 executable compositions
+across 38 topic files; logical definitions are counted separately. Every verified
+Rust source remains below 300 lines. These checks were completed locally before
+publication. PR #1263's published checked-scan/trim snapshot separately passed
+its complete [CI gate](https://github.com/krabka-io/krabka-broker/actions/runs/36790486763)
+at `bb3ce3280f769802e7ab6d66a6b1fb782e026a3c`.
+
+
+## Anchored remote coverage and copy resumption
+
+The host coverage walk had a real anchoring bug. With finished ranges
+`[(0, 9), (20, 29)]` and local start 20, it seeded coverage from the obsolete
+first range and stopped at the gap, returning nine instead of 29. With only
+`[(0, 9)]` it returned nine instead of no coverage. Because copying resumes at
+that endpoint's successor, both cases resumed at ten, below the local start;
+the same shared result could also suppress physical-retention progress.
+Regressions in both existing broker test tables failed before the repair.
+
+The shared adapter now sorts metadata and delegates to
+[`remote_covered_through`](../crates/verified/src/retention/coverage.rs).
+Its contract describes interval geometry rather than a reference implementation:
+every offset from the anchor through the returned endpoint is covered by an
+actual input range; some range attains the endpoint; and no overlapping or
+adjacent range extends it. No coverage means malformed metadata or no range
+containing the anchor. The implementation checks the entire listing before
+walking coverage, so a corrupt tail beyond a gap also fails closed. Sorted starts
+are the sole ordering precondition; overlaps, repeated starts, obsolete ranges
+and signed extrema are admitted.
+
+Three native tests compare bounded coordinate enumeration with the kernel and
+exercise obsolete prefixes, real gaps, overlapping ranges, malformed tails,
+inclusive endpoints and successor saturation. Copy completion, truth of object
+metadata, snapshot coherence and physical deletion remain external assumptions.
+The existing local-retention and copy callers share the repaired root; neither
+adds a separate workaround. This kernel establishes availability of a remote
+prefix, not the full physical-deletion protocol.
+
+Publication validation: pinned Creusot 0.13.0 generation and full no-cache
+saved-session replay prove all 543 files;
+322 verified library tests and 92 broker remote-log-manager tests pass. The four
+verified/log/remote-storage Bazel targets, a scoped broker Bazel run, workspace
+all-target Clippy with warnings denied, formatting and Creusot/mutation checks
+pass. The new kernel appears in mutation discovery. All 1,084 preceding proof
+artifacts, including both timestamp interval batches, remain byte-identical;
+only the new coverage session is added to that baseline. There are still 56
+executable compositions across 38 topic files, and every verified Rust source
+remains below 300 lines. Local checks do not establish remote CI success.

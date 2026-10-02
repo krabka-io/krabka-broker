@@ -84,6 +84,19 @@ async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
     }
 }
 
+/// Metadata leadership can precede installation of the Produce readiness gate.
+async fn data_leader_client(cluster: &Cluster) -> Client {
+    let leader = leader_of(&cluster[0].0, TOPIC).await;
+    let (handle, _, _) = cluster
+        .iter()
+        .find(|(handle, _, _)| handle.node_id() == leader)
+        .expect("the data leader is a cluster member");
+    handle
+        .wait_until_local_partition_leader(TOPIC, 0, NodeId(leader))
+        .await;
+    client(&handle.listen_addr().to_string()).await
+}
+
 /// Create the data topic with `leader` leading its one partition on all three
 /// brokers. The test stops the broker that coordinates the transaction and
 /// expects the data partition to change leaders with it, so the two must
@@ -323,7 +336,7 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     let first = client(&address_of(&cluster, coordinator)).await;
     let producer = init_producer(&first).await;
     add_partition(&first, producer).await;
-    let data_leader = client(&address_of(&cluster, leader_of(&cluster[0].0, TOPIC).await)).await;
+    let data_leader = data_leader_client(&cluster).await;
     produce(&data_leader, Some(producer), &["a", "b", "c"]).await;
     first.close();
     data_leader.close();
@@ -361,7 +374,7 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     );
     second.close();
 
-    let data_leader = client(&address_of(&cluster, leader_of(&cluster[0].0, TOPIC).await)).await;
+    let data_leader = data_leader_client(&cluster).await;
     produce(&data_leader, None, &["z"]).await;
     data_leader.close();
     let bootstrap = cluster[0].0.listen_addr().to_string();

@@ -63,12 +63,12 @@ pub fn restore_offset_index_entry_valid(
 /// Validate one decoded time-index entry. Relative offsets strictly advance;
 /// timestamps may repeat but may not decrease.
 ///
-/// Kafka's `TimeIndex.maybeAppend` only appends a strictly greater timestamp,
-/// but krabka's segment writer appends the segment's running maximum
-/// timestamp at every sparse-index point, so an archive krabka wrote repeats a
-/// timestamp whenever a batch does not raise the maximum. Non-decreasing is
-/// the rule both writers satisfy, and the one a binary search over the index
-/// (`TimeIndex.lookup`) needs.
+/// The segment writer emits strictly newer running maxima, at the last offset
+/// of the batch that established each maximum. Archive validation also admits
+/// repeated maxima: non-decreasing timestamps with advancing offsets suffice
+/// for the binary lookup and strict-start kernels. Structural validity cannot
+/// establish truthful record prefix bounds; those require faithful construction
+/// or a separate semantic check against complete decoded records.
 #[ensures(result == (relative_offset@ <= max_relative@
     && match previous {
         Some((previous_timestamp, previous_relative)) =>
