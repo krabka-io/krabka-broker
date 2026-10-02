@@ -1873,3 +1873,77 @@ all 1,124 parent artifact files are unchanged. Every authored verified Rust
 source remains below 300 lines (largest: 288). This layer remains local on
 `codex/proof-control-truncation`, above published PR #1271, with no remote
 qualification yet.
+
+## Physical truncation, rebuilt producer windows and retry waits
+
+The physical-prefix theorem and the producer-window theorem previously met at
+a host assumption: the window's snapshot rows must already be valid at the
+new log end. The audit checked the real broker callers before changing them.
+Producer tracking drops an entry by its last offset, which agrees with whole
+batch removal. The future-log writer already rejects every swap while a
+truncation/reset mark remains unreported, even if the log grew back to equal
+ends. The offset-equality primitive alone does not establish byte/history
+equality, and no runtime change is needed for either checked guard.
+
+`truncated_replay_bounds_first_retry` derives the rebuilt window from the
+complete physical batch-end sequence and an arbitrary-length history of
+same-producer data batches with nondecreasing epochs. Each row's exclusive
+frontier names a real batch end. The exact physical cut establishes valid
+surviving rows at the retained end. The composition then selects the latest
+surviving epoch's last five batches and consumes the full-window retry theorem.
+It exports that window's bounds, exact retry classification, first matching
+original history index, physical coordinates and exclusive acknowledgement.
+Every duplicate frontier fits the retained end. Clamping the old HWM preserves
+readiness for that returned frontier.
+
+Tail deletion does not preserve the previous retry selection. If an older
+sequence alias reenters the five-slot window, it can become the first match
+even while the previously selected alias remains physically present. Deleting
+all data at a newer epoch can also restore an earlier epoch. The theorem
+therefore classifies requests against the rebuilt window and latest surviving
+epoch, rather than assuming an unchanged window or original selection.
+
+The independent oracle filters physical ends and data rows, takes the latest
+epoch's five-batch suffix, and uses modular sequence arithmetic. Properties
+include interleaved other-producer batches, histories longer than the window,
+multiple epochs and arbitrary prefix cuts. Boundary tables cover interior
+removal, slot repacking, wrap aliases, empty released/trunk rules and maximum
+signed offsets. Real log/tracker regressions exercise aligned and interior
+cuts, older-alias reentry and earlier-epoch restoration. Reopening qualifies
+only the actual latest metadata loaded by the snapshot.
+
+Complete decoded physical ends, faithful data-row span/PID/epoch association,
+complete physical data replay and serialized producer operations remain host
+obligations. A snapshot-only reopen may retain just the latest batch metadata;
+this theorem does not imply that every physically surviving older batch remains
+deduplicable after such a restart. Snapshot policy and marker-only entries are
+outside its data-history boundary. Byte equality, safe consensus truncation
+and crash durability are not established.
+
+Six scoped controls test the dependency boundary. Hiding only the exported
+exact physical end or first-alias minimality leaves the corresponding helper
+proof and native tests passing, but rejects the aggregate proof. Using a row's
+base instead of its last offset also rejects the proof, but the native oracle
+still passes for faithful physical spans: at the actual whole-batch end those
+two retention tests agree. That mutation is not claimed as a native negative
+qualification. Selecting by the row's base at the requested interior cut,
+requiring a strictly greater HWM for acknowledgement, or rejecting every empty
+rebuilt window rejects both the aggregate proof and independent native oracle.
+The strict-waiter primitive is still provable with its matching changed contract.
+The positive composition passes the same cache-free depth-two search used for
+those controls. All temporary edits were restored, and property seeds remain
+outside the repository.
+The final contract also exports fencing and successor classification from the
+latest surviving row, so downstream compositions can consume those decisions.
+
+
+Final qualification used the pinned Creusot v0.13.0 image and a fresh target.
+Both cache-free generation and canonical replay prove all 564 sessions. All
+356 verified-crate tests and 33 native producer-state tests pass, including
+the three actual log/tracker regressions. Bazel verified tests/documentation
+and the producer-state-filtered broker target pass, as do strict workspace
+Clippy, all four proof/mutation configuration checks, and repository formatting.
+The 1,126 parent artifact files remain byte-identical; only the new composition
+session is retained. Authored verified Rust sources remain below 300 lines
+(maximum 288). This layer is local on `codex/proof-truncated-producer-window`,
+above `codex/proof-control-truncation`; these local checks do not claim remote CI.
