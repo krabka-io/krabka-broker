@@ -505,7 +505,7 @@ pub struct RunOutput {
     )]
     pub startup: Option<Time>,
     /// Driver-observed wall-clock from start to first successful
-    /// `send().await.await??`.
+    /// `send().await?`.
     #[serde(with = "serde_units::numeric::millis_i64")]
     pub first_ack: Time,
     #[serde(default)]

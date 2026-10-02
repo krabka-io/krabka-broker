@@ -221,10 +221,5 @@ pub fn rec(topic: &str, v: &str) -> ProducerRecord {
 }
 
 pub async fn send_ok(producer: &Producer, record: ProducerRecord) {
-    producer
-        .send(record)
-        .await
-        .await
-        .expect("producer delivery channel open")
-        .expect("produce acknowledged");
+    producer.send(record).await.expect("produce acknowledged");
 }

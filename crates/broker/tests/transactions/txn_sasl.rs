@@ -49,7 +49,12 @@ async fn sasl_authenticated_transactional_flow_commits() {
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["a", "b", "c"] {
-        drop(producer.send(rec("sasl-txn", v)).await);
+        drop(
+            producer
+                .enqueue(rec("sasl-txn", v))
+                .await
+                .expect("record is queued"),
+        );
     }
     // send_offsets_to_transaction dials the group coordinator on a *second*
     // fresh connection — the other secondary connection that must carry SASL.

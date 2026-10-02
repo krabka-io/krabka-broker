@@ -200,14 +200,18 @@ async fn produce(load: Load) {
     while !stop.load(Ordering::Relaxed) {
         while window.len() < inflight {
             let pending = producer
-                .send(ProducerRecord {
+                .enqueue(ProducerRecord {
                     topic: topic.clone(),
                     value: Some(value.clone()),
                     ..Default::default()
                 })
                 .await;
             sent.fetch_add(1, Ordering::Relaxed);
-            window.push_back(pending);
+            if let Ok(handle) = pending {
+                window.push_back(handle);
+            } else {
+                break;
+            }
         }
         if let Some(pending) = window.pop_front()
             && pending.await.is_ok()

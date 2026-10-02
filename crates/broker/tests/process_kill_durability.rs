@@ -447,10 +447,9 @@ fn ensure_torn(segment: &Path) {
 async fn produce_settled(producer: &Producer, topic: &str, keys: &[String]) -> Vec<String> {
     let mut acked = Vec::new();
     for key in keys {
-        let receipt = producer.send(record(topic, key)).await;
-        match receipt.await {
-            Ok(Ok(_)) => acked.push(key.clone()),
-            Ok(Err(_)) | Err(_) => break,
+        match producer.send(record(topic, key)).await {
+            Ok(_) => acked.push(key.clone()),
+            Err(_) => break,
         }
     }
     acked
@@ -504,9 +503,8 @@ async fn wait_ready(bootstrap: &str, topic: &str, key: &str) {
             .build()
             .await
         {
-            match producer.send(record(topic, key)).await.await {
-                Ok(Ok(_)) => return,
-                Ok(Err(e)) => last = Some(format!("{e}")),
+            match producer.send(record(topic, key)).await {
+                Ok(_) => return,
                 Err(e) => last = Some(format!("{e}")),
             }
         }
@@ -660,9 +658,9 @@ async fn produce_through_a_kill(
     let mut acked = Vec::new();
     for i in 0..BURST_ATTEMPTS {
         let key = format!("c{cycle}-b{i}");
-        match producer.send(record(topic, &key)).await.await {
-            Ok(Ok(_)) => acked.push(key),
-            Ok(Err(_)) | Err(_) => break,
+        match producer.send(record(topic, &key)).await {
+            Ok(_) => acked.push(key),
+            Err(_) => break,
         }
     }
     killer.await.expect("the kill task");

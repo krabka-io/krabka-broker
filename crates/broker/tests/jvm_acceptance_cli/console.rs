@@ -146,7 +146,7 @@ async fn rust_producer_to_console_consumer() {
                 ..Default::default()
             })
             .await;
-        let m = fut.await.expect("oneshot").expect("ack");
+        let m = fut.expect("ack");
         assert!(m.partition == 0);
     }
     producer.flush().await.expect("flush");

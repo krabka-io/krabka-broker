@@ -183,7 +183,12 @@ async fn boot_with_ongoing_txn(
     // before the admin call. The drop pattern around `send` is
     // intentional — it's a future-of-record-metadata handle we don't
     // need (commits will never fire on this test path).
-    drop(producer.send(rec(topic, "v")).await);
+    drop(
+        producer
+            .enqueue(rec(topic, "v"))
+            .await
+            .expect("record is queued"),
+    );
     producer.flush().await.unwrap();
     // Don't commit/abort — we want the txn to stay Ongoing.
 

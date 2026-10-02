@@ -87,12 +87,13 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     for v in ["a", "b", "c"] {
         drop(
             producer
-                .send(ProducerRecord {
+                .enqueue(ProducerRecord {
                     topic: "t".into(),
                     value: Some(bytes::Bytes::from(v.to_string())),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .expect("record is queued"),
         );
     }
     // Flush the records to the log (advances HWM) but keep the txn OPEN (LSO=0).
@@ -248,12 +249,13 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
     for v in ["a", "b", "c"] {
         drop(
             producer
-                .send(ProducerRecord {
+                .enqueue(ProducerRecord {
                     topic: "t".into(),
                     value: Some(bytes::Bytes::from(v.to_string())),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .expect("record is queued"),
         );
     }
     producer.flush().await.unwrap();

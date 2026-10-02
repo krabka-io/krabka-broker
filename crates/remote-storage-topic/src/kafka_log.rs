@@ -515,10 +515,9 @@ impl KafkaMetadataEventLog {
             .producer
             .as_ref()
             .ok_or_else(|| MetadataLogError::Publish("the metadata log is read-only".into()))?;
-        let ack = producer.send(record).await;
-        let meta = ack
+        let meta = producer
+            .send(record)
             .await
-            .map_err(|_| MetadataLogError::Publish("producer dropped before ack".into()))?
             .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
         Ok(meta.offset)
     }

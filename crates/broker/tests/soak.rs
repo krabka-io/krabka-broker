@@ -388,8 +388,11 @@ async fn produce_loop(
             None => format!("{topic}-{sequence}"),
         };
         let value = vec![b'x'; PAYLOAD_BYTES];
-        let receipt = producer.send(record(topic, key.clone(), value)).await;
-        if let Ok(Ok(_)) = receipt.await {
+        if producer
+            .send(record(topic, key.clone(), value))
+            .await
+            .is_ok()
+        {
             load.produced.fetch_add(1, Ordering::Relaxed);
             if record_ack {
                 load.verified.lock().await.insert(key);

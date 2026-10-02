@@ -126,8 +126,6 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
             ..Default::default()
         })
         .await
-        .await
-        .expect("producer delivery channel open")
         .expect("the in-flight record is acknowledged");
     p.broker
         .wait_until_local_log_end_offset("orders", 0, 1)

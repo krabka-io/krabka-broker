@@ -177,8 +177,6 @@ pub(super) async fn send_ok(producer: &Producer, topic: &str, value: &'static st
     producer
         .send(record(topic, value))
         .await
-        .await
-        .expect("producer delivery channel open")
         .expect("produce acknowledged");
 }
 
@@ -200,7 +198,5 @@ pub(super) async fn send_at(
             ..record(topic, value)
         })
         .await
-        .await
-        .expect("producer delivery channel open")
         .expect("produce acknowledged");
 }

@@ -190,13 +190,14 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     for p in 0..n_partitions {
         let v = format!("p{p}");
         let rx = producer
-            .send(ProducerRecord {
+            .enqueue(ProducerRecord {
                 topic: topic.into(),
                 partition: Some(p),
                 value: Some(Bytes::from(v.clone())),
                 ..Default::default()
             })
-            .await;
+            .await
+            .expect("enqueue record");
         futs.push((p, rx));
         expected.insert(v);
     }
@@ -209,7 +210,6 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     for (p, rx) in futs {
         let meta = rx
             .await
-            .expect("oneshot")
             .unwrap_or_else(|e| panic!("record for partition {p} failed: {e:?}"));
         assert!(meta.partition == p, "ack partition mismatch: {meta:?}");
     }

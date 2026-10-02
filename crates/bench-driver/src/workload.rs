@@ -51,8 +51,7 @@ use crate::{
 /// consumer task tallies its per-slice counts and its per-slice latency
 /// histogram locally, so the hot path holds no shared locks. `run()` then merges
 /// them into the `samples` series.
-type AckResult =
-    Result<Result<RecordMetadata, ProducerError>, tokio::sync::oneshot::error::RecvError>;
+type AckResult = Result<RecordMetadata, ProducerError>;
 type AckFuture = Pin<Box<dyn Future<Output = (AckResult, Instant)> + Send>>;
 
 pub const MAX_CLIENT_REQUEST_TIMEOUT: Time = millis(2_147_483_647);
@@ -1114,26 +1113,6 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             }
         };
     }
-    // The ack channel was dropped before a result (producer gone).
-    macro_rules! handle_dropped {
-        () => {{
-            if stop.load(Ordering::Relaxed) == STATE_MEASURING {
-                dropped += 1;
-            }
-            if dropped == 1 && error.is_empty() {
-                error = format!("producer-{idx}-rx-closed");
-            }
-        }};
-    }
-    macro_rules! handle_ack_result {
-        ($res:expr, $t0:expr) => {{
-            match $res {
-                Ok(res) => handle_ack!(res, $t0),
-                Err(_) => handle_dropped!(),
-            }
-        }};
-    }
-
     loop {
         let state = stop.load(Ordering::Relaxed);
         if state == STATE_STOP {
@@ -1143,13 +1122,13 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         // latency is the real send→ack time, not how long a record waited in
         // the in-flight set behind an older stuck send.
         while let Some((res, t0)) = inflight.next().now_or_never().flatten() {
-            handle_ack_result!(res, t0);
+            handle_ack!(res, t0);
         }
         // Back-pressure: at capacity, block until any send completes. Waiting
         // for the oldest can make one dead-leader send hide live-partition acks.
         while inflight.len() >= max_inflight {
             if let Some((res, t0)) = inflight.next().await {
-                handle_ack_result!(res, t0);
+                handle_ack!(res, t0);
             }
         }
         if let Some(p) = pacer.as_mut() {
@@ -1169,8 +1148,10 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             ..Default::default()
         };
         let t0 = Instant::now();
-        let rx = producer.send(rec).await;
-        inflight.push(Box::pin(async move { (rx.await, t0) }));
+        match producer.enqueue(rec).await {
+            Ok(delivery) => inflight.push(Box::pin(async move { (delivery.await, t0) })),
+            Err(error) => handle_ack!(Err::<RecordMetadata, _>(error), t0),
+        }
     }
 
     // Drain anything still outstanding when the measurement window closed, but
@@ -1189,7 +1170,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             break;
         }
         match tokio::time::timeout_at(drain_until, inflight.next()).await {
-            Ok(Some((res, t0))) => handle_ack_result!(res, t0),
+            Ok(Some((res, t0))) => handle_ack!(res, t0),
             Ok(None) => break,
             Err(_) => {
                 let unresolved = inflight.len() as u64;

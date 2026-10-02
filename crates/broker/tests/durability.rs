@@ -408,12 +408,13 @@ async fn read_committed_under_rf1_unchanged() {
     for v in ["p", "q", "r"] {
         drop(
             producer
-                .send(ProducerRecord {
+                .enqueue(ProducerRecord {
                     topic: "rctxn".into(),
                     value: Some(Bytes::from(v.to_string())),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .expect("record is queued"),
         );
     }
     txn.commit().await.unwrap();

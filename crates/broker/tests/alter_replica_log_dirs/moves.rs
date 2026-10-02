@@ -114,12 +114,13 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
         // matches the pattern in `crates/broker/tests/durability.rs`.
         drop(
             producer
-                .send(ProducerRecord {
+                .enqueue(ProducerRecord {
                     topic: "t".into(),
                     value: Some(Bytes::from(format!("v{i}"))),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .expect("record is queued"),
         );
     }
     producer.flush().await.expect("flush");

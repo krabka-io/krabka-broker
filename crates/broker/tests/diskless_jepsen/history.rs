@@ -131,8 +131,6 @@ async fn produce_appender(
                 ..Default::default()
             })
             .await
-            .await
-            .expect("producer response channel")
             .expect("acks=all record");
         let return_order = clock.fetch_add(1, Ordering::SeqCst);
         records.push(AckedRecord {
