@@ -107,3 +107,5 @@ mod truncated_producer;
 mod snapshot_tail;
 
 mod completed_producer;
+
+mod completed_eviction;

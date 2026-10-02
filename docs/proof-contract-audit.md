@@ -2119,3 +2119,49 @@ only Creusot-only helper bodies and add the pointwise ordering and slot-witness
 lemmas. The 1,132 parent artifact files remain byte-identical and all authored verified Rust files
 remain below 300 lines (maximum 288). Local proof qualification is complete;
 remote CI for the repaired head is tracked separately.
+
+## Completed retry eviction and acknowledgement order
+
+The completion selector exported maximal physical coverage, but
+`completed_batches_preserve_first_retry` exported only ordering, origins and
+retry coordinates. A caller could not establish why an eligible old physical
+batch disappeared. The weaker interface permitted a one-row window containing
+only a newer incoming batch, even when five old batches were eligible.
+
+The composed contract now carries both maximality laws through the snapshot-row
+projection: an omitted eligible old source, or an accepted incoming physical
+offset absent from the window, requires five retained batches with strictly
+greater last offsets. This strengthens the interface without changing selection,
+retry classification or the existing preconditions.
+
+`completed_eviction_bounds_waiters` consumes that contract and the actual
+Produce-frontier and waiter kernels. It nominates an old current-epoch batch,
+constructs every retained source's exclusive durability frontier, and exports
+their readiness at a common HWM observation. If the nominated batch was evicted,
+there are five strictly newer frontiers; every ready retained waiter implies that
+the nominated frontier is already covered. Conversely, while the nominated
+frontier remains uncovered, all five retained waiters are unready. The implication
+is one-way: at HWM 3, an evicted batch ending at 2 is covered while the earliest
+retained batch ending at 6 still waits for frontier 7.
+
+Two contract-weakening controls separately hide old-source maximality and waiter
+readiness. In both cases the weakened helper still proves and the native checks
+pass, but the consumer proof fails. These controls distinguish the aggregate law
+from a test that merely repeats the function's returned coordinates. All temporary
+changes are restored before positive qualification.
+
+This is a law about eligible completed physical batches and one HWM observation.
+It excludes epoch replacement, incomplete callbacks, physical persistence and
+transaction reconstruction. Eviction of one source does not exclude a Duplicate
+decision for a different retained sequence alias, and HWM coverage does not prove
+that evicted bytes remain readable.
+
+Qualification uses pinned Creusot v0.13.0 compilation, forced cache-free
+generation of both affected sessions, ordinary cache-free generation of all 572
+sessions, and full cache-free saved-ledger replay of all 572 sessions. The final
+verified-crate Bazel suite passes 368 native tests and the doc tests; strict
+workspace Clippy, proof/mutation configuration checks and formatting also pass.
+Both weakening controls use fresh depth-six plans and restore the same proof
+bodies qualified by the positive runs. The 1,140 unaffected parent artifact files
+remain byte-identical, and all authored verified Rust sources remain below 300
+lines (maximum 288). Remote CI is tracked separately.
