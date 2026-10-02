@@ -11,7 +11,7 @@ use krabka_protocol::owned::produce_request::{
     PartitionProduceData, ProduceRequest, TopicProduceData,
 };
 
-use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
+use crate::epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn epoch_checkpoint_byte_compat() {
@@ -45,7 +45,7 @@ async fn epoch_checkpoint_byte_compat() {
         .expect("produce");
 
     // Bump epoch to 1 + produce another.
-    broker.test_set_leader_epoch("ckpt", 0, 1);
+    set_leader_epoch(&broker, "ckpt", 1).await;
     client
         .send(ProduceRequest {
             acks: 1,
