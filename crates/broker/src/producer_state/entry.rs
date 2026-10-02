@@ -93,34 +93,37 @@ impl ProducerEntry {
         retained[NUM_BATCHES_TO_RETAIN - 1] = self.last_batch();
         retained
     }
+}
 
-    /// The earlier batches after `self` accepts one more batch at `epoch`:
-    /// the current last batch joins them and the oldest leaves at capacity.
-    /// A new epoch clears them, as Kafka's `maybeUpdateProducerEpoch` does.
-    #[must_use]
-    pub fn earlier_after_append(&self, epoch: i16) -> EarlierBatches {
-        if epoch != self.epoch {
-            return NO_EARLIER_BATCHES;
+/// The shared live/model completion projection, keeping metadata by physical
+/// offset instead of asynchronous acknowledgement order.
+pub(crate) fn earlier_after_completion(
+    existing: Option<ProducerEntry>,
+    epoch: i16,
+    incoming: RetainedBatch,
+) -> (bool, EarlierBatches) {
+    let retained: Vec<_> = existing
+        .into_iter()
+        .flat_map(|entry| entry.retained_batches().into_iter().flatten())
+        .collect();
+    let ends: Vec<_> = retained.iter().map(|batch| batch.last_offset).collect();
+    let (accepted, selected) = krabka_verified::producer::producer_completion_window(
+        existing.map(|entry| entry.epoch),
+        epoch,
+        &ends,
+        incoming.last_offset,
+    );
+    let mut earlier = NO_EARLIER_BATCHES;
+    if accepted {
+        for (slot, &source) in selected.iter().take(selected.len() - 1).enumerate() {
+            earlier[slot] = Some(if source == retained.len() {
+                incoming
+            } else {
+                retained[source]
+            });
         }
-        let Some(last) = self.last_batch() else {
-            return NO_EARLIER_BATCHES;
-        };
-        let mut next = NO_EARLIER_BATCHES;
-        let kept = self
-            .earlier
-            .iter()
-            .flatten()
-            .copied()
-            .chain(std::iter::once(last));
-        let count = self.earlier.iter().flatten().count() + 1;
-        for (slot, batch) in next
-            .iter_mut()
-            .zip(kept.skip(count.saturating_sub(NUM_BATCHES_TO_RETAIN - 1)))
-        {
-            *slot = Some(batch);
-        }
-        next
     }
+    (accepted, earlier)
 }
 
 #[derive(Debug, Default)]

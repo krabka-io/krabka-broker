@@ -1,0 +1,55 @@
+(* #"/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 19 0 25 8 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span switness = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 10 11 10 59
+let%span switness'0 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 11 11 11 40
+let%span switness'1 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 12 11 12 80
+let%span switness'2 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 13 11 13 46
+let%span switness'3 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 14 11 16 69
+let%span switness'4 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 17 10 17 48
+let%span switness'5 = "/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 18 10 18 37
+
+use creusot.int.UInt64
+use seq.Seq
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant selected : Seq.seq UInt64.t
+
+constant count : int
+
+constant position : int
+
+constant first : int
+
+constant source : int
+
+function old_source_slot [#"/workspace/crates/verified/src/producer/completion/coverage/witness.rs" 19 0 25 8] (selected: Seq.seq UInt64.t) (count: int) (position: int) (first: int) (source: int) : int
+
+goal vc_old_source_slot: ([%#switness] 0 <= position /\ position <= count /\ 0 <= first)
+  -> ([%#switness'0] 0 <= source /\ source < count)
+  -> ([%#switness'1] if source < position then first <= source else first <= source + 1)
+  -> ([%#switness'2] Seq.length selected = count + 1 - first)
+  -> ([%#switness'3] forall j: int. 0 <= j /\ j < Seq.length selected
+      -> UInt64.t'int (Seq.get selected j)
+      = (if first + j = position then count else if gt_log_Int (first + j) position then first + j - 1 else first + j))
+  -> (if source < position then
+    let result = source
+    - first in [@stop_split] [@expl:old_source_slot ensures] ([@stop_split] [@expl:old_source_slot ensures #0] [%#switness'4] 0
+        <= result
+      /\ result < Seq.length selected)
+    /\ ([@stop_split] [@expl:old_source_slot ensures #1] [%#switness'5] UInt64.t'int (Seq.get selected result) = source)
+  else
+    let result = source + 1
+    - first in [@stop_split] [@expl:old_source_slot ensures] ([@stop_split] [@expl:old_source_slot ensures #0] [%#switness'4] 0
+        <= result
+      /\ result < Seq.length selected)
+    /\ ([@stop_split] [@expl:old_source_slot ensures #1] [%#switness'5] UInt64.t'int (Seq.get selected result) = source)
+  )

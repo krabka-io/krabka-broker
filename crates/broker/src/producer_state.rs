@@ -15,6 +15,8 @@ use crate::partition::LogOffset;
 #[cfg(test)]
 #[macro_use]
 mod commit_macro;
+#[cfg(test)]
+mod completed_commit;
 mod decision;
 mod entry;
 mod expiry;
@@ -59,8 +61,11 @@ impl ProducerState {
 
     /// Commit a successful append into the tracker.
     ///
-    /// Skips the write, rather than overwrite, when the tracked entry already
-    /// carries a higher producer epoch. `AppendCommit::record` defers this
+    /// A completion at an older epoch preserves the tracked entry. At the
+    /// same epoch, completions merge by physical offset into the latest five
+    /// distinct batches; a repeated completion keeps the existing metadata.
+    /// Earlier completions never replace the latest sequence, timestamp or
+    /// transaction state. `AppendCommit::record` defers this
     /// call until the `acks=all` high-watermark gate for its own append
     /// resolves, so it can run long after the append itself, on a task
     /// unrelated to the writer's serial handling of later messages on the
@@ -92,25 +97,33 @@ impl ProducerState {
         let handle = self.handle(topic, partition);
         let mut s = handle.lock().await;
         let existing = s.entries.get(&ProducerId(producer_id)).copied();
-        if existing.is_some_and(|existing| existing.epoch > producer_epoch) {
-            return;
-        }
-        let earlier = existing.map_or(NO_EARLIER_BATCHES, |existing| {
-            existing.earlier_after_append(producer_epoch)
-        });
         let last_sequence = increment_sequence(base_sequence, last_offset_delta);
         let last_offset = base_offset + i64::from(last_offset_delta);
-        let current_txn_first_offset = match existing {
-            Some(existing) if existing.current_txn_first_offset.is_some() => {
-                existing.current_txn_first_offset
-            }
-            Some(existing)
-                if existing.epoch == producer_epoch && existing.last_offset >= last_offset =>
-            {
-                None
-            }
-            _ => is_transactional.then_some(base_offset),
+        let incoming = RetainedBatch {
+            base_sequence: krabka_verified::decrement_sequence(last_sequence, last_offset_delta),
+            last_sequence,
+            base_offset,
+            last_offset,
+            timestamp: last_timestamp,
         };
+        let (accepted, earlier) =
+            entry::earlier_after_completion(existing, producer_epoch, incoming);
+        if !accepted {
+            return;
+        }
+        if let Some(mut tracked) = existing
+            && tracked.epoch == producer_epoch
+            && tracked.last_offset >= last_offset
+        {
+            // Deferred completions can fill an earlier slot, but never undo
+            // newer sequence, timestamp or transaction-marker state.
+            tracked.earlier = earlier;
+            s.entries.insert(ProducerId(producer_id), tracked);
+            return;
+        }
+        let current_txn_first_offset = existing
+            .and_then(|entry| entry.current_txn_first_offset)
+            .or_else(|| is_transactional.then_some(base_offset));
         s.entries.insert(
             ProducerId(producer_id),
             ProducerEntry {

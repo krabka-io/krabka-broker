@@ -2024,3 +2024,98 @@ byte-identical; retained artifacts cover the two new sessions and the refactored
 physical-history session with its unchanged contract. Authored verified Rust
 sources remain below 300 lines (maximum 288). This layer is local on
 `codex/proof-snapshot-tail-retry`; these checks do not establish remote CI.
+
+
+## Deferred producer-completion order
+
+The recovery proofs' complete, ordered histories do not establish the live
+tracker's completion order. `PendingAck::finish` calls `AppendCommit::record`
+after its independent HWM wait; the writer serialized the physical append,
+but those callbacks can finish out of order. The old `ProducerState::commit`
+protected only the epoch and transaction reopening. At the same epoch, a late
+completion replaced the latest sequence, offset and timestamp and appended
+retained metadata in completion order. A native counterexample first records
+the batch ending at offset 21, then completes the older batch ending at 11:
+the old tracker moves its latest offset back to 11. Ignoring every earlier
+completion would preserve the newest batch but lose the earlier batch's retry.
+
+The live tracker now delegates retained-window selection to
+`producer_completion_window`. A lower producer epoch is rejected without
+changing the entry. At the current epoch, distinct completed physical batches
+are merged by last offset and the five greatest survive. A repeated physical
+offset keeps the old metadata. A newer epoch starts its own window, including
+the first data batch after marker-only state. Earlier completions can fill
+retained slots while preserving the latest sequence, coordinates, timestamps
+and current transaction state. In particular, repeating a data completion
+after a same-epoch marker preserves that marker's closed state and timestamp.
+The bounded Stateright tracker uses the same live projection; its independent
+sequence oracle and reachable-state counts remain unchanged.
+
+`completed_batches_preserve_first_retry` composes that actual selection with
+snapshot-row validity, complete retry-window reconstruction, producer
+classification and the acknowledgement frontier. It returns every retained
+row's original source index, including the incoming completion's distinct
+index. It exports epoch monotonicity, physical ordering, preservation of the
+newest current-epoch batch after an earlier completion, exact duplicate
+existence, the first matching alias, that alias's original base and exclusive
+frontier, and readiness exactly when the HWM reaches that frontier. A rejected
+completion against marker-only state keeps the marker's fence and zero-sequence
+restart rule; it is not treated as a producer with no entry.
+
+The independent oracle uses a sorted distinct-offset map and modular sequence
+arithmetic. Native tracker tests enumerate all 720 orders of six completions,
+then repeat every completion, including the evicted one, and compare each
+retained batch's full metadata. Real partition-writer regressions append data
+and COMMIT/ABORT markers at equal and higher epochs before completing earlier
+data, compare the full live entry, and compare exact sequence decisions with
+a tracker rebuilt from the reopened log.
+
+These proofs cover completed truthful data batches and serialized tracker
+installation. Equal offsets must identify the same surviving physical batch;
+PID routing, assigned geometry, and faithful metadata projection remain host
+obligations. They do not establish a complete physical window before all its
+callbacks finish, fix the best-effort log-end/truncation race in
+`AppendCommit::record`, reconstruct all transaction boundaries, prove timestamp
+equality across marker snapshot recovery, or establish byte or crash durability.
+
+
+Six scoped controls use fresh proof plans, no cached answers, and the positive
+proof's same depth-six search. Removing only physical source ordering, retained
+source epoch eligibility, or first-alias minimality leaves the respective
+weakened helper provable and the native oracle passing, while rejecting the
+composition. Returning a window position instead of its source index rejects
+both the composition and oracle. Removing the five-batch crop rejects the
+selector proof and oracle. Removing only the live preservation branch leaves
+the pure proofs passing but rejects the broker regressions: installation is
+covered by those real-host checks, not automatically certified by a theorem
+over the projected window. All temporary mutations were restored, and negative
+property seeds are retained outside the repository.
+
+The selector now requires only at most five strictly ordered offsets and an
+empty old window when no current epoch exists; its ordering law also covers
+signed-offset and epoch boundaries. The composition separately establishes
+valid nonnegative producer geometry for retry coordinates. A separate checked
+insertion lemma connects inverse indices and the dropped prefix to maximal
+retained offsets; a separate pointwise lemma supplies the strict order of any
+two insertion positions. A checked slot witness constructs the retained position
+of every old source outside the discarded prefix. The caller keeps that witness's
+membership as a branch condition, so splitting an omitted-row conjunction cannot
+discard the term needed to contradict omission. The remaining omitted old row is
+explicitly tied to the discarded prefix before exporting the maximal-window
+guarantee. Explicit new-epoch and unchanged-window branches preserve the same
+selector contract while separating those cases from sorted insertion. These
+proof-only changes retain every exported contract and the normal depth-six search.
+
+The pinned Creusot v0.13.0 image compiles the frozen source from a fresh target
+directory and proves all 571 sessions with ordinary cache-free generation. Full
+canonical saved-ledger replay also proves all 571 sessions without cached answers.
+Focused forced generation proves all five sessions added by this layer. Native
+validation passes all 363 verified-crate tests and 38 producer-state tests, including the model,
+all completion orders, and real marker/restart cases. Relevant Bazel tests/docs,
+strict workspace Clippy, proof/mutation configuration checks and formatting pass.
+The six scoped controls passed before the final proof-only decomposition; the
+four mutated source files' positive bytes are unchanged. Later edits affect
+only Creusot-only helper bodies and add the pointwise ordering and slot-witness
+lemmas. The 1,132 parent artifact files remain byte-identical and all authored verified Rust files
+remain below 300 lines (maximum 288). Local proof qualification is complete;
+remote CI for the repaired head is tracked separately.
