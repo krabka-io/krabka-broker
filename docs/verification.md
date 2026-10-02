@@ -176,6 +176,21 @@ logical Fetch: every offset in the retained window has a concrete copied batch
 with identical bytes, and every offset before either floor is excluded. Promotion
 checkpoints a higher canonical floor in the follower before rebasing; an injected
 first-append failure and reopen regression checks that ordering.
+The [byte-quorum composition](../crates/verified/src/composition/byte_quorum.rs)
+connects identity/epoch admission, validated actual WAL copies, observed durable
+completion, installed identities, explicit quorum votes and consumer Fetch.
+A fresh advance above the retained floor exports a distinct matching-copy
+majority; complete valid copies must reach log end. The canonical reference is
+validated through the covering-copy theorem, including an interior logical
+floor. That theorem and its layout validator now export arbitrary batch order
+and checked extents; WAL authorization and byte-count definitions are available
+to crate-local proof consumers. Independent sorted-ledger tests and consistent
+wrong-helper contracts reject mismatched or unfinished copies. Accurate decoded
+bytes, current lineage, actual fsync/checkpoint completion, identity provenance
+and inherited watermark evidence remain host obligations. The network leader
+continues to trust authenticated offset reports; the model consumes inspected
+copy evidence and does not prove that authentication makes those reports true.
+
 The [append/reservation witness composition](../crates/verified/src/composition/append.rs)
 returns the actual computed append, reservation, recovery, acknowledgement and
 scan results with exact admission and equality guarantees. Its pair consumer

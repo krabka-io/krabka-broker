@@ -9,11 +9,11 @@ use super::{
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open(crate))]
 #[requires(0 <= count && count <= batches.len())]
 #[ensures(result >= 0)]
 #[variant(count)]
-fn wal_copy_byte_count(batches: Seq<WalCopyBatch>, count: Int) -> Int {
+pub(crate) fn wal_copy_byte_count(batches: Seq<WalCopyBatch>, count: Int) -> Int {
     pearlite! {
         if count == 0 { 0 } else {
             wal_copy_byte_count(batches, count - 1) + batches[count - 1].2@.len()
@@ -166,6 +166,10 @@ pub(super) fn checked_wal_copy_replays_exactly(
         && 0 <= physical@ && physical@ <= floors.0@.max(floors.1@)
         && bytes_end@ == position@ + wal_copy_byte_count(source@, source@.len())
         && bytes_end@ <= file_end@
+        && (forall<i: Int> 0 <= i && i < source@.len() ==>
+            physical@ <= source@[i].0@ && source@[i].0@ + source@[i].1@ + 1 <= target@)
+        && (forall<i: Int, j: Int> 0 <= i && i < j && j < source@.len() ==>
+            source@[i].0@ + source@[i].1@ < source@[j].0@)
         && (match selected { None => false, Some(_) => true }) ==
             (floors.0@ <= requested@ && floors.1@ <= requested@ && requested@ < target@)
         && (match selected {

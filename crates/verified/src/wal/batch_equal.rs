@@ -42,6 +42,8 @@ fn exact_wal_batch_suffix(
 #[cfg_attr(creusot, ensures(result == wal_batch_layout(bases@, lasts@, start@, target@)))]
 #[cfg_attr(creusot, ensures(result ==> forall<i: Int> 0 <= i && i < bases@.len()
     ==> start@ <= bases@[i]@ && bases@[i]@ <= lasts@[i]@ && lasts@[i]@ < target@))]
+#[cfg_attr(creusot, ensures(result ==> forall<i: Int, j: Int>
+    0 <= i && i < j && j < bases@.len() ==> lasts@[i]@ < bases@[j]@))]
 #[must_use]
 pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i64) -> bool {
     if bases.len() != lasts.len() {
@@ -63,6 +65,8 @@ pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i
         start@ <= bases@[j]@ && bases@[j]@ <= lasts@[j]@ && lasts@[j]@ < expected@
         && lasts@[j] < i64::MAX
         && bases@[j]@ == if j == 0 { start@ } else { lasts@[j - 1]@ + 1 }))]
+    #[cfg_attr(creusot, invariant(forall<a: Int, b: Int>
+        0 <= a && a < b && b < i@ ==> lasts@[a]@ < bases@[b]@))]
     #[cfg_attr(creusot, variant(bases@.len() - i@))]
     while i < bases.len() {
         if bases[i] != expected || bases[i] > lasts[i] {
@@ -110,6 +114,10 @@ pub fn wal_batch_layout(bases: Seq<i64>, lasts: Seq<i64>, start: Int, target: In
         && wal_batch_layout(bases@, lasts@, physical@, target@)
         && (forall<i: Int> 0 <= i && i < bases@.len() ==>
             physical@ <= bases@[i]@ && bases@[i]@ <= lasts@[i]@ && lasts@[i]@ < target@),
+}))]
+#[cfg_attr(creusot, ensures(match result {
+    None => true,
+    Some(_) => forall<i: Int, j: Int> 0 <= i && i < j && j < bases@.len() ==> lasts@[i]@ < bases@[j]@,
 }))]
 #[must_use]
 pub fn wal_covering_batch_range(

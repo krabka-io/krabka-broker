@@ -1,0 +1,63 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_authenticated_copy_vote": {
+        "tactic": "compute_specified",
+        "children": [
+          {
+            "tactic": "split_vc",
+            "children": [
+              { "prover": "alt-ergo", "time": 0.014 },
+              { "prover": "alt-ergo", "time": 0.026 },
+              { "prover": "alt-ergo", "time": 0.016 },
+              { "prover": "alt-ergo", "time": 0.013 },
+              { "prover": "alt-ergo", "time": 0.014 },
+              { "prover": "alt-ergo", "time": 0.017 },
+              { "prover": "alt-ergo", "time": 0.015 },
+              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "alt-ergo", "time": 0.039 },
+              { "prover": "alt-ergo", "time": 0.034 },
+              { "prover": "alt-ergo", "time": 0.012 },
+              { "prover": "z3", "time": 0.008 },
+              { "prover": "z3", "time": 0.035 },
+              { "prover": "alt-ergo", "time": 0.026 },
+              { "prover": "z3", "time": 0.011 },
+              { "prover": "z3", "time": 0.028 },
+              { "prover": "alt-ergo", "time": 0.026 }
+            ]
+          }
+        ]
+      },
+      "vc_branch_Option_tup3_i64_u64_Option_usize": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_covering_copy_preserves_logical_fetch": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      },
+      "vc_deref_Vec_tup3_i64_i32_Vec_u8_Global_Global": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_from_residual_Option_i64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_index_slice_tup3_i64_i32_Vec_u8_Global": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_len_tup3_i64_i32_Vec_u8_Global": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      },
+      "vc_len_tup3_i64_i32_Vec_u8_Global'0": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      },
+      "vc_wal_fetch_admission": { "prover": "alt-ergo", "time": 0.009 }
+    }
+  }
+}

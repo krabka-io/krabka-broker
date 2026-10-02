@@ -99,6 +99,7 @@ A specification is not automatically weak because it resembles a short function.
 | `stable_abort_sources_cover_fetch` | Derives LSO from transaction state, replaces the inherited LSO, and returns the greatest bounded Fetch prefix plus exactly every qualifying unique abort row from both complete source indexes. A later marker owner is still represented, and an invalid source rejects the whole result. | Starts, indexes and watermarks must describe one coherent log lineage. Complete source enumeration, authoritative state projection, requested-floor authorization, bytes and client record filtering remain external. |
 | `quorum_commit_bounds_fetch` | When HWM advances, at least the configured quorum of counted entries reaches the consumer Fetch limit; HWM remains inside the log and is maximal above the epoch gate. The Fetch limit is exactly the HWM/LSO/delivery minimum. | Entries represent distinct voters and matching log prefixes. An inherited unchanged HWM needs prior-epoch durability evidence. This is the consensus kernel, not the separate ISR high-watermark algorithm. |
 | `installed_wal_quorum_bounds_fetch` | The actual voter validator, clamped explicit durable votes, majority computation, and consumer Fetch yield concrete distinct installed supporters at/above the exclusive limit when an advance exposes retained records. Exact configured size is checked; the unsynced leader end contributes no extra vote. Admission is complete for valid ID/count/projection shapes. The watermark is maximal among quorum-supported frontiers inside the log, and the Fetch limit is exactly the minimum of HWM, LSO, and delivery. | Reported offsets faithfully represent fsynced matching prefixes. Current/log-start floors need prior evidence; floor-only advancement exposes no retained records, and unchanged inherited watermarks carry no fresh support promise. The returned supporter list is a proof/test witness, not a production allocation. |
+| `durable_matching_copies_bound_fetch` | Validates the canonical byte range, derives votes through actual identity/epoch admission and completed byte-identical copies, then returns quorum/Fetch frontiers, distinct supporters and the exact derived votes. A fresh advance exposing retained records has a matching completed-copy majority; complete valid copies reach log end. | Decoded metadata must match the actual inspected bytes. Completion observations must describe the current fsynced/checkpointed copies. Identity provenance, current log lineage, I/O and inherited-watermark evidence remain external. |
 | `checked_wal_copy_replays_exactly` | An arbitrary sequence of actual byte-equal batch copies makes live append, Produce acknowledgement, and tail recovery agree on the exact exclusive end and total encoded-byte extent, with strict logical/byte progress for a nonempty copy. Success preserves every batch’s metadata and bytes; every complete valid copy that fits is admitted. Gaps, overlaps, metadata/byte divergence, zero-byte batches, incomplete copies, extent exhaustion, and wrong target ends are rejected. | Batch metadata faithfully decodes the compared bytes. Reading, copying, fsync, checkpoint publication, concurrency, and quorum-wide byte agreement remain host obligations. This is a pure complete-copy projection, not a crash/durability proof. |
 | `checkpoint_truncation_bounds_fetch` | For arbitrary-length ordered physical batch ends, recovery admits exactly scalar-valid empty ranges or whole-batch ends. Nonempty truncation retains exactly the batches at/before that cut and reaches that exact end; empty recovery resets at its logical floor. Subsequent HWM/LSO/delivery clamping gives the exact consumer Fetch minimum and cannot expose the discarded suffix. Interior logical starts and integer extremes are allowed. | The ends are the complete accurately decoded local batch sequence, with physical start at/below logical start and the observed log end matching its final boundary. The returned count describes truncation before later prefix trimming. Byte preservation, actual I/O, fsync, concurrent changes, and checkpoint publication remain host obligations. |
 | `published_trim_bounds_recovery` | Capping and reconciling an active trim, publishing its WAL range before native floor advancement, whole-batch recovery, and Fetch compose after every modeled publication stage. Before publication, recovery retains exactly the old durable prefix; after publication, either native floor recovers the synced full prefix at the new floor. The retained batch count and visible-offset membership are exact, including empty ranges and interior floors. | Atomic whole-file publication, truthful fsync completion, prefix-only unlinking, accurate remaining batch rows, and a coherent initial checkpoint are host facts. Partial native floors stay below the already published WAL floor. Reset/truncate and legacy inconsistent checkpoint repair are separate protocols. |
@@ -2548,3 +2549,70 @@ and all four proof/mutation configuration gates. The changed oracle and host
 regression pass again after final lint corrections. All 1,154 parent artifacts
 remain byte-identical. All 302 authored verified Rust sources remain below
 300 lines (maximum 288). Published CI must qualify the pushed revision separately.
+
+## Inspected durable copies through quorum visibility
+
+The installed-voter/Fetch theorem starts from supplied durable offsets. Its
+majority witness alone cannot establish that those offsets name the same bytes,
+that the requesting peer is the installed voter, or that the copy completed
+durably. The new composition derives votes from actual source and replica
+byte arrays, observed durable completion, and the production WAL Fetch
+authorization/epoch kernel before invoking the existing installed-voter theorem.
+The existing covering-copy theorem checks append/recovery geometry and actual
+byte identity; a logical floor inside the first whole batch stays supported.
+
+Two existing proof interfaces obstructed that connection. The WAL Fetch guard
+exported a private opaque authorization predicate: the new caller's generated
+file declared the predicate without its definition, so it could not derive
+peer-to-voter identity. The predicate is now open within the crate. The layout
+validator and covering-copy theorem now export strict order between arbitrary
+batches and each batch's extent within the validated range. Their loop proof
+already maintains processed extents below the next base; a pair-order invariant
+exports that consequence without changing the production algorithm. The byte
+count definition is likewise available to crate-local proof consumers.
+
+The new theorem validates its canonical reference through covering-copy
+admission, ignores invalid or unfinished observations by assigning only the
+logical floor, and exports the exact derived vote vector and actual distinct
+supporter IDs. A fresh advance with Fetch above the retained floor carries a
+majority whose copied prefix ends reach that limit, whose confirmed peer IDs
+match the installed IDs, whose epoch requests are admitted, whose durable
+completion flags are true, and whose copied batch coordinates and bytes equal
+the canonical prefix. A separate service guarantee requires complete valid
+copies to reach log end, excluding a consumer which discards every usable vote.
+A small induction over the explicit vote list establishes that service law.
+
+The model consumes inspected bytes and truthful completion observations; the
+leader's network acknowledgement path still trusts the authenticated follower's
+reported durable offset. This is a stronger proof of the checked evidence chain,
+not a proof that the leader remotely inspects each copy or that authentication
+forces truthful fsync reports. Byte decoding, current log lineage, actual fsync
+and checkpoint publication, authenticated identity provenance and coherent
+snapshot projection remain host obligations. An unchanged inherited watermark
+can still expose records without fresh supporting copies and needs earlier
+durability evidence. A floor-only advance exposes no retained records.
+
+The independent oracle checks scalar/byte equality and ranks derived offsets
+directly, without calling a verification kernel. Native fixtures cover corrupt
+bytes at equal lengths, mismatched coordinates, absent or incorrect identities,
+stale/future and unknown epochs, incomplete copies, excess copied batches,
+invalid references, interior floors, extreme offsets, capped visibility and
+the inherited/floor-only boundary. Arbitrary bounded copy configurations compare
+the complete vote, watermark and supporter ledger with that oracle.
+
+Two paired controls alter the copy-vote helper and its local contract
+consistently. Ignoring observed bytes still proves its helper (1/1), but leaves
+the unchanged quorum consumer at 34/35 obligations and fails the native oracle.
+Crediting a copy without durable completion still proves its helper (16/16),
+but again leaves the consumer at 34/35 and fails the oracle. All original
+sources are restored byte-for-byte before final qualification.
+
+Final local qualification passes pinned cache-free generation and read-only
+replay of all 580 sessions, all 380 verified native tests, the real follower
+fsync/ack regression, verified Bazel tests/doc tests, strict verified all-target
+Clippy, formatting and all four proof/mutation gates. The host test uses one
+thread and a raised file-descriptor limit. Both paired controls fail as expected
+and restore their original sources. All 1,146 unrelated parent artifacts remain
+byte-identical; four strengthened existing sessions and three new sessions are
+retained. All 304 authored verified Rust sources remain below 300 lines (maximum
+288). Remote CI must qualify the published revision separately.

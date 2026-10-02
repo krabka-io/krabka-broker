@@ -123,6 +123,9 @@ use transaction_fetch::{committed_fetch_excludes_unstable, control_marker_bounds
 mod marker_admission;
 use marker_admission::admitted_marker_bounds_committed_fetch;
 
+mod byte_quorum;
+use byte_quorum::durable_matching_copies_bound_fetch;
+
 mod quorum_fetch;
 use quorum_fetch::{installed_wal_quorum_bounds_fetch, quorum_commit_bounds_fetch};
 
