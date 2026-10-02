@@ -482,7 +482,7 @@ fn token_round_one_threads_the_token_expiry() {
         exchange: SaslExchange::ScramPending,
         pending_token_expiry_ms: None,
     };
-    let (_, first) = KafkaScramClient::first(
+    let (client, first) = KafkaScramClient::first(
         SaslMechanism::ScramSha512,
         None,
         "tok",
@@ -494,11 +494,34 @@ fn token_round_one_threads_the_token_expiry() {
     let ConnectionAuth::Negotiating {
         pending_token_expiry_ms,
         ..
-    } = auth
+    } = &auth
     else {
         panic!("round 1 must keep negotiating, got {auth:?}");
     };
-    assert!(pending_token_expiry_ms == Some(expiry));
+    assert!(*pending_token_expiry_ms == Some(expiry));
+    let before = crate::time_util::now_ms();
+    let round2 = authenticate(
+        &source,
+        Some(&token_secret()),
+        &mut auth,
+        client.last(&round1.auth_bytes),
+    );
+    let after = crate::time_util::now_ms();
+    assert!(round2.error_code == 0);
+    assert!(matches!(&auth, ConnectionAuth::Authenticated {
+        expires_at_ms: Some(at), authenticated_via_token: true, ..
+    } if *at == expiry));
+    assert!(
+        expiry - after <= round2.session_lifetime_ms
+            && round2.session_lifetime_ms <= expiry - before
+    );
+    assert!(!auth.expired_for_request(0, expiry - 1));
+    assert!(auth.expired_for_request(0, expiry));
+    assert!(!auth.expired_for_request(17, expiry));
+    assert!(
+        auth.token_api_admission(krabka_verified::delegation_token::TokenApi::Describe)
+            == krabka_verified::delegation_token::TokenApiAdmission::Reject
+    );
 }
 
 /// The image keeps no token HMAC, as Kafka's metadata does not: a token's

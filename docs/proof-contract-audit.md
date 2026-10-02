@@ -160,7 +160,7 @@ The implication-shaped checks explicitly return true on rejected input. They pro
 | Module and executable/proof functions | Assessment | Critique and useful composition |
 | :--- | :--- | :--- |
 | [audit](../crates/verified/src/audit.rs): `audit_checkpoint_admission`, `audit_loss_marker_admission`, `settle_loss_batch`, `spool_append_decision` | Invariant + guard | Byte-cap preservation and exact loss conservation are substantial; checkpoint/signature inputs remain host facts. The new settlement composition proves duplicate replay is harmless before generation exhaustion. |
-| [authz](../crates/verified/src/authz.rs): `acl_identity_match`, `acl_resource_match`, `acl_operation_match`, `request_auth_admission`, `acl_decision` | Guard | Deny precedence and one-way operation implication are useful policy contracts. Identity OR and handshake API tables add little alone; the token-description composition now connects complete row matching and deny/default folding to session admission and visibility. Faithful string/CIDR facts, complete ACL enumeration, and connection-phase transitions remain host obligations. |
+| [authz](../crates/verified/src/authz.rs): `acl_identity_match`, `acl_resource_match`, `acl_operation_match`, `request_auth_admission`, `acl_decision`, `sasl_session_expiry`, `session_expired_for_request` | Guard + arithmetic + composition | Deny precedence and one-way operation implication are useful policy contracts. Identity OR and handshake API tables add little alone; the token-description composition now connects complete row matching and deny/default folding to session admission and visibility. The session consumers now derive token deadlines through both SCRAM rounds and request admission, and keep credential-free listener caps finite on overflow. Faithful string/CIDR facts, complete ACL enumeration, connection-phase transitions and clock observations remain host obligations. |
 | [barrier](../crates/verified/src/barrier.rs): `barrier_target_count_decision`, `barrier_marker_fence_decision`, `barrier_placement_decision`, `barrier_cut_classification` | Guard | Fence equality and checked target-count expansion prevent stale appends and overflow. Complete/Partial is only a boolean classification; neither it nor placement admission proves every target received a durable marker. |
 | [break_glass](../crates/verified/src/break_glass.rs): `break_glass_admission`, `select_break_glass_candidate` | Selection + guard | The selected candidate is a global lexicographic minimum, not merely an eligible member. Admission alone cannot establish distinct approvers or one-time durable spending; those need lifecycle/cross-spend models. |
 | [break_glass_persistence](../crates/verified/src/break_glass_persistence.rs): `break_glass_consumption_decision`, `break_glass_local_action_decision` | Guard | The local action depends on the named spend state and commit result. The missing link is that a committed controller consume and local action refer to the same proposal and survive restart. |
@@ -2616,3 +2616,65 @@ and restore their original sources. All 1,146 unrelated parent artifacts remain
 byte-identical; four strengthened existing sessions and three new sessions are
 retained. All 304 authored verified Rust sources remain below 300 lines (maximum
 288). Remote CI must qualify the published revision separately.
+### Created delegation tokens through SCRAM session and request admission
+
+The existing token-creation proof gives exact deadlines through private logical
+models. A caller cannot directly derive the coherence and lifetime bounds needed
+to authenticate with those deadlines. Its strengthened contract now exports
+`creation <= initial_expiry <= maximum`, the configured/requested lifetime
+bounds, and the candidate endpoints that prove progress. Production creation is
+unchanged.
+
+`created_token_session_bounds_requests` derives those deadlines, applies the
+production SCRAM credential classifier in round one, and repeats the captured
+expiry check used by round two. It then composes the shared session-deadline,
+request-expiry, authentication-phase and token-API gates. Successful completion
+cannot extend the session past either token ceiling or a positive listener cap.
+The receipt records both deadlines, the advertised lifetime and the exact
+request admission. Ordinary requests fail at equality; handshake/authentication
+frames remain eligible for reauthentication. Every token API remains rejected.
+The converse admission and exact failure conditions exclude rejecting all
+credentials or requests as a vacuous implementation.
+
+The session arithmetic and request-expiry guards were previously outside the
+verified boundary. They now live in `authz/session.rs`, with the host retaining
+only connection-state and configured-Time projection. Review exposed a boundary
+error: `checked_add` discarded an overflowing positive cap, giving a credential
+without its own expiry an unlimited session. The kernel saturates that cap at
+`i64::MAX`. A separate `credential_free_session_cap_bounds_requests` composition
+covers PLAIN, regular SCRAM and GSSAPI and proves the finite, maximal deadline;
+the token-only composition would not detect this bug because those sessions
+already carry a finite credential expiry. The host regression fails before the
+change and passes with the shared kernel.
+
+These theorems consume nondecreasing nonnegative clock observations. Actual
+cryptographic success, principal identity, faithful transfer of the pending
+expiry, metadata publication and connection-state snapshots remain host
+obligations. They describe the token snapshot captured by round one, not later
+renewal or revocation. The advertised lifetime does not prove delivery of the
+response or timely client reauthentication.
+
+Paired negative controls change a kernel and its own contract consistently:
+
+- Replace saturated cap addition with `checked_add`, and permit absent expiry
+  on cap overflow. The helper still proves; the credential-free consumer fails
+  its required finite-deadline admission, and the native boundary oracle fails.
+  The token consumer continues to prove, as its own credential deadline already
+  bounds this case.
+- Replace expiry-at-equality with expiry strictly after the deadline in both
+  the request guard and its contract. The helper still proves; both compositions
+  fail their exact admission guarantees, and the native oracle fails.
+
+Both controls restore the source bytes before positive qualification. They show
+that the aggregate guarantees detect consistent but wrong helper policies,
+rather than merely checking a function against a restatement of its own body.
+
+Final qualification passes pinned Creusot 0.13.0 forced generation of all five
+changed/new sessions, ordinary cache-free source generation and read-only
+cache-free canonical replay of all 581 sessions. All 380 verified-crate tests,
+16 connection-state tests and five real SCRAM tests pass, together with strict
+all-target Clippy for both changed crates, formatting, two verified-crate Bazel
+targets and the four proof/mutation configuration gates. The final tree retains
+only the upgraded creation session and four new sessions; all 1,152 unrelated
+parent artifact files are byte-identical. All 303 authored verified Rust sources
+remain under 300 lines (largest: 288).

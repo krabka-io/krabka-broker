@@ -10,7 +10,9 @@
 use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
 use krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange};
 use krabka_verified::{
-    authz::{RequestAuthState, request_auth_admission},
+    authz::{
+        RequestAuthState, request_auth_admission, sasl_session_expiry, session_expired_for_request,
+    },
     delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
 };
 
@@ -80,12 +82,11 @@ pub enum ConnectionAuth {
         /// and the token's HMAC as the password equivalent.
         ///
         /// The delegation-token RPCs read this flag.
-        /// `CreateDelegationToken` rejects token-authed callers with
-        /// `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, because KIP-48 forbids
-        /// token-creating-token chains. `DescribeDelegationToken` restricts a
-        /// token-authed caller to their own owned tokens, whatever the owner
-        /// filter says. Only the token-auth path sets this to `true`; every
-        /// other construction site defaults it to `false`.
+        /// Every delegation-token RPC rejects token-authed callers with
+        /// `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`. This prevents token-to-token
+        /// chains and leakage of sibling token HMACs through Describe. Only
+        /// the token-auth path sets this to `true`; every other construction
+        /// site defaults it to `false`.
         authenticated_via_token: bool,
     },
     /// In-band re-authentication in progress: a `SaslHandshake` from a
@@ -144,16 +145,11 @@ pub(super) fn session_expiry(
     credential_expires_at_ms: Option<i64>,
     max_reauth: Option<krabka_units::Time>,
 ) -> (Option<i64>, i64) {
-    let cap_expiry = max_reauth
-        .map(krabka_units::convert::TimeExt::millis_i64)
-        .filter(|ms| *ms > 0)
-        .and_then(|ms| now_ms.checked_add(ms));
-    let expires_at_ms = match (credential_expires_at_ms, cap_expiry) {
-        (Some(credential), Some(cap)) => Some(credential.min(cap)),
-        (credential, cap) => credential.or(cap),
-    };
-    let session_lifetime_ms = expires_at_ms.map_or(0, |at| at.saturating_sub(now_ms).max(0));
-    (expires_at_ms, session_lifetime_ms)
+    sasl_session_expiry(
+        now_ms,
+        credential_expires_at_ms,
+        max_reauth.map(krabka_units::convert::TimeExt::millis_i64),
+    )
 }
 
 /// Enters a KIP-368 re-authentication: a `Reauthenticating` connection runs
@@ -387,20 +383,12 @@ impl ConnectionAuth {
     /// clock says; every other API on an expired session does not.
     #[must_use]
     pub(crate) fn expired_for_request(&self, api_key: ApiKeyCode, now_ms: i64) -> bool {
-        use krabka_protocol::api_key::ApiKey;
-
-        if api_key == ApiKey::SaslHandshake as ApiKeyCode
-            || api_key == ApiKey::SaslAuthenticate as ApiKeyCode
-        {
-            return false;
+        match self {
+            Self::Authenticated { expires_at_ms, .. } => {
+                session_expired_for_request(*expires_at_ms, api_key, now_ms)
+            }
+            _ => false,
         }
-        matches!(
-            self,
-            Self::Authenticated {
-                expires_at_ms: Some(at),
-                ..
-            } if *at <= now_ms
-        )
     }
 
     /// The mechanism a `SaslHandshake` named for the exchange now in flight,
@@ -923,8 +911,12 @@ mod tests {
             check!(session_expiry(now, credential, cap) == want, "{case}");
         }
 
-        // A cap that runs the clock past `i64::MAX` leaves the credential as
-        // the only ceiling instead of overflowing.
+        check!(
+            session_expiry(i64::MAX - 1, None, Some(krabka_units::millis(30_000)))
+                == (Some(i64::MAX), 1)
+        );
+
+        // A saturated cap still respects an earlier credential deadline.
         check!(
             session_expiry(
                 i64::MAX - 1,

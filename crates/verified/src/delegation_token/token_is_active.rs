@@ -78,6 +78,19 @@ fn bounded_period(requested_ms: i64, default_ms: i64) -> i64 {
                 deadline_model(now_ms, default_renew_period_ms@),
             ),
 })]
+// Export arithmetic bounds independently of the private exact-value models.
+#[ensures(match result {
+    TokenCreateDecision::Invalid => true,
+    TokenCreateDecision::Create(d) => now_ms@ <= d.initial_expiry_ms@
+        && d.initial_expiry_ms@ <= d.max_timestamp_ms@
+        && d.max_timestamp_ms@ <= now_ms@ + ceiling_ms@
+        && (requested_ms@ > 0 ==> d.max_timestamp_ms@ <= now_ms@ + requested_ms@)
+        && d.initial_expiry_ms@ <= now_ms@ + default_renew_period_ms@
+        && (d.max_timestamp_ms@ == i64::MAX@ || d.max_timestamp_ms@ == now_ms@ + ceiling_ms@
+            || (requested_ms@ > 0 && d.max_timestamp_ms@ == now_ms@ + requested_ms@))
+        && (d.initial_expiry_ms@ == d.max_timestamp_ms@
+            || d.initial_expiry_ms@ == now_ms@ + default_renew_period_ms@),
+})]
 #[must_use]
 pub fn create_token_deadlines(
     now_ms: i64,

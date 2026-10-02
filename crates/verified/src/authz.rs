@@ -1,4 +1,4 @@
-//! Kafka ACL precedence: super-user bypass, deny-wins, and default deny.
+//! Kafka ACL precedence and SASL session/request admission.
 
 #[cfg(creusot)]
 use std::clone::Clone;
@@ -113,6 +113,9 @@ pub use acl_decision::{
     acl_decision, acl_identity_match, acl_operation_match, acl_resource_match,
     request_auth_admission,
 };
+
+mod session;
+pub use session::{sasl_session_expiry, session_expired_for_request};
 
 #[cfg(test)]
 mod tests;
