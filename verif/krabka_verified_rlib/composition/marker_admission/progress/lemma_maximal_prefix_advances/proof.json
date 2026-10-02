@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_lemma_maximal_prefix_advances": {
+        "prover": "alt-ergo",
+        "time": 0.016
+      }
+    }
+  }
+}

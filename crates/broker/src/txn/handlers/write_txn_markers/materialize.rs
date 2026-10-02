@@ -82,7 +82,7 @@ pub(crate) async fn append_marker_and_materialize(
         .lock()
         .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
         .transaction_marker_state(producer_id);
-    if equal_epoch_marker_fenced(
+    if krabka_verified::transaction::transaction_marker_equal_epoch_fenced(
         transaction_version,
         producer_epoch,
         current_producer_epoch,
@@ -260,25 +260,6 @@ pub(crate) struct MarkerAppend {
     /// `WriteTxnMarkers` v2 `TransactionVersion` field. At 2 and above an
     /// equal producer epoch fences the marker.
     pub(crate) transaction_version: i16,
-}
-
-/// Whether a marker at the partition's current producer epoch is a zombie.
-///
-/// Kafka's `ProducerAppendInfo.checkProducerEpoch` rejects an epoch equal to
-/// the current one at transaction version 2 and above, where every completion
-/// bumps the epoch, unless no transaction is open (a retry of a marker already
-/// written, KAFKA-19999) or the epoch is `i16::MAX`. A lower epoch is fenced
-/// at every version by the materialization decision.
-fn equal_epoch_marker_fenced(
-    transaction_version: i16,
-    producer_epoch: i16,
-    current_producer_epoch: i16,
-    has_pending_transaction: bool,
-) -> bool {
-    transaction_version >= 2
-        && producer_epoch == current_producer_epoch
-        && has_pending_transaction
-        && producer_epoch != i16::MAX
 }
 
 #[cfg(test)]

@@ -1,0 +1,46 @@
+(* #"/workspace/crates/verified/src/transaction/marker.rs" 16 0 21 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 22 27 22 28
+let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 25 29 25 37
+let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 22 4 25 37
+let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 12 10 14 63
+
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+constant const_MAX: Int16.t = (32767: Int16.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_marker_equal_epoch_fenced [#"/workspace/crates/verified/src/transaction/marker.rs" 16 0 21 9]
+  (transaction_version: Int16.t) (producer_epoch: Int16.t) (current_producer_epoch: Int16.t)
+  (has_pending_transaction: bool) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- Int16.ge transaction_version ([%#smarker] (2: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb6) | br1 -> {_10} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_12 <- producer_epoch = current_producer_epoch ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb6) | br1 -> {_12} (! bb2) ] ]
+  | bb2 = any [ br0 -> {has_pending_transaction = false} (! bb6) | br1 -> {has_pending_transaction} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- producer_epoch <> ([%#smarker'0] const_MAX) ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#smarker'1] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & transaction_version: Int16.t = transaction_version
+  | & producer_epoch: Int16.t = producer_epoch
+  | & current_producer_epoch: Int16.t = current_producer_epoch
+  | & has_pending_transaction: bool = has_pending_transaction
+  | & _10: bool = Any.any_l ()
+  | & _12: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:transaction_marker_equal_epoch_fenced ensures] [%#smarker'2] result
+    = (ge_log_Int (Int16.to_int transaction_version) 2
+    /\ producer_epoch = current_producer_epoch
+    /\ has_pending_transaction /\ Int16.to_int producer_epoch <> Int16.to_int const_MAX)}
+    (! return {result}) ]

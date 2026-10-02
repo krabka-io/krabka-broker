@@ -95,6 +95,7 @@ A specification is not automatically weak because it resembles a short function.
 | `reserved_pair_preserves_recovery_and_ack_order` | Two admitted reservations feed the concrete append witnesses. The second batch starts at the first acknowledgement frontier, so its offsets do not overlap the first batch and its acknowledgement, recovery and scan frontiers advance strictly. Invalid spans or combined overflow reject the pair. | The batches are accurately decoded and controller reservations are serialized. Byte integrity, fsync, quorum votes, concurrency and rollback are external. |
 | `committed_fetch_excludes_unstable` | Returns the actual unstable frontier and all Fetch visibility fields. The consumer limit is the greatest prefix bounded by log end, HW, delivery and every supplied unstable start; starts beyond log end reject the input. | The starts are a coherent complete or minimum-equivalent projection of actual transaction state. The host uses all open starts and the earliest unreplicated key; map ordering and state maintenance remain external. Negative raw starts conservatively hide the window rather than admitting readable negative offsets. |
 | `control_marker_bounds_committed_fetch` | Actual control-key bytes, matching producer identity, checked marker geometry, transaction closure, abort intervals, earliest unstable starts, and read-committed Fetch compose. Only matching COMMIT/ABORT markers close; the transaction still blocks until HWM strictly passes the marker's last offset. The returned limit is maximal subject to every remaining transaction and HWM/delivery/end, excluding artificially empty Fetch. | The admitted marker span and complete other live/unreplicated starts describe a coherent host state. Decoding, sidecar durability, stamping, and concurrent state application remain external; the production promotion/reopen regression checks the shared adapter. |
+| `admitted_marker_bounds_committed_fetch` | Actual transaction-version fencing and producer/coordinator admission compose with marker closure, exact abort intervals and maximal committed Fetch. Rejection preserves the pending prefix; admitted markers release their start only past the whole marker and strictly advance when every remaining cap permits it. | Coherent PID-keyed pending state, complete competing starts, serialized successful durable append, marker encoding and offset publication remain external. The extracted equal-epoch guard alone is a decision table; its downstream visibility consequences are the composed claim. |
 | `stable_abort_sources_cover_fetch` | Derives LSO from transaction state, replaces the inherited LSO, and returns the greatest bounded Fetch prefix plus exactly every qualifying unique abort row from both complete source indexes. A later marker owner is still represented, and an invalid source rejects the whole result. | Starts, indexes and watermarks must describe one coherent log lineage. Complete source enumeration, authoritative state projection, requested-floor authorization, bytes and client record filtering remain external. |
 | `quorum_commit_bounds_fetch` | When HWM advances, at least the configured quorum of counted entries reaches the consumer Fetch limit; HWM remains inside the log and is maximal above the epoch gate. The Fetch limit is exactly the HWM/LSO/delivery minimum. | Entries represent distinct voters and matching log prefixes. An inherited unchanged HWM needs prior-epoch durability evidence. This is the consensus kernel, not the separate ISR high-watermark algorithm. |
 | `installed_wal_quorum_bounds_fetch` | The actual voter validator, clamped explicit durable votes, majority computation, and consumer Fetch yield concrete distinct installed supporters at/above the exclusive limit when an advance exposes retained records. Exact configured size is checked; the unsynced leader end contributes no extra vote. Admission is complete for valid ID/count/projection shapes. The watermark is maximal among quorum-supported frontiers inside the log, and the Fetch limit is exactly the minimum of HWM, LSO, and delivery. | Reported offsets faithfully represent fsynced matching prefixes. Current/log-start floors need prior evidence; floor-only advancement exposes no retained records, and unchanged inherited watermarks carry no fresh support promise. The returned supporter list is a proof/test witness, not a production allocation. |
@@ -2398,3 +2399,99 @@ passes the repaired completion sessions but leaves the separate inherited
 elapsed-credit conservation theorem at 66 of 67 obligations. This remaining
 failure is tracked separately; local combined qualification does not establish
 remote success for the upper layers.
+
+## Marker generation admission reaches consumer visibility
+
+The control-marker composition starts from an already admitted marker span.
+Its key, producer identity, closure, abort interval and maximal Fetch guarantees
+do not establish that a rejected producer/coordinator generation cannot reach
+that pipeline. The host's transaction-version-2 equal-epoch fence also sat
+outside the verified marker-admission kernel.
+
+The production guard is now extracted unchanged into the transaction kernel.
+The new `admitted_marker_bounds_committed_fetch` composition consumes both
+admission decisions and the existing control-marker pipeline. Its independent
+admission predicate includes the version-2 equal-epoch fence and final-epoch
+exception. Rejection preserves the previous prefix and produces no abort row.
+An admitted marker retains its pending start until HW passes its **last**
+offset, then returns the maximal prefix bounded by the remaining transactions,
+HW, delivery and the new log end. If each bound lies beyond the pending start,
+the prefix strictly advances. Publication is selected exactly for admitted
+COMMIT requests on the offsets partition; an admitted ABORT returns its exact
+pending-start/marker-last interval and never selects offset publication.
+
+For example, a transaction starting at 3 and a marker spanning 8 through 10
+must remain capped at 3 when HW is 10. At HW 11 an admitted marker can release
+that start, subject to the other transaction starts and delivery cap. A stale
+request, or a version-2 equal-epoch pending request below the final epoch,
+must not release it even at HW 11. The native oracle calculates those prefixes
+from the complete open-transaction set rather than calling a reference kernel.
+It covers stale generations, tied and earlier competing starts, delivery
+blocking, negative caps and the maximum representable epoch/offset boundary.
+
+This is a pending-transaction transition, not an actor or crash-completion
+proof. The host must provide coherent PID-keyed state, every competing start,
+valid decoded marker geometry, serialized application and successful durable
+append. Actual committed-offset publication remains external. The adapter can
+also drain an older owed publication before rejecting a new request; the
+rejection guarantee concerns the prospective marker's log/Fetch transition,
+not every actor side effect of a retry.
+
+Three paired semantic controls change a helper's implementation **and** its
+local contract consistently. Each altered helper still proves, while the
+independent composed claim and deterministic native oracle both fail:
+
+| Wrong local rule | Helper proof | Composed proof | Native oracle |
+| --- | --- | --- | --- |
+| Equal-epoch fencing always disabled | 1/1 | 63/72 | Rejects an invented abort interval |
+| Equal-epoch fencing rejects every request | 1/1 | 35/40 | Rejects missing admitted-marker effects |
+| Release once HW passes the marker base, regardless of its last offset | 1/1 | 28/30 | Observes limit 10 instead of 3 at HW 10 |
+
+The original sources are restored byte-for-byte after these controls. This
+checks an independent consequence of the admission and replication rules,
+including admission completeness; a helper whose contract restates the wrong
+local rule is insufficient to establish the composed guarantee. The small
+successor lemma exports strict progress through a separate module interface
+so its logical body cannot erase the downstream contract's instantiation term.
+
+Final local qualification passes pinned cache-free source generation and
+read-only cache-free replay of all 580 retained sessions, all 380 native
+verified-crate tests, seven host marker-materialization tests, relevant Bazel
+tests and doc tests, strict verified-crate Clippy, repository formatting and
+all four proof/mutation configuration checks. The host fixtures use a raised
+file-descriptor limit and one test thread; the default parallel run exhausted
+its 1,024-file limit before coordinator readiness. All 1,154 parent artifacts
+remain byte-identical. All 302 authored verified Rust sources remain below
+300 lines (maximum 288). Remote CI must qualify the published revision
+separately.
+
+
+### Marker proof CI follow-up
+
+The published marker revision's [proof job](https://github.com/krabka-io/krabka-broker/actions/runs/37052206887/job/110988100975)
+passes setup and runs the pinned image, but leaves the new composition at
+32 of 33 obligations. The new composition's largest local recorded attempt
+was 0.765 seconds. Its temporary complete-start vector mixed copy invariants
+and quantified frontier comparisons into the marker's admission context.
+
+The composition now obtains the other transactions' frontier from the same
+verified Fetch helper and caps it with this transaction's pending start. This
+is the same minimum over the complete set, without an allocation or copy loop.
+All preconditions and postconditions remain byte-identical, including maximal
+visibility, no release before the marker's last offset, admission completeness
+and strict progress. No production behavior changes. Forced pinned replay
+passes the three affected sessions with four CPUs and with one CPU. The four-CPU
+recorded maximum falls to 0.299 seconds.
+
+Repeated paired controls still prove their altered helper and fail the composed
+claim and native oracle: disabled fencing leaves 53/61 obligations, reject-all
+leaves 26/31, and release at the marker base leaves 20/22. All control sources
+are restored byte-for-byte. The repair requires fresh remote qualification;
+the initial failed job does not establish success for it.
+
+Repair qualification passes cache-free pinned source generation and read-only
+retained-ledger replay of all 580 files, all 380 native verified tests, strict
+verified Clippy, repository formatting and the diff check. The three paired
+controls still fail both the composed proof and native oracle. Only the repaired
+composition's two artifacts change; all 1,158 unrelated parent artifacts remain
+byte-identical. All 302 verified Rust sources remain below 300 lines.

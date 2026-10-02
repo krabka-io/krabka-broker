@@ -1,0 +1,59 @@
+(* #"/workspace/crates/verified/src/composition/marker_admission/progress.rs" 15 0 20 9 *)
+
+let%span sprogress = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 8 11 8 61
+let%span sprogress'0 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 9 11 9 75
+let%span sprogress'1 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 10 11 12 18
+let%span sprogress'2 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 13 10 13 16
+let%span sprogress'3 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 14 10 14 34
+
+use creusot.int.Int64
+use seq.Seq
+use int.Int
+
+type tup3_Int_Int_Int = { f0: int; f1: int; f2: int }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant start : int
+
+constant caps : tup3_Int_Int_Int
+
+constant others : Seq.seq Int64.t
+
+constant limit : int
+
+predicate lemma_maximal_prefix_advances [#"/workspace/crates/verified/src/composition/marker_admission/progress.rs" 15 0 20 9] (start: int) (caps: tup3_Int_Int_Int) (others: Seq.seq Int64.t) (limit: int)
+
+goal vc_lemma_maximal_prefix_advances: ([%#sprogress] start < caps.f0 /\ start < caps.f1 /\ start < caps.f2)
+  -> ([%#sprogress'0] forall i: int. 0 <= i /\ i < Seq.length others -> start < Int64.to_int (Seq.get others i))
+  -> ([%#sprogress'1] forall v: int. v <= caps.f0
+        /\ v <= caps.f1
+        /\ v <= caps.f2 /\ (forall i: int. 0 <= i /\ i < Seq.length others -> v <= Int64.to_int (Seq.get others i))
+      -> v <= limit)
+  -> (let next = start + 1 in if next <= caps.f0 then
+    if next <= caps.f1 then
+      if next <= caps.f2 then
+        (forall i: int. 0 <= i /\ i < Seq.length others -> next <= Int64.to_int (Seq.get others i))
+        && next <= limit
+        && (let result = true in [@stop_split] [@expl:lemma_maximal_prefix_advances ensures] ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #0] [%#sprogress'2] result)
+        /\ ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #1] [%#sprogress'3] result -> start < limit))
+      else
+        false
+        && next <= limit
+        && (let result = true in [@stop_split] [@expl:lemma_maximal_prefix_advances ensures] ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #0] [%#sprogress'2] result)
+        /\ ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #1] [%#sprogress'3] result -> start < limit))
+
+    else
+      false
+      && next <= limit
+      && (let result = true in [@stop_split] [@expl:lemma_maximal_prefix_advances ensures] ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #0] [%#sprogress'2] result)
+      /\ ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #1] [%#sprogress'3] result -> start < limit))
+
+  else
+    false
+    && next <= limit
+    && (let result = true in [@stop_split] [@expl:lemma_maximal_prefix_advances ensures] ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #0] [%#sprogress'2] result)
+    /\ ([@stop_split] [@expl:lemma_maximal_prefix_advances ensures #1] [%#sprogress'3] result -> start < limit))
+  )

@@ -1,0 +1,543 @@
+(* #"/workspace/crates/verified/src/composition/marker_admission.rs" 77 0 85 24 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sconvert'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
+let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 12 10 28 1
+let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 29 10 35 1
+let%span stransaction_fetch'1 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 50 11 50 72
+let%span stransaction_fetch'2 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 51 11 51 73
+let%span stransaction_fetch'3 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 52 11 53 62
+let%span stransaction_fetch'4 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 54 10 55 55
+let%span stransaction_fetch'5 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 56 10 57 38
+let%span stransaction_fetch'6 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 58 10 60 66
+let%span stransaction_fetch'7 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 61 10 67 1
+let%span stransaction_fetch'8 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 68 10 73 22
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 12 10 14 63
+let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 126 10 127 44
+let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 128 10 130 61
+let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 131 10 134 67
+let%span smarker'3 = "/workspace/crates/verified/src/transaction/marker.rs" 135 10 136 89
+let%span smarker'4 = "/workspace/crates/verified/src/transaction/marker.rs" 137 10 140 54
+let%span smarker'5 = "/workspace/crates/verified/src/transaction/marker.rs" 141 10 145 55
+let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 65 8 70 81
+let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 102 8 104 71
+let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 86 8 87 71
+let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 119 8 119 92
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span sprogress = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 8 11 8 61
+let%span sprogress'0 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 9 11 9 75
+let%span sprogress'1 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 10 11 12 18
+let%span sprogress'2 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 13 10 13 16
+let%span sprogress'3 = "/workspace/crates/verified/src/composition/marker_admission/progress.rs" 14 10 14 34
+let%span smarker_admission = "/workspace/crates/verified/src/composition/marker_admission.rs" 89 23 89 24
+let%span smarker_admission'0 = "/workspace/crates/verified/src/composition/marker_admission.rs" 86 32 95 5
+let%span smarker_admission'1 = "/workspace/crates/verified/src/composition/marker_admission.rs" 86 32 96 13
+let%span smarker_admission'2 = "/workspace/crates/verified/src/composition/marker_admission.rs" 97 17 97 65
+let%span smarker_admission'3 = "/workspace/crates/verified/src/composition/marker_admission.rs" 98 18 101 45
+let%span smarker_admission'4 = "/workspace/crates/verified/src/composition/marker_admission.rs" 102 18 104 24
+let%span smarker_admission'5 = "/workspace/crates/verified/src/composition/marker_admission.rs" 105 22 110 5
+let%span smarker_admission'6 = "/workspace/crates/verified/src/composition/marker_admission.rs" 113 8 113 69
+let%span smarker_admission'7 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 24 120 51
+let%span smarker_admission'8 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 15 120 16
+let%span smarker_admission'9 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 18 120 19
+let%span smarker_admission'10 = "/workspace/crates/verified/src/composition/marker_admission.rs" 120 21 120 22
+let%span smarker_admission'11 = "/workspace/crates/verified/src/composition/marker_admission.rs" 123 8 123 12
+let%span smarker_admission'12 = "/workspace/crates/verified/src/composition/marker_admission.rs" 121 27 128 5
+let%span smarker_admission'13 = "/workspace/crates/verified/src/composition/marker_admission.rs" 129 18 129 35
+let%span smarker_admission'14 = "/workspace/crates/verified/src/composition/marker_admission.rs" 130 28 130 45
+let%span smarker_admission'15 = "/workspace/crates/verified/src/composition/marker_admission.rs" 130 19 130 45
+let%span smarker_admission'16 = "/workspace/crates/verified/src/composition/marker_admission.rs" 131 22 131 46
+let%span smarker_admission'17 = "/workspace/crates/verified/src/composition/marker_admission.rs" 132 22 132 37
+let%span smarker_admission'18 = "/workspace/crates/verified/src/composition/marker_admission.rs" 134 18 139 28
+let%span smarker_admission'19 = "/workspace/crates/verified/src/composition/marker_admission.rs" 141 8 143 56
+let%span smarker_admission'20 = "/workspace/crates/verified/src/composition/marker_admission.rs" 42 11 43 39
+let%span smarker_admission'21 = "/workspace/crates/verified/src/composition/marker_admission.rs" 44 11 45 36
+let%span smarker_admission'22 = "/workspace/crates/verified/src/composition/marker_admission.rs" 46 11 47 62
+let%span smarker_admission'23 = "/workspace/crates/verified/src/composition/marker_admission.rs" 48 10 48 63
+let%span smarker_admission'24 = "/workspace/crates/verified/src/composition/marker_admission.rs" 49 10 50 41
+let%span smarker_admission'25 = "/workspace/crates/verified/src/composition/marker_admission.rs" 51 10 52 38
+let%span smarker_admission'26 = "/workspace/crates/verified/src/composition/marker_admission.rs" 53 10 55 61
+let%span smarker_admission'27 = "/workspace/crates/verified/src/composition/marker_admission.rs" 56 10 58 64
+let%span smarker_admission'28 = "/workspace/crates/verified/src/composition/marker_admission.rs" 59 10 59 37
+let%span smarker_admission'29 = "/workspace/crates/verified/src/composition/marker_admission.rs" 60 10 61 62
+let%span smarker_admission'30 = "/workspace/crates/verified/src/composition/marker_admission.rs" 62 10 66 1
+let%span smarker_admission'31 = "/workspace/crates/verified/src/composition/marker_admission.rs" 67 10 72 27
+let%span smarker_admission'32 = "/workspace/crates/verified/src/composition/marker_admission.rs" 73 10 76 29
+let%span smarker_admission'33 = "/workspace/crates/verified/src/composition/marker_admission.rs" 21 16 25 48
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.slice.Slice64
+use seq.Seq
+use int.MinMax
+use creusot.int.Int16
+use creusot.int.UInt8
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type tup2_i64_i32 = { f0'0: Int64.t; f1'0: Int32.t }
+
+type t_FetchWatermarks = { log_start: Int64.t; hw: Int64.t; lso: Int64.t; log_end: Int64.t; deliverable: Int64.t }
+
+type t_FetchVisibility = {
+  out_of_range: bool;
+  empty: bool;
+  limit_offset: Int64.t;
+  effective_lso: Int64.t;
+  read_committed_aborts: bool;
+  response_hw: Int64.t;
+  response_lso: Int64.t }
+
+type tup2_i64_FetchVisibility = { f0'1: Int64.t; f1'1: t_FetchVisibility }
+
+type t_Option_tup2_i64_FetchVisibility = None | Some tup2_i64_FetchVisibility
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let committed_fetch_excludes_unstable (starts: Slice64.slice Int64.t) (w: t_FetchWatermarks)
+  (return (x: t_Option_tup2_i64_FetchVisibility)) = any
+  [ return (result: t_Option_tup2_i64_FetchVisibility) ->
+  {[@stop_split] [@expl:committed_fetch_excludes_unstable ensures] ([@stop_split] [@expl:committed_fetch_excludes_unstable ensures #0] [%#stransaction_fetch] match result with
+        | None -> exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts)
+          /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int w.log_end)
+        | Some {f0'1 = lso'0; f1'1 = visibility} -> Int64.to_int lso'0 <= Int64.to_int w.log_end
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+            -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int w.log_end)
+        /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso'0 = Int64.to_int w.log_end
+          \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
+          /\ (exists i: int. 0 <= i
+              /\ i < Seq.length (Slice64.view starts)
+              /\ Int64.to_int lso'0 = Int64.to_int (Seq.get (Slice64.view starts) i))
+          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+            -> Int64.to_int lso'0 <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+        /\ Int64.to_int visibility.limit_offset
+          = MinMax.min (MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)) (Int64.to_int w.deliverable)
+        /\ Int64.to_int visibility.effective_lso = MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)
+        /\ Int64.to_int visibility.response_lso = MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)
+        /\ Int64.to_int visibility.response_hw = Int64.to_int w.hw
+        /\ visibility.read_committed_aborts
+        /\ not visibility.out_of_range
+        /\ visibility.empty
+          = ge_log_Int (Int64.to_int w.log_start) (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.deliverable))
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+          -> Int64.to_int visibility.limit_offset <= Int64.to_int (Seq.get (Slice64.view starts) i))
+        end)
+    /\ ([@stop_split] [@expl:committed_fetch_excludes_unstable ensures #1] [%#stransaction_fetch'0] match result with
+      | None -> true
+      | Some {f1'1 = visibility} -> forall v: int. v <= Int64.to_int w.log_end
+          /\ v <= Int64.to_int w.hw
+          /\ v <= Int64.to_int w.deliverable
+          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+            -> v <= Int64.to_int (Seq.get (Slice64.view starts) i)) -> v <= Int64.to_int visibility.limit_offset
+      end)}
+    (! return {result}) ]
+
+let unwrap_tup2_i64_FetchVisibility (self_: t_Option_tup2_i64_FetchVisibility) (return (x: tup2_i64_FetchVisibility)) =
+{[@stop_split] [@expl:unwrap requires] [%#soption] self_ <> None}
+  any
+  [ return (result: tup2_i64_FetchVisibility) -> {[@stop_split] [@expl:unwrap ensures] [%#soption'0] Some result
+    = self_}
+    (! return {result}) ]
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
+type t_TransactionMarkerRequest = {
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  coordinator_epoch: Int32.t;
+  is_commit: bool;
+  is_offsets_partition: bool }
+
+type t_TransactionMarkerPartitionState = {
+  producer_epoch'0: Int16.t;
+  coordinator_epoch'0: Int32.t;
+  has_pending_transaction'0: bool }
+
+constant const_MAX: Int16.t = (32767: Int16.t)
+
+let transaction_marker_equal_epoch_fenced (transaction_version: Int16.t) (producer_epoch'1: Int16.t)
+  (current_producer_epoch: Int16.t) (has_pending_transaction: bool) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:transaction_marker_equal_epoch_fenced ensures] [%#smarker] result
+    = (ge_log_Int (Int16.to_int transaction_version) 2
+    /\ producer_epoch'1 = current_producer_epoch
+    /\ has_pending_transaction /\ Int16.to_int producer_epoch'1 <> Int16.to_int const_MAX)}
+    (! return {result}) ]
+
+type t_TransactionMarkerMaterializationDecision =
+  | RejectMalformed
+  | RejectProducerEpoch
+  | RejectCoordinatorEpoch
+  | Retry
+  | AppendWithoutOffsetPublication
+  | AppendAndPublishOffsets
+
+predicate marker_well_formed [#"/workspace/crates/verified/src/transaction/marker.rs" 60 0 63 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'6] ge_log_Int (Int64.to_int request.producer_id) 0
+  /\ ge_log_Int (Int16.to_int request.producer_epoch) 0
+  /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (- 1)
+  /\ ge_log_Int (Int16.to_int current'.producer_epoch'0) (- 1)
+  /\ ge_log_Int (Int32.to_int current'.coordinator_epoch'0) (- 1)
+  /\ (not current'.has_pending_transaction'0 \/ ge_log_Int (Int16.to_int current'.producer_epoch'0) 0)
+
+predicate marker_completed_retry [#"/workspace/crates/verified/src/transaction/marker.rs" 97 0 100 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'7] not current'.has_pending_transaction'0
+  /\ Int16.to_int request.producer_epoch = Int16.to_int current'.producer_epoch'0
+  /\ Int32.to_int request.coordinator_epoch = Int32.to_int current'.coordinator_epoch'0
+
+predicate marker_generation_current [#"/workspace/crates/verified/src/transaction/marker.rs" 81 0 84 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'8] ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
+  /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (Int32.to_int current'.coordinator_epoch'0)
+
+predicate marker_publishes_offsets [#"/workspace/crates/verified/src/transaction/marker.rs" 114 0 117 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker'9] current'.has_pending_transaction'0 /\ request.is_commit /\ request.is_offsets_partition
+
+let transaction_marker_materialization_decision (request: t_TransactionMarkerRequest)
+  (current': t_TransactionMarkerPartitionState) (return (x: t_TransactionMarkerMaterializationDecision)) = any
+  [ return (result: t_TransactionMarkerMaterializationDecision) ->
+  {[@stop_split] [@expl:transaction_marker_materialization_decision ensures] ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #0] [%#smarker'0] (result
+        = RejectMalformed)
+      = (not marker_well_formed request current'))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #1] [%#smarker'1] (result
+        = RejectProducerEpoch)
+      = (marker_well_formed request current'
+      /\ Int16.to_int request.producer_epoch < Int16.to_int current'.producer_epoch'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #2] [%#smarker'2] (result
+        = RejectCoordinatorEpoch)
+      = (marker_well_formed request current'
+      /\ ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
+      /\ Int32.to_int request.coordinator_epoch < Int32.to_int current'.coordinator_epoch'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #3] [%#smarker'3] (result = Retry)
+      = (marker_well_formed request current' /\ marker_completed_retry request current'))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #4] [%#smarker'4] (result
+        = AppendAndPublishOffsets)
+      = (marker_well_formed request current'
+      /\ marker_generation_current request current' /\ marker_publishes_offsets request current'))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #5] [%#smarker'5] (result
+      = AppendWithoutOffsetPublication)
+    = (marker_well_formed request current'
+    /\ marker_generation_current request current'
+    /\ not marker_completed_retry request current' /\ not marker_publishes_offsets request current'))}
+    (! return {result}) ]
+
+type t_Option_tup2_i64_i64 = None'0 | Some'0 tup2_i64_i64
+
+type tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64 = {
+  f0'2: t_TransactionMarkerMaterializationDecision;
+  f1'2: Int64.t;
+  f2'2: Int64.t;
+  f3'2: t_Option_tup2_i64_i64 }
+
+let from_u8 (small: bool) (return (x: UInt8.t)) = any
+  [ return (result: UInt8.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result = UInt8.of_bool small}
+    (! return {result}) ]
+
+type tup3_i64_i64_i64 = { f0'3: Int64.t; f1'3: Int64.t; f2'3: Int64.t }
+
+type tup2_i64_Option_tup2_i64_i64 = { f0'4: Int64.t; f1'4: t_Option_tup2_i64_i64 }
+
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
+
+let control_marker_bounds_committed_fetch (key: Slice64.slice UInt8.t) (is_control: bool) (producer: tup3_i64_i64_i64)
+  (span: tup2_i64_i32) (other_starts: Slice64.slice Int64.t) (bounds: tup2_i64_i64)
+  (return (x: tup2_i64_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:control_marker_bounds_committed_fetch requires] ([@stop_split] [@expl:control_marker_bounds_committed_fetch requires #0] [%#stransaction_fetch'1] 0
+      <= Int64.to_int span.f0'0
+    /\ 0 <= Int32.to_int span.f1'0 /\ Int64.to_int span.f0'0 + Int32.to_int span.f1'0 < Int64.to_int const_MAX'0)
+  /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch requires #1] [%#stransaction_fetch'2] ge_log_Int (Int64.to_int producer.f0'3) 0
+    /\ 0 <= Int64.to_int producer.f2'3 /\ Int64.to_int producer.f2'3 <= Int64.to_int span.f0'0)
+  /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch requires #2] [%#stransaction_fetch'3] forall i: int. 0
+        <= i
+      /\ i < Seq.length (Slice64.view other_starts)
+    -> 0 <= Int64.to_int (Seq.get (Slice64.view other_starts) i)
+    /\ Int64.to_int (Seq.get (Slice64.view other_starts) i) <= Int64.to_int span.f0'0)}
+  any
+  [ return (result: tup2_i64_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:control_marker_bounds_committed_fetch ensures] ([@stop_split] [@expl:control_marker_bounds_committed_fetch ensures #0] [%#stransaction_fetch'4] Int64.to_int result.f0'4
+        <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1
+      /\ Int64.to_int result.f0'4 <= Int64.to_int bounds.f0 /\ Int64.to_int result.f0'4 <= Int64.to_int bounds.f1)
+    /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch ensures #1] [%#stransaction_fetch'5] forall i: int. 0
+            <= i
+          /\ i < Seq.length (Slice64.view other_starts)
+        -> Int64.to_int result.f0'4 <= Int64.to_int (Seq.get (Slice64.view other_starts) i))
+    /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch ensures #2] [%#stransaction_fetch'6] not (is_control
+        /\ ge_log_Int (Seq.length (Slice64.view key)) 4
+        /\ UInt8.t'int (Seq.get (Slice64.view key) 2) = 0
+        /\ (UInt8.t'int (Seq.get (Slice64.view key) 3) = 0 \/ UInt8.t'int (Seq.get (Slice64.view key) 3) = 1)
+        /\ producer.f0'3 = producer.f1'3
+        /\ gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0 + Int32.to_int span.f1'0))
+      -> Int64.to_int result.f0'4 <= Int64.to_int producer.f2'3)
+    /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch ensures #3] [%#stransaction_fetch'7] match result.f1'4 with
+        | Some'0 {f0 = start; f1 = last} -> is_control
+        /\ ge_log_Int (Seq.length (Slice64.view key)) 4
+        /\ UInt8.t'int (Seq.get (Slice64.view key) 2) = 0
+        /\ UInt8.t'int (Seq.get (Slice64.view key) 3) = 0
+        /\ producer.f0'3 = producer.f1'3
+        /\ Int64.to_int start = Int64.to_int producer.f2'3
+        /\ Int64.to_int last = Int64.to_int span.f0'0 + Int32.to_int span.f1'0
+        | None'0 -> not (is_control
+        /\ ge_log_Int (Seq.length (Slice64.view key)) 4
+        /\ UInt8.t'int (Seq.get (Slice64.view key) 2) = 0
+        /\ UInt8.t'int (Seq.get (Slice64.view key) 3) = 0 /\ producer.f0'3 = producer.f1'3)
+        end)
+    /\ ([@stop_split] [@expl:control_marker_bounds_committed_fetch ensures #4] [%#stransaction_fetch'8] forall v: int. v
+          <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1
+        /\ v <= Int64.to_int bounds.f0
+        /\ v <= Int64.to_int bounds.f1
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view other_starts)
+            -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) i))
+        /\ (is_control
+          /\ ge_log_Int (Seq.length (Slice64.view key)) 4
+          /\ UInt8.t'int (Seq.get (Slice64.view key) 2) = 0
+          /\ (UInt8.t'int (Seq.get (Slice64.view key) 3) = 0 \/ UInt8.t'int (Seq.get (Slice64.view key) 3) = 1)
+          /\ producer.f0'3 = producer.f1'3
+          /\ gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0 + Int32.to_int span.f1'0)
+        \/ v <= Int64.to_int producer.f2'3) -> v <= Int64.to_int result.f0'4)}
+    (! return {result}) ]
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert'0] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+type tup3_Int_Int_Int = { f0'5: int; f1'5: int; f2'5: int }
+
+predicate lemma_maximal_prefix_advances [#"/workspace/crates/verified/src/composition/marker_admission/progress.rs" 15 0 20 9] (start: int) (caps: tup3_Int_Int_Int) (others: Seq.seq Int64.t) (limit: int)
+
+axiom lemma_maximal_prefix_advances_spec:
+  forall start: int, caps: tup3_Int_Int_Int, others: Seq.seq Int64.t, limit: int [lemma_maximal_prefix_advances start caps others limit]. ([%#sprogress] start
+        < caps.f0'5
+      /\ start < caps.f1'5 /\ start < caps.f2'5)
+    -> ([%#sprogress'0] forall i: int. 0 <= i /\ i < Seq.length others -> start < Int64.to_int (Seq.get others i))
+    -> ([%#sprogress'1] forall v: int. v <= caps.f0'5
+          /\ v <= caps.f1'5
+          /\ v <= caps.f2'5 /\ (forall i: int. 0 <= i /\ i < Seq.length others -> v <= Int64.to_int (Seq.get others i))
+        -> v <= limit) -> ([%#sprogress'2] lemma_maximal_prefix_advances start caps others limit)
+
+axiom lemma_maximal_prefix_advances_spec'0:
+  forall start: int, caps: tup3_Int_Int_Int, others: Seq.seq Int64.t, limit: int [lemma_maximal_prefix_advances start caps others limit]. ([%#sprogress] start
+        < caps.f0'5
+      /\ start < caps.f1'5 /\ start < caps.f2'5)
+    -> ([%#sprogress'0] forall i: int. 0 <= i /\ i < Seq.length others -> start < Int64.to_int (Seq.get others i))
+    -> ([%#sprogress'1] forall v: int. v <= caps.f0'5
+          /\ v <= caps.f1'5
+          /\ v <= caps.f2'5 /\ (forall i: int. 0 <= i /\ i < Seq.length others -> v <= Int64.to_int (Seq.get others i))
+        -> v <= limit) -> ([%#sprogress'3] lemma_maximal_prefix_advances start caps others limit -> start < limit)
+
+predicate pending_marker_admitted [#"/workspace/crates/verified/src/composition/marker_admission.rs" 16 0 20 9] (version: Int16.t) (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+  [%#smarker_admission'33] ge_log_Int (Int64.to_int request.producer_id) 0
+  /\ ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
+  /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (Int32.to_int current'.coordinator_epoch'0)
+  /\ (Int16.to_int version < 2
+  \/ request.producer_epoch <> current'.producer_epoch'0
+  \/ Int16.to_int request.producer_epoch = Int16.to_int const_MAX)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let admitted_marker_bounds_committed_fetch [#"/workspace/crates/verified/src/composition/marker_admission.rs" 77 0 85 24]
+  (version: Int16.t) (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState)
+  (pending_start: Int64.t) (span: tup2_i64_i32) (other_starts: Slice64.slice Int64.t) (bounds: tup2_i64_i64)
+  (return (x: tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires] ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #0] [%#smarker_admission'20] current'.has_pending_transaction'0
+    /\ ge_log_Int (Int16.to_int current'.producer_epoch'0) 0
+    /\ ge_log_Int (Int32.to_int current'.coordinator_epoch'0) (- 1))
+  /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #1] [%#smarker_admission'21] 0
+      <= Int64.to_int pending_start
+    /\ Int64.to_int pending_start <= Int64.to_int span.f0'0
+    /\ 0 <= Int32.to_int span.f1'0 /\ Int64.to_int span.f0'0 + Int32.to_int span.f1'0 < Int64.to_int const_MAX'0)
+  /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch requires #2] [%#smarker_admission'22] forall i: int. 0
+        <= i
+      /\ i < Seq.length (Slice64.view other_starts)
+    -> 0 <= Int64.to_int (Seq.get (Slice64.view other_starts) i)
+    /\ Int64.to_int (Seq.get (Slice64.view other_starts) i) <= Int64.to_int span.f0'0)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_74 <- { log_start = ([%#smarker_admission] (0: Int64.t));
+                       hw = bounds.f0;
+                       lso = span.f0'0;
+                       log_end = span.f0'0;
+                       deliverable = bounds.f1 } ] s1
+    | s1 = committed_fetch_excludes_unstable [%#smarker_admission'0] {other_starts} {_74}
+        (fun (_x: t_Option_tup2_i64_FetchVisibility) -> [ &_72 <- _x ] s2)
+    | s2 = unwrap_tup2_i64_FetchVisibility [%#smarker_admission'1] {_72}
+        (fun (_x: tup2_i64_FetchVisibility) -> [ &_71 <- _x ] s3)
+    | s3 = [ &other_visibility <- _71.f1'1 ] s4
+    | s4 = min_i64 [%#smarker_admission'2] {other_visibility.limit_offset} {pending_start}
+        (fun (_x: Int64.t) -> [ &before <- _x ] s5)
+    | s5 = {[@expl:assertion] [%#smarker_admission'3] Int64.to_int before <= Int64.to_int pending_start
+      /\ Int64.to_int before <= Int64.to_int bounds.f0
+      /\ Int64.to_int before <= Int64.to_int bounds.f1
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
+        -> Int64.to_int before <= Int64.to_int (Seq.get (Slice64.view other_starts) j))}
+      s6
+    | s6 = {[@expl:assertion] [%#smarker_admission'4] forall v: int. v <= Int64.to_int pending_start
+          /\ v <= Int64.to_int bounds.f0
+          /\ v <= Int64.to_int bounds.f1
+          /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
+            -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) j)) -> v <= Int64.to_int before}
+      s7
+    | s7 = transaction_marker_equal_epoch_fenced [%#smarker_admission'5] {version} {request.producer_epoch}
+        {current'.producer_epoch'0} {current'.has_pending_transaction'0} (fun (_x: bool) -> [ &_97 <- _x ] s8)
+    | s8 = any [ br0 -> {_97 = false} (! bb6) | br1 -> {_97} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &decision <- RejectProducerEpoch ] s1 | s1 = bb8 ]
+  | bb6 = s0
+    [ s0 = transaction_marker_materialization_decision [%#smarker_admission'6] {request} {current'}
+        (fun (_x: t_TransactionMarkerMaterializationDecision) -> [ &decision <- _x ] s1)
+    | s1 = bb8 ]
+  | bb8 = any
+    [ br0 -> {decision = RejectMalformed} (! bb9)
+    | br1 -> {decision = RejectProducerEpoch} (! bb9)
+    | br2 -> {decision = RejectCoordinatorEpoch} (! bb9)
+    | br3 -> {decision = Retry} (! bb9)
+    | br4 -> {decision = AppendWithoutOffsetPublication} (! bb11)
+    | br5 -> {decision = AppendAndPublishOffsets} (! bb11) ]
+  | bb9 = s0
+    [ s0 = [ &_110 <- None'0 ] s1
+    | s1 = [ &_ret <- { f0'2 = decision; f1'2 = before; f2'2 = before; f3'2 = _110 } ] s2
+    | s2 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = from_u8 [%#smarker_admission'7] {request.is_commit} (fun (_x: UInt8.t) -> [ &_112 <- _x ] s1)
+    | s1 = any
+      [ any_ (__arr_temp: Slice64.array UInt8.t) -> (! -{Seq.get __arr_temp.Slice64.elts 0
+          = ([%#smarker_admission'8] (0: UInt8.t))
+        /\ Seq.get __arr_temp.Slice64.elts 1 = ([%#smarker_admission'9] (0: UInt8.t))
+        /\ Seq.get __arr_temp.Slice64.elts 2 = ([%#smarker_admission'10] (0: UInt8.t))
+        /\ Seq.get __arr_temp.Slice64.elts 3 = _112 /\ Seq.length __arr_temp.Slice64.elts = 4}-
+        [ &key <- __arr_temp ] s2) ]
+    | s2 = [ &_119 <- key ] s3
+    | s3 = [ &_120 <- { f0'3 = request.producer_id; f1'3 = request.producer_id; f2'3 = pending_start } ] s4
+    | s4 = control_marker_bounds_committed_fetch [%#smarker_admission'12] {_119} {[%#smarker_admission'11] true} {_120}
+        {span} {other_starts} {bounds} (fun (_x: tup2_i64_Option_tup2_i64_i64) -> [ &_116 <- _x ] s5)
+    | s5 = [ &after <- _116.f0'4 ] s6
+    | s6 = [ &aborted <- _116.f1'4 ] s7
+    | s7 = {[@expl:assertion] [%#smarker_admission'13] Int64.to_int before <= Int64.to_int after} s8
+    | s8 = from_i64 [%#smarker_admission'14] {span.f1'0} (fun (_x: Int64.t) -> [ &_136 <- _x ] s9)
+    | s9 = Int64.add [%#smarker_admission'15] {span.f0'0} {_136} (fun (_x: Int64.t) -> [ &_134 <- _x ] s10)
+    | s10 = [ &_132 <- Int64.le bounds.f0 _134 ] s11
+    | s11 = any [ br0 -> {_132 = false} (! bb17) | br1 -> {_132} (! bb15) ] ]
+  | bb15 = s0
+    [ s0 = {[@expl:assertion] [%#smarker_admission'16] Int64.to_int after <= Int64.to_int pending_start} s1
+    | s1 = {[@expl:assertion] [%#smarker_admission'17] after = before} s2
+    | s2 = bb17 ]
+  | bb17 = s0
+    [ s0 = {[@expl:assertion] [%#smarker_admission'18] gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0
+        + Int32.to_int span.f1'0)
+      -> (forall v: int. v <= Int64.to_int bounds.f0
+          /\ v <= Int64.to_int bounds.f1
+          /\ v <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1
+          /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
+            -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) j)) -> v <= Int64.to_int after)}
+      s1
+    | s1 =
+      {[@expl:assertion] [%#smarker_admission'19] let advances = gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0
+        + Int32.to_int span.f1'0)
+      /\ gt_log_Int (Int64.to_int bounds.f1) (Int64.to_int pending_start)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view other_starts)
+        -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view other_starts) j)) (Int64.to_int pending_start)) in advances
+      -> lemma_maximal_prefix_advances (Int64.to_int pending_start) { f0'5 = Int64.to_int bounds.f0;
+                                                                      f1'5 = Int64.to_int bounds.f1;
+                                                                      f2'5 = Int64.to_int span.f0'0
+                                                                        + Int32.to_int span.f1'0
+                                                                      + 1 } (Slice64.view other_starts) (Int64.to_int after)}
+      s2
+    | s2 = [ &_ret <- { f0'2 = decision; f1'2 = before; f2'2 = after; f3'2 = aborted } ] s3
+    | s3 = return {_ret} ] ]
+  [ & _ret: tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64 = Any.any_l ()
+  | & version: Int16.t = version
+  | & request: t_TransactionMarkerRequest = request
+  | & current': t_TransactionMarkerPartitionState = current'
+  | & pending_start: Int64.t = pending_start
+  | & span: tup2_i64_i32 = span
+  | & other_starts: Slice64.slice Int64.t = other_starts
+  | & bounds: tup2_i64_i64 = bounds
+  | & other_visibility: t_FetchVisibility = Any.any_l ()
+  | & _71: tup2_i64_FetchVisibility = Any.any_l ()
+  | & _72: t_Option_tup2_i64_FetchVisibility = Any.any_l ()
+  | & _74: t_FetchWatermarks = Any.any_l ()
+  | & before: Int64.t = Any.any_l ()
+  | & decision: t_TransactionMarkerMaterializationDecision = Any.any_l ()
+  | & _97: bool = Any.any_l ()
+  | & _110: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & key: Slice64.array UInt8.t = Any.any_l ()
+  | & _112: UInt8.t = Any.any_l ()
+  | & after: Int64.t = Any.any_l ()
+  | & aborted: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _116: tup2_i64_Option_tup2_i64_i64 = Any.any_l ()
+  | & _119: Slice64.array UInt8.t = Any.any_l ()
+  | & _120: tup3_i64_i64_i64 = Any.any_l ()
+  | & _132: bool = Any.any_l ()
+  | & _134: Int64.t = Any.any_l ()
+  | & _136: Int64.t = Any.any_l () ])
+  [ return (result: tup4_TransactionMarkerMaterializationDecision_i64_i64_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures] ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #0] [%#smarker_admission'23] Int64.to_int result.f1'2
+        <= Int64.to_int pending_start
+      /\ Int64.to_int result.f1'2 <= Int64.to_int result.f2'2)
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #1] [%#smarker_admission'24] Int64.to_int result.f2'2
+        <= Int64.to_int bounds.f0
+      /\ Int64.to_int result.f2'2 <= Int64.to_int bounds.f1
+      /\ Int64.to_int result.f2'2 <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1)
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #2] [%#smarker_admission'25] forall i: int. 0
+            <= i
+          /\ i < Seq.length (Slice64.view other_starts)
+        -> Int64.to_int result.f2'2 <= Int64.to_int (Seq.get (Slice64.view other_starts) i))
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #3] [%#smarker_admission'26] (result.f0'2
+        = AppendAndPublishOffsets)
+      = (pending_marker_admitted version request current' /\ request.is_commit /\ request.is_offsets_partition))
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #4] [%#smarker_admission'27] (result.f0'2
+        = AppendWithoutOffsetPublication)
+      = (pending_marker_admitted version request current' /\ not (request.is_commit /\ request.is_offsets_partition)))
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #5] [%#smarker_admission'28] result.f0'2
+      <> Retry)
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #6] [%#smarker_admission'29] not pending_marker_admitted version request current'
+        \/ Int64.to_int bounds.f0 <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 -> result.f2'2 = result.f1'2)
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #7] [%#smarker_admission'30] match result.f3'2 with
+        | Some'0 {f0 = start; f1 = last} -> pending_marker_admitted version request current'
+        /\ not request.is_commit
+        /\ start = pending_start /\ Int64.to_int last = Int64.to_int span.f0'0 + Int32.to_int span.f1'0
+        | None'0 -> not pending_marker_admitted version request current' \/ request.is_commit
+        end)
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #8] [%#smarker_admission'31] pending_marker_admitted version request current'
+        /\ gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0 + Int32.to_int span.f1'0)
+      -> (forall v: int. v <= Int64.to_int bounds.f0
+          /\ v <= Int64.to_int bounds.f1
+          /\ v <= Int64.to_int span.f0'0 + Int32.to_int span.f1'0 + 1
+          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view other_starts)
+            -> v <= Int64.to_int (Seq.get (Slice64.view other_starts) i)) -> v <= Int64.to_int result.f2'2))
+    /\ ([@stop_split] [@expl:admitted_marker_bounds_committed_fetch ensures #9] [%#smarker_admission'32] pending_marker_admitted version request current'
+      /\ gt_log_Int (Int64.to_int bounds.f0) (Int64.to_int span.f0'0 + Int32.to_int span.f1'0)
+      /\ gt_log_Int (Int64.to_int bounds.f1) (Int64.to_int pending_start)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view other_starts)
+        -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view other_starts) i)) (Int64.to_int pending_start))
+    -> gt_log_Int (Int64.to_int result.f2'2) (Int64.to_int result.f1'2))}
+    (! return {result}) ]

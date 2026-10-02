@@ -79,7 +79,7 @@ contracts must also rule out rejecting everything.
 ### Cross-module theorems
 
 The proof/test-only [composition module](../crates/verified/src/composition.rs)
-calls the existing kernels through their contracts and checks fifty-seven connections.
+calls the existing kernels through their contracts and checks relationships across module boundaries.
 All compositions export usable relational guarantees or witnesses. A historical
 control replacing all fifteen then-remaining bodies with `true` proved those
 files and passed all composition tests. Append, reservation, audit-loss settlement, scheduled delivery and read-committed Fetch compositions now return actual
@@ -220,6 +220,17 @@ abort intervals, strict marker/HWM release, and the maximal read-committed Fetch
 prefix. Replicated control batches share native append's semantic bookkeeping
 while retaining their original wire bytes; the promotion regression compares
 transaction and producer state before and after reopen.
+The [marker-admission composition](../crates/verified/src/composition/marker_admission.rs)
+connects the production transaction-version fence and producer/coordinator
+generation admission to that same control-marker pipeline. Rejected pending
+markers preserve the previous Fetch limit and produce no abort interval.
+Admitted markers retain their unstable start until HW passes the marker's last
+offset; afterward the prefix is maximal under all remaining starts and caps,
+and strictly advances when no competing start or delivery cap blocks it.
+COMMIT publishes offsets only on the offsets partition; ABORT returns its exact
+interval and never publishes offsets. Complete PID-keyed pending state,
+serialized application, successful durable append and actual offset publication
+remain host obligations.
 A completed trim now syncs retained bytes and publishes its WAL range before
 native prefix removal or log-floor advancement. The publication-stage composition
 then connects each old/new checkpoint to whole-batch recovery and exact Fetch
