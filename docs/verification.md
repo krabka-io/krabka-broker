@@ -79,15 +79,15 @@ contracts must also rule out rejecting everything.
 ### Cross-module theorems
 
 The proof/test-only [composition module](../crates/verified/src/composition.rs)
-calls the existing kernels through their contracts and checks fifty-one connections.
-Five older compositions still export only `#[ensures(result)]`; their laws
-are body checks rather than reusable relational postconditions. A historical
+calls the existing kernels through their contracts and checks fifty-four connections.
+One older composition still exports only `#[ensures(result)]`; its law
+is a body check rather than a reusable relational postcondition. A historical
 control replacing all fifteen then-remaining bodies with `true` proved those
 files and passed all composition tests. Append, reservation, audit-loss settlement, scheduled delivery and read-committed Fetch compositions now return actual
 computed witnesses, with exact admission and relational contracts plus
 independent oracles. The
 [audit](proof-contract-audit.md#remaining-boolean-only-composition-contracts)
-identifies the five remaining entries explicitly. The preceding thirteen-entry
+identifies the remaining entry explicitly. The preceding thirteen-entry
 control proved all affected files and passed all 53 then-existing composition
 tests; read-committed Fetch has since been repaired. The twelve-entry checkpoint
 control proved all twelve replacements and passed all 57 composition tests;
@@ -104,7 +104,12 @@ Validated epoch reconciliation exports its actual cut to retained snapshot
 selection and replay; neither discarded-tail snapshots nor invented earlier
 floors can suppress reconstruction. Constructed sparse rows now export attained
 prefix maxima into retained-record selection and then cross-tier ListOffsets
-visibility; a pruned match cannot suppress a later retained one.
+visibility; a pruned match cannot suppress a later retained one. Validated remote
+and local time scans now export actual cursors into a consumer that checks
+prefix bounds against decoded records and returns the first retained match.
+Completed logical trim now supplies the read floor independently of producer
+replay progress; physical eviction supplies the cache frontier used to reroute
+the same retained match to committed remote coverage.
 Witness-returning compositions carry their aggregate guarantees in the exported
 contracts. The connections are:
 allocation, append, acknowledgement, recovery, and scan frontiers agree;

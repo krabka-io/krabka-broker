@@ -41,8 +41,7 @@ use crate::{
     },
     producer_snapshot::{
         ProducerReloadRange, ProducerSnapshotEntryFacts, producer_snapshot_entry_valid,
-        producer_snapshot_latest_index, producer_snapshot_reload_keeps,
-        producer_snapshot_replay_start,
+        producer_snapshot_latest_index, producer_snapshot_replay_start,
     },
     quota::{quota_charge, quota_credit},
     raft::{advance_high_watermark, in_half_open_window},
@@ -209,3 +208,12 @@ use retained_timestamp::constructed_index_retained_candidate;
 
 mod constructed_tiered_timestamp;
 use constructed_tiered_timestamp::constructed_tiered_timestamp_preserves_first;
+
+mod validated_time_scan;
+use validated_time_scan::validated_retained_time_scan_agrees;
+
+mod trim_timestamp;
+use trim_timestamp::completed_trim_preserves_retained_timestamp;
+
+mod eviction_timestamp;
+use eviction_timestamp::physical_eviction_routes_retained_timestamp;
