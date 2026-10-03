@@ -1,0 +1,26 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_create_token_deadlines": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Create": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_elim_Renew": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_renew_token_expiry": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_renewed_token_survives_captured_cleanup": {
+        "prover": "z3",
+        "time": 0.021
+      },
+      "vc_request_auth_admission": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_sasl_session_expiry": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_scram_credential_source": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_session_expired_for_request": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_token_is_active": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_token_mutation_decision": { "prover": "alt-ergo", "time": 0.007 }
+    }
+  }
+}
