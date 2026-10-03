@@ -14,6 +14,11 @@
 //! configurations fail with [`ObjectStoreError::InvalidConfig`] there, and so
 //! do the WORM bucket checks. The multipart-upload listing is not exported.
 
+use object_store as object_store_api;
+
+#[cfg(all(feature = "object-store-013", not(target_family = "wasm")))]
+pub mod v013;
+
 mod build;
 mod config;
 mod error;

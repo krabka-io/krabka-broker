@@ -3132,7 +3132,7 @@ dependencies = [
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
  "krabka-security",
- "object_store",
+ "object_store 0.14.2",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3256,7 +3256,7 @@ dependencies = [
  "mutants",
  "nix 0.31.3",
  "num-traits",
- "object_store",
+ "object_store 0.14.2",
  "opentelemetry-proto",
  "pbkdf2",
  "prometheus-client",
@@ -3407,7 +3407,7 @@ dependencies = [
 [[package]]
 name = "krabka-compression"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "assert2",
  "bytes",
@@ -3485,7 +3485,7 @@ dependencies = [
 [[package]]
 name = "krabka-ids"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "assert2",
  "base64 0.23.1",
@@ -3564,7 +3564,7 @@ dependencies = [
 [[package]]
 name = "krabka-metadata"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "assert2",
  "bytes",
@@ -3591,7 +3591,8 @@ dependencies = [
  "futures-util",
  "http",
  "mockall",
- "object_store",
+ "object_store 0.13.2",
+ "object_store 0.14.2",
  "quick-xml 0.42.0",
  "reqwest 0.13.5",
  "serde",
@@ -3620,7 +3621,7 @@ dependencies = [
 [[package]]
 name = "krabka-protocol"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "arbitrary",
  "assert2",
@@ -3706,7 +3707,7 @@ dependencies = [
  "krabka-units",
  "krabka-verified",
  "maplit",
- "object_store",
+ "object_store 0.14.2",
  "proptest",
  "reqwest 0.13.5",
  "ring",
@@ -3781,7 +3782,7 @@ dependencies = [
  "krabka-units",
  "krabka-verified",
  "maplit",
- "object_store",
+ "object_store 0.14.2",
  "regex",
  "ring",
  "serde",
@@ -3867,7 +3868,7 @@ dependencies = [
 [[package]]
 name = "krabka-security"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "arc-swap",
  "assert2",
@@ -3942,7 +3943,7 @@ dependencies = [
 [[package]]
 name = "krabka-trace-context"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "opentelemetry",
  "serde",
@@ -3954,7 +3955,7 @@ dependencies = [
 [[package]]
 name = "krabka-units"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "num-traits",
  "serde",
@@ -3977,7 +3978,7 @@ dependencies = [
 [[package]]
 name = "krabka-voters"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 dependencies = [
  "assert2",
  "krabka-ids",
@@ -4305,6 +4306,16 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
 
 [[package]]
 name = "md-5"
@@ -4665,6 +4676,45 @@ dependencies = [
 
 [[package]]
 name = "object_store"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "622acbc9100d3c10e2ee15804b0caa40e55c933d5aa53814cd520805b7958a49"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "itertools 0.14.0",
+ "md-5 0.10.6",
+ "parking_lot",
+ "percent-encoding",
+ "quick-xml 0.39.4",
+ "rand 0.10.3",
+ "reqwest 0.12.28",
+ "ring",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "walkdir",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
+name = "object_store"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1796bc93603f78c5760a69f2d58badc9618d22adade0a95385bb2adbae4eb94"
@@ -4684,7 +4734,7 @@ dependencies = [
  "humantime",
  "hyper",
  "itertools 0.15.0",
- "md-5",
+ "md-5 0.11.0",
  "nix 0.31.3",
  "parking_lot",
  "percent-encoding",
@@ -5126,7 +5176,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "inout",
- "md-5",
+ "md-5 0.11.0",
  "p256",
  "p384",
  "p521",
@@ -5753,6 +5803,16 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
+version = "0.39.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
+name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
@@ -6089,6 +6149,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -6109,12 +6170,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams 0.4.2",
  "web-sys",
 ]
 
@@ -6157,7 +6220,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
+ "wasm-streams 0.5.0",
  "web-sys",
 ]
 
@@ -6866,7 +6929,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "hmac",
- "md-5",
+ "md-5 0.11.0",
  "md4",
  "num-derive",
  "num-traits",
@@ -7910,6 +7973,19 @@ dependencies = [
 
 [[package]]
 name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm-streams"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
@@ -8539,7 +8615,7 @@ source = "git+https://github.com/krabka-io/krabka-gateway?rev=3a5d9ac1a8a4be242d
 [[patch.unused]]
 name = "krabka-hlc"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 
 [[patch.unused]]
 name = "krabka-integration"
@@ -8549,7 +8625,7 @@ source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e25
 [[patch.unused]]
 name = "krabka-kafka-tap"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 
 [[patch.unused]]
 name = "krabka-logql"
@@ -8599,7 +8675,7 @@ source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e25
 [[patch.unused]]
 name = "krabka-protocol-codegen"
 version = "0.5.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=84bdea5f9f9583767f03a457a146375c302a04ed#84bdea5f9f9583767f03a457a146375c302a04ed"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5961e822bc0a9b27d660031d#e06aa582b1a2cd8d5961e822bc0a9b27d660031d"
 
 [[patch.unused]]
 name = "krabka-query-frontend"
