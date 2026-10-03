@@ -8570,7 +8570,7 @@ source = "git+https://github.com/krabka-io/krabka-gateway?rev=3a5d9ac1a8a4be242d
 [[patch.unused]]
 name = "krabka-blockstore"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-cli"
@@ -8620,7 +8620,7 @@ source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5
 [[patch.unused]]
 name = "krabka-integration"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-kafka-tap"
@@ -8630,27 +8630,27 @@ source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5
 [[patch.unused]]
 name = "krabka-logql"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-metrics"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-metrics-service"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-o11y-verified"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-observability"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-operator"
@@ -8660,17 +8660,17 @@ source = "git+https://github.com/krabka-io/krabka-operator?rev=08c4fa694e7461a0e
 [[patch.unused]]
 name = "krabka-pprof"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-profiles"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-promql"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-protocol-codegen"
@@ -8680,7 +8680,7 @@ source = "git+https://github.com/krabka-io/krabka-protocol?rev=e06aa582b1a2cd8d5
 [[patch.unused]]
 name = "krabka-query-frontend"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-rebalancer"
@@ -8700,9 +8700,9 @@ source = "git+https://github.com/krabka-io/krabka-gateway?rev=3a5d9ac1a8a4be242d
 [[patch.unused]]
 name = "krabka-traceql"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
 
 [[patch.unused]]
 name = "krabka-traces"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-o11y?rev=92f3302a8d77f57ca1e259b36acf07ab23708b22#92f3302a8d77f57ca1e259b36acf07ab23708b22"
+source = "git+https://github.com/krabka-io/krabka-o11y?rev=5614722a52f6cfb4fc56133a535efa532a7d136a#5614722a52f6cfb4fc56133a535efa532a7d136a"
