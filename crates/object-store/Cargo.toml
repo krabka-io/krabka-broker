@@ -18,6 +18,10 @@ categories = ["database-implementations", "filesystem"]
 [lints]
 workspace = true
 
+[features]
+# DataFusion and Parquet still expose the 0.13 object-store types.
+object-store-013 = ["dep:object_store_013"]
+
 [dependencies]
 # `tokio` carries the `WriteMultipart` upload that `ObjectStoreClient` streams
 # a large segment through.
@@ -37,6 +41,7 @@ tracing = { workspace = true }
 # `LocalFileSystem` do not build for wasm32-wasip1, where only the in-memory
 # backend is available and the other configurations are rejected.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+object_store_013 = { package = "object_store", version = "0.13", optional = true, features = ["aws", "gcp", "fs", "tokio"] }
 object_store = { workspace = true, features = ["aws", "gcp", "fs"] }
 http = "1"
 quick-xml = { version = "0.42", features = ["serialize"] }

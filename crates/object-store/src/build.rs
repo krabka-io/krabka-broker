@@ -6,9 +6,10 @@ use object_store::ObjectStore;
 #[cfg(not(target_family = "wasm"))]
 use object_store::{ClientOptions, RetryConfig};
 
+use super::{error::ObjectStoreError, object_store_api as object_store};
+use crate::config::ObjectStoreConfig;
 #[cfg(not(target_family = "wasm"))]
 use crate::config::{GcsConfig, S3Config};
-use crate::{config::ObjectStoreConfig, error::ObjectStoreError};
 
 /// The retry budget `cfg` asks for.
 ///
@@ -150,7 +151,7 @@ mod tests {
     use assert2::{assert, check};
     use object_store::ObjectStoreExt;
 
-    use super::*;
+    use super::{object_store, *};
     use crate::config::{GcsConfig, ObjectStoreConfig, S3Config};
 
     #[test]

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use object_store::{ObjectStoreExt as _, path::Path};
 
-use crate::error::ObjectStoreError;
+use super::{error::ObjectStoreError, object_store_api as object_store};
 
 /// Read a whole object, and reject it if its size exceeds `max_bytes`.
 ///
@@ -45,7 +45,7 @@ mod tests {
     use assert2::assert;
     use object_store::{PutPayload, path::Path};
 
-    use super::*;
+    use super::{object_store, *};
 
     async fn store_with(key: &str, bytes: &'static [u8]) -> Arc<dyn object_store::ObjectStore> {
         let store: Arc<dyn object_store::ObjectStore> =

@@ -2,6 +2,8 @@
 
 use object_store::path::Path as ObjectPath;
 
+use super::object_store_api as object_store;
+
 /// Errors raised by the object-store substrate.
 #[derive(Debug, thiserror::Error)]
 pub enum ObjectStoreError {
@@ -67,7 +69,7 @@ impl From<object_store::Error> for ObjectStoreError {
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{object_store, *};
 
     #[test]
     fn io_error_converts_via_from() {
