@@ -280,3 +280,9 @@ use reconfiguration::{
     constructed_voter_reconfiguration, reconfiguration_control_commit_waiter,
     reconfiguration_control_prefix_support, reconfigured_majorities_overlap,
 };
+
+mod token_session;
+use token_session::created_token_session_bounds_requests;
+
+mod session_cap;
+use session_cap::credential_free_session_cap_bounds_requests;

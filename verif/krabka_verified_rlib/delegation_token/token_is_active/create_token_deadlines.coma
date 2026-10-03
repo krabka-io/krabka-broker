@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 81 0 86 24 *)
+(* #"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 95 0 100 24 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
@@ -8,22 +8,23 @@ let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
 let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
 let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 87 21 87 22
-let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 87 53 87 54
-let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 91 50 91 90
-let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 91 27 91 91
-let%span stoken_is_active'3 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 92 28 92 75
-let%span stoken_is_active'4 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 95 27 95 66
-let%span stoken_is_active'5 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 68 10 69 55
-let%span stoken_is_active'6 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 70 10 79 1
-let%span stoken_is_active'7 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 47 11 47 26
-let%span stoken_is_active'8 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 48 10 48 67
-let%span stoken_is_active'9 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 49 10 49 21
-let%span stoken_is_active'10 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 36 11 36 28
-let%span stoken_is_active'11 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 37 10 37 57
-let%span stoken_is_active'12 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 10 8 10 89
-let%span stoken_is_active'13 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 20 8 20 98
-let%span stoken_is_active'14 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 30 8 30 47
+let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 101 21 101 22
+let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 101 53 101 54
+let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 105 50 105 90
+let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 105 27 105 91
+let%span stoken_is_active'3 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 106 28 106 75
+let%span stoken_is_active'4 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 109 27 109 66
+let%span stoken_is_active'5 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 69 10 70 55
+let%span stoken_is_active'6 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 71 10 80 1
+let%span stoken_is_active'7 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 82 10 93 1
+let%span stoken_is_active'8 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 48 11 48 26
+let%span stoken_is_active'9 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 49 10 49 67
+let%span stoken_is_active'10 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 50 10 50 21
+let%span stoken_is_active'11 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 37 11 37 28
+let%span stoken_is_active'12 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 38 10 38 57
+let%span stoken_is_active'13 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 11 8 11 89
+let%span stoken_is_active'14 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 21 8 21 98
+let%span stoken_is_active'15 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 31 8 31 47
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -37,8 +38,8 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-function bounded_period_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 18 0 18 66] (requested_ms: Int64.t) (default_ms: Int64.t) : int
- = [%#stoken_is_active'13] if gt_log_Int (Int64.to_int requested_ms) 0
+function bounded_period_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 19 0 19 66] (requested_ms: Int64.t) (default_ms: Int64.t) : int
+ = [%#stoken_is_active'14] if gt_log_Int (Int64.to_int requested_ms) 0
   /\ Int64.to_int requested_ms < Int64.to_int default_ms then
     Int64.to_int requested_ms
   else
@@ -46,12 +47,12 @@ function bounded_period_model [#"/workspace/crates/verified/src/delegation_token
 
 
 let bounded_period (requested_ms: Int64.t) (default_ms: Int64.t) (return (x: Int64.t)) =
-{[@stop_split] [@expl:bounded_period requires] [%#stoken_is_active'7] gt_log_Int (Int64.to_int default_ms) 0}
+{[@stop_split] [@expl:bounded_period requires] [%#stoken_is_active'8] gt_log_Int (Int64.to_int default_ms) 0}
   any
   [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:bounded_period ensures] ([@stop_split] [@expl:bounded_period ensures #0] [%#stoken_is_active'8] Int64.to_int result
+  {[@stop_split] [@expl:bounded_period ensures] ([@stop_split] [@expl:bounded_period ensures #0] [%#stoken_is_active'9] Int64.to_int result
       = bounded_period_model requested_ms default_ms)
-    /\ ([@stop_split] [@expl:bounded_period ensures #1] [%#stoken_is_active'9] gt_log_Int (Int64.to_int result) 0)}
+    /\ ([@stop_split] [@expl:bounded_period ensures #1] [%#stoken_is_active'10] gt_log_Int (Int64.to_int result) 0)}
     (! return {result}) ]
 
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
@@ -60,18 +61,18 @@ meta "rewrite_def" predicate ge_log_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-function deadline_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 8 0 8 55] (now_ms: Int64.t) (duration_ms: int) : int
- = [%#stoken_is_active'12] if gt_log_Int (Int64.to_int now_ms + duration_ms) (Int64.to_int const_MAX) then
+function deadline_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 9 0 9 55] (now_ms: Int64.t) (duration_ms: int) : int
+ = [%#stoken_is_active'13] if gt_log_Int (Int64.to_int now_ms + duration_ms) (Int64.to_int const_MAX) then
     Int64.to_int const_MAX
   else
     Int64.to_int now_ms + duration_ms
 
 
 let token_deadline (now_ms: Int64.t) (duration_ms: Int64.t) (return (x: Int64.t)) =
-{[@stop_split] [@expl:token_deadline requires] [%#stoken_is_active'10] ge_log_Int (Int64.to_int duration_ms) 0}
+{[@stop_split] [@expl:token_deadline requires] [%#stoken_is_active'11] ge_log_Int (Int64.to_int duration_ms) 0}
   any
   [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:token_deadline ensures] [%#stoken_is_active'11] Int64.to_int result
+  {[@stop_split] [@expl:token_deadline ensures] [%#stoken_is_active'12] Int64.to_int result
     = deadline_model now_ms (Int64.to_int duration_ms)}
     (! return {result}) ]
 
@@ -89,54 +90,69 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
-function min_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 28 0 28 42] (left: int) (right: int) : int
- = [%#stoken_is_active'14] if left < right then left else right
+function min_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 29 0 29 42] (left: int) (right: int) : int
+ = [%#stoken_is_active'15] if left < right then left else right
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let create_token_deadlines [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 81 0 86 24]
+let create_token_deadlines [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 95 0 100 24]
   (now_ms: Int64.t) (requested_ms: Int64.t) (ceiling_ms: Int64.t) (default_renew_period_ms: Int64.t)
   (return (x: t_TokenCreateDecision)) = (! bb0
   [ bb0 = s0
-    [ s0 = [ &_14 <- Int64.le ceiling_ms ([%#stoken_is_active] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb4) ] ]
+    [ s0 = [ &_19 <- Int64.le ceiling_ms ([%#stoken_is_active] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb2) | br1 -> {_19} (! bb4) ] ]
   | bb2 = s0
-    [ s0 = [ &_16 <- Int64.le default_renew_period_ms ([%#stoken_is_active'0] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_16 = false} (! bb5) | br1 -> {_16} (! bb4) ] ]
+    [ s0 = [ &_21 <- Int64.le default_renew_period_ms ([%#stoken_is_active'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb5) | br1 -> {_21} (! bb4) ] ]
   | bb4 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb5 = s0
-    [ s0 = bounded_period [%#stoken_is_active'1] {requested_ms} {ceiling_ms} (fun (_x: Int64.t) -> [ &_21 <- _x ] s1)
-    | s1 = token_deadline [%#stoken_is_active'2] {now_ms} {_21} (fun (_x: Int64.t) -> [ &max_timestamp_ms'0 <- _x ] s2)
+    [ s0 = bounded_period [%#stoken_is_active'1] {requested_ms} {ceiling_ms} (fun (_x: Int64.t) -> [ &_26 <- _x ] s1)
+    | s1 = token_deadline [%#stoken_is_active'2] {now_ms} {_26} (fun (_x: Int64.t) -> [ &max_timestamp_ms'0 <- _x ] s2)
     | s2 = token_deadline [%#stoken_is_active'3] {now_ms} {default_renew_period_ms}
         (fun (_x: Int64.t) -> [ &renew_deadline_ms <- _x ] s3)
     | s3 = min_i64 [%#stoken_is_active'4] {renew_deadline_ms} {max_timestamp_ms'0}
-        (fun (_x: Int64.t) -> [ &_29 <- _x ] s4)
-    | s4 = [ &_27 <- { max_timestamp_ms = max_timestamp_ms'0; initial_expiry_ms = _29 } ] s5
-    | s5 = [ &_ret <- Create _27 ] s6
+        (fun (_x: Int64.t) -> [ &_34 <- _x ] s4)
+    | s4 = [ &_32 <- { max_timestamp_ms = max_timestamp_ms'0; initial_expiry_ms = _34 } ] s5
+    | s5 = [ &_ret <- Create _32 ] s6
     | s6 = return {_ret} ] ]
   [ & _ret: t_TokenCreateDecision = Any.any_l ()
   | & now_ms: Int64.t = now_ms
   | & requested_ms: Int64.t = requested_ms
   | & ceiling_ms: Int64.t = ceiling_ms
   | & default_renew_period_ms: Int64.t = default_renew_period_ms
-  | & _14: bool = Any.any_l ()
-  | & _16: bool = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
   | & max_timestamp_ms'0: Int64.t = Any.any_l ()
-  | & _21: Int64.t = Any.any_l ()
+  | & _26: Int64.t = Any.any_l ()
   | & renew_deadline_ms: Int64.t = Any.any_l ()
-  | & _27: t_TokenDeadlines = Any.any_l ()
-  | & _29: Int64.t = Any.any_l () ])
+  | & _32: t_TokenDeadlines = Any.any_l ()
+  | & _34: Int64.t = Any.any_l () ])
   [ return (result: t_TokenCreateDecision) ->
   {[@stop_split] [@expl:create_token_deadlines ensures] ([@stop_split] [@expl:create_token_deadlines ensures #0] [%#stoken_is_active'5] (result
         = Invalid)
       = (Int64.to_int ceiling_ms <= 0 \/ Int64.to_int default_renew_period_ms <= 0))
     /\ ([@stop_split] [@expl:create_token_deadlines ensures #1] [%#stoken_is_active'6] match result with
+        | Invalid -> true
+        | Create deadlines -> Int64.to_int deadlines.max_timestamp_ms
+          = deadline_model now_ms (bounded_period_model requested_ms ceiling_ms)
+        /\ Int64.to_int deadlines.initial_expiry_ms
+        = min_model (Int64.to_int deadlines.max_timestamp_ms) (deadline_model now_ms (Int64.to_int default_renew_period_ms))
+        end)
+    /\ ([@stop_split] [@expl:create_token_deadlines ensures #2] [%#stoken_is_active'7] match result with
       | Invalid -> true
-      | Create deadlines -> Int64.to_int deadlines.max_timestamp_ms
-        = deadline_model now_ms (bounded_period_model requested_ms ceiling_ms)
-      /\ Int64.to_int deadlines.initial_expiry_ms
-      = min_model (Int64.to_int deadlines.max_timestamp_ms) (deadline_model now_ms (Int64.to_int default_renew_period_ms))
+      | Create d -> Int64.to_int now_ms <= Int64.to_int d.initial_expiry_ms
+      /\ Int64.to_int d.initial_expiry_ms <= Int64.to_int d.max_timestamp_ms
+      /\ Int64.to_int d.max_timestamp_ms <= Int64.to_int now_ms + Int64.to_int ceiling_ms
+      /\ (gt_log_Int (Int64.to_int requested_ms) 0
+        -> Int64.to_int d.max_timestamp_ms <= Int64.to_int now_ms + Int64.to_int requested_ms)
+      /\ Int64.to_int d.initial_expiry_ms <= Int64.to_int now_ms + Int64.to_int default_renew_period_ms
+      /\ (Int64.to_int d.max_timestamp_ms = Int64.to_int const_MAX
+        \/ Int64.to_int d.max_timestamp_ms = Int64.to_int now_ms + Int64.to_int ceiling_ms
+        \/ gt_log_Int (Int64.to_int requested_ms) 0
+        /\ Int64.to_int d.max_timestamp_ms = Int64.to_int now_ms + Int64.to_int requested_ms)
+      /\ (Int64.to_int d.initial_expiry_ms = Int64.to_int d.max_timestamp_ms
+      \/ Int64.to_int d.initial_expiry_ms = Int64.to_int now_ms + Int64.to_int default_renew_period_ms)
       end)}
     (! return {result}) ]

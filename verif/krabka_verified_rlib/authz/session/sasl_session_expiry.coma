@@ -1,0 +1,225 @@
+(* #"/workspace/crates/verified/src/authz/session.rs" 29 0 33 23 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span ssession = "/workspace/crates/verified/src/authz/session.rs" 35 27 35 28
+let%span ssession'0 = "/workspace/crates/verified/src/authz/session.rs" 35 37 35 63
+let%span ssession'1 = "/workspace/crates/verified/src/authz/session.rs" 40 29 40 47
+let%span ssession'2 = "/workspace/crates/verified/src/authz/session.rs" 39 46 39 65
+let%span ssession'3 = "/workspace/crates/verified/src/authz/session.rs" 44 20 44 45
+let%span ssession'4 = "/workspace/crates/verified/src/authz/session.rs" 44 50 44 51
+let%span ssession'5 = "/workspace/crates/verified/src/authz/session.rs" 44 20 44 52
+let%span ssession'6 = "/workspace/crates/verified/src/authz/session.rs" 43 16 43 17
+let%span ssession'7 = "/workspace/crates/verified/src/authz/session.rs" 5 10 6 64
+let%span ssession'8 = "/workspace/crates/verified/src/authz/session.rs" 7 10 10 1
+let%span ssession'9 = "/workspace/crates/verified/src/authz/session.rs" 11 10 14 1
+let%span ssession'10 = "/workspace/crates/verified/src/authz/session.rs" 15 10 21 1
+let%span ssession'11 = "/workspace/crates/verified/src/authz/session.rs" 22 10 27 1
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 361 18 361 22
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 362 18 362 22
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span scmp'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] ge_log_Int (Int64.to_int self_
+          + Int64.to_int rhs) (Int64.to_int const_MIN)
+        /\ Int64.to_int self_ + Int64.to_int rhs <= Int64.to_int const_MAX
+      -> Int64.to_int result = Int64.to_int self_ + Int64.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'0] Int64.to_int self_ + Int64.to_int rhs
+        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] gt_log_Int (Int64.to_int self_
+      + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
+    (! return {result}) ]
+
+type tup2_Option_i64_Option_i64 = { f0: t_Option_i64; f1: t_Option_i64 }
+
+predicate resolve_Option_i64 [@inline:trivial] (_1: t_Option_i64) = true
+
+meta "rewrite_def" predicate resolve_Option_i64
+
+let or_i64 (self_: t_Option_i64) (optb: t_Option_i64) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:or_i64 ensures] ([@stop_split] [@expl:or ensures #0] [%#soption] self_ = None -> result = optb)
+    /\ ([@stop_split] [@expl:or ensures #1] [%#soption'0] self_ = None \/ result = self_ /\ resolve_Option_i64 optb)}
+    (! return {result}) ]
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum'5] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
+let saturating_sub (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:saturating_sub ensures] ([@stop_split] [@expl:saturating_sub ensures #0] [%#snum'2] ge_log_Int (Int64.to_int self_
+          - Int64.to_int rhs) (Int64.to_int const_MIN)
+        /\ Int64.to_int self_ - Int64.to_int rhs <= Int64.to_int const_MAX
+      -> Int64.to_int result = Int64.to_int self_ - Int64.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #1] [%#snum'3] Int64.to_int self_ - Int64.to_int rhs
+        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #2] [%#snum'4] gt_log_Int (Int64.to_int self_
+      - Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
+    (! return {result}) ]
+
+let max_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:max_i64 ensures] ([@stop_split] [@expl:max ensures #0] [%#scmp'4] ge_log_Int (deep_model_i64 result) (deep_model_i64 self_))
+    /\ ([@stop_split] [@expl:max ensures #1] [%#scmp'5] ge_log_Int (deep_model_i64 result) (deep_model_i64 o))
+    /\ ([@stop_split] [@expl:max ensures #2] [%#scmp'6] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:max ensures #3] [%#scmp'7] deep_model_i64 self_ <= deep_model_i64 o -> result = o)
+    /\ ([@stop_split] [@expl:max ensures #4] [%#scmp'8] deep_model_i64 o < deep_model_i64 self_ -> result = self_)}
+    (! return {result}) ]
+
+type tup2_Option_i64_i64 = { f0'0: t_Option_i64; f1'0: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let sasl_session_expiry [#"/workspace/crates/verified/src/authz/session.rs" 29 0 33 23] (now_ms: Int64.t)
+  (credential_expiry_ms: t_Option_i64) (reauth_ms: t_Option_i64) (return (x: tup2_Option_i64_i64)) = (! bb0
+  [ bb0 = any [ br0 -> {reauth_ms = None} (! bb1) | br1 (x0: Int64.t) -> {reauth_ms = Some x0} (! bb3) ]
+  | bb3 = s0
+    [ s0 = elim_Some {reauth_ms} (fun (r0: Int64.t) -> [ &cap'0 <- r0 ] s1)
+    | s1 = [ &_23 <- Int64.gt cap'0 ([%#ssession] (0: Int64.t)) ] s2
+    | s2 = any [ br0 -> {_23 = false} (! bb1) | br1 -> {_23} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = elim_Some {reauth_ms} (fun (r0: Int64.t) -> [ &cap <- r0 ] s1)
+    | s1 = saturating_add [%#ssession'0] {now_ms} {cap} (fun (_x: Int64.t) -> [ &_25 <- _x ] s2)
+    | s2 = [ &cap_expiry <- Some _25 ] s3
+    | s3 = bb7 ]
+  | bb1 = s0 [ s0 = [ &cap_expiry <- None ] s1 | s1 = bb7 ]
+  | bb7 = s0
+    [ s0 = [ &_29 <- { f0 = credential_expiry_ms; f1 = cap_expiry } ] s1
+    | s1 = any [ br0 -> {_29.f0 = None} (! bb8) | br1 (x0: Int64.t) -> {_29.f0 = Some x0} (! bb9) ] ]
+  | bb9 = any [ br0 -> {_29.f1 = None} (! bb8) | br1 (x0: Int64.t) -> {_29.f1 = Some x0} (! bb11) ]
+  | bb8 = s0
+    [ s0 = [ &credential'0 <- _29.f0 ] s1
+    | s1 = [ &cap'2 <- _29.f1 ] s2
+    | s2 = or_i64 [%#ssession'1] {credential'0} {cap'2} (fun (_x: t_Option_i64) -> [ &expiry <- _x ] s3)
+    | s3 = bb14 ]
+  | bb11 = s0
+    [ s0 = elim_Some {_29.f0} (fun (r0: Int64.t) -> [ &credential <- r0 ] s1)
+    | s1 = elim_Some {_29.f1} (fun (r0: Int64.t) -> [ &cap'1 <- r0 ] s2)
+    | s2 = min_i64 [%#ssession'2] {credential} {cap'1} (fun (_x: Int64.t) -> [ &_36 <- _x ] s3)
+    | s3 = [ &expiry <- Some _36 ] s4
+    | s4 = bb14 ]
+  | bb14 = any [ br0 -> {expiry = None} (! bb18) | br1 (x0: Int64.t) -> {expiry = Some x0} (! bb17) ]
+  | bb17 = s0
+    [ s0 = elim_Some {expiry} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1)
+    | s1 = saturating_sub [%#ssession'3] {at'} {now_ms} (fun (_x: Int64.t) -> [ &_46 <- _x ] s2)
+    | s2 = max_i64 [%#ssession'5] {_46} {[%#ssession'4] (0: Int64.t)} (fun (_x: Int64.t) -> [ &lifetime <- _x ] s3)
+    | s3 = bb21 ]
+  | bb18 = s0 [ s0 = [ &lifetime <- [%#ssession'6] (0: Int64.t) ] s1 | s1 = bb21 ]
+  | bb21 = s0 [ s0 = [ &_ret <- { f0'0 = expiry; f1'0 = lifetime } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: tup2_Option_i64_i64 = Any.any_l ()
+  | & now_ms: Int64.t = now_ms
+  | & credential_expiry_ms: t_Option_i64 = credential_expiry_ms
+  | & reauth_ms: t_Option_i64 = reauth_ms
+  | & cap_expiry: t_Option_i64 = Any.any_l ()
+  | & cap: Int64.t = Any.any_l ()
+  | & cap'0: Int64.t = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _25: Int64.t = Any.any_l ()
+  | & expiry: t_Option_i64 = Any.any_l ()
+  | & _29: tup2_Option_i64_Option_i64 = Any.any_l ()
+  | & credential: Int64.t = Any.any_l ()
+  | & cap'1: Int64.t = Any.any_l ()
+  | & _36: Int64.t = Any.any_l ()
+  | & credential'0: t_Option_i64 = Any.any_l ()
+  | & cap'2: t_Option_i64 = Any.any_l ()
+  | & lifetime: Int64.t = Any.any_l ()
+  | & at': Int64.t = Any.any_l ()
+  | & _46: Int64.t = Any.any_l () ])
+  [ return (result: tup2_Option_i64_i64) ->
+  {[@stop_split] [@expl:sasl_session_expiry ensures] ([@stop_split] [@expl:sasl_session_expiry ensures #0] [%#ssession'7] (result.f0'0
+        = None)
+      = (credential_expiry_ms = None
+      /\ match reauth_ms with
+        | None -> true
+        | Some cap -> Int64.to_int cap <= 0
+        end))
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #1] [%#ssession'8] match { f0 = credential_expiry_ms;
+                                                                                    f1 = result.f0'0 } with
+        | {f0 = Some credential; f1 = Some at'} -> Int64.to_int at' <= Int64.to_int credential
+        | _ -> true
+        end)
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #2] [%#ssession'9] match { f0 = reauth_ms;
+                                                                                    f1 = result.f0'0 } with
+        | {f0 = Some cap; f1 = Some at'} -> gt_log_Int (Int64.to_int cap) 0
+        -> Int64.to_int at' <= Int64.to_int now_ms + Int64.to_int cap
+        | _ -> true
+        end)
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #3] [%#ssession'10] match result.f0'0 with
+        | None -> true
+        | Some at' -> credential_expiry_ms = Some at'
+        \/ match reauth_ms with
+          | None -> false
+          | Some cap -> gt_log_Int (Int64.to_int cap) 0
+          /\ (Int64.to_int at' = Int64.to_int now_ms + Int64.to_int cap \/ Int64.to_int at' = Int64.to_int const_MAX)
+          end
+        end)
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #4] [%#ssession'11] match result.f0'0 with
+      | None -> Int64.to_int result.f1'0 = 0
+      | Some at' -> Int64.to_int result.f1'0
+      = (if Int64.to_int at' <= Int64.to_int now_ms then
+        0
+      else
+        if gt_log_Int (Int64.to_int at' - Int64.to_int now_ms) (Int64.to_int const_MAX) then
+          Int64.to_int const_MAX
+        else
+          Int64.to_int at' - Int64.to_int now_ms
+
+      )
+      end)}
+    (! return {result}) ]

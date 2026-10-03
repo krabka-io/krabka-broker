@@ -1,0 +1,14 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_min_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_or_i64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_sasl_session_expiry": { "prover": "alt-ergo", "time": 0.189 },
+      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.007 }
+    }
+  }
+}
