@@ -135,7 +135,12 @@ jobs:
       # `aspect build` renders docs for impacted crates. Build the complete set
       # here for the artifact, reusing this runner's Bazel output tree.
       - name: docgen
-        run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
+        run: |
+          set -euo pipefail
+          targets="${RUNNER_TEMP}/rustdoc-targets.txt"
+          bazel query 'kind("rust_doc rule", //crates/...)' > "${targets}"
+          test -s "${targets}"
+          bazel build --target_pattern_file="${targets}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rustdoc
