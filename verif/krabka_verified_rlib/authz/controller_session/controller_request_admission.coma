@@ -1,0 +1,69 @@
+(* #"/workspace/crates/verified/src/authz/controller_session.rs" 12 0 12 94 *)
+
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 99 10 99 61
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 100 10 100 55
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 101 10 102 30
+let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 103 10 104 48
+let%span scontroller_session = "/workspace/crates/verified/src/authz/controller_session.rs" 17 4 17 42
+let%span scontroller_session'0 = "/workspace/crates/verified/src/authz/controller_session.rs" 7 10 10 1
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_RequestAuthState = PreHandshake | Exchanging | Failed | Authenticated
+
+let request_auth_admission (state: t_RequestAuthState) (api_key: Int16.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:request_auth_admission ensures] ([@stop_split] [@expl:request_auth_admission ensures #0] [%#sacl_decision] state
+        = Authenticated -> result)
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #1] [%#sacl_decision'0] state = Failed -> not result)
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #2] [%#sacl_decision'1] state = Exchanging
+      -> result = (Int16.to_int api_key = 36))
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #3] [%#sacl_decision'2] state = PreHandshake
+    -> result = (Int16.to_int api_key = 17 \/ Int16.to_int api_key = 18))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let controller_request_admission [#"/workspace/crates/verified/src/authz/controller_session.rs" 12 0 12 94]
+  (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {expiry_ms = None} (! bb1) | br1 (x0: Int64.t) -> {expiry_ms = Some x0} (! bb3) ]
+  | bb3 = s0
+    [ s0 = elim_Some {expiry_ms} (fun (r0: Int64.t) -> [ &at''0 <- r0 ] s1)
+    | s1 = [ &_12 <- Int64.le at''0 now_ms ] s2
+    | s2 = any [ br0 -> {_12 = false} (! bb1) | br1 -> {_12} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = elim_Some {expiry_ms} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1) | s1 = [ &state <- Failed ] s2 | s2 = bb6 ]
+  | bb1 = s0 [ s0 = [ &state <- Authenticated ] s1 | s1 = bb6 ]
+  | bb6 = s0
+    [ s0 = request_auth_admission [%#scontroller_session] {state} {api_key} (fun (_x: bool) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & expiry_ms: t_Option_i64 = expiry_ms
+  | & api_key: Int16.t = api_key
+  | & now_ms: Int64.t = now_ms
+  | & state: t_RequestAuthState = Any.any_l ()
+  | & at': Int64.t = Any.any_l ()
+  | & at''0: Int64.t = Any.any_l ()
+  | & _12: bool = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:controller_request_admission ensures] [%#scontroller_session'0] result
+    = match expiry_ms with
+      | None -> true
+      | Some at' -> Int64.to_int now_ms < Int64.to_int at'
+      end}
+    (! return {result}) ]

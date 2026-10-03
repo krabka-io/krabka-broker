@@ -20,6 +20,11 @@ use crate::{
 };
 
 impl KraftController {
+    /// The same epoch clock used for credential mutations and log timestamps.
+    pub(crate) fn wall_clock_ms() -> i64 {
+        super::Engine::wall_clock_ms()
+    }
+
     /// The node id this controller runs as.
     #[must_use]
     pub fn node_id(&self) -> NodeId {

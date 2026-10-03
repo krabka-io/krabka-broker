@@ -2738,3 +2738,58 @@ all-target Clippy for both changed crates, formatting, two verified-crate Bazel
 targets and all four proof/mutation configuration gates. Only two new proof
 sessions are retained; all 1,154 parent artifact files remain byte-identical.
 All 302 authored verified Rust sources stay under 300 lines (largest: 288).
+
+
+## Controller credential handoff through request expiry and ACL precedence
+
+The controller OAuth validation proof bound the session decision to the token,
+but `run_inbound_sasl` returned only principal and delegation-token identity.
+The computed deadline was lost before `RaftConnection`, and the controller
+request loop never checked it. Its old comment also incorrectly claimed that
+no finite lifetime was advertised: OAuth credentials already advertised one.
+A real wire regression served ApiVersions at deadline 1000 instead of EOF.
+
+The handshake now carries the existing authenticated deadline through the
+connection and request context. A verified controller guard maps expiry to
+failed authentication and delegates to the existing phase kernel. The request
+loop checks it before ApiVersions, ACL callbacks and dispatch. Uncapped
+credentials skip the clock lookup. Controller reauthentication remains the
+existing `ILLEGAL_SASL_STATE` path; clients must reconnect.
+
+`published_controller_session_bounds_quorum_requests` consumes the existing
+actual-publication history and completion-bound OAuth theorem, then processes
+arbitrary DescribeQuorum clock observations and current Cluster Describe ACL
+facts. Authentication exists exactly when validation saw no key replacement,
+no unfinished publisher and no hard cache expiry. An admitted deadline equals
+token expiry. Its returned rows are the unique maximal handled prefix before
+the first observation at or after that deadline. Each row selects allow or
+refusal by independent ACL precedence; an ACL refusal continues the session.
+Expiry closes even for a superuser, and later clock rollback cannot revive it.
+
+For example, a token expiring at 2000 can serve a superuser request at 1500 and
+refuse a denied request at 1999. It closes before a superuser request at 2000,
+and cannot answer a later observation of 1500. A reject-all rule would lose the
+live prefix and fails the same theorem. Publication history covers validation,
+not later key rotation; later credential mutations are outside the captured
+snapshot. Faithful claim, clock and ACL projection, frame decoding, actual
+network closure and cryptographic success remain host obligations. This is
+per-request expiry, not an idle-close timer or a bound on operation completion.
+
+Two paired controls alter the guard and its local contract consistently. An
+inclusive deadline and a reject-all phase both prove their changed helper,
+but both fail the consumer proof and the independent native oracle. Sources
+are restored byte-for-byte. The native oracle selects its maximal prefix with
+an iterator and uses the earlier independent wide publication-capacity oracle.
+The wire fixture checks equality, integer exhaustion, uncapped credentials,
+closure before bootstrap/ACL dispatch and inability to revive a closed stream.
+The signed OAuth fixture uses the actual TCP upgrade and checks that its
+returned deadline equals the independently validated credential expiry.
+
+Final qualification passes fresh pinned Creusot 0.13.0 generation and read-only
+cache-free replay of all 597 sessions. All 398 verified, 384 Raft, 20 controller
+handshake and 91 broker authentication tests pass. Strict all-target Clippy for
+all three changed crates, four verified/Raft Bazel test/doc targets, formatting
+and all four proof/mutation configuration gates pass. Only two new proof
+sessions are retained; all 1,190 parent artifact files remain byte-identical.
+All 323 authored verified Rust sources stay under 300 lines (largest: 297).
+Remote CI is tracked separately in the pull request.

@@ -292,3 +292,6 @@ use oauth_completion::validated_oauth_snapshot_bounds_session;
 
 mod jwks_publication;
 use jwks_publication::published_keys_bound_oauth_session;
+
+mod controller_session;
+use controller_session::published_controller_session_bounds_quorum_requests;

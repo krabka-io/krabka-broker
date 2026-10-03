@@ -144,11 +144,13 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
         //    `SaslServerAuthenticator` does on `SASL_SSL`.
         let mut principal = certificate_principal;
         let mut authenticated_via_token = false;
+        let mut expires_at_ms = None;
         if self.protocol.requires_sasl() {
-            let (authenticated, via_token) =
+            let (authenticated, via_token, deadline) =
                 run_inbound_sasl(&mut *stream, self, &peer, api_versions).await?;
             principal = Some(authenticated);
             authenticated_via_token = via_token;
+            expires_at_ms = deadline;
         }
 
         // 3. Authorization runs for each request, not here. A principal
@@ -164,6 +166,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
             stream,
             principal,
             authenticated_via_token,
+            expires_at_ms,
             grants,
         })
     }

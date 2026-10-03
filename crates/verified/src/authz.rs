@@ -80,8 +80,9 @@ pub enum RequestAuthState {
     /// A handshake chose a mechanism, for the initial authentication or a
     /// KIP-368 re-authentication: only `SaslAuthenticate` (36) may follow.
     Exchanging,
-    /// A re-authentication handshake switched mechanisms: the next frame,
-    /// whatever it is, fails the connection.
+    /// Authentication failed, including a mechanism switch or a controller
+    /// session that expired: the next frame, whatever it is, fails
+    /// the connection.
     Failed,
     Authenticated,
 }
@@ -116,6 +117,9 @@ pub use acl_decision::{
 
 mod session;
 pub use session::{sasl_session_expiry, session_expired_for_request};
+
+mod controller_session;
+pub use controller_session::controller_request_admission;
 
 #[cfg(test)]
 mod tests;

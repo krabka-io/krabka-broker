@@ -63,7 +63,9 @@ pub(super) async fn read_request_from_frame(
     read_kafka_request(&mut server, 4096).await
 }
 
-pub(super) async fn read_response_frame(stream: &mut tokio::io::DuplexStream) -> Vec<u8> {
+pub(super) async fn read_response_frame<R: tokio::io::AsyncRead + Unpin>(
+    stream: &mut R,
+) -> Vec<u8> {
     timeout(Duration::from_secs(1), async {
         let mut size_buf = [0u8; 4];
         stream

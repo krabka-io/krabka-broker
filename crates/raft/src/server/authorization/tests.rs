@@ -617,10 +617,12 @@ async fn a_denied_request_never_reaches_the_engine() {
                 peer: "127.0.0.1:9093".parse().unwrap(),
                 principal: None,
                 authenticated_via_token: false,
+                expires_at_ms: None,
                 grants: Grants::of(grants),
                 unstable: crate::server::Unstable::default(),
                 limits: crate::ListenerLimits::default(),
             },
+            crate::kraft::KraftController::wall_clock_ms,
         ));
 
         let response = exchange(&mut client, api, version, &body).await;

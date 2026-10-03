@@ -15,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 use super::{ConnectionContext, Unstable, handle_conn, run, test_support::single_voter_engine};
 use crate::{AllowAllGrants, ListenerLimits, RaftError};
 
+mod session_expiry;
+
 /// An `ApiVersions` v0 request frame: a v1 header, `client_id` "c", no body.
 fn api_versions_request(correlation_id: i32) -> Vec<u8> {
     let mut frame = Vec::new();
@@ -33,6 +35,7 @@ fn context(limits: ListenerLimits) -> ConnectionContext {
         peer: "127.0.0.1:9093".parse().unwrap(),
         principal: None,
         authenticated_via_token: false,
+        expires_at_ms: None,
         grants: Arc::new(AllowAllGrants),
         unstable: Unstable::default(),
         limits,
@@ -66,6 +69,7 @@ async fn an_oversize_request_frame_closes_the_connection() {
         None,
         None,
         context(limits),
+        crate::kraft::KraftController::wall_clock_ms,
     ));
 
     // A frame at the limit is served.
@@ -105,6 +109,7 @@ async fn an_idle_connection_closes_after_the_idle_window() {
         None,
         None,
         context(limits),
+        crate::kraft::KraftController::wall_clock_ms,
     ));
 
     // Two requests 20 s apart keep a 30 s window open for 40 s.
@@ -142,6 +147,7 @@ async fn a_listener_without_an_idle_window_keeps_a_silent_connection() {
         None,
         None,
         context(limits),
+        crate::kraft::KraftController::wall_clock_ms,
     ));
 
     // Longer than the ten-minute Kafka default, which `None` replaces.
