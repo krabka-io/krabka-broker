@@ -5,8 +5,8 @@ use super::WalFetchAdmission;
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
-fn wal_fetch_authorized(
+#[logic(open(crate))]
+pub(crate) fn wal_fetch_authorized(
     authenticated_node: Option<u64>,
     claimed_node: u64,
     local_node: u64,

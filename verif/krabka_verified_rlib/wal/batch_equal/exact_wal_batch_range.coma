@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/wal/batch_equal.rs" 46 0 46 91 *)
+(* #"/workspace/crates/verified/src/wal/batch_equal.rs" 48 0 48 91 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -6,37 +6,39 @@ let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creu
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 47 7 47 18
-let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 47 22 47 33
-let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 48 15 48 20
-let%span sbatch_equal'2 = "/workspace/crates/verified/src/wal/batch_equal.rs" 51 24 51 35
-let%span sbatch_equal'3 = "/workspace/crates/verified/src/wal/batch_equal.rs" 55 16 55 22
-let%span sbatch_equal'4 = "/workspace/crates/verified/src/wal/batch_equal.rs" 66 32 66 49
-let%span sbatch_equal'5 = "/workspace/crates/verified/src/wal/batch_equal.rs" 67 14 67 25
-let%span sbatch_equal'6 = "/workspace/crates/verified/src/wal/batch_equal.rs" 62 34 65 73
-let%span sbatch_equal'7 = "/workspace/crates/verified/src/wal/batch_equal.rs" 61 34 61 53
-let%span sbatch_equal'8 = "/workspace/crates/verified/src/wal/batch_equal.rs" 60 34 60 97
-let%span sbatch_equal'9 = "/workspace/crates/verified/src/wal/batch_equal.rs" 58 34 59 73
-let%span sbatch_equal'10 = "/workspace/crates/verified/src/wal/batch_equal.rs" 57 34 57 62
-let%span sbatch_equal'11 = "/workspace/crates/verified/src/wal/batch_equal.rs" 56 34 56 52
-let%span sbatch_equal'12 = "/workspace/crates/verified/src/wal/batch_equal.rs" 68 11 68 19
-let%span sbatch_equal'13 = "/workspace/crates/verified/src/wal/batch_equal.rs" 68 35 68 43
-let%span sbatch_equal'14 = "/workspace/crates/verified/src/wal/batch_equal.rs" 68 46 68 54
-let%span sbatch_equal'15 = "/workspace/crates/verified/src/wal/batch_equal.rs" 71 25 71 33
-let%span sbatch_equal'16 = "/workspace/crates/verified/src/wal/batch_equal.rs" 71 46 71 47
-let%span sbatch_equal'17 = "/workspace/crates/verified/src/wal/batch_equal.rs" 71 25 71 48
-let%span sbatch_equal'18 = "/workspace/crates/verified/src/wal/batch_equal.rs" 75 13 75 14
-let%span sbatch_equal'19 = "/workspace/crates/verified/src/wal/batch_equal.rs" 75 8 75 14
-let%span sbatch_equal'20 = "/workspace/crates/verified/src/wal/batch_equal.rs" 69 19 69 24
-let%span sbatch_equal'21 = "/workspace/crates/verified/src/wal/batch_equal.rs" 72 19 72 24
-let%span sbatch_equal'22 = "/workspace/crates/verified/src/wal/batch_equal.rs" 36 28 41 6
-let%span sbatch_equal'23 = "/workspace/crates/verified/src/wal/batch_equal.rs" 42 28 42 87
-let%span sbatch_equal'24 = "/workspace/crates/verified/src/wal/batch_equal.rs" 43 28 44 80
-let%span sbatch_equal'25 = "/workspace/crates/verified/src/wal/batch_equal.rs" 9 10 9 29
-let%span sbatch_equal'26 = "/workspace/crates/verified/src/wal/batch_equal.rs" 7 11 7 37
-let%span sbatch_equal'27 = "/workspace/crates/verified/src/wal/batch_equal.rs" 8 11 8 45
-let%span sbatch_equal'28 = "/workspace/crates/verified/src/wal/batch_equal.rs" 18 8 31 9
-let%span sbatch_equal'29 = "/workspace/crates/verified/src/wal/batch_equal.rs" 86 8 93 9
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 49 7 49 18
+let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 49 22 49 33
+let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 50 15 50 20
+let%span sbatch_equal'2 = "/workspace/crates/verified/src/wal/batch_equal.rs" 53 24 53 35
+let%span sbatch_equal'3 = "/workspace/crates/verified/src/wal/batch_equal.rs" 57 16 57 22
+let%span sbatch_equal'4 = "/workspace/crates/verified/src/wal/batch_equal.rs" 70 32 70 49
+let%span sbatch_equal'5 = "/workspace/crates/verified/src/wal/batch_equal.rs" 71 14 71 25
+let%span sbatch_equal'6 = "/workspace/crates/verified/src/wal/batch_equal.rs" 68 34 69 61
+let%span sbatch_equal'7 = "/workspace/crates/verified/src/wal/batch_equal.rs" 64 34 67 73
+let%span sbatch_equal'8 = "/workspace/crates/verified/src/wal/batch_equal.rs" 63 34 63 53
+let%span sbatch_equal'9 = "/workspace/crates/verified/src/wal/batch_equal.rs" 62 34 62 97
+let%span sbatch_equal'10 = "/workspace/crates/verified/src/wal/batch_equal.rs" 60 34 61 73
+let%span sbatch_equal'11 = "/workspace/crates/verified/src/wal/batch_equal.rs" 59 34 59 62
+let%span sbatch_equal'12 = "/workspace/crates/verified/src/wal/batch_equal.rs" 58 34 58 52
+let%span sbatch_equal'13 = "/workspace/crates/verified/src/wal/batch_equal.rs" 72 11 72 19
+let%span sbatch_equal'14 = "/workspace/crates/verified/src/wal/batch_equal.rs" 72 35 72 43
+let%span sbatch_equal'15 = "/workspace/crates/verified/src/wal/batch_equal.rs" 72 46 72 54
+let%span sbatch_equal'16 = "/workspace/crates/verified/src/wal/batch_equal.rs" 75 25 75 33
+let%span sbatch_equal'17 = "/workspace/crates/verified/src/wal/batch_equal.rs" 75 46 75 47
+let%span sbatch_equal'18 = "/workspace/crates/verified/src/wal/batch_equal.rs" 75 25 75 48
+let%span sbatch_equal'19 = "/workspace/crates/verified/src/wal/batch_equal.rs" 79 13 79 14
+let%span sbatch_equal'20 = "/workspace/crates/verified/src/wal/batch_equal.rs" 79 8 79 14
+let%span sbatch_equal'21 = "/workspace/crates/verified/src/wal/batch_equal.rs" 73 19 73 24
+let%span sbatch_equal'22 = "/workspace/crates/verified/src/wal/batch_equal.rs" 76 19 76 24
+let%span sbatch_equal'23 = "/workspace/crates/verified/src/wal/batch_equal.rs" 36 28 41 6
+let%span sbatch_equal'24 = "/workspace/crates/verified/src/wal/batch_equal.rs" 42 28 42 87
+let%span sbatch_equal'25 = "/workspace/crates/verified/src/wal/batch_equal.rs" 43 28 44 80
+let%span sbatch_equal'26 = "/workspace/crates/verified/src/wal/batch_equal.rs" 45 28 46 67
+let%span sbatch_equal'27 = "/workspace/crates/verified/src/wal/batch_equal.rs" 9 10 9 29
+let%span sbatch_equal'28 = "/workspace/crates/verified/src/wal/batch_equal.rs" 7 11 7 37
+let%span sbatch_equal'29 = "/workspace/crates/verified/src/wal/batch_equal.rs" 8 11 8 45
+let%span sbatch_equal'30 = "/workspace/crates/verified/src/wal/batch_equal.rs" 18 8 31 9
+let%span sbatch_equal'31 = "/workspace/crates/verified/src/wal/batch_equal.rs" 90 8 97 9
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -68,11 +70,11 @@ constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 predicate exact_wal_batch_suffix [#"/workspace/crates/verified/src/wal/batch_equal.rs" 10 0 16 9] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (index: int) (expected: int) (target: int)
 
 axiom exact_wal_batch_suffix_def:
-  forall bases: Seq.seq Int64.t, lasts: Seq.seq Int64.t, index: int, expected: int, target: int [exact_wal_batch_suffix bases lasts index expected target]. ([%#sbatch_equal'26] Seq.length bases
+  forall bases: Seq.seq Int64.t, lasts: Seq.seq Int64.t, index: int, expected: int, target: int [exact_wal_batch_suffix bases lasts index expected target]. ([%#sbatch_equal'28] Seq.length bases
       = Seq.length lasts)
-    -> ([%#sbatch_equal'27] 0 <= index /\ index <= Seq.length bases)
+    -> ([%#sbatch_equal'29] 0 <= index /\ index <= Seq.length bases)
     -> exact_wal_batch_suffix bases lasts index expected target
-    = ([%#sbatch_equal'28] if index = Seq.length bases then
+    = ([%#sbatch_equal'30] if index = Seq.length bases then
       expected = target
     else
       Int64.to_int (Seq.get bases index) = expected
@@ -102,8 +104,8 @@ let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
       end}
     any) ]
 
-predicate wal_batch_layout [#"/workspace/crates/verified/src/wal/batch_equal.rs" 84 0 84 90] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (start: int) (target: int) =
-  [%#sbatch_equal'29] Seq.length bases = Seq.length lasts
+predicate wal_batch_layout [#"/workspace/crates/verified/src/wal/batch_equal.rs" 88 0 88 90] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (start: int) (target: int) =
+  [%#sbatch_equal'31] Seq.length bases = Seq.length lasts
   /\ (if start = target then
     Seq.length bases = 0
   else
@@ -118,19 +120,19 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let exact_wal_batch_range [#"/workspace/crates/verified/src/wal/batch_equal.rs" 46 0 46 91]
+let exact_wal_batch_range [#"/workspace/crates/verified/src/wal/batch_equal.rs" 48 0 48 91]
   (bases: Slice64.slice Int64.t) (lasts: Slice64.slice Int64.t) (start: Int64.t) (target: Int64.t) (return (x: bool)) =
 (! bb0
   [ bb0 = s0
-    [ s0 = len_i64 [%#sbatch_equal] {bases} (fun (_x: UInt64.t) -> [ &_22 <- _x ] s1)
-    | s1 = len_i64 [%#sbatch_equal'0] {lasts} (fun (_x: UInt64.t) -> [ &_24 <- _x ] s2)
-    | s2 = [ &_21 <- _22 <> _24 ] s3
-    | s3 = any [ br0 -> {_21 = false} (! bb4) | br1 -> {_21} (! bb3) ] ]
+    [ s0 = len_i64 [%#sbatch_equal] {bases} (fun (_x: UInt64.t) -> [ &_25 <- _x ] s1)
+    | s1 = len_i64 [%#sbatch_equal'0] {lasts} (fun (_x: UInt64.t) -> [ &_27 <- _x ] s2)
+    | s2 = [ &_24 <- _25 <> _27 ] s3
+    | s3 = any [ br0 -> {_24 = false} (! bb4) | br1 -> {_24} (! bb3) ] ]
   | bb3 = s0 [ s0 = [ &_ret <- [%#sbatch_equal'1] false ] s1 | s1 = return {_ret} ]
-  | bb4 = s0 [ s0 = [ &_28 <- start = target ] s1 | s1 = any [ br0 -> {_28 = false} (! bb6) | br1 -> {_28} (! bb5) ] ]
+  | bb4 = s0 [ s0 = [ &_31 <- start = target ] s1 | s1 = any [ br0 -> {_31 = false} (! bb6) | br1 -> {_31} (! bb5) ] ]
   | bb5 = s0
-    [ s0 = len_i64 [%#sbatch_equal'2] {bases} (fun (_x: UInt64.t) -> [ &_32 <- _x ] s1)
-    | s1 = any [ br0 -> {_32 = (0: UInt64.t)} (! bb10) | default -> -{_32 <> (0: UInt64.t)}- (! bb8) ] ]
+    [ s0 = len_i64 [%#sbatch_equal'2] {bases} (fun (_x: UInt64.t) -> [ &_35 <- _x ] s1)
+    | s1 = any [ br0 -> {_35 = (0: UInt64.t)} (! bb10) | default -> -{_35 <> (0: UInt64.t)}- (! bb8) ] ]
   | bb8 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
   | bb10 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
   | bb6 = s0 [ s0 = [ &expected <- start ] s1 | s1 = [ &i <- [%#sbatch_equal'3] (0: UInt64.t) ] s2 | s2 = bb11 ]
@@ -139,115 +141,120 @@ let exact_wal_batch_range [#"/workspace/crates/verified/src/wal/batch_equal.rs" 
       {[@expl:loop variant] well_founded_relation_Int variant_old_bb11 ([%#sbatch_equal'4] Seq.length (Slice64.view bases)
       - UInt64.t'int i)}
       bb11invariant
-    | bb11invariant = {[@expl:loop invariant #0] [%#sbatch_equal'11] UInt64.t'int i <= Seq.length (Slice64.view bases)}
-      {[@expl:loop invariant #1] [%#sbatch_equal'10] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
-      {[@expl:loop invariant #2] [%#sbatch_equal'9] exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) 0 (Int64.to_int start) (Int64.to_int target)
+    | bb11invariant = {[@expl:loop invariant #0] [%#sbatch_equal'12] UInt64.t'int i <= Seq.length (Slice64.view bases)}
+      {[@expl:loop invariant #1] [%#sbatch_equal'11] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
+      {[@expl:loop invariant #2] [%#sbatch_equal'10] exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) 0 (Int64.to_int start) (Int64.to_int target)
       = exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) (UInt64.t'int i) (Int64.to_int expected) (Int64.to_int target)}
-      {[@expl:loop invariant #3] [%#sbatch_equal'8] Int64.to_int expected
+      {[@expl:loop invariant #3] [%#sbatch_equal'9] Int64.to_int expected
       = (if UInt64.t'int i = 0 then
         Int64.to_int start
       else
         Int64.to_int (Seq.get (Slice64.view lasts) (UInt64.t'int i - 1)) + 1
       )}
-      {[@expl:loop invariant #4] [%#sbatch_equal'7] Int64.to_int start <= Int64.to_int expected}
-      {[@expl:loop invariant #5] [%#sbatch_equal'6] forall j: int. 0 <= j /\ j < UInt64.t'int i
+      {[@expl:loop invariant #4] [%#sbatch_equal'8] Int64.to_int start <= Int64.to_int expected}
+      {[@expl:loop invariant #5] [%#sbatch_equal'7] forall j: int. 0 <= j /\ j < UInt64.t'int i
         -> Int64.to_int start <= Int64.to_int (Seq.get (Slice64.view bases) j)
         /\ Int64.to_int (Seq.get (Slice64.view bases) j) <= Int64.to_int (Seq.get (Slice64.view lasts) j)
         /\ Int64.to_int (Seq.get (Slice64.view lasts) j) < Int64.to_int expected
         /\ Int64.lt (Seq.get (Slice64.view lasts) j) const_MAX
         /\ Int64.to_int (Seq.get (Slice64.view bases) j)
         = (if j = 0 then Int64.to_int start else Int64.to_int (Seq.get (Slice64.view lasts) (j - 1)) + 1)}
+      {[@expl:loop invariant #6] [%#sbatch_equal'6] forall a: int, b: int. 0 <= a /\ a < b /\ b < UInt64.t'int i
+        -> Int64.to_int (Seq.get (Slice64.view lasts) a) < Int64.to_int (Seq.get (Slice64.view bases) b)}
       (! [ &variant_old_bb11 <- [%#sbatch_equal'4] Seq.length (Slice64.view bases) - UInt64.t'int i ] s0)
-      [ s0 = len_i64 [%#sbatch_equal'5] {bases} (fun (_x: UInt64.t) -> [ &_71 <- _x ] s1)
-      | s1 = [ &_69 <- UInt64.lt i _71 ] s2
-      | s2 = any [ br0 -> {_69 = false} (! bb28) | br1 -> {_69} (! bb14) ] ]
+      [ s0 = len_i64 [%#sbatch_equal'5] {bases} (fun (_x: UInt64.t) -> [ &_78 <- _x ] s1)
+      | s1 = [ &_76 <- UInt64.lt i _78 ] s2
+      | s2 = any [ br0 -> {_76 = false} (! bb28) | br1 -> {_76} (! bb14) ] ]
       [ bb14 = s0
-        [ s0 = [ &_76 <- i ] s1
-        | s1 = [ &_77 <- Slice64.length bases ] s2
-        | s2 = [ &_78 <- UInt64.lt _76 _77 ] s3
-        | s3 = {[@expl:index in bounds] [%#sbatch_equal'12] _78} s4
-        | s4 = Slice64.get [%#sbatch_equal'12] <Int64.t> {bases} {_76} (fun (r: Int64.t) -> [ &_75 <- r ] s5)
-        | s5 = [ &_74 <- _75 <> expected ] s6
-        | s6 = any [ br0 -> {_74 = false} (! bb17) | br1 -> {_74} (! bb21) ] ]
+        [ s0 = [ &_83 <- i ] s1
+        | s1 = [ &_84 <- Slice64.length bases ] s2
+        | s2 = [ &_85 <- UInt64.lt _83 _84 ] s3
+        | s3 = {[@expl:index in bounds] [%#sbatch_equal'13] _85} s4
+        | s4 = Slice64.get [%#sbatch_equal'13] <Int64.t> {bases} {_83} (fun (r: Int64.t) -> [ &_82 <- r ] s5)
+        | s5 = [ &_81 <- _82 <> expected ] s6
+        | s6 = any [ br0 -> {_81 = false} (! bb17) | br1 -> {_81} (! bb21) ] ]
       | bb17 = s0
-        [ s0 = [ &_82 <- i ] s1
-        | s1 = [ &_83 <- Slice64.length bases ] s2
-        | s2 = [ &_84 <- UInt64.lt _82 _83 ] s3
-        | s3 = {[@expl:index in bounds] [%#sbatch_equal'13] _84} s4
-        | s4 = Slice64.get [%#sbatch_equal'13] <Int64.t> {bases} {_82} (fun (r: Int64.t) -> [ &_81 <- r ] s5)
-        | s5 = [ &_86 <- i ] s6
-        | s6 = [ &_87 <- Slice64.length lasts ] s7
-        | s7 = [ &_88 <- UInt64.lt _86 _87 ] s8
-        | s8 = {[@expl:index in bounds] [%#sbatch_equal'14] _88} s9
-        | s9 = Slice64.get [%#sbatch_equal'14] <Int64.t> {lasts} {_86} (fun (r: Int64.t) -> [ &_85 <- r ] s10)
-        | s10 = [ &_80 <- Int64.gt _81 _85 ] s11
-        | s11 = any [ br0 -> {_80 = false} (! bb22) | br1 -> {_80} (! bb21) ] ]
+        [ s0 = [ &_89 <- i ] s1
+        | s1 = [ &_90 <- Slice64.length bases ] s2
+        | s2 = [ &_91 <- UInt64.lt _89 _90 ] s3
+        | s3 = {[@expl:index in bounds] [%#sbatch_equal'14] _91} s4
+        | s4 = Slice64.get [%#sbatch_equal'14] <Int64.t> {bases} {_89} (fun (r: Int64.t) -> [ &_88 <- r ] s5)
+        | s5 = [ &_93 <- i ] s6
+        | s6 = [ &_94 <- Slice64.length lasts ] s7
+        | s7 = [ &_95 <- UInt64.lt _93 _94 ] s8
+        | s8 = {[@expl:index in bounds] [%#sbatch_equal'15] _95} s9
+        | s9 = Slice64.get [%#sbatch_equal'15] <Int64.t> {lasts} {_93} (fun (r: Int64.t) -> [ &_92 <- r ] s10)
+        | s10 = [ &_87 <- Int64.gt _88 _92 ] s11
+        | s11 = any [ br0 -> {_87 = false} (! bb22) | br1 -> {_87} (! bb21) ] ]
       | bb22 = s0
-        [ s0 = [ &_94 <- i ] s1
-        | s1 = [ &_95 <- Slice64.length lasts ] s2
-        | s2 = [ &_96 <- UInt64.lt _94 _95 ] s3
-        | s3 = {[@expl:index in bounds] [%#sbatch_equal'15] _96} s4
-        | s4 = Slice64.get [%#sbatch_equal'15] <Int64.t> {lasts} {_94} (fun (r: Int64.t) -> [ &_93 <- r ] s5)
-        | s5 = checked_add [%#sbatch_equal'17] {_93} {[%#sbatch_equal'16] (1: Int64.t)}
-            (fun (_x: t_Option_i64) -> [ &_92 <- _x ] s6)
-        | s6 = any [ br0 -> {_92 = None} (! bb27) | br1 (x0: Int64.t) -> {_92 = Some x0} (! bb26) ] ]
+        [ s0 = [ &_101 <- i ] s1
+        | s1 = [ &_102 <- Slice64.length lasts ] s2
+        | s2 = [ &_103 <- UInt64.lt _101 _102 ] s3
+        | s3 = {[@expl:index in bounds] [%#sbatch_equal'16] _103} s4
+        | s4 = Slice64.get [%#sbatch_equal'16] <Int64.t> {lasts} {_101} (fun (r: Int64.t) -> [ &_100 <- r ] s5)
+        | s5 = checked_add [%#sbatch_equal'18] {_100} {[%#sbatch_equal'17] (1: Int64.t)}
+            (fun (_x: t_Option_i64) -> [ &_99 <- _x ] s6)
+        | s6 = any [ br0 -> {_99 = None} (! bb27) | br1 (x0: Int64.t) -> {_99 = Some x0} (! bb26) ] ]
       | bb26 = s0
-        [ s0 = elim_Some {_92} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
+        [ s0 = elim_Some {_99} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
         | s1 = [ &expected <- next ] s2
-        | s2 = UInt64.add [%#sbatch_equal'19] {i} {[%#sbatch_equal'18] (1: UInt64.t)}
+        | s2 = UInt64.add [%#sbatch_equal'20] {i} {[%#sbatch_equal'19] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &i <- _x ] s3)
         | s3 = bb11 ] ] ]
-  | bb21 = s0 [ s0 = [ &_ret <- [%#sbatch_equal'20] false ] s1 | s1 = return {_ret} ]
-  | bb27 = s0 [ s0 = [ &_ret <- [%#sbatch_equal'21] false ] s1 | s1 = return {_ret} ]
+  | bb21 = s0 [ s0 = [ &_ret <- [%#sbatch_equal'21] false ] s1 | s1 = return {_ret} ]
+  | bb27 = s0 [ s0 = [ &_ret <- [%#sbatch_equal'22] false ] s1 | s1 = return {_ret} ]
   | bb28 = s0 [ s0 = [ &_ret <- expected = target ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & bases: Slice64.slice Int64.t = bases
   | & lasts: Slice64.slice Int64.t = lasts
   | & start: Int64.t = start
   | & target: Int64.t = target
-  | & _21: bool = Any.any_l ()
-  | & _22: UInt64.t = Any.any_l ()
-  | & _24: UInt64.t = Any.any_l ()
-  | & _28: bool = Any.any_l ()
-  | & _32: UInt64.t = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _25: UInt64.t = Any.any_l ()
+  | & _27: UInt64.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
   | & expected: Int64.t = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _69: bool = Any.any_l ()
-  | & _71: UInt64.t = Any.any_l ()
-  | & _74: bool = Any.any_l ()
-  | & _75: Int64.t = Any.any_l ()
-  | & _76: UInt64.t = Any.any_l ()
-  | & _77: UInt64.t = Any.any_l ()
-  | & _78: bool = Any.any_l ()
-  | & _80: bool = Any.any_l ()
-  | & _81: Int64.t = Any.any_l ()
-  | & _82: UInt64.t = Any.any_l ()
+  | & _76: bool = Any.any_l ()
+  | & _78: UInt64.t = Any.any_l ()
+  | & _81: bool = Any.any_l ()
+  | & _82: Int64.t = Any.any_l ()
   | & _83: UInt64.t = Any.any_l ()
-  | & _84: bool = Any.any_l ()
-  | & _85: Int64.t = Any.any_l ()
-  | & _86: UInt64.t = Any.any_l ()
-  | & _87: UInt64.t = Any.any_l ()
-  | & _88: bool = Any.any_l ()
-  | & next: Int64.t = Any.any_l ()
-  | & _92: t_Option_i64 = Any.any_l ()
-  | & _93: Int64.t = Any.any_l ()
+  | & _84: UInt64.t = Any.any_l ()
+  | & _85: bool = Any.any_l ()
+  | & _87: bool = Any.any_l ()
+  | & _88: Int64.t = Any.any_l ()
+  | & _89: UInt64.t = Any.any_l ()
+  | & _90: UInt64.t = Any.any_l ()
+  | & _91: bool = Any.any_l ()
+  | & _92: Int64.t = Any.any_l ()
+  | & _93: UInt64.t = Any.any_l ()
   | & _94: UInt64.t = Any.any_l ()
-  | & _95: UInt64.t = Any.any_l ()
-  | & _96: bool = Any.any_l ()
+  | & _95: bool = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _99: t_Option_i64 = Any.any_l ()
+  | & _100: Int64.t = Any.any_l ()
+  | & _101: UInt64.t = Any.any_l ()
+  | & _102: UInt64.t = Any.any_l ()
+  | & _103: bool = Any.any_l ()
   | & variant_old_bb11: int = Any.any_l () ])
   [ return (result: bool) ->
-  {[@stop_split] [@expl:exact_wal_batch_range ensures] ([@stop_split] [@expl:exact_wal_batch_range ensures #0] [%#sbatch_equal'22] result
+  {[@stop_split] [@expl:exact_wal_batch_range ensures] ([@stop_split] [@expl:exact_wal_batch_range ensures #0] [%#sbatch_equal'23] result
       = (Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)
       /\ (if Int64.to_int start = Int64.to_int target then
         Seq.length (Slice64.view bases) = 0
       else
         exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) 0 (Int64.to_int start) (Int64.to_int target)
       )))
-    /\ ([@stop_split] [@expl:exact_wal_batch_range ensures #1] [%#sbatch_equal'23] result
+    /\ ([@stop_split] [@expl:exact_wal_batch_range ensures #1] [%#sbatch_equal'24] result
       = wal_batch_layout (Slice64.view bases) (Slice64.view lasts) (Int64.to_int start) (Int64.to_int target))
-    /\ ([@stop_split] [@expl:exact_wal_batch_range ensures #2] [%#sbatch_equal'24] result
-    -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
-      -> Int64.to_int start <= Int64.to_int (Seq.get (Slice64.view bases) i)
-      /\ Int64.to_int (Seq.get (Slice64.view bases) i) <= Int64.to_int (Seq.get (Slice64.view lasts) i)
-      /\ Int64.to_int (Seq.get (Slice64.view lasts) i) < Int64.to_int target))}
+    /\ ([@stop_split] [@expl:exact_wal_batch_range ensures #2] [%#sbatch_equal'25] result
+      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
+        -> Int64.to_int start <= Int64.to_int (Seq.get (Slice64.view bases) i)
+        /\ Int64.to_int (Seq.get (Slice64.view bases) i) <= Int64.to_int (Seq.get (Slice64.view lasts) i)
+        /\ Int64.to_int (Seq.get (Slice64.view lasts) i) < Int64.to_int target))
+    /\ ([@stop_split] [@expl:exact_wal_batch_range ensures #3] [%#sbatch_equal'26] result
+    -> (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (Slice64.view bases)
+      -> Int64.to_int (Seq.get (Slice64.view lasts) i) < Int64.to_int (Seq.get (Slice64.view bases) j)))}
     (! return {result}) ]

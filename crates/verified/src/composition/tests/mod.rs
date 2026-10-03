@@ -3,6 +3,7 @@ use proptest::prelude::*;
 use super::*;
 
 mod abort_union;
+mod byte_quorum;
 mod consume_trace;
 mod list_offsets;
 mod quota_time;
