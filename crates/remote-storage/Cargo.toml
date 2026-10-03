@@ -24,9 +24,9 @@ bytes = { workspace = true }
 # crate: the verifier and the manifest types it checks belong together.
 clap = { workspace = true, features = ["derive"] }
 krabka-audit = { workspace = true }
-krabka-ids = { version = "0.4.0" }
+krabka-ids = { version = "0.5.0" }
 krabka-object-store = { version = "0.7.0", path = "../object-store" }
-krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-protocol = { version = "0.5.0", default-features = false }
 krabka-units = { workspace = true }
 krabka-verified = { version = "0.7.0", path = "../verified" }
 derive_more = { workspace = true }
@@ -53,9 +53,9 @@ assert2 = { workspace = true }
 async-trait = { workspace = true }
 # The lookup tests of `max.decompressed.message.bytes` write a compressed batch,
 # and the library itself carries no codec.
-krabka-compression = { version = "0.4.0", default-features = false, features = ["gzip"] }
+krabka-compression = { version = "0.5.0", default-features = false, features = ["gzip"] }
 krabka-log = { version = "0.7.0", path = "../log" }
-krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-protocol = { version = "0.5.0", default-features = false }
 proptest = { workspace = true }
 # `gcs_emulator` creates its buckets through the emulator's JSON control
 # plane, which no `object_store` API reaches. Same pin as `krabka-object-store`,

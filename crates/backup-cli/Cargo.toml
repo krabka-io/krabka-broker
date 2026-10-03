@@ -29,11 +29,11 @@ path = "src/main.rs"
 krabka-audit = { workspace = true }
 # `ListGroups` and `OffsetFetch` for the offsets capture. The tool speaks only
 # stock Kafka APIs, so it also runs against a cluster that is not krabka.
-krabka-client-admin = { version = "0.4.0" }
+krabka-client-admin = { version = "0.5.0" }
 # The connection, the `FindCoordinator` helpers, and the request trait the
 # `OffsetCommit` that puts offsets back is sent over.
-krabka-client-core = { version = "0.4.0" }
-krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-client-core = { version = "0.5.0" }
+krabka-protocol = { version = "0.5.0", default-features = false }
 krabka-security = { workspace = true }
 # The archive the capture is written to is the archive `krabka restore` reads,
 # so the backend mapping is the object-store layer the restore uses, not the

@@ -28,8 +28,8 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
-krabka-protocol = { version = "0.4.0", default-features = false }
-krabka-ids = { version = "0.4.0" }
+krabka-protocol = { version = "0.5.0", default-features = false }
+krabka-ids = { version = "0.5.0" }
 krabka-verified = { version = "0.7.0", path = "../verified" }
 krabka-units = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
