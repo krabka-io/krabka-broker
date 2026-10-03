@@ -25,10 +25,9 @@ use krabka_units::prelude::{Time, TimeExt as _};
 /// Panics if `units_per_token` is zero.
 pub use krabka_verified::quota::quota_whole_request as whole_token_request;
 use krabka_verified::{
-    quota::{quota_charge, quota_credit, quota_refill},
+    quota::{quota_charge, quota_credit, quota_debt_cap, quota_refill},
     throttle::{AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume},
 };
-use num_traits::ToPrimitive as _;
 
 use super::{BucketState, MICROS_PER_TOKEN, TokenBucket};
 
@@ -99,8 +98,9 @@ impl TokenBucket {
     /// throttle is capped at `max_wait` would be throttled at the cap on every
     /// request until the whole uncapped debt was repaid, and a bucket that
     /// grants nothing while in debt would starve its other consumers for as
-    /// long. The cap leaves the throttle a caller derives from the debt, when
-    /// that throttle is itself bounded by `max_wait`, unchanged.
+    /// long. The cap bounds the throttle derived from the debt by the wait
+    /// converted to clock nanoseconds. It rounds credit down to complete
+    /// micro-tokens, so fractional credit cannot extend debt beyond that wait.
     ///
     /// # Panics
     /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
@@ -241,9 +241,10 @@ impl BucketState {
     /// or no cap without one.
     fn debt_cap(&self, max_wait: Option<Time>) -> u64 {
         max_wait.map_or(u64::MAX, |wait| {
-            let micros = self.micro_rate_per_sec.to_f64().unwrap_or(f64::INFINITY)
-                * wait.secs_f64().max(0.0);
-            micros.round().to_u64().unwrap_or(u64::MAX)
+            let Ok(wait) = std::time::Duration::try_from_secs_f64(wait.secs_f64().max(0.0)) else {
+                return u64::MAX;
+            };
+            quota_debt_cap(wait.as_nanos(), self.micro_rate_per_sec)
         })
     }
 
@@ -880,6 +881,19 @@ mod tests {
             let granted = b.try_consume(u64::MAX);
 
             check!((reported, granted) == (debt, grant), "{label}");
+        }
+    }
+
+    #[test]
+    fn bounded_fractional_debt_is_repaid_at_the_exact_wait() {
+        for (rate, cap) in [(0.000_001, 0), (0.000_003, 1)] {
+            let (bucket, clock) = manual_bucket();
+            bucket.set_byte_rate_with_burst(ByteRate::from_bytes_per_sec_f64(rate), bytes(1));
+            check!(bucket.record_bounded(u64::MAX, Time::from_secs_f64(0.5)) == cap);
+            clock
+                .advance(Duration::from_millis(500))
+                .expect("manual time moves forward");
+            check!(bucket.record(0) == 0);
         }
     }
 

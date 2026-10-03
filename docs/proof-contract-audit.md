@@ -112,6 +112,7 @@ A specification is not automatically weak because it resembles a short function.
 | `refill_partition_preserves_consume_budget` | Splitting elapsed time preserves the exact consume grant, remaining balance, debt, and fractional credit of the aggregate rational-time ledger, including burst saturation. | Fixed rate and burst, coherent initial balance, representable total elapsed time, and no charge/consume between refills. The host must claim each interval once and publish the returned fraction under its lock; native adapter regressions exercise that publication. |
 | `quota_charge_refund_restores_consume_budget` | Debt-first refill, full charge, refund, and grant arithmetic restore the refilled signed balance and exactly the next consume budget. Admission is complete exactly when the charge's debt fits in `u64`; saturation cannot silently establish restoration. | A coherent bucket has at most one of available/debt nonzero and available at/below burst. Counts are effective micro-tokens; the charge/refund pair must be serialized without intervening state changes. Integer representability, unit conversion, clock claims, locking, and quota lookup are distinct boundaries. |
 | `bounded_quota_debt_cannot_outlast_repayment` | Capped charge, debt-first repayment, and consume give the exact signed-ledger balance, clear debt after credit at least the cap, and grant the full probe when credit exceeds the cap by that probe and the burst fits it. The exact balance law excludes fabricated full bursts. | A coherent starting bucket, accurately computed integer debt cap and credited refill, and serialized state publication. The theorem bounds credits, not elapsed wall time; rate/wait rounding and real-time progress remain external. |
+| `capped_charge_is_repaid_by_elapsed_time` | Derives the debt cap from the wait and rate, retains exactly the unpaid charge up to that cap, and carries two elapsed intervals through refill and whole-token consume. The completed converted wait clears debt; enough extra time grants the full probe. Exact retained debt and grant completeness exclude forgetting every charge or starving every consume. | Fixed effective rate, burst and token quantum; coherent state; no intervening charge/refund/consume. The host converts the wait to clock nanoseconds, claims each interval once and publishes the state atomically. Elapsed time is the clock projection, not an asynchronous scheduling guarantee. |
 | `covering_copy_preserves_logical_fetch` | The actual trim planner, whole-batch covering validation, byte comparison, live append, Produce acknowledgement, tail recovery, and Fetch compose across an interior logical floor. Complete valid copies that fit are admitted; every visible offset has a concrete copied batch with identical coordinates and bytes, while offsets before either floor have none. Encoded-byte progress equals exactly the copied lengths. | Source batches are the complete physical sequence covering the reconciled logical floor, possibly starting before it. Faithful decoding and completed I/O are assumed. Production persists a higher canonical floor in the follower before physical rebasing and has an injected-failure/reopen regression; the theorem does not prove filesystem publication or all crash interleavings. |
 | `validated_index_bounds_lookup` | Returns exact floor and ceiling byte cursors after complete archive validation, with source membership, global floor/ceiling extremality and byte bounds; invalid archives are rejected exactly. | The same entries and extent must describe the actual file. Empty-index zero is a fallback; structural validity alone cannot establish truthful batch rows. |
 | `indexed_offset_scan_preserves_first_batch` | Connects sparse rows to complete physical batch rows, consumes validated cursors and reuses the scalar first-match kernel. Every matching batch lies at or after the floor; the indexed scan returns the globally first qualifying batch, bounded by a present ceiling. | Complete faithfully decoded last-offset/byte-position batch rows. Actual header lengths, the host's extra batch skip, windowed decoding and I/O remain external. |
@@ -189,7 +190,7 @@ The implication-shaped checks explicitly return true on rejected input. They pro
 | [producer_id](../crates/verified/src/producer_id.rs): `producer_id_block_allocation` | Arithmetic invariant + guard | Allocation pins epoch fencing and exact block endpoints, including exhaustion. Sequential block uniqueness follows only when the controller persists and reuses the returned next frontier; failover/replay of that frontier is outside this function. |
 | [producer_snapshot](../crates/verified/src/producer_snapshot.rs): `producer_snapshot_reload_log_start`, `producer_snapshot_reload_keeps`, `producer_snapshot_stray`, `producer_snapshot_latest_index`, `producer_snapshot_entry_valid`, `producer_snapshot_replay_start` | Selection + guard | Latest selection proves global maximality within the reload window; replay start and entry validity are precise. Truncation, latest selection, and replay-start construction now compose with explicit newest-survivor and exact-cursor witnesses. Trim admission/application also composes with selection against an advanced log start. A valid snapshot may contain older producer history, and a physical replay may read the entire batch around its cursor. Snapshot bytes are not proved equivalent to replaying the retained log, snapshot rows and coherent replayed windows now compose with retry classification and original acknowledgement coordinates, but generation and eviction of the complete tail-rebuilt dedup window remain host obligations. |
 | [quorum_state](../crates/verified/src/quorum_state.rs): `quorum_state_write_decision`, `quorum_state_load_decision` | Guard | Signed JSON field bounds and restoration classification exclude malformed vote encodings. Correct field ranges are not an encode/decode round trip, and at-most-one vote per epoch across crashes still requires durable write ordering. |
-| [quota](../crates/verified/src/quota.rs): `user_client_quota_precedence`, `ip_quota_precedence`, `quota_credit`, `quota_charge`, `quota_refill`, `quota_whole_request` | Guard + conservation | Exact/default precedence is a complete policy table. Candidate presence is supplied by the host, so the proof does not establish canonical lookup keys or shared bucket identity. The selected candidate supplies the rate; sensor-key construction uses concrete request tags and is outside this proof. The extracted charge/credit kernels now connect debt accounting to grant conservation; the compositions establish refund restoration only without discarded debt and bounded repayment with an exact consume budget. The scaled refill ledger and exact whole-token selector compose into arbitrary consume traces with both credit conservation and a final-request service guarantee. Unit conversion, clock claims, and atomic publication remain host obligations. |
+| [quota](../crates/verified/src/quota.rs): `user_client_quota_precedence`, `ip_quota_precedence`, `quota_credit`, `quota_charge`, `quota_refill`, `quota_whole_request`, `quota_debt_cap` | Guard + conservation | Exact/default precedence is a complete policy table. Candidate presence is supplied by the host, so the proof does not establish canonical lookup keys or shared bucket identity. The selected candidate supplies the rate; sensor-key construction uses concrete request tags and is outside this proof. The extracted charge/credit kernels now connect debt accounting to grant conservation; the compositions establish refund restoration only without discarded debt and bounded repayment with an exact consume budget. The scaled refill ledger and exact whole-token selector compose into arbitrary consume traces with both credit conservation and a final-request service guarantee. Unit conversion, clock claims, and atomic publication remain host obligations. |
 | [raft](../crates/verified/src/raft.rs): `fetch_response_mutation`, `advance_high_watermark`, `in_half_open_window`, `frontier_reaches`, `control_history_frontier`, `metadata_record_offset_deltas` | Invariant + guard | Response actions are fenced and exclusive, watermark advancement is exact and monotonic, replay windows are half-open, and generated deltas are contiguous. Epoch/leader identity projection and durable log mutation remain outside these kernels. |
 | [reassignment](../crates/verified/src/reassignment.rs): `reassignment_set_membership`, `reassignment_plan_admission`, `reassignment_action` | Selection + guard | Set differences are disjoint and handoff chooses the first eligible target. Catch-up and eligible handoffs are already-decided facts; the reassignment model checks leadership/set invariants through transitions, but actual replicated-byte catch-up remains external. |
 | [reconfiguration](../crates/verified/src/reconfiguration.rs): `voter_reconfiguration_decision`, `add_decision`, `remove_decision`, `update_decision`, `finalize_decision` | Guard + safety corollary | Admission preserves a nonempty voter count and supported KRaft version under current leadership. A count-changing plan does not prove old/new quorum intersection or durability of the membership change; caught-up is a supplied fact. |
@@ -2495,3 +2496,55 @@ verified Clippy, repository formatting and the diff check. The three paired
 controls still fail both the composed proof and native oracle. Only the repaired
 composition's two artifacts change; all 1,158 unrelated parent artifacts remain
 byte-identical. All 302 verified Rust sources remain below 300 lines.
+
+### Debt repayment must derive its credit from elapsed time
+
+The earlier bounded-debt composition accepts a repayment credit and assumes
+that it reaches the debt cap. That abstract guarantee cannot detect a cap
+which the actual clock cannot earn before the requested wait. The production
+`BucketState::debt_cap` rounded floating micro-tokens to the nearest integer:
+at one micro-token per second, a half-second wait retained one micro-token of
+debt, but the integer refill earned zero by the deadline. The real manual-clock
+regression failed with debt one at that deadline.
+
+The shared bounded-charge adapter now converts its wait to the clock's
+nanosecond resolution and calls `quota_debt_cap`. This kernel computes the
+floor of wait times rate over one billion, clipped at the representable debt
+limit; a checked wide-product overflow also clips. Nonpositive/NaN waits keep
+a zero cap and unrepresentable positive waits remain uncapped. The host test
+covers one and three micro-tokens per second at a half-second wait, asserting
+both the retained debt and its clearance at the exact clock deadline.
+
+The new elapsed-time composition calls the cap, charge, two-interval refill
+composition, whole-token selector and grant kernel. It exports the exact cap,
+retained debt, whole-token grant, remaining balance, debt and fractional credit,
+as well as debt clearance at the converted deadline and a full-probe service
+guarantee when elapsed credit covers the cap plus the probe. Rate, burst and
+token quantum stay fixed, and no intervening operation changes the ledger.
+Coherent state, time conversion, clock provenance, serialized claims and
+atomic publication remain host obligations. This strengthens the consequence
+beyond a supplied-credit repayment premise; it does not prove wall-clock
+scheduling or floating rate conversion.
+
+The native oracle uses a signed rational ledger and decomposes seconds from
+subsecond credit to calculate the cap independently without a wide-product
+overflow. Boundary cases cover early/at/after-deadline repayment, existing
+debt, carried fractions, burst and integer saturation, whole-token quantum,
+zero waits, waits beyond the clock domain and arbitrary coherent inputs.
+
+Two paired controls change the cap implementation and its local contract
+together. A round-up cap still proves its helper (1/1), but leaves the consumer
+at 8/10 obligations and fails the exact-deadline native oracle. A cap which
+forgets all debt still proves its helper (1/1), but leaves the consumer at 9/10
+and fails the independent retained-debt oracle. This distinguishes repayment
+from the vacuous policy of forgetting every charge. Both original sources are
+restored byte-for-byte before final qualification.
+
+Final local qualification passes pinned cache-free generation and read-only
+replay of all 579 retained sessions, all 380 verified native tests, all 35
+throttle unit tests, the four verified/throttle Bazel test and doc-test targets,
+strict all-target Clippy for both crates, repository formatting, the diff check
+and all four proof/mutation configuration gates. The changed oracle and host
+regression pass again after final lint corrections. All 1,154 parent artifacts
+remain byte-identical. All 302 authored verified Rust sources remain below
+300 lines (maximum 288). Published CI must qualify the pushed revision separately.

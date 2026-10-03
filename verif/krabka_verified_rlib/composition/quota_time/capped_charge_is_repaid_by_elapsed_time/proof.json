@@ -1,0 +1,40 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_capped_charge_is_repaid_by_elapsed_time": {
+        "tactic": "compute_specified",
+        "children": [
+          {
+            "tactic": "split_vc",
+            "children": [
+              { "prover": "alt-ergo", "time": 0.009 },
+              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "alt-ergo", "time": 0.014 },
+              {
+                "tactic": "split_vc",
+                "children": [
+                  { "prover": "alt-ergo", "time": 0.011 },
+                  { "prover": "alt-ergo", "time": 0.249 },
+                  { "prover": "z3", "time": 0.036 },
+                  { "prover": "alt-ergo", "time": 0.031 },
+                  { "prover": "alt-ergo", "time": 0.306 },
+                  { "prover": "cvc5", "time": 0.165 }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "vc_plan_consume": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_quota_charge": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_quota_debt_cap": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_quota_whole_request": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_refill_partition_preserves_consume_budget": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      }
+    }
+  }
+}
