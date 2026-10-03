@@ -135,6 +135,12 @@ pub fn create_token_deadlines(
         ),
     _ => true,
 })]
+// Export the interval independently of the private arithmetic models.
+#[ensures(match result {
+    TokenRenewDecision::Renew(expiry) => now_ms@ <= expiry@ && expiry@ <= max_timestamp_ms@
+        && (now_ms@ < max_timestamp_ms@ ==> now_ms@ < expiry@),
+    _ => true,
+})]
 #[must_use]
 pub fn renew_token_expiry(
     now_ms: i64,

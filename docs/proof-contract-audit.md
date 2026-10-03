@@ -2793,3 +2793,61 @@ and all four proof/mutation configuration gates pass. Only two new proof
 sessions are retained; all 1,190 parent artifact files remain byte-identical.
 All 323 authored verified Rust sources stay under 300 lines (largest: 297).
 Remote CI is tracked separately in the pull request.
+
+## Boundary renewal through delayed cleanup and SCRAM request admission
+
+Creation, renewal, guarded mutation and authentication each had exact leaf
+contracts, but the created-token consumer never drove a renewal or a captured
+cleanup proposal. Their boundary policies differ deliberately: authentication
+rejects a token at its expiry, while renewal still accepts equality. An old
+cleanup proposal must not erase the successfully renewed generation.
+
+The renewal helper now exports its interval independently of its private exact
+arithmetic models: the new expiry is between renewal time and the immutable
+maximum, and is strictly later when that maximum permits progress. Removing
+this interface still proves the helper but leaves the new consumer at 86 of
+105 obligations. Its source and production body are otherwise unchanged.
+
+`renewed_token_survives_captured_cleanup` derives both deadlines from creation,
+renews at the original expiry and passes that concrete replacement through the
+controller's guarded mutation kernel. It derives the delayed cleanup's state
+from the resulting stored expiry, rather than accepting a supplied stale flag.
+A real extension must append and reject the old cleanup. At the maximum,
+renewal is an exact retry and cleanup can delete. An uncommitted metadata tail
+refuses both proposals and supplies no authenticated session. The retained
+expiry then drives SCRAM source selection, round-two liveness, session binding
+and the broker's ordinary-request/reauthentication gates.
+
+For example, a token created at 0 with expiry 1000 and maximum 2000 cannot
+authenticate at 1000 before renewal. A renewal of 500 ms at 1000 installs 1500;
+cleanup expecting 1000 is stale. SCRAM completion at 1250 advertises 250 ms,
+admits an ordinary request at 1499, and refuses it at 1500. Completion at 1500
+cannot establish a session even for a reauthentication API. Exact admission
+and mutation classification exclude both rejecting every renewal and accepting
+every cleanup as vacuous alternatives.
+
+The schedule fixes one token identity and its immutable fields and changes
+only expiry. Actual metadata publication, commit ordering, faithful full-record
+projection, clock provenance and cryptographic success remain host obligations.
+The existing controller actor fixture separately exercises uncommitted-tail
+refusal, committed renewal, exact retry and stale captured-delete rejection.
+This theorem does not model arbitrary renewal/revocation after SCRAM round one.
+
+Two paired controls change a helper implementation and its own contract
+consistently. Rejecting renewal at equality proves the modified renewal helper
+but fails the consumer and native service regression. Accepting a stale delete
+proves the modified mutation helper, but leaves the consumer at 30 of 33
+obligations and fails the independent native deadline/schedule oracle. Both
+sources are restored byte-for-byte before positive qualification. The oracle
+uses wide closed-form arithmetic and symbolic extension/no-op schedules,
+covering exhaustion, uncommitted tails, both SCRAM rounds, reauthentication
+frames, caps and arbitrary valid creation/renewal inputs.
+
+Final local qualification passes fresh pinned Creusot 0.13.0 generation and
+read-only cache-free replay of all 598 sessions, all 401 verified native tests,
+strict all-target verified Clippy, both verified Bazel test/doc targets,
+formatting and all four proof/mutation configuration gates. Only the renewal
+helper's two artifacts change and one new consumer session is added; all 1,192
+unrelated parent artifact files remain byte-identical. All 325 authored
+verified Rust sources stay under 300 lines (largest: 297). Remote CI remains
+separate from this local qualification.

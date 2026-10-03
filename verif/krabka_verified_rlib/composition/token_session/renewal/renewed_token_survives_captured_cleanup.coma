@@ -1,0 +1,571 @@
+(* #"/workspace/crates/verified/src/composition/token_session/renewal.rs" 61 0 68 17 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 99 10 99 61
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 100 10 100 55
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 101 10 102 30
+let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 103 10 104 48
+let%span ssession = "/workspace/crates/verified/src/authz/session.rs" 5 10 6 64
+let%span ssession'0 = "/workspace/crates/verified/src/authz/session.rs" 7 10 10 1
+let%span ssession'1 = "/workspace/crates/verified/src/authz/session.rs" 11 10 14 1
+let%span ssession'2 = "/workspace/crates/verified/src/authz/session.rs" 15 10 21 1
+let%span ssession'3 = "/workspace/crates/verified/src/authz/session.rs" 22 10 27 1
+let%span ssession'4 = "/workspace/crates/verified/src/authz/session.rs" 52 10 55 2
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 111 10 131 10
+let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 132 10 143 74
+let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 14 10 14 78
+let%span stoken_mutation_decision'2 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 15 10 16 77
+let%span stoken_mutation_decision'3 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 17 10 18 78
+let%span stoken_mutation_decision'4 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 19 10 20 65
+let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 69 10 70 55
+let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 71 10 80 1
+let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 82 10 93 1
+let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 197 10 202 1
+let%span stoken_is_active'3 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 123 10 124 65
+let%span stoken_is_active'4 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 125 10 129 1
+let%span stoken_is_active'5 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 130 10 137 1
+let%span stoken_is_active'6 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 139 10 143 1
+let%span srenewal = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 70 8 70 74
+let%span srenewal'0 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 76 33 76 67
+let%span srenewal'1 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 78 8 78 67
+let%span srenewal'2 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 82 18 90 6
+let%span srenewal'3 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 96 18 108 6
+let%span srenewal'4 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 121 16 121 44
+let%span srenewal'5 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 123 51 123 90
+let%span srenewal'6 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 123 32 123 37
+let%span srenewal'7 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 123 39 123 43
+let%span srenewal'8 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 123 45 123 49
+let%span srenewal'9 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 123 8 123 91
+let%span srenewal'10 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 128 20 128 48
+let%span srenewal'11 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 129 8 129 50
+let%span srenewal'12 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 132 31 132 89
+let%span srenewal'13 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 135 18 135 46
+let%span srenewal'14 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 136 19 136 83
+let%span srenewal'15 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 137 12 137 67
+let%span srenewal'16 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 136 19 137 67
+let%span srenewal'17 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 34 11 34 80
+let%span srenewal'18 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 35 11 35 77
+let%span srenewal'19 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 36 10 36 40
+let%span srenewal'20 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 37 10 37 93
+let%span srenewal'21 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 38 10 39 104
+let%span srenewal'22 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 40 10 40 79
+let%span srenewal'23 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 41 10 42 49
+let%span srenewal'24 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 43 10 44 48
+let%span srenewal'25 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 45 10 46 49
+let%span srenewal'26 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 47 10 48 48
+let%span srenewal'27 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 49 10 50 69
+let%span srenewal'28 = "/workspace/crates/verified/src/composition/token_session/renewal.rs" 51 10 60 1
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type tup5_i64_i64_i64_i64_i64 = { f0: Int64.t; f1: Int64.t; f2: Int64.t; f3: Int64.t; f4: Int64.t }
+
+type t_TokenDeadlines = { max_timestamp_ms: Int64.t; initial_expiry_ms: Int64.t }
+
+type t_TokenCreateDecision = Invalid | Create t_TokenDeadlines
+
+function deadline_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 9 0 9 55] (now_ms: Int64.t) (duration_ms: int) : int
+
+function bounded_period_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 19 0 19 66] (requested_ms: Int64.t) (default_ms: Int64.t) : int
+
+function min_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 29 0 29 42] (left: int) (right: int) : int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let create_token_deadlines (now_ms: Int64.t) (requested_ms: Int64.t) (ceiling_ms: Int64.t)
+  (default_renew_period_ms: Int64.t) (return (x: t_TokenCreateDecision)) = any
+  [ return (result: t_TokenCreateDecision) ->
+  {[@stop_split] [@expl:create_token_deadlines ensures] ([@stop_split] [@expl:create_token_deadlines ensures #0] [%#stoken_is_active] (result
+        = Invalid)
+      = (Int64.to_int ceiling_ms <= 0 \/ Int64.to_int default_renew_period_ms <= 0))
+    /\ ([@stop_split] [@expl:create_token_deadlines ensures #1] [%#stoken_is_active'0] match result with
+        | Invalid -> true
+        | Create deadlines -> Int64.to_int deadlines.max_timestamp_ms
+          = deadline_model now_ms (bounded_period_model requested_ms ceiling_ms)
+        /\ Int64.to_int deadlines.initial_expiry_ms
+        = min_model (Int64.to_int deadlines.max_timestamp_ms) (deadline_model now_ms (Int64.to_int default_renew_period_ms))
+        end)
+    /\ ([@stop_split] [@expl:create_token_deadlines ensures #2] [%#stoken_is_active'1] match result with
+      | Invalid -> true
+      | Create d -> Int64.to_int now_ms <= Int64.to_int d.initial_expiry_ms
+      /\ Int64.to_int d.initial_expiry_ms <= Int64.to_int d.max_timestamp_ms
+      /\ Int64.to_int d.max_timestamp_ms <= Int64.to_int now_ms + Int64.to_int ceiling_ms
+      /\ (gt_log_Int (Int64.to_int requested_ms) 0
+        -> Int64.to_int d.max_timestamp_ms <= Int64.to_int now_ms + Int64.to_int requested_ms)
+      /\ Int64.to_int d.initial_expiry_ms <= Int64.to_int now_ms + Int64.to_int default_renew_period_ms
+      /\ (Int64.to_int d.max_timestamp_ms = Int64.to_int const_MAX
+        \/ Int64.to_int d.max_timestamp_ms = Int64.to_int now_ms + Int64.to_int ceiling_ms
+        \/ gt_log_Int (Int64.to_int requested_ms) 0
+        /\ Int64.to_int d.max_timestamp_ms = Int64.to_int now_ms + Int64.to_int requested_ms)
+      /\ (Int64.to_int d.initial_expiry_ms = Int64.to_int d.max_timestamp_ms
+      \/ Int64.to_int d.initial_expiry_ms = Int64.to_int now_ms + Int64.to_int default_renew_period_ms)
+      end)}
+    (! return {result}) ]
+
+let elim_Create (_x: t_TokenCreateDecision) (return (f0'0: t_TokenDeadlines)) = any
+  [ _k (f0'0: t_TokenDeadlines) -> {Create f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Create] match _x with
+      | Create _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let token_is_active (now_ms: Int64.t) (expiry_timestamp_ms: Int64.t) (max_timestamp_ms'0: Int64.t) (return (x: bool)) =
+any
+  [ return (result: bool) -> {[@stop_split] [@expl:token_is_active ensures] [%#stoken_is_active'2] result
+    = (ge_log_Int (Int64.to_int now_ms) 0
+    /\ gt_log_Int (Int64.to_int expiry_timestamp_ms) (Int64.to_int now_ms)
+    /\ gt_log_Int (Int64.to_int max_timestamp_ms'0) (Int64.to_int now_ms)
+    /\ Int64.to_int expiry_timestamp_ms <= Int64.to_int max_timestamp_ms'0)}
+    (! return {result}) ]
+
+type t_TokenRenewDecision = Invalid'0 | Expired'0 | Renew'0 Int64.t
+
+let renew_token_expiry (now_ms: Int64.t) (requested_ms: Int64.t) (default_renew_period_ms: Int64.t)
+  (current_expiry_ms: Int64.t) (max_timestamp_ms'0: Int64.t) (return (x: t_TokenRenewDecision)) = any
+  [ return (result: t_TokenRenewDecision) ->
+  {[@stop_split] [@expl:renew_token_expiry ensures] ([@stop_split] [@expl:renew_token_expiry ensures #0] [%#stoken_is_active'3] (result
+        = Expired'0)
+      = (Int64.to_int current_expiry_ms < Int64.to_int now_ms \/ Int64.to_int max_timestamp_ms'0 < Int64.to_int now_ms))
+    /\ ([@stop_split] [@expl:renew_token_expiry ensures #1] [%#stoken_is_active'4] (result = Invalid'0)
+      = (ge_log_Int (Int64.to_int current_expiry_ms) (Int64.to_int now_ms)
+      /\ ge_log_Int (Int64.to_int max_timestamp_ms'0) (Int64.to_int now_ms)
+      /\ Int64.to_int default_renew_period_ms <= 0))
+    /\ ([@stop_split] [@expl:renew_token_expiry ensures #2] [%#stoken_is_active'5] match result with
+        | Renew'0 expiry -> Int64.to_int expiry
+        = min_model (Int64.to_int max_timestamp_ms'0) (deadline_model now_ms (bounded_period_model requested_ms default_renew_period_ms))
+        | _ -> true
+        end)
+    /\ ([@stop_split] [@expl:renew_token_expiry ensures #3] [%#stoken_is_active'6] match result with
+      | Renew'0 expiry -> Int64.to_int now_ms <= Int64.to_int expiry
+      /\ Int64.to_int expiry <= Int64.to_int max_timestamp_ms'0
+      /\ (Int64.to_int now_ms < Int64.to_int max_timestamp_ms'0 -> Int64.to_int now_ms < Int64.to_int expiry)
+      | _ -> true
+      end)}
+    (! return {result}) ]
+
+let elim_Renew (_x: t_TokenRenewDecision) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Renew'0 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Renew] match _x with
+      | Renew'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_TokenMutationKind = Renew | Expire | Delete
+
+type t_TokenMutationState = Missing | Expected | Applied | Stale
+
+type t_TokenMutationFacts = {
+  kind'0: t_TokenMutationKind;
+  state'0: t_TokenMutationState;
+  now_ms'0: Int64.t;
+  expected_expiry_ms'0: Int64.t;
+  incoming_expiry_ms'0: Int64.t;
+  max_timestamp_ms'0: Int64.t;
+  uncommitted_tail'0: bool }
+
+type t_TokenMutationDecision = Append | Retry | Reject
+
+let token_mutation_decision (facts: t_TokenMutationFacts) (return (x: t_TokenMutationDecision)) = any
+  [ return (result: t_TokenMutationDecision) ->
+  {[@stop_split] [@expl:token_mutation_decision ensures] ([@stop_split] [@expl:token_mutation_decision ensures #0] [%#stoken_mutation_decision] (result
+        = Append)
+      = (not facts.uncommitted_tail'0
+      /\ facts.state'0 = Expected
+      /\ match facts.kind'0 with
+        | Delete -> true
+        | Renew -> ge_log_Int (Int64.to_int facts.now_ms'0) 0
+        /\ ge_log_Int (Int64.to_int facts.expected_expiry_ms'0) (Int64.to_int facts.now_ms'0)
+        /\ ge_log_Int (Int64.to_int facts.max_timestamp_ms'0) (Int64.to_int facts.now_ms'0)
+        /\ Int64.to_int facts.expected_expiry_ms'0 <= Int64.to_int facts.max_timestamp_ms'0
+        /\ Int64.to_int facts.incoming_expiry_ms'0 <> Int64.to_int facts.expected_expiry_ms'0
+        /\ ge_log_Int (Int64.to_int facts.incoming_expiry_ms'0) (Int64.to_int facts.now_ms'0)
+        /\ Int64.to_int facts.incoming_expiry_ms'0 <= Int64.to_int facts.max_timestamp_ms'0
+        | Expire -> ge_log_Int (Int64.to_int facts.now_ms'0) 0
+        /\ ge_log_Int (Int64.to_int facts.expected_expiry_ms'0) (Int64.to_int facts.now_ms'0)
+        /\ ge_log_Int (Int64.to_int facts.max_timestamp_ms'0) (Int64.to_int facts.now_ms'0)
+        /\ Int64.to_int facts.expected_expiry_ms'0 <= Int64.to_int facts.max_timestamp_ms'0
+        /\ ge_log_Int (Int64.to_int facts.incoming_expiry_ms'0) 0
+        /\ Int64.to_int facts.incoming_expiry_ms'0 <= Int64.to_int facts.max_timestamp_ms'0
+        end))
+    /\ ([@stop_split] [@expl:token_mutation_decision ensures #1] [%#stoken_mutation_decision'0] (result = Retry)
+    = (not facts.uncommitted_tail'0
+    /\ (facts.state'0 = Applied
+    \/ facts.kind'0 = Delete /\ facts.state'0 = Missing
+    \/ facts.kind'0 = Renew
+    /\ facts.state'0 = Expected
+    /\ Int64.to_int facts.incoming_expiry_ms'0 = Int64.to_int facts.expected_expiry_ms'0
+    /\ ge_log_Int (Int64.to_int facts.now_ms'0) 0
+    /\ ge_log_Int (Int64.to_int facts.expected_expiry_ms'0) (Int64.to_int facts.now_ms'0)
+    /\ ge_log_Int (Int64.to_int facts.max_timestamp_ms'0) (Int64.to_int facts.now_ms'0)
+    /\ Int64.to_int facts.expected_expiry_ms'0 <= Int64.to_int facts.max_timestamp_ms'0)))}
+    (! return {result}) ]
+
+type tup3_i64_i64_bool = { f0'0: Int64.t; f1'0: Int64.t; f2'0: bool }
+
+type t_Option_tup3_i64_i64_bool = None | Some tup3_i64_i64_bool
+
+type t_RenewalTrace = {
+  original_expiry: Int64.t;
+  maximum: Int64.t;
+  renewed_expiry: Int64.t;
+  boundary_authenticated: bool;
+  renewal: t_TokenMutationDecision;
+  cleanup: t_TokenMutationDecision;
+  session: t_Option_tup3_i64_i64_bool }
+
+type tup3_i64_i64_i64 = { f0'1: Int64.t; f1'1: Int64.t; f2'1: Int64.t }
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] ge_log_Int (Int64.to_int self_
+          + Int64.to_int rhs) (Int64.to_int const_MIN)
+        /\ Int64.to_int self_ + Int64.to_int rhs <= Int64.to_int const_MAX
+      -> Int64.to_int result = Int64.to_int self_ + Int64.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'0] Int64.to_int self_ + Int64.to_int rhs
+        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] gt_log_Int (Int64.to_int self_
+      + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
+    (! return {result}) ]
+
+type t_ScramCredentialSource = Regular | DelegationToken | ExpiredDelegationToken | Unknown
+
+let scram_credential_source (has_regular_credential: bool) (token_mechanism: bool) (has_token: bool)
+  (token_active: bool) (return (x: t_ScramCredentialSource)) = any
+  [ return (result: t_ScramCredentialSource) ->
+  {[@stop_split] [@expl:scram_credential_source ensures] ([@stop_split] [@expl:scram_credential_source ensures #0] [%#stoken_mutation_decision'1] (result
+        = Regular)
+      = has_regular_credential)
+    /\ ([@stop_split] [@expl:scram_credential_source ensures #1] [%#stoken_mutation_decision'2] (result
+        = DelegationToken)
+      = (not has_regular_credential /\ token_mechanism /\ has_token /\ token_active))
+    /\ ([@stop_split] [@expl:scram_credential_source ensures #2] [%#stoken_mutation_decision'3] (result
+        = ExpiredDelegationToken)
+      = (not has_regular_credential /\ token_mechanism /\ has_token /\ not token_active))
+    /\ ([@stop_split] [@expl:scram_credential_source ensures #3] [%#stoken_mutation_decision'4] (result = Unknown)
+    = (not has_regular_credential /\ (not token_mechanism \/ not has_token)))}
+    (! return {result}) ]
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+type tup2_Option_i64_i64 = { f0'2: t_Option_i64; f1'2: Int64.t }
+
+type tup2_Option_i64_Option_i64 = { f0'3: t_Option_i64; f1'3: t_Option_i64 }
+
+let sasl_session_expiry (now_ms: Int64.t) (credential_expiry_ms: t_Option_i64) (reauth_ms: t_Option_i64)
+  (return (x: tup2_Option_i64_i64)) = any
+  [ return (result: tup2_Option_i64_i64) ->
+  {[@stop_split] [@expl:sasl_session_expiry ensures] ([@stop_split] [@expl:sasl_session_expiry ensures #0] [%#ssession] (result.f0'2
+        = None'0)
+      = (credential_expiry_ms = None'0
+      /\ match reauth_ms with
+        | None'0 -> true
+        | Some'0 cap -> Int64.to_int cap <= 0
+        end))
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #1] [%#ssession'0] match { f0'3 = credential_expiry_ms;
+                                                                                    f1'3 = result.f0'2 } with
+        | {f0'3 = Some'0 credential; f1'3 = Some'0 at'} -> Int64.to_int at' <= Int64.to_int credential
+        | _ -> true
+        end)
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #2] [%#ssession'1] match { f0'3 = reauth_ms;
+                                                                                    f1'3 = result.f0'2 } with
+        | {f0'3 = Some'0 cap; f1'3 = Some'0 at'} -> gt_log_Int (Int64.to_int cap) 0
+        -> Int64.to_int at' <= Int64.to_int now_ms + Int64.to_int cap
+        | _ -> true
+        end)
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #3] [%#ssession'2] match result.f0'2 with
+        | None'0 -> true
+        | Some'0 at' -> credential_expiry_ms = Some'0 at'
+        \/ match reauth_ms with
+          | None'0 -> false
+          | Some'0 cap -> gt_log_Int (Int64.to_int cap) 0
+          /\ (Int64.to_int at' = Int64.to_int now_ms + Int64.to_int cap \/ Int64.to_int at' = Int64.to_int const_MAX)
+          end
+        end)
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #4] [%#ssession'3] match result.f0'2 with
+      | None'0 -> Int64.to_int result.f1'2 = 0
+      | Some'0 at' -> Int64.to_int result.f1'2
+      = (if Int64.to_int at' <= Int64.to_int now_ms then
+        0
+      else
+        if gt_log_Int (Int64.to_int at' - Int64.to_int now_ms) (Int64.to_int const_MAX) then
+          Int64.to_int const_MAX
+        else
+          Int64.to_int at' - Int64.to_int now_ms
+
+      )
+      end)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0'4: Int64.t)) = any
+  [ _k (f0'4: Int64.t) -> {Some'0 f0'4 = _x} (! return {f0'4})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_RequestAuthState = PreHandshake | Exchanging | Failed | Authenticated
+
+let request_auth_admission (state: t_RequestAuthState) (api_key: Int16.t) (return (x: bool)) = any
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:request_auth_admission ensures] ([@stop_split] [@expl:request_auth_admission ensures #0] [%#sacl_decision] state
+        = Authenticated -> result)
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #1] [%#sacl_decision'0] state = Failed -> not result)
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #2] [%#sacl_decision'1] state = Exchanging
+      -> result = (Int16.to_int api_key = 36))
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #3] [%#sacl_decision'2] state = PreHandshake
+    -> result = (Int16.to_int api_key = 17 \/ Int16.to_int api_key = 18))}
+    (! return {result}) ]
+
+let session_expired_for_request (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms: Int64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:session_expired_for_request ensures] [%#ssession'4] result
+    = (Int16.to_int api_key <> 17
+    /\ Int16.to_int api_key <> 36
+    /\ match expiry_ms with
+      | None'0 -> false
+      | Some'0 at' -> Int64.to_int at' <= Int64.to_int now_ms
+      end)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let renewed_token_survives_captured_cleanup [#"/workspace/crates/verified/src/composition/token_session/renewal.rs" 61 0 68 17]
+  (issued_ms: Int64.t) (periods: tup5_i64_i64_i64_i64_i64) (delays: tup3_i64_i64_i64) (cap_ms: Int64.t)
+  (uncommitted_tail: bool) (api_key: Int16.t) (return (x: t_RenewalTrace)) =
+{[@stop_split] [@expl:renewed_token_survives_captured_cleanup requires] ([@stop_split] [@expl:renewed_token_survives_captured_cleanup requires #0] [%#srenewal'17] ge_log_Int (Int64.to_int issued_ms) 0
+    /\ gt_log_Int (Int64.to_int periods.f1) 0
+    /\ gt_log_Int (Int64.to_int periods.f2) 0 /\ gt_log_Int (Int64.to_int periods.f4) 0)
+  /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup requires #1] [%#srenewal'18] 0
+    <= Int64.to_int delays.f0'1
+  /\ Int64.to_int delays.f0'1 <= Int64.to_int delays.f1'1 /\ Int64.to_int delays.f1'1 <= Int64.to_int delays.f2'1)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = create_token_deadlines [%#srenewal] {issued_ms} {periods.f0} {periods.f1} {periods.f2}
+        (fun (_x: t_TokenCreateDecision) -> [ &_41 <- _x ] s1)
+    | s1 = any [ br0 -> {_41 = Invalid} (! bb4) | br1 (x0: t_TokenDeadlines) -> {_41 = Create x0} (! bb3) ] ]
+  | bb4 = {false} any
+  | bb3 = s0
+    [ s0 = elim_Create {_41} (fun (r0: t_TokenDeadlines) -> [ &created <- r0 ] s1)
+    | s1 = [ &old' <- created.initial_expiry_ms ] s2
+    | s2 = [ &maximum'0 <- created.max_timestamp_ms ] s3
+    | s3 = token_is_active [%#srenewal'0] {old'} {old'} {maximum'0}
+        (fun (_x: bool) -> [ &boundary_authenticated'0 <- _x ] s4)
+    | s4 = renew_token_expiry [%#srenewal'1] {old'} {periods.f3} {periods.f4} {old'} {maximum'0}
+        (fun (_x: t_TokenRenewDecision) -> [ &_56 <- _x ] s5)
+    | s5 = any
+      [ br0 -> {_56 = Invalid'0} (! bb9)
+      | br1 -> {_56 = Expired'0} (! bb9)
+      | br2 (x0: Int64.t) -> {_56 = Renew'0 x0} (! bb8) ] ]
+  | bb9 = {false} any
+  | bb8 = s0
+    [ s0 = elim_Renew {_56} (fun (r0: Int64.t) -> [ &renewed <- r0 ] s1)
+    | s1 = [ &_65 <- Renew ] s2
+    | s2 = [ &_66 <- Expected ] s3
+    | s3 = [ &_64 <- { kind'0 = _65;
+                       state'0 = _66;
+                       now_ms'0 = old';
+                       expected_expiry_ms'0 = old';
+                       incoming_expiry_ms'0 = renewed;
+                       max_timestamp_ms'0 = maximum'0;
+                       uncommitted_tail'0 = uncommitted_tail } ] s4
+    | s4 = token_mutation_decision [%#srenewal'2] {_64} (fun (_x: t_TokenMutationDecision) -> [ &renewal'0 <- _x ] s5)
+    | s5 = any
+      [ br0 -> {renewal'0 = Append} (! bb13)
+      | br1 -> {renewal'0 = Retry} (! bb11)
+      | br2 -> {renewal'0 = Reject} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &_73 <- false ] s1 | s1 = bb14 ]
+  | bb13 = s0 [ s0 = [ &_73 <- true ] s1 | s1 = bb14 ]
+  | bb14 = any [ br0 -> {_73 = false} (! bb16) | br1 -> {_73} (! bb15) ]
+  | bb15 = s0 [ s0 = [ &stored <- renewed ] s1 | s1 = bb17 ]
+  | bb16 = s0 [ s0 = [ &stored <- old' ] s1 | s1 = bb17 ]
+  | bb17 = s0
+    [ s0 = [ &_77 <- Delete ] s1
+    | s1 = [ &_79 <- stored = old' ] s2
+    | s2 = any [ br0 -> {_79 = false} (! bb19) | br1 -> {_79} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_78 <- Expected ] s1 | s1 = bb20 ]
+  | bb19 = s0 [ s0 = [ &_78 <- Stale ] s1 | s1 = bb20 ]
+  | bb20 = s0
+    [ s0 = [ &_76 <- { kind'0 = _77;
+                       state'0 = _78;
+                       now_ms'0 = old';
+                       expected_expiry_ms'0 = old';
+                       incoming_expiry_ms'0 = old';
+                       max_timestamp_ms'0 = maximum'0;
+                       uncommitted_tail'0 = uncommitted_tail } ] s1
+    | s1 = token_mutation_decision [%#srenewal'3] {_76} (fun (_x: t_TokenMutationDecision) -> [ &cleanup'0 <- _x ] s2)
+    | s2 = [ &_94 <- None ] s3
+    | s3 = [ &trace <- { original_expiry = old';
+                         maximum = maximum'0;
+                         renewed_expiry = renewed;
+                         boundary_authenticated = boundary_authenticated'0;
+                         renewal = renewal'0;
+                         cleanup = cleanup'0;
+                         session = _94 } ] s4
+    | s4 = any
+      [ br0 -> {cleanup'0 = Append} (! bb24)
+      | br1 -> {cleanup'0 = Retry} (! bb22)
+      | br2 -> {cleanup'0 = Reject} (! bb22) ] ]
+  | bb22 = s0 [ s0 = [ &_96 <- false ] s1 | s1 = bb25 ]
+  | bb24 = s0 [ s0 = [ &_96 <- true ] s1 | s1 = bb25 ]
+  | bb25 = any [ br0 -> {_96 = false} (! bb27) | br1 -> {_96} (! bb26) ]
+  | bb26 = s0 [ s0 = [ &_ret <- trace ] s1 | s1 = return {_ret} ]
+  | bb27 = s0
+    [ s0 = saturating_add [%#srenewal'4] {old'} {delays.f0'1} (fun (_x: Int64.t) -> [ &first <- _x ] s1)
+    | s1 = token_is_active [%#srenewal'5] {first} {stored} {maximum'0} (fun (_x: bool) -> [ &_105 <- _x ] s2)
+    | s2 = scram_credential_source [%#srenewal'9] {[%#srenewal'6] false} {[%#srenewal'7] true} {[%#srenewal'8] true}
+        {_105} (fun (_x: t_ScramCredentialSource) -> [ &_104 <- _x ] s3)
+    | s3 = any
+      [ br0 -> {_104 = Regular} (! bb31)
+      | br1 -> {_104 = DelegationToken} (! bb33)
+      | br2 -> {_104 = ExpiredDelegationToken} (! bb31)
+      | br3 -> {_104 = Unknown} (! bb31) ] ]
+  | bb31 = s0 [ s0 = [ &_103 <- false ] s1 | s1 = bb34 ]
+  | bb33 = s0 [ s0 = [ &_103 <- true ] s1 | s1 = bb34 ]
+  | bb34 = any [ br0 -> {_103 = false} (! bb35) | br1 -> {_103} (! bb36) ]
+  | bb36 = s0
+    [ s0 = saturating_add [%#srenewal'10] {old'} {delays.f1'1} (fun (_x: Int64.t) -> [ &completed <- _x ] s1)
+    | s1 = token_is_active [%#srenewal'11] {completed} {stored} {stored} (fun (_x: bool) -> [ &_115 <- _x ] s2)
+    | s2 = any [ br0 -> {_115 = false} (! bb40) | br1 -> {_115} (! bb39) ] ]
+  | bb39 = s0
+    [ s0 = [ &_126 <- Some'0 stored ] s1
+    | s1 = [ &_128 <- Some'0 cap_ms ] s2
+    | s2 = sasl_session_expiry [%#srenewal'12] {completed} {_126} {_128}
+        (fun (_x: tup2_Option_i64_i64) -> [ &_124 <- _x ] s3)
+    | s3 = any [ br0 -> {_124.f0'2 = None'0} (! bb44) | br1 (x0: Int64.t) -> {_124.f0'2 = Some'0 x0} (! bb43) ] ]
+  | bb44 = {false} any
+  | bb43 = s0
+    [ s0 = elim_Some {_124.f0'2} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1)
+    | s1 = [ &lifetime <- _124.f1'2 ] s2
+    | s2 = saturating_add [%#srenewal'13] {old'} {delays.f2'1} (fun (_x: Int64.t) -> [ &request <- _x ] s3)
+    | s3 = [ &_136 <- Authenticated ] s4
+    | s4 = request_auth_admission [%#srenewal'14] {_136} {api_key} (fun (_x: bool) -> [ &_135 <- _x ] s5)
+    | s5 = any [ br0 -> {_135 = false} (! bb48) | br1 -> {_135} (! bb47) ] ]
+  | bb47 = s0
+    [ s0 = [ &_139 <- Some'0 at' ] s1
+    | s1 = session_expired_for_request [%#srenewal'15] {_139} {api_key} {request} (fun (_x: bool) -> [ &_138 <- _x ] s2)
+    | s2 = [ &admitted <- not _138 ] s3
+    | s3 = bb50 ]
+  | bb48 = s0 [ s0 = [ &admitted <- [%#srenewal'16] false ] s1 | s1 = bb50 ]
+  | bb50 = s0
+    [ s0 = [ &_144 <- { f0'0 = at'; f1'0 = lifetime; f2'0 = admitted } ] s1
+    | s1 = [ &_143 <- Some _144 ] s2
+    | s2 = [ &trace <- { trace with session = _143 } ] s3
+    | s3 = [ &_ret <- trace ] s4
+    | s4 = return {_ret} ]
+  | bb40 = s0 [ s0 = [ &_ret <- trace ] s1 | s1 = return {_ret} ]
+  | bb35 = s0 [ s0 = [ &_ret <- trace ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RenewalTrace = Any.any_l ()
+  | & issued_ms: Int64.t = issued_ms
+  | & periods: tup5_i64_i64_i64_i64_i64 = periods
+  | & delays: tup3_i64_i64_i64 = delays
+  | & cap_ms: Int64.t = cap_ms
+  | & uncommitted_tail: bool = uncommitted_tail
+  | & api_key: Int16.t = api_key
+  | & created: t_TokenDeadlines = Any.any_l ()
+  | & _41: t_TokenCreateDecision = Any.any_l ()
+  | & old': Int64.t = Any.any_l ()
+  | & maximum'0: Int64.t = Any.any_l ()
+  | & boundary_authenticated'0: bool = Any.any_l ()
+  | & renewed: Int64.t = Any.any_l ()
+  | & _56: t_TokenRenewDecision = Any.any_l ()
+  | & renewal'0: t_TokenMutationDecision = Any.any_l ()
+  | & _64: t_TokenMutationFacts = Any.any_l ()
+  | & _65: t_TokenMutationKind = Any.any_l ()
+  | & _66: t_TokenMutationState = Any.any_l ()
+  | & stored: Int64.t = Any.any_l ()
+  | & _73: bool = Any.any_l ()
+  | & cleanup'0: t_TokenMutationDecision = Any.any_l ()
+  | & _76: t_TokenMutationFacts = Any.any_l ()
+  | & _77: t_TokenMutationKind = Any.any_l ()
+  | & _78: t_TokenMutationState = Any.any_l ()
+  | & _79: bool = Any.any_l ()
+  | & trace: t_RenewalTrace = Any.any_l ()
+  | & _94: t_Option_tup3_i64_i64_bool = Any.any_l ()
+  | & _96: bool = Any.any_l ()
+  | & first: Int64.t = Any.any_l ()
+  | & _103: bool = Any.any_l ()
+  | & _104: t_ScramCredentialSource = Any.any_l ()
+  | & _105: bool = Any.any_l ()
+  | & completed: Int64.t = Any.any_l ()
+  | & _115: bool = Any.any_l ()
+  | & at': Int64.t = Any.any_l ()
+  | & lifetime: Int64.t = Any.any_l ()
+  | & _124: tup2_Option_i64_i64 = Any.any_l ()
+  | & _126: t_Option_i64 = Any.any_l ()
+  | & _128: t_Option_i64 = Any.any_l ()
+  | & request: Int64.t = Any.any_l ()
+  | & admitted: bool = Any.any_l ()
+  | & _135: bool = Any.any_l ()
+  | & _136: t_RequestAuthState = Any.any_l ()
+  | & _138: bool = Any.any_l ()
+  | & _139: t_Option_i64 = Any.any_l ()
+  | & _143: t_Option_tup3_i64_i64_bool = Any.any_l ()
+  | & _144: tup3_i64_i64_bool = Any.any_l () ])
+  [ return (result: t_RenewalTrace) ->
+  {[@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures] ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #0] [%#srenewal'19] not result.boundary_authenticated)
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #1] [%#srenewal'20] Int64.to_int issued_ms
+        <= Int64.to_int result.original_expiry
+      /\ Int64.to_int result.original_expiry <= Int64.to_int result.maximum)
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #2] [%#srenewal'21] Int64.to_int result.original_expiry
+        <= Int64.to_int result.renewed_expiry
+      /\ Int64.to_int result.renewed_expiry <= Int64.to_int result.maximum
+      /\ (Int64.to_int result.original_expiry < Int64.to_int result.renewed_expiry)
+      = (Int64.to_int result.original_expiry < Int64.to_int result.maximum))
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #3] [%#srenewal'22] (result.renewal
+        = Reject)
+      = uncommitted_tail)
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #4] [%#srenewal'23] (result.renewal
+        = Append)
+      = (not uncommitted_tail /\ Int64.to_int result.original_expiry < Int64.to_int result.maximum))
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #5] [%#srenewal'24] (result.renewal
+        = Retry)
+      = (not uncommitted_tail /\ result.original_expiry = result.maximum))
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #6] [%#srenewal'25] (result.cleanup
+        = Reject)
+      = (uncommitted_tail \/ Int64.to_int result.original_expiry < Int64.to_int result.maximum))
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #7] [%#srenewal'26] (result.cleanup
+        = Append)
+      = (not uncommitted_tail /\ result.original_expiry = result.maximum))
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #8] [%#srenewal'27] (result.session = None)
+      = (uncommitted_tail
+      \/ ge_log_Int (Int64.to_int result.original_expiry
+      + Int64.to_int delays.f1'1) (Int64.to_int result.renewed_expiry)))
+    /\ ([@stop_split] [@expl:renewed_token_survives_captured_cleanup ensures #9] [%#srenewal'28] match result.session with
+      | None -> true
+      | Some {f0'0 = at'; f1'0 = lifetime; f2'0 = admitted} -> Int64.to_int result.original_expiry
+          + Int64.to_int delays.f1'1
+        < Int64.to_int at'
+      /\ Int64.to_int at' <= Int64.to_int result.renewed_expiry
+      /\ Int64.to_int lifetime = Int64.to_int at' - Int64.to_int result.original_expiry - Int64.to_int delays.f1'1
+      /\ (gt_log_Int (Int64.to_int cap_ms) 0
+        -> Int64.to_int at' <= Int64.to_int result.original_expiry + Int64.to_int delays.f1'1 + Int64.to_int cap_ms)
+      /\ (at' = result.renewed_expiry
+        \/ gt_log_Int (Int64.to_int cap_ms) 0
+        /\ (Int64.to_int at' = Int64.to_int result.original_expiry + Int64.to_int delays.f1'1 + Int64.to_int cap_ms
+        \/ Int64.to_int at' = Int64.to_int const_MAX))
+      /\ admitted
+      = (Int16.to_int api_key = 17
+      \/ Int16.to_int api_key = 36 \/ Int64.to_int result.original_expiry + Int64.to_int delays.f2'1 < Int64.to_int at')
+      end)}
+    (! return {result}) ]
