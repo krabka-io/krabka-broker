@@ -1,11 +1,5 @@
-//! The model configuration and its stateright implementation: the initial
-//! state, the enabled actions, the transition, the properties and the search
-//! boundary.
-//!
-//! A `Model` implementation is one indivisible unit — the action generator,
-//! the transition and the properties only make sense against each other — so
-//! it stays whole in this file, and every transition it takes calls out to the
-//! seam modules that wrap the real broker cores.
+//! The model configuration and checker interface. Enabled actions, transitions
+//! and properties live in child modules; transitions drive the production seams.
 
 use std::time::Instant;
 
@@ -134,351 +128,31 @@ impl Model for DpModel {
     type Action = Act;
 
     fn init_states(&self) -> Vec<Self::State> {
-        vec![DpState {
-            log: [vec![], vec![], vec![]],
-            hwm: 0,
-            leader: 0,
-            leader_epoch: 1,
-            // The diskless runtime foundation is a single-node local-fsync WAL. Keep the RF=3
-            // model for classic clean/unclean checks, but constrain diskless to
-            // the leader broker so WAL durability is not incorrectly invalidated
-            // by electing a different replica that never fsynced the record.
-            isr: if self.diskless { 0b001 } else { 0b111 },
-            live: if self.diskless { 0b001 } else { 0b111 },
-            // A partition whose ISR meets min ISR has no eligible-leader set,
-            // and every configuration starts with a full ISR.
-            elr: 0,
-            committed: vec![],
-            wal_acked: vec![],
-            seq_next: 0,
-            assigned: vec![],
-            lost: false,
-            elr_trace: 0,
-        }]
+        self.model_init_states()
     }
 
     fn actions(&self, s: &Self::State, acts: &mut Vec<Self::Action>) {
-        let leader_live = has(s.live, s.leader);
-        // Data-path actions require a live leader.
-        if leader_live {
-            if s.log[usize::from(s.leader)].len() < self.max_len && s.leader_epoch <= MAX_EPOCH {
-                acts.push(Act::Produce);
-                if self.diskless && s.assigned.len() < 3 {
-                    acts.push(Act::Assign(1));
-                    acts.push(Act::Assign(2));
-                }
-            }
-            if self.diskless && s.wal_acked.len() < s.log[s.leader as usize].len() {
-                acts.push(Act::WalSync);
-            }
-            if !self.diskless {
-                for b in 0..NB_U8 {
-                    if b != s.leader
-                        && has(s.live, b)
-                        && model_offset(s.log[usize::from(b)].len()) < s.leader_leo()
-                    {
-                        acts.push(Act::Replicate(b));
-                    }
-                }
-                acts.push(Act::AdvanceHwm);
-            }
-            for fo in 0..=s.leader_leo() {
-                acts.push(Act::ConsumerFetch {
-                    read_committed: false,
-                    fetch_offset: fo,
-                });
-                acts.push(Act::ConsumerFetch {
-                    read_committed: true,
-                    fetch_offset: fo,
-                });
-            }
-        }
-        // Liveness + failover.
-        let live_count = u32::from(s.live).count_ones();
-        for b in 0..NB_U8 {
-            if self.diskless && b != s.leader {
-                continue;
-            }
-            if has(s.live, b) && (live_count > 1 || self.diskless) {
-                acts.push(Act::Die(b));
-            }
-            if !has(s.live, b) {
-                acts.push(Act::Revive(b));
-                // Controller failover: elect (dead leader, epoch headroom) or
-                // shrink the ISR (dead non-leader ISR member).
-                if !self.diskless
-                    && ((b == s.leader && s.leader_epoch < MAX_EPOCH)
-                        || (b != s.leader && has(s.isr, b)))
-                {
-                    acts.push(Act::Failover(b));
-                }
-            }
-            // Re-admit a follower to the ISR only once the leader's real
-            // expansion rule admits it: an epoch-consistent prefix of the
-            // leader's log (it has truncated + replicated any divergence via
-            // the real protocol) whose log end reaches the HWM and the start of
-            // the leader's epoch. Checking LEO alone would admit a stale,
-            // divergent follower that hasn't reconciled — which is unreachable
-            // in real Kafka, where the follower fetch/OffsetForLeaderEpoch loop
-            // truncates before its reported progress can make it eligible.
-            if !self.diskless
-                && has(s.live, b)
-                && b != s.leader
-                && !has(s.isr, b)
-                && isr_eligible(s, b)
-            {
-                acts.push(Act::ExpandIsr(b));
-            }
-        }
+        self.model_actions(s, acts);
     }
 
     fn next_state(&self, last: &Self::State, a: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
-        match a {
-            Act::Produce => {
-                s.log[usize::from(s.leader)].push(s.leader_epoch);
-            }
-            Act::Assign(count) => {
-                let (base, next) = self.reserve(s.seq_next, i64::from(count));
-                s.assigned.push((base, base + i64::from(count)));
-                s.seq_next = next;
-            }
-            Act::Replicate(b) => {
-                let leader_log = s.log[usize::from(s.leader)].clone();
-                let trunc =
-                    model_index(real_truncation_offset(&s.log[usize::from(b)], &leader_log));
-                s.log[usize::from(b)].truncate(trunc);
-                if s.log[usize::from(b)].len() < leader_log.len() {
-                    let off = s.log[usize::from(b)].len();
-                    s.log[usize::from(b)].push(leader_log[off]);
-                }
-            }
-            Act::AdvanceHwm => {
-                // The real core: frozen while the ISR is under min ISR (Kafka's
-                // `Partition.maybeIncrementLeaderHW`), otherwise the minimum ISR
-                // LEO if that is higher. It never falls within one leadership;
-                // only an election that drops records lowers it, in
-                // `apply_elect`. Every record it passes therefore reached the
-                // HWM with at least min ISR replicas holding it, which is the
-                // obligation KIP-966's eligible-leader set is a claim about.
-                s.hwm = real_hwm(&s, self.base, self.min_isr);
-                let leader_log = &s.log[usize::from(s.leader)];
-                while model_offset(s.committed.len()) < s.hwm {
-                    let off = s.committed.len();
-                    s.committed.push(leader_log[off]);
-                }
-            }
-            Act::WalSync => {
-                // fsync makes the leader's appended prefix durable and releases
-                // it through the same HW seam the broker's diskless path uses.
-                let leader_log = &s.log[s.leader as usize];
-                while s.wal_acked.len() < leader_log.len() {
-                    let off = s.wal_acked.len();
-                    s.wal_acked.push(leader_log[off]);
-                }
-                s.hwm = real_wal_hwm(s.leader, model_offset(s.wal_acked.len()), self.base);
-                while model_offset(s.committed.len()) < s.hwm {
-                    let off = s.committed.len();
-                    s.committed.push(leader_log[off]);
-                }
-            }
-            Act::ConsumerFetch {
-                read_committed,
-                fetch_offset,
-            } => {
-                let leader_log_len = s.leader_leo();
-                let vw = compute_visibility_window(
-                    false, // consumer, not follower
-                    read_committed,
-                    FetchWatermarks {
-                        log_start: Offset(0),
-                        hw: Offset(s.hwm),
-                        lso: Offset(s.hwm), // lso = hwm (no txns in v1)
-                        log_end: Offset(leader_log_len),
-                        // This model's topic delivers immediately.
-                        deliverable: Offset(s.hwm),
-                    },
-                    Offset(fetch_offset),
-                );
-                assert2::assert!(
-                    vw.limit_offset <= s.hwm,
-                    "consumer limit {} exceeds HWM {}",
-                    vw.limit_offset,
-                    s.hwm
-                );
-                assert2::assert!(vw.response_hw == s.hwm, "response_hw drift");
-            }
-            Act::Die(b) => {
-                s.live &= !(1 << b);
-            }
-            Act::Revive(b) => {
-                s.live |= 1 << b;
-            }
-            Act::ExpandIsr(b) => {
-                let previous = elr::partition_record(s.leader, s.isr, s.leader_epoch);
-                s.isr |= 1 << b;
-                // An ISR change is a partition change, and every controller
-                // path that submits one runs the ELR publisher over it. An
-                // expansion back to min ISR is how the set empties again.
-                if self.tracks_elr() {
-                    elr::maintain(&self.image, &mut s, &previous);
-                }
-            }
-            Act::Failover(dead) => do_failover(
-                self.tracks_elr().then_some(&self.image),
-                &mut s,
-                dead,
-                self.unclean,
-            ),
-        }
-        Some(s)
+        self.model_next_state(last, a)
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        let mut props = vec![
-            Property::always("committed_durable", |_, s: &DpState| {
-                let lg = &s.log[usize::from(s.leader)];
-                s.committed
-                    .iter()
-                    .enumerate()
-                    .all(|(off, &e)| lg.get(off) == Some(&e))
-            }),
-            Property::always("wal_acked_durable", |_, s: &DpState| {
-                let lg = &s.log[s.leader as usize];
-                s.wal_acked
-                    .iter()
-                    .enumerate()
-                    .all(|(off, &e)| lg.get(off) == Some(&e))
-            }),
-            Property::always("hwm_within_leader_log", |_, s: &DpState| {
-                s.hwm <= s.leader_leo()
-            }),
-        ];
-        if self.diskless {
-            props.extend([
-                Property::always("diskless_hw_released_by_wal_sync", |_, s: &DpState| {
-                    s.hwm == model_offset(s.wal_acked.len())
-                }),
-                Property::sometimes("wal_acked_progress", |_, s: &DpState| {
-                    !s.wal_acked.is_empty()
-                }),
-                Property::sometimes("wal_acked_survives_broker_down", |_, s: &DpState| {
-                    !has(s.live, s.leader) && !s.wal_acked.is_empty()
-                }),
-                Property::always("offsets_contiguous_and_unique", |_, s: &DpState| {
-                    let mut next = 0;
-                    for &(start, end) in &s.assigned {
-                        if start != next || end <= start {
-                            return false;
-                        }
-                        next = end;
-                    }
-                    next == s.seq_next
-                }),
-            ]);
-        } else {
-            props.extend([
-                Property::sometimes("committed_progress", |_, s: &DpState| {
-                    !s.committed.is_empty()
-                }),
-                Property::sometimes("full_replication", |_, s: &DpState| {
-                    s.hwm == s.leader_leo() && s.hwm > 0
-                }),
-                // A leader change occurred.
-                Property::sometimes("leader_changed", |_, s: &DpState| s.leader_epoch >= 2),
-                // The ISR shrank below the full replica set.
-                Property::sometimes("isr_shrunk", |_, s: &DpState| {
-                    u32::from(s.isr).count_ones() < u32::from(NB_U8)
-                }),
-                // Two brokers hold different epochs at one offset — truncation
-                // territory (a follower must truncate to reconcile).
-                Property::sometimes("divergence_present", |_, s: &DpState| {
-                    (0..MAX_LEN).any(|off| {
-                        let mut seen: Option<u8> = None;
-                        for b in 0..NB {
-                            if let Some(&e) = s.log[b].get(off) {
-                                match seen {
-                                    None => seen = Some(e),
-                                    Some(x) if x != e => return true,
-                                    _ => {}
-                                }
-                            }
-                        }
-                        false
-                    })
-                }),
-            ]);
-        }
-        if self.tracks_elr() {
-            props.extend([
-                // THE CLAIM. `failover_one` and `select_leader` elect a
-                // surviving eligible leader replica ahead of a longer log and
-                // report that election as losing nothing -- the
-                // unclean-election counter does not count it, the audit reason
-                // says no committed record is lost, and KFC-9's `require` gate
-                // lets it through. All of that rests on the published set
-                // naming only replicas that hold every committed record, which
-                // KIP-966 gets from the leader's high watermark standing still
-                // while the ISR is under min ISR. This is that, stated over a
-                // set the model did not choose but computed with the real
-                // maintenance rule, and over a watermark the real core moved.
-                Property::always("elr_holds_every_committed_record", |_, s: &DpState| {
-                    (0..NB_U8).filter(|&b| has(s.elr, b)).all(|b| {
-                        let log = &s.log[usize::from(b)];
-                        s.committed
-                            .iter()
-                            .enumerate()
-                            .all(|(off, &e)| log.get(off) == Some(&e))
-                    })
-                }),
-                // The same claim at the moment it is cashed in: the election
-                // that took the ELR rule did not drop a committed record.
-                Property::always(
-                    "elr_election_keeps_every_committed_record",
-                    |_, s: &DpState| s.elr_trace & ELR_DROPPED_COMMITTED == 0,
-                ),
-                // Anti-vacuity for the rule the claim rests on: a state in
-                // which every ISR member holds a record past the HWM, so a
-                // watermark that ignored min ISR would have committed it, but
-                // the ISR is under min ISR and the watermark stayed.
-                Property::sometimes("hwm_held_by_min_isr", |m: &DpModel, s: &DpState| {
-                    let leader_log = &s.log[usize::from(s.leader)];
-                    has(s.isr, s.leader)
-                        && usize::try_from(u32::from(s.isr).count_ones())
-                            .expect("a bitmask over three brokers counts low")
-                            < m.min_isr
-                        && (0..NB_U8)
-                            .filter(|&b| has(s.isr, b))
-                            .all(|b| consistent_leo(&s.log[usize::from(b)], leader_log) > s.hwm)
-                }),
-                // Anti-vacuity. Without these three the two `always`
-                // properties above would pass on a model that never publishes
-                // an ELR, never elects out of one, or only ever elects the
-                // replica the fallback would have picked anyway.
-                Property::sometimes("elr_published", |_, s: &DpState| s.elr != 0),
-                Property::sometimes("elr_election_taken", |_, s: &DpState| {
-                    s.elr_trace & ELR_ELECTED != 0
-                }),
-                Property::sometimes("elr_election_beat_a_longer_log", |_, s: &DpState| {
-                    s.elr_trace & ELR_BEAT_LONGER_LOG != 0
-                }),
-            ]);
-        }
-        if self.unclean {
-            // Loss characterization: an unclean-election data loss is reachable
-            // (and `committed_durable` above still holds — `committed` is the LIVE
-            // durability obligation, truncated when an unclean election drops it).
-            props.push(Property::sometimes("unclean_loss", |_, s: &DpState| s.lost));
-        } else {
-            // Clean config: NO committed-data loss ever occurs.
-            props.push(Property::always("no_loss_when_clean", |_, s: &DpState| {
-                !s.lost
-            }));
-        }
-        props
+        self.model_properties()
     }
 
     fn within_boundary(&self, s: &Self::State) -> bool {
         s.log.iter().all(|l| l.len() <= self.max_len) && s.leader_epoch <= MAX_EPOCH + 1
     }
 }
+
+#[path = "model/actions.rs"]
+mod actions;
+
+#[path = "model/transitions.rs"]
+mod transitions;
+
+#[path = "model/invariants.rs"]
+mod invariants;

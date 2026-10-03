@@ -34,6 +34,7 @@ use super::{
 use crate::partition::LogOffset;
 
 const MAX_STATES: usize = 2_000_000;
+
 const MAX_DEPTH: usize = 40;
 
 // The exact unique-state count of the exhaustive BFS over each config below.
@@ -49,6 +50,7 @@ const MAX_DEPTH: usize = 40;
 // the old model kept `earlier` empty, so only a retry of the last batch was
 // ever a duplicate.
 const PINNED_UNIQUE_STATES_BASIC: usize = 731;
+
 const PINNED_UNIQUE_STATES_WIDE: usize = 4_233;
 
 struct ProducerModel {
@@ -160,33 +162,6 @@ impl Answer {
     }
 }
 
-/// Kafka's classification of `batch` at `epoch` against `window`:
-/// `UnifiedLog.analyzeAndValidateProducerState` looks the batch up among the
-/// retained batches first (`ProducerStateEntry.findDuplicateBatch`, same epoch
-/// only), then `ProducerAppendInfo.checkProducerEpoch` and `checkSequence`
-/// decide the rest.
-fn kafka_decision(window: Option<&Window>, epoch: i16, batch: Range) -> Answer {
-    let Some(window) = window else {
-        return Answer::Append;
-    };
-    if epoch == window.epoch && window.retained.contains(&batch) {
-        return Answer::Duplicate(batch);
-    }
-    if epoch < window.epoch {
-        Answer::Fenced
-    } else if epoch > window.epoch {
-        if batch.base == 0 {
-            Answer::Append
-        } else {
-            Answer::OutOfOrder
-        }
-    } else if batch.base == window.last_sequence + 1 {
-        Answer::Append
-    } else {
-        Answer::OutOfOrder
-    }
-}
-
 /// A submit whose outcome a `sometimes` witness looks for. It is recorded only
 /// on the transition that produced it and cleared by the next, so it adds at
 /// most a few states per reachable entry.
@@ -222,184 +197,17 @@ enum ProdAction {
     Submit(i16, Range),
 }
 
-impl Model for ProducerModel {
-    type State = ProdState;
-    type Action = ProdAction;
+#[path = "producer_state_model/helpers.rs"]
+mod helpers;
+use helpers::kafka_decision;
 
-    fn init_states(&self) -> Vec<Self::State> {
-        vec![ProdState {
-            host: None,
-            window: None,
-            witness: None,
-            violation: None,
-        }]
-    }
+#[path = "producer_state_model/checker.rs"]
+mod checker;
 
-    fn actions(&self, _s: &Self::State, actions: &mut Vec<Self::Action>) {
-        for epoch in 0..=self.max_epoch {
-            for base in 0..=self.max_seq {
-                for delta in 0..=1 {
-                    actions.push(ProdAction::Submit(
-                        epoch,
-                        Range {
-                            base,
-                            last: base + delta,
-                        },
-                    ));
-                }
-            }
-        }
-    }
+#[path = "producer_state_model/checks.rs"]
+mod checks;
+use checks::run;
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let ProdAction::Submit(epoch, batch) = action;
-        let entry = last.host.as_ref().map(HostEntry::entry);
-        let host = Answer::of(check_retained(
-            entry.as_ref(),
-            SequenceContext::RELEASED,
-            epoch,
-            batch.base,
-            batch.last - batch.base,
-        ));
-        let kafka = kafka_decision(last.window.as_ref(), epoch, batch);
-        let mut s = ProdState {
-            witness: None,
-            ..last.clone()
-        };
-        if host != kafka {
-            s.violation.get_or_insert((epoch, batch, host, kafka));
-            return Some(s);
-        }
-        match host {
-            Answer::Append => {
-                s.host = Some(HostEntry::after_append(last.host.as_ref(), epoch, batch));
-                let mut window = last
-                    .window
-                    .clone()
-                    .filter(|window| window.epoch == epoch)
-                    .unwrap_or(Window {
-                        epoch,
-                        last_sequence: -1,
-                        retained: VecDeque::new(),
-                    });
-                window.last_sequence = batch.last;
-                window.retained.push_back(batch);
-                if window.retained.len() > NUM_BATCHES_TO_RETAIN {
-                    window.retained.pop_front();
-                }
-                s.window = Some(window);
-                Some(s)
-            }
-            Answer::Duplicate(range) => {
-                let retained = &last.window.as_ref()?.retained;
-                s.witness = Some(if retained.back() == Some(&range) {
-                    Witness::DuplicateOfLast
-                } else if retained.len() == NUM_BATCHES_TO_RETAIN
-                    && retained.front() == Some(&range)
-                {
-                    Witness::DuplicateOfOldest
-                } else {
-                    Witness::DuplicateOfOlder
-                });
-                Some(s)
-            }
-            Answer::OutOfOrder
-                if last.window.as_ref().is_some_and(|w| {
-                    w.epoch == epoch
-                        && w.retained.len() == NUM_BATCHES_TO_RETAIN
-                        && w.retained
-                            .front()
-                            .is_some_and(|oldest| batch.last < oldest.base)
-                }) =>
-            {
-                s.witness = Some(Witness::RetryBelowWindowRefused);
-                Some(s)
-            }
-            Answer::OutOfOrder | Answer::Fenced => None,
-        }
-    }
-
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            // Safety: the host answers every submit as Kafka does over the
-            // ghost window. That covers dedup of any of the five retained
-            // batches, contiguity within an epoch, a fresh start at a new
-            // epoch, and fencing of a stale epoch.
-            Property::always("decision_matches_kafka", |_, s: &ProdState| {
-                s.violation.is_none()
-            }),
-            Property::sometimes("duplicate_of_last_batch", |_, s: &ProdState| {
-                s.witness == Some(Witness::DuplicateOfLast)
-            }),
-            Property::sometimes("duplicate_of_older_retained_batch", |_, s: &ProdState| {
-                s.witness == Some(Witness::DuplicateOfOlder)
-            }),
-            Property::sometimes("duplicate_of_oldest_retained_batch", |_, s: &ProdState| {
-                s.witness == Some(Witness::DuplicateOfOldest)
-            }),
-            Property::sometimes("retry_below_window_refused", |_, s: &ProdState| {
-                s.witness == Some(Witness::RetryBelowWindowRefused)
-            }),
-            Property::sometimes("can_bump_epoch", |_, s: &ProdState| {
-                s.window.as_ref().is_some_and(|w| w.epoch >= 1)
-            }),
-        ]
-    }
-
-    fn within_boundary(&self, s: &Self::State) -> bool {
-        s.window
-            .as_ref()
-            .is_none_or(|w| w.epoch <= self.max_epoch && w.last_sequence <= self.max_seq)
-    }
-}
-
-fn run(model: ProducerModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < MAX_STATES,
-        "[{label}] state cap hit"
-    );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
-}
-
-#[test]
-fn producer_basic() {
-    // Six single-record batches fill the five-batch window and evict one.
-    run(
-        ProducerModel {
-            max_epoch: 1,
-            max_seq: 6,
-        },
-        "producer_basic",
-        PINNED_UNIQUE_STATES_BASIC,
-    );
-}
-
-#[test]
-fn producer_wide() {
-    run(
-        ProducerModel {
-            max_epoch: 3,
-            max_seq: 9,
-        },
-        "producer_wide",
-        PINNED_UNIQUE_STATES_WIDE,
-    );
-}
+#[cfg(test)]
+#[path = "producer_state_model/tests.rs"]
+mod tests;

@@ -61,6 +61,7 @@ use stateright::{Checker, Model, Property};
 use super::{EpochEntry, epoch_and_offset_for_entries, truncate_to};
 
 const MAX_STATES: usize = 2_000_000;
+
 const MAX_DEPTH: usize = 64;
 
 // The exact unique-state count of the exhaustive BFS over each config below.
@@ -71,7 +72,9 @@ const MAX_DEPTH: usize = 64;
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
 const PINNED_UNIQUE_STATES_TWO: usize = 35_274;
+
 const PINNED_UNIQUE_STATES_THREE: usize = 20_212;
+
 const PINNED_UNIQUE_STATES_NO_ASSIGN: usize = 10_865;
 
 /// One replica: its log, one leader epoch per offset, and its checkpoint.
@@ -143,29 +146,6 @@ pub(super) enum FetchAnswer {
     Records,
 }
 
-/// Kafka's `Partition.readRecords` divergence gate for a fetch at
-/// `fetch_offset` that carries `last_fetched_epoch`. The model's log start is
-/// always 0, so the below-log-start check never fires.
-pub(super) fn leader_answer(
-    leader: &Replica,
-    fetch_offset: Offset,
-    last_fetched_epoch: Option<LeaderEpoch>,
-) -> FetchAnswer {
-    if let Some(last_fetched_epoch) = last_fetched_epoch {
-        let (epoch, end_offset) = leader.end_offset_for(last_fetched_epoch);
-        if end_offset == Offset(-1) || epoch == LeaderEpoch::UNKNOWN {
-            return FetchAnswer::OutOfRange;
-        }
-        if epoch < last_fetched_epoch || end_offset < fetch_offset {
-            return FetchAnswer::Diverging { epoch, end_offset };
-        }
-    }
-    if fetch_offset > leader.log_end() {
-        return FetchAnswer::OutOfRange;
-    }
-    FetchAnswer::Records
-}
-
 /// A follower's truncation for one `diverging_epoch`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Truncation {
@@ -173,46 +153,6 @@ pub(super) struct Truncation {
     /// `false` for a KIP-279 step-back: the follower does not know the
     /// leader's epoch and asks again from a lower one.
     pub(super) complete: bool,
-}
-
-/// Kafka's `AbstractFetcherThread.getOffsetTruncationState` for a
-/// `diverging_epoch`. The leader never sends an undefined one (it answers
-/// `OFFSET_OUT_OF_RANGE` instead), so those two branches are not reached.
-pub(super) fn follower_truncation(
-    follower: &Replica,
-    leader_epoch: LeaderEpoch,
-    leader_end_offset: Offset,
-) -> Truncation {
-    let log_end = follower.log_end();
-    let (follower_epoch, follower_end) = follower.end_offset_for(leader_epoch);
-    if follower_end == Offset(-1) {
-        return Truncation {
-            offset: leader_end_offset.min(log_end),
-            complete: true,
-        };
-    }
-    if follower_epoch == leader_epoch {
-        Truncation {
-            offset: follower_end.min(leader_end_offset).min(log_end),
-            complete: true,
-        }
-    } else {
-        Truncation {
-            offset: follower_end.min(log_end),
-            complete: false,
-        }
-    }
-}
-
-/// The number of leading records two logs share.
-fn common_prefix(a: &[LeaderEpoch], b: &[LeaderEpoch]) -> usize {
-    a.iter().zip(b).take_while(|(x, y)| x == y).count()
-}
-
-fn is_strictly_increasing(entries: &[EpochEntry]) -> bool {
-    entries
-        .windows(2)
-        .all(|w| w[0].epoch < w[1].epoch && w[0].start_offset < w[1].start_offset)
 }
 
 /// Safety ghosts: each is set once, when its property is broken, and never
@@ -257,122 +197,6 @@ pub(super) enum Action {
     Fetch(usize),
 }
 
-impl Cluster {
-    pub(super) fn new(replicas: usize, assign_on_election: bool) -> Self {
-        let mut cluster = Self {
-            epoch: LeaderEpoch(0),
-            leader: 0,
-            replicas: vec![Replica::default(); replicas],
-            reconciled: vec![false; replicas],
-            violations: Violations::default(),
-            witnesses: Witnesses::default(),
-        };
-        if assign_on_election {
-            cluster.replicas[0].assign(LeaderEpoch(0), Offset(0));
-        }
-        cluster
-    }
-
-    /// Apply `action`. Returns `false` when it changed nothing.
-    pub(super) fn step(&mut self, action: Action, assign_on_election: bool) -> bool {
-        match action {
-            Action::Elect(r) => {
-                self.epoch = LeaderEpoch(self.epoch.0 + 1);
-                self.leader = r;
-                self.reconciled.fill(false);
-                if assign_on_election {
-                    let log_end = self.replicas[r].log_end();
-                    self.replicas[r].assign(self.epoch, log_end);
-                }
-                true
-            }
-            Action::Write => {
-                let epoch = self.epoch;
-                self.replicas[self.leader].append(epoch);
-                true
-            }
-            Action::Fetch(f) => self.fetch(f),
-        }
-    }
-
-    fn fetch(&mut self, f: usize) -> bool {
-        let before = self.clone();
-        let leader = self.replicas[self.leader].clone();
-        let follower = &self.replicas[f];
-        let fetch_offset = follower.log_end();
-        let last_fetched_epoch = follower.epochs.last().map(|e| e.epoch);
-        match leader_answer(&leader, fetch_offset, last_fetched_epoch) {
-            FetchAnswer::Records => {
-                self.reconciled[f] = true;
-                let at = usize::try_from(fetch_offset.0).expect("fetch offset is non-negative");
-                if let Some(&epoch) = leader.log.get(at) {
-                    self.replicas[f].append(epoch);
-                }
-            }
-            FetchAnswer::Diverging { epoch, end_offset } => {
-                let requested = last_fetched_epoch.expect("only an epoch-carrying fetch diverges");
-                let floor_and_higher = leader.epochs.iter().any(|e| e.epoch < requested)
-                    && leader.epochs.iter().any(|e| e.epoch > requested);
-                if floor_and_higher && leader.epochs.iter().all(|e| e.epoch != requested) {
-                    self.witnesses.gap = true;
-                }
-                let truncation = follower_truncation(follower, epoch, end_offset);
-                let agreed = common_prefix(&follower.log, &leader.log);
-                let keep = usize::try_from(truncation.offset.0).expect("truncation is >= 0");
-                if keep < agreed {
-                    self.violations.over_truncated = true;
-                }
-                if keep < follower.log.len() {
-                    self.witnesses.divergent_truncation = true;
-                }
-                if !truncation.complete {
-                    self.witnesses.step_back = true;
-                }
-                let unchanged = self.replicas[f].clone();
-                self.replicas[f].truncate(truncation.offset);
-                if self.replicas[f] == unchanged {
-                    self.violations.stalled = true;
-                }
-                self.reconciled[f] = false;
-            }
-            FetchAnswer::OutOfRange => {
-                // `AbstractFetcherThread.fetchOffsetAndTruncate`: truncate to
-                // the leader's log end when the follower is past it.
-                self.violations.out_of_range = true;
-                if leader.log_end() < fetch_offset {
-                    self.replicas[f].truncate(leader.log_end());
-                }
-                self.reconciled[f] = false;
-            }
-        }
-        *self != before
-    }
-
-    pub(super) fn follower_prefix_holds(&self) -> bool {
-        let leader = &self.replicas[self.leader].log;
-        self.replicas.iter().enumerate().all(|(r, replica)| {
-            r == self.leader || !self.reconciled[r] || leader.starts_with(&replica.log)
-        })
-    }
-
-    pub(super) fn checkpoints_hold(&self) -> bool {
-        self.replicas
-            .iter()
-            .all(|replica| is_strictly_increasing(&replica.epochs))
-    }
-
-    fn converged(&self) -> bool {
-        let leader = &self.replicas[self.leader].log;
-        !leader.is_empty()
-            && self
-                .reconciled
-                .iter()
-                .enumerate()
-                .all(|(r, &ok)| r == self.leader || ok)
-            && self.replicas.iter().all(|replica| &replica.log == leader)
-    }
-}
-
 struct ReconcileModel {
     replicas: usize,
     max_epoch: i32,
@@ -380,145 +204,21 @@ struct ReconcileModel {
     assign_on_election: bool,
 }
 
-impl Model for ReconcileModel {
-    type State = Cluster;
-    type Action = Action;
+#[path = "leader_epoch_model/helpers.rs"]
+mod helpers;
+use helpers::{common_prefix, is_strictly_increasing};
+pub(super) use helpers::{follower_truncation, leader_answer};
 
-    fn init_states(&self) -> Vec<Self::State> {
-        vec![Cluster::new(self.replicas, self.assign_on_election)]
-    }
+#[path = "leader_epoch_model/transitions.rs"]
+mod transitions;
 
-    fn actions(&self, s: &Self::State, actions: &mut Vec<Self::Action>) {
-        if s.epoch.0 < self.max_epoch {
-            actions.extend((0..self.replicas).map(Action::Elect));
-        }
-        if s.replicas[s.leader].log.len() < self.max_log {
-            actions.push(Action::Write);
-        }
-        actions.extend(
-            (0..self.replicas)
-                .filter(|&r| r != s.leader)
-                .map(Action::Fetch),
-        );
-    }
+#[path = "leader_epoch_model/checker.rs"]
+mod checker;
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut next = last.clone();
-        next.step(action, self.assign_on_election).then_some(next)
-    }
+#[path = "leader_epoch_model/checks.rs"]
+mod checks;
+use checks::run;
 
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            Property::always("reconciled_follower_is_leader_prefix", |_, s: &Cluster| {
-                s.follower_prefix_holds()
-            }),
-            Property::always("no_agreed_record_truncated", |_, s: &Cluster| {
-                !s.violations.over_truncated
-            }),
-            Property::always("divergence_makes_progress", |_, s: &Cluster| {
-                !s.violations.stalled
-            }),
-            Property::always("leader_places_every_follower_epoch", |_, s: &Cluster| {
-                !s.violations.out_of_range
-            }),
-            Property::always("checkpoints_strictly_increasing", |_, s: &Cluster| {
-                s.checkpoints_hold()
-            }),
-            Property::sometimes("divergent_suffix_truncated", |_, s: &Cluster| {
-                s.witnesses.divergent_truncation
-            }),
-            Property::sometimes("gap_epoch_resolved_to_floor", |_, s: &Cluster| {
-                s.witnesses.gap
-            }),
-            Property::sometimes("step_back_truncation", |_, s: &Cluster| {
-                s.witnesses.step_back
-            }),
-            Property::sometimes("converged_after_divergence", |_, s: &Cluster| {
-                s.witnesses.divergent_truncation && s.converged()
-            }),
-        ]
-    }
-}
-
-fn run(
-    model: ReconcileModel,
-    label: &str,
-    pinned_unique_states: usize,
-) -> impl Checker<ReconcileModel> {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH);
-    assert2::assert!(checker.state_count() < MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-    checker
-}
-
-#[test]
-fn reconciliation_two_replicas() {
-    run(
-        ReconcileModel {
-            replicas: 2,
-            max_epoch: 5,
-            max_log: 3,
-            assign_on_election: true,
-        },
-        "reconciliation_two_replicas",
-        PINNED_UNIQUE_STATES_TWO,
-    )
-    .assert_properties();
-}
-
-#[test]
-fn reconciliation_three_replicas() {
-    run(
-        ReconcileModel {
-            replicas: 3,
-            max_epoch: 3,
-            max_log: 2,
-            assign_on_election: true,
-        },
-        "reconciliation_three_replicas",
-        PINNED_UNIQUE_STATES_THREE,
-    )
-    .assert_properties();
-}
-
-/// Without Kafka's assign-at-election a new leader that has not written yet
-/// cannot place a follower's newer epoch, and answers `OFFSET_OUT_OF_RANGE`.
-/// The safety properties still hold: the lookup never licenses a wrong
-/// truncation, it only stops answering.
-#[test]
-fn without_assign_on_election_the_leader_cannot_place_newer_epochs() {
-    let checker = run(
-        ReconcileModel {
-            replicas: 2,
-            max_epoch: 4,
-            max_log: 3,
-            assign_on_election: false,
-        },
-        "without_assign_on_election",
-        PINNED_UNIQUE_STATES_NO_ASSIGN,
-    );
-    checker.assert_any_discovery("leader_places_every_follower_epoch");
-    for property in [
-        "reconciled_follower_is_leader_prefix",
-        "no_agreed_record_truncated",
-        "checkpoints_strictly_increasing",
-    ] {
-        checker.assert_no_discovery(property);
-    }
-}
+#[cfg(test)]
+#[path = "leader_epoch_model/tests.rs"]
+mod tests;

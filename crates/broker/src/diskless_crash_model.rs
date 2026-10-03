@@ -39,8 +39,11 @@
 use stateright::{Checker, Model, Property};
 
 const MAX_OFFSET: i64 = 2;
+
 const APPENDERS: usize = 2;
+
 const MAX_DEPTH: usize = 24;
+
 const TARGET_STATE_COUNT: usize = 100_000;
 
 // The exact unique-state count of the exhaustive BFS over this model.
@@ -53,14 +56,21 @@ const TARGET_STATE_COUNT: usize = 100_000;
 const PINNED_UNIQUE_STATES: usize = 6_341;
 
 const WITNESS_KRAFT_FSYNC_GAP: u8 = 1 << 0;
+
 const WITNESS_PUT_BEFORE_INDEX: u8 = 1 << 1;
+
 const WITNESS_MID_FSYNC: u8 = 1 << 2;
+
 const WITNESS_TRIM_AT_INDEX: u8 = 1 << 3;
+
 const WITNESS_MINORITY_WAL_LOSS: u8 = 1 << 4;
+
 const WITNESS_STATELESS_APPEND: u8 = 1 << 5;
+
 const WITNESS_SEQUENCER_HANDOFF: u8 = 1 << 6;
 
 const WAL_NODES: usize = 3;
+
 const WAL_MAJORITY: usize = 2;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -103,266 +113,17 @@ enum Act {
 #[derive(Clone, Debug)]
 struct CrashModel;
 
-impl Model for CrashModel {
-    type Action = Act;
-    type State = CrashState;
+#[path = "diskless_crash_model/checker.rs"]
+mod checker;
 
-    fn init_states(&self) -> Vec<Self::State> {
-        vec![CrashState {
-            kraft_next: 0,
-            log_end: 0,
-            wal_nodes: [0; WAL_NODES],
-            wal_lost: [false; WAL_NODES],
-            wal_acked: 0,
-            handoff_wal_acked: 0,
-            advertised_hwm: 0,
-            sequencer_epoch: 0,
-            object_frontier: 0,
-            index_frontier: 0,
-            trimmed: 0,
-            producer_committed: 0,
-            reservations: Vec::new(),
-            appenders_seen: 0,
-            witnesses: 0,
-        }]
-    }
+#[path = "diskless_crash_model/helpers.rs"]
+mod helpers;
+use helpers::{fsync_quorum, reserve_via_controller, surviving_wal_frontier};
 
-    fn actions(&self, s: &Self::State, acts: &mut Vec<Self::Action>) {
-        if s.kraft_next < MAX_OFFSET {
-            for node in 0..APPENDERS {
-                if !s.wal_lost[node] {
-                    acts.push(Act::ReserveVia(node));
-                }
-            }
-        }
-        if s.log_end < s.kraft_next {
-            acts.push(Act::FsyncAppend);
-            acts.push(Act::CrashBeforeFsync);
-            acts.push(Act::CrashMidFsync);
-        }
-        if s.object_frontier < s.wal_acked {
-            acts.push(Act::PutObject);
-        }
-        if s.index_frontier < s.object_frontier {
-            acts.push(Act::CommitIndex);
-        }
-        if s.trimmed < s.index_frontier {
-            acts.push(Act::Trim);
-        }
-        if s.wal_lost.iter().filter(|lost| **lost).count() == 0 && s.wal_acked > 0 {
-            for node in 0..WAL_NODES {
-                acts.push(Act::LoseWalNode(node));
-            }
-        }
-        if s.wal_acked > 0 && s.sequencer_epoch < 2 {
-            acts.push(Act::SequencerHandoff);
-        }
-    }
+#[path = "diskless_crash_model/checks.rs"]
+mod checks;
+use checks::run;
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
-        match action {
-            Act::ReserveVia(node) => {
-                let (base, next) = reserve_via_controller(&s);
-                s.kraft_next = next;
-                s.reservations.push((base, next));
-                s.appenders_seen |= 1 << node;
-                if s.appenders_seen.count_ones() >= 2 {
-                    s.witnesses |= WITNESS_STATELESS_APPEND;
-                }
-            }
-            Act::FsyncAppend => {
-                s.log_end += 1;
-                fsync_quorum(&mut s);
-                s.producer_committed = s.log_end;
-            }
-            Act::CrashBeforeFsync => {
-                if s.kraft_next > s.log_end {
-                    s.witnesses |= WITNESS_KRAFT_FSYNC_GAP;
-                }
-            }
-            Act::CrashMidFsync => {
-                s.witnesses |= WITNESS_MID_FSYNC;
-                s.kraft_next = s.kraft_next.max(s.log_end);
-            }
-            Act::PutObject => {
-                s.object_frontier = s.wal_acked;
-                if s.object_frontier > s.index_frontier {
-                    s.witnesses |= WITNESS_PUT_BEFORE_INDEX;
-                }
-            }
-            Act::CommitIndex => {
-                s.index_frontier = s.object_frontier;
-            }
-            Act::Trim => {
-                let decision = krabka_verified::diskless::diskless_trim_decision(
-                    s.index_frontier,
-                    s.wal_acked,
-                    0,
-                    s.trimmed,
-                );
-                if decision.should_trim {
-                    s.trimmed = decision.target;
-                }
-                if s.trimmed > 0 && s.trimmed == s.index_frontier {
-                    s.witnesses |= WITNESS_TRIM_AT_INDEX;
-                }
-            }
-            Act::LoseWalNode(node) => {
-                s.wal_lost[node] = true;
-                s.witnesses |= WITNESS_MINORITY_WAL_LOSS;
-            }
-            Act::SequencerHandoff => {
-                s.sequencer_epoch += 1;
-                s.handoff_wal_acked = s.handoff_wal_acked.max(s.wal_acked);
-                // KIP-207 permits the newly advertised frontier to move back
-                // while authority changes. Durability does not move back: the
-                // new sequencer can re-derive `wal_acked` from the surviving
-                // quorum, independently of this conservative visible value.
-                s.advertised_hwm = s.index_frontier.min(s.wal_acked);
-                s.witnesses |= WITNESS_SEQUENCER_HANDOFF;
-            }
-        }
-        Some(s)
-    }
-
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            Property::always("wal_acked_durable", |_, s: &CrashState| {
-                s.wal_acked <= surviving_wal_frontier(s)
-            }),
-            Property::always("committed_durable", |_, s: &CrashState| {
-                s.producer_committed <= surviving_wal_frontier(s)
-            }),
-            Property::always(
-                "sequencer_handoff_never_regresses_wal_acked",
-                |_, s: &CrashState| s.wal_acked >= s.handoff_wal_acked,
-            ),
-            Property::always("trim_at_committed_index_frontier", |_, s: &CrashState| {
-                s.trimmed <= s.index_frontier && s.trimmed <= s.wal_acked
-            }),
-            Property::always("reservations_gap_free_and_unique", |_, s: &CrashState| {
-                let mut next = 0;
-                for &(base, end) in &s.reservations {
-                    if base != next || end <= base {
-                        return false;
-                    }
-                    next = end;
-                }
-                next == s.kraft_next
-            }),
-            Property::sometimes("crash_in_kraft_fsync_gap", |_, s: &CrashState| {
-                s.witnesses & WITNESS_KRAFT_FSYNC_GAP != 0
-            }),
-            Property::sometimes("crash_between_put_and_index", |_, s: &CrashState| {
-                s.witnesses & WITNESS_PUT_BEFORE_INDEX != 0
-            }),
-            Property::sometimes("crash_mid_fsync", |_, s: &CrashState| {
-                s.witnesses & WITNESS_MID_FSYNC != 0
-            }),
-            Property::sometimes("trim_at_index_frontier", |_, s: &CrashState| {
-                s.witnesses & WITNESS_TRIM_AT_INDEX != 0
-            }),
-            Property::sometimes(
-                "acked_unflushed_survives_minority_wal_loss",
-                |_, s: &CrashState| {
-                    s.witnesses & WITNESS_MINORITY_WAL_LOSS != 0 && s.wal_acked > s.trimmed
-                },
-            ),
-            Property::sometimes("two_appenders_race_gap_free", |_, s: &CrashState| {
-                s.witnesses & WITNESS_STATELESS_APPEND != 0
-            }),
-            Property::sometimes(
-                "sequencer_handoff_regresses_only_advertised_hwm",
-                |_, s: &CrashState| {
-                    s.witnesses & WITNESS_SEQUENCER_HANDOFF != 0 && s.advertised_hwm < s.wal_acked
-                },
-            ),
-        ]
-    }
-}
-
-fn fsync_quorum(s: &mut CrashState) {
-    let mut synced = 0;
-    for node in 0..WAL_NODES {
-        if !s.wal_lost[node] && synced < WAL_MAJORITY {
-            s.wal_nodes[node] = s.log_end;
-            synced += 1;
-        }
-    }
-    s.wal_acked = quorum_frontier(s);
-    s.advertised_hwm = s.wal_acked;
-}
-
-fn quorum_frontier(s: &CrashState) -> i64 {
-    let live: Vec<i64> = s
-        .wal_nodes
-        .iter()
-        .copied()
-        .zip(s.wal_lost.iter().copied())
-        .filter_map(|(offset, lost)| (!lost).then_some(offset))
-        .collect();
-    if live.len() < WAL_MAJORITY {
-        return s.trimmed;
-    }
-    let mut live = live;
-    live.sort_unstable();
-    let leader_end = live.pop().unwrap_or(0);
-    let followers = live;
-    krabka_verified::consensus::majority_watermark(leader_end, &followers, WAL_MAJORITY, 0)
-}
-
-/// The controller's reservation for one appender's one-record batch: the
-/// pending chain folded from the image frontier with
-/// `wal_reservation_frontier`, then `reserve_offsets` from its end. Either
-/// kernel refusing is a failure of the run, not a pruned step.
-fn reserve_via_controller(s: &CrashState) -> (i64, i64) {
-    let pending_frontier = s
-        .reservations
-        .iter()
-        .try_fold(0, |frontier, &(base, end)| {
-            krabka_verified::offset_allocator::wal_reservation_frontier(frontier, base, end - base)
-        })
-        .expect("the controller's pending reservation chain stays exact");
-    krabka_verified::offset_allocator::reserve_offsets(pending_frontier, 1)
-        .expect("a bounded reservation is representable")
-}
-
-fn surviving_wal_frontier(s: &CrashState) -> i64 {
-    s.wal_nodes
-        .iter()
-        .copied()
-        .zip(s.wal_lost.iter().copied())
-        .filter_map(|(offset, lost)| (!lost).then_some(offset))
-        .max()
-        .unwrap_or(s.index_frontier)
-        .max(s.index_frontier)
-}
-
-fn run() {
-    let checker = CrashModel
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[diskless_crash_model] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert2::assert!(checker.state_count() < TARGET_STATE_COUNT, "truncated");
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == PINNED_UNIQUE_STATES,
-        "unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
-}
-
-#[test]
-fn diskless_crash_model() {
-    run();
-}
+#[cfg(test)]
+#[path = "diskless_crash_model/tests.rs"]
+mod tests;
