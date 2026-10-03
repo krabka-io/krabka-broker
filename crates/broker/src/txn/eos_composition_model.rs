@@ -59,7 +59,9 @@ use super::{
 use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
 
 const TARGET_STATE_COUNT: usize = 20_000_000;
+
 const MAX_UNIQUE_STATES: usize = 2_000_000;
+
 const MAX_DEPTH: usize = 50;
 
 // The exact unique-state count of the exhaustive BFS over each config below.
@@ -70,17 +72,10 @@ const MAX_DEPTH: usize = 50;
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
 const PINNED_UNIQUE_STATES_BASIC: usize = 1_228;
+
 const PINNED_UNIQUE_STATES_WIDE: usize = 58_524;
 
-const PID0: i64 = 1000; // base producer id; per-producer pid = PID0 + producer index
-
-fn model_offset(value: usize) -> i64 {
-    i64::try_from(value).expect("bounded model offset fits in i64")
-}
-
-fn model_index(value: i64) -> usize {
-    usize::try_from(value).expect("model offsets are non-negative and bounded")
-}
+const PID0: i64 = 1000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Kind {
@@ -142,136 +137,6 @@ struct EosModel {
     max_log: usize,
 }
 
-fn tstate(id: i8) -> TxnState {
-    TxnState::from_kafka_status(id).expect("valid TxnState id")
-}
-
-/// Rebuild a real `TxnEntry` for producer `p` so the real decision cores behave
-/// exactly as in a live run. Partitions and timestamps do not change the
-/// decision.
-fn rebuild(p: usize, pr: Prod) -> TxnEntry {
-    // Per-producer pid = PID0 + index; wrap into `ProducerId` at the seam.
-    let mut e = TxnEntry::new_empty(
-        "tid".to_string(),
-        ProducerId(PID0 + model_offset(p)),
-        pr.epoch,
-        60_000,
-        1,
-    );
-    e.state = tstate(pr.state);
-    e
-}
-
-// ----- derived txn structure (faithful LSO + aborted-list mechanics) -----
-
-/// Outcome of txn (producer, generation) from the log: a marker resolves it.
-fn txn_outcome(log: &[Batch], producer: u8, generation: u8) -> Option<Kind> {
-    log.iter()
-        .find(|b| {
-            b.producer == producer
-                && b.generation == generation
-                && matches!(b.kind, Kind::Commit | Kind::Abort)
-        })
-        .map(|b| b.kind)
-}
-
-/// LSO = base offset of the oldest still-OPEN txn (Data present, no marker yet),
-/// else the log end. This is Kafka's first-unstable-offset rule. This function
-/// derives the LSO from the log alone. The txn universe is whatever
-/// (producer, generation) pairs appear, so the property closures stay
-/// non-capturing.
-fn lso(log: &[Batch]) -> Offset {
-    let mut min_open: Option<i64> = None;
-    let mut seen: Vec<(u8, u8)> = Vec::new();
-    for (off, b) in log.iter().enumerate() {
-        if b.kind == Kind::Data && !seen.contains(&(b.producer, b.generation)) {
-            seen.push((b.producer, b.generation));
-            // First occurrence of this (producer, generation) — its base offset.
-            if txn_outcome(log, b.producer, b.generation).is_none() {
-                min_open = Some(min_open.map_or(model_offset(off), |m| m.min(model_offset(off))));
-            }
-        }
-    }
-    Offset(min_open.unwrap_or(model_offset(log.len())))
-}
-
-/// The exclusive offset a `read_committed` consumer may see.
-///
-/// This function drives the REAL `compute_visibility_window` on its
-/// read-committed branch, where `effective_lso = lso.min(hw)`. When an open
-/// txn's records sit above the HWM, `lso > hw` and the clamp returns `hw`. The
-/// consumer never reads above the watermark.
-fn effective_lso(log: &[Batch], hw: Offset) -> Offset {
-    let log_end = Offset(model_offset(log.len()));
-    let l = lso(log);
-    let vw = compute_visibility_window(
-        false, // consumer, not follower
-        true,  // read_committed
-        FetchWatermarks {
-            log_start: Offset(0),
-            // The HW may sit below the log end: replication lag.
-            hw,
-            lso: l,
-            log_end,
-            // This model's topic delivers immediately.
-            deliverable: hw,
-        },
-        Offset(0), // fetch_offset
-    );
-    vw.effective_lso // = lso.min(hw)
-}
-
-/// The `read_committed` visible set: `Data` batch offsets below `effective_lso`
-/// whose txn did NOT abort.
-fn visible(log: &[Batch], hw: Offset) -> Vec<i64> {
-    let eff = effective_lso(log, hw);
-    (0..model_offset(log.len()))
-        .filter(|&off| off < eff)
-        .filter(|&off| {
-            let b = log[model_index(off)];
-            b.kind == Kind::Data && txn_outcome(log, b.producer, b.generation) != Some(Kind::Abort)
-        })
-        .collect()
-}
-
-// ----- independent oracles (by producer and marker, never by generation) -----
-
-/// Kafka's first unstable offset, derived without the generation tags `lso()`
-/// reads: the smallest offset of a Data batch whose producer has written no
-/// control marker after it, else the log end.
-fn first_unstable_offset(log: &[Batch]) -> Offset {
-    let open = log.iter().enumerate().position(|(off, b)| {
-        b.kind == Kind::Data
-            && !log[off + 1..]
-                .iter()
-                .any(|later| later.producer == b.producer && later.kind != Kind::Data)
-    });
-    Offset(model_offset(open.unwrap_or(log.len())))
-}
-
-/// The Data offsets a `read_committed` consumer drops as aborted, derived the
-/// way Kafka's aborted-transaction index and consumer do: each Abort marker of
-/// producer `p` at offset `m` aborts every Data batch of `p` after `p`'s
-/// previous control marker and before `m`.
-fn aborted_by_markers(log: &[Batch]) -> Vec<i64> {
-    let mut aborted = Vec::new();
-    for (m, marker) in log.iter().enumerate() {
-        if marker.kind != Kind::Abort {
-            continue;
-        }
-        for (off, b) in log[..m].iter().enumerate().rev() {
-            if b.producer != marker.producer {
-                continue;
-            }
-            if b.kind != Kind::Data {
-                break;
-            }
-            aborted.push(model_offset(off));
-        }
-    }
-    aborted
-}
-
 // ----- model -----
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -282,289 +147,20 @@ enum Act {
     Ack,           // a follower replicates one more offset: hw += 1
 }
 
-impl Model for EosModel {
-    type State = EosState;
-    type Action = Act;
+#[path = "eos_composition_model/helpers.rs"]
+mod helpers;
+use helpers::{
+    aborted_by_markers, effective_lso, first_unstable_offset, lso, model_index, model_offset,
+    rebuild, tstate, txn_outcome, visible,
+};
 
-    fn init_states(&self) -> Vec<Self::State> {
-        vec![EosState {
-            log: vec![],
-            prod: (0..self.producers)
-                .map(|_| Prod {
-                    state: TxnState::Empty.to_kafka_status(),
-                    epoch: 0,
-                    generation: 0,
-                })
-                .collect(),
-            hw: Offset(0),
-            violations: Violations::default(),
-        }]
-    }
+#[path = "eos_composition_model/checker.rs"]
+mod checker;
 
-    fn actions(&self, s: &Self::State, acts: &mut Vec<Self::Action>) {
-        // A follower replicating: advance the HWM toward the log end.
-        if s.hw < model_offset(s.log.len()) {
-            acts.push(Act::Ack);
-        }
-        if s.log.len() >= self.max_log {
-            return;
-        }
-        for p in 0..self.producers {
-            let pr = s.prod[usize::from(p)];
-            // `AddPartitionsToTxn` opens a NEW transaction only from a state
-            // that is not already `Ongoing`; on an `Ongoing` one it extends
-            // the open transaction, which `Append` covers.
-            if pr.generation < self.max_gen
-                && pr.state != TxnState::Ongoing.to_kafka_status()
-                && tstate(pr.state).can_transition_to(TxnState::Ongoing)
-            {
-                acts.push(Act::Begin(p));
-            }
-            if pr.state == TxnState::Ongoing.to_kafka_status() {
-                let n = s
-                    .log
-                    .iter()
-                    .filter(|b| {
-                        b.producer == p && b.generation == pr.generation && b.kind == Kind::Data
-                    })
-                    .count();
-                if n < self.max_data_per_txn {
-                    acts.push(Act::Append(p));
-                }
-                if n >= 1 {
-                    acts.push(Act::End(p, true));
-                    acts.push(Act::End(p, false));
-                }
-            }
-        }
-    }
+#[path = "eos_composition_model/checks.rs"]
+mod checks;
+use checks::run;
 
-    fn next_state(&self, last: &Self::State, a: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
-        match a {
-            Act::Begin(p) => {
-                let pr = &mut s.prod[usize::from(p)];
-                if pr.state == TxnState::Ongoing.to_kafka_status()
-                    || !tstate(pr.state).can_transition_to(TxnState::Ongoing)
-                {
-                    return None;
-                }
-                pr.generation += 1;
-                pr.state = TxnState::Ongoing.to_kafka_status();
-            }
-            Act::Append(p) => {
-                let g = s.prod[usize::from(p)].generation;
-                s.log.push(Batch {
-                    producer: p,
-                    generation: g,
-                    kind: Kind::Data,
-                });
-            }
-            Act::End(p, commit) => {
-                let pr = s.prod[usize::from(p)];
-                let mut entry = rebuild(usize::from(p), pr);
-                let Ok((prepare, complete)) = decide_phase1_transition(&mut entry, commit) else {
-                    return None; // illegal transition
-                };
-                crate::txn::handlers::end_txn::prepare_completion_identities_with_fresh(
-                    &mut entry,
-                    TxnVersion::Verified,
-                    None,
-                )
-                .expect("model epochs never reach the rotation boundary");
-                let completion =
-                    crate::txn::handlers::end_txn::completion_producer_identity(&entry);
-                match decide_end_txn_completion(
-                    &entry,
-                    ProducerId(PID0 + i64::from(p)),
-                    entry.producer_epoch,
-                    completion.0,
-                    completion.1,
-                    prepare,
-                    complete,
-                ) {
-                    CompletionDecision::Proceed {
-                        next_state,
-                        response_epoch,
-                        ..
-                    } => {
-                        s.log.push(Batch {
-                            producer: p,
-                            generation: pr.generation,
-                            kind: if commit { Kind::Commit } else { Kind::Abort },
-                        });
-                        let np = &mut s.prod[usize::from(p)];
-                        np.state = next_state.to_kafka_status();
-                        np.epoch = response_epoch; // TV_2 bumps the epoch on completion
-                    }
-                    CompletionDecision::AlreadyComplete { .. } | CompletionDecision::Reject(_) => {
-                        s.violations.end_not_proceed = true;
-                    }
-                }
-            }
-            Act::Ack => {
-                s.hw += 1; // a follower replicated one more offset
-            }
-        }
-        // The HWM and the LSO never regress: offsets only grow, and the
-        // oldest open transaction's base only advances.
-        if s.hw < last.hw {
-            s.violations.hw_regressed = true;
-        }
-        if lso(&s.log) < lso(&last.log) {
-            s.violations.lso_regressed = true;
-        }
-        Some(s)
-    }
-
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            // HEADLINE: every visible batch belongs to a COMMITTED txn — no
-            // open/uncommitted and no aborted record is ever visible. Catches a
-            // real `compute_visibility_window` returning effective_lso ABOVE
-            // min(lso, hw) (which would expose open-txn or above-HWM data).
-            Property::always("only_committed_visible", |_, s: &EosState| {
-                visible(&s.log, s.hw).into_iter().all(|off| {
-                    let b = s.log[model_index(off)];
-                    txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Commit)
-                })
-            }),
-            // The read_committed window is exactly min(first unstable offset,
-            // HWM), with the first unstable offset recomputed here from the
-            // log's markers, not from `lso()`. Catches a window above OR
-            // below min(lso, hw), and an `lso()` that drifts from Kafka's rule.
-            Property::always("window_is_min_lso_hw", |_, s: &EosState| {
-                effective_lso(&s.log, s.hw) == first_unstable_offset(&s.log).min(s.hw)
-            }),
-            // Every committed Data batch below min(first unstable offset, HWM)
-            // is visible: no committed, durable, stable record is hidden.
-            Property::always("committed_prefix_complete", |_, s: &EosState| {
-                let v = visible(&s.log, s.hw);
-                let window = first_unstable_offset(&s.log).min(s.hw);
-                s.log.iter().enumerate().all(|(off, b)| {
-                    !(b.kind == Kind::Data
-                        && model_offset(off) < window
-                        && txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Commit))
-                        || v.contains(&model_offset(off))
-                })
-            }),
-            // Nothing at or above the HWM is visible.
-            Property::always("nothing_visible_above_hw", |_, s: &EosState| {
-                visible(&s.log, s.hw).into_iter().all(|off| off < s.hw)
-            }),
-            // No visible offset lies in an aborted range as Kafka's consumer
-            // derives it from the Abort markers alone (see
-            // `aborted_by_markers`), independently of `visible()`'s filter.
-            Property::always("no_visible_aborted", |_, s: &EosState| {
-                let aborted = aborted_by_markers(&s.log);
-                visible(&s.log, s.hw)
-                    .into_iter()
-                    .all(|off| !aborted.contains(&off))
-            }),
-            // The HWM stays within the log.
-            Property::always("hw_within_log", |_, s: &EosState| {
-                s.hw <= model_offset(s.log.len())
-            }),
-            // Every transition keeps the LSO and the HWM from regressing, and
-            // every End drives the decision cores to Proceed.
-            Property::always("no_transition_violation", |_, s: &EosState| {
-                s.violations == Violations::default()
-            }),
-            // ----- non-vacuity witnesses -----
-            Property::sometimes("committed_visible", |_, s: &EosState| {
-                !visible(&s.log, s.hw).is_empty()
-            }),
-            Property::sometimes("aborted_filtered", |_, s: &EosState| {
-                let eff = effective_lso(&s.log, s.hw);
-                s.log.iter().enumerate().any(|(off, b)| {
-                    b.kind == Kind::Data
-                        && (model_offset(off)) < eff
-                        && txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Abort)
-                })
-            }),
-            // The key EOS subtlety: a COMMITTED batch sits ABOVE the LSO, held
-            // back by an older still-open transaction (out-of-order commit).
-            Property::sometimes("interleaved_held_back", |_, s: &EosState| {
-                let l = lso(&s.log);
-                s.log.iter().enumerate().any(|(off, b)| {
-                    b.kind == Kind::Data
-                        && (model_offset(off)) >= l
-                        && txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Commit)
-                })
-            }),
-            // The visibility CORE actively clamps: the HWM holds the effective LSO
-            // BELOW the LSO (an open txn's records sit above the not-yet-replicated
-            // HWM). Proves `compute_visibility_window`'s `lso.min(hw)` is exercised
-            // non-trivially, not as an identity pass-through.
-            Property::sometimes("hwm_clamp_active", |_, s: &EosState| {
-                effective_lso(&s.log, s.hw) < lso(&s.log)
-            }),
-        ]
-    }
-
-    fn within_boundary(&self, s: &Self::State) -> bool {
-        s.log.len() <= self.max_log
-    }
-}
-
-fn run(model: EosModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < TARGET_STATE_COUNT,
-        "[{label}] truncated"
-    );
-    assert2::assert!(
-        checker.unique_state_count() < MAX_UNIQUE_STATES,
-        "[{label}] unique bound exceeded ({})",
-        checker.unique_state_count()
-    );
-    checker.assert_properties();
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-}
-
-#[test]
-fn txn_basic() {
-    run(
-        EosModel {
-            producers: 2,
-            max_gen: 1,
-            max_data_per_txn: 2,
-            max_log: 5,
-        },
-        "txn_basic",
-        PINNED_UNIQUE_STATES_BASIC,
-    );
-}
-
-#[test]
-fn txn_wide() {
-    // Deeper interleaving: a second transaction generation per producer + a
-    // longer log, so a producer's committed txn can be held back by another
-    // producer's later open txn across more offset orderings.
-    run(
-        EosModel {
-            producers: 2,
-            max_gen: 2,
-            max_data_per_txn: 2,
-            max_log: 7,
-        },
-        "txn_wide",
-        PINNED_UNIQUE_STATES_WIDE,
-    );
-}
+#[cfg(test)]
+#[path = "eos_composition_model/tests.rs"]
+mod tests;

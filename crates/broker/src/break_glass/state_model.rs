@@ -53,7 +53,9 @@ const TARGET: &str = "doomed";
 const PROPOSER: &str = "User:alice";
 
 const TARGET_STATE_COUNT: usize = 1_000_000;
+
 const MAX_UNIQUE_STATES: usize = 200_000;
+
 const MAX_DEPTH: usize = 20;
 
 // The exact unique-state count of the exhaustive BFS over each config below.
@@ -64,6 +66,7 @@ const MAX_DEPTH: usize = 20;
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
 const PINNED_UNIQUE_STATES_TWO_OF_THREE: usize = 36;
+
 const PINNED_UNIQUE_STATES_THREE_OF_FOUR: usize = 114;
 
 /// One proposal, projected onto the fields a transition reads.
@@ -102,38 +105,6 @@ struct BreakGlassModel {
     /// Every principal that can send a request, inside the approver set and
     /// outside it.
     principals: Vec<&'static str>,
-}
-
-/// The stored record that one model state stands for.
-fn record(state: &ProposalState) -> BreakGlassProposalRecord {
-    BreakGlassProposalRecord {
-        proposal_id: Uuid::from_u128(1),
-        action: ACTION,
-        target: TARGET.to_owned(),
-        proposer: PROPOSER.to_owned(),
-        reason: "incident 42".to_owned(),
-        created_at_ms: 0,
-        expires_at_ms: EXPIRES_AT,
-        approvals: state
-            .approvals
-            .iter()
-            .map(|principal| BreakGlassApproval {
-                principal: (*principal).to_owned(),
-                approved_at_ms: 0,
-                key_id: String::new(),
-                signature: Vec::new(),
-            })
-            .collect(),
-        consumed_at_ms: i64::from(state.consumed),
-        withdrawn: state.withdrawn,
-    }
-}
-
-/// The image that a gated handler reads for one model state.
-fn image_of(state: &ProposalState) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1BreakGlassProposal(record(state)));
-    image
 }
 
 impl BreakGlassModel {
@@ -182,163 +153,17 @@ impl BreakGlassModel {
     }
 }
 
-/// How many different principals appear in `approvals`.
-fn distinct(approvals: &[&'static str]) -> usize {
-    let mut seen: Vec<&str> = Vec::with_capacity(approvals.len());
-    for principal in approvals {
-        if !seen.contains(principal) {
-            seen.push(principal);
-        }
-    }
-    seen.len()
-}
+#[path = "state_model/helpers.rs"]
+mod helpers;
+use helpers::{config, distinct, image_of, record};
 
-impl Model for BreakGlassModel {
-    type State = ProposalState;
-    type Action = Step;
+#[path = "state_model/checker.rs"]
+mod checker;
 
-    fn init_states(&self) -> Vec<Self::State> {
-        vec![ProposalState {
-            approvals: Vec::new(),
-            withdrawn: false,
-            consumed: false,
-            now_ms: 0,
-            consumes: 0,
-            under_approved: false,
-        }]
-    }
+#[path = "state_model/checks.rs"]
+mod checks;
+use checks::run;
 
-    fn actions(&self, _state: &Self::State, actions: &mut Vec<Self::Action>) {
-        for principal in &self.principals {
-            actions.push(Step::Approve(principal));
-            actions.push(Step::Withdraw(principal));
-        }
-        actions.push(Step::Expire);
-        actions.push(Step::Consume);
-    }
-
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            Step::Approve(principal) => self.settle(&mut state, principal, false),
-            Step::Withdraw(principal) => self.settle(&mut state, principal, true),
-            Step::Expire => state.now_ms = (state.now_ms + 1).min(EXPIRES_AT),
-            Step::Consume => self.consume(&mut state),
-        }
-        // Headline safety, per transition. It fires the moment an interleaving
-        // spends one approval twice, rather than at the end of the run.
-        assert2::assert!(
-            state.consumes <= 1,
-            "a proposal was consumed twice after {action:?}: {state:?}"
-        );
-        Some(state)
-    }
-
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            Property::always("no_double_spend", |_, state: &ProposalState| {
-                state.consumes <= 1
-            }),
-            Property::always("no_under_approved", |_, state: &ProposalState| {
-                !state.under_approved
-            }),
-            Property::always(
-                "a_withdrawn_proposal_is_never_consumed",
-                |_, state: &ProposalState| !(state.withdrawn && state.consumes > 0),
-            ),
-            // Non-vacuity witnesses. Without them a model that refuses every
-            // action would pass every safety property.
-            Property::sometimes("consumed", |_, state: &ProposalState| state.consumes == 1),
-            Property::sometimes("withdrawn", |_, state: &ProposalState| state.withdrawn),
-            Property::sometimes("expired", |_, state: &ProposalState| {
-                state.now_ms >= EXPIRES_AT
-            }),
-            Property::sometimes(
-                "fully_approved",
-                |model: &BreakGlassModel, state: &ProposalState| {
-                    distinct(&state.approvals) >= model.config.required_approvals
-                },
-            ),
-            Property::sometimes(
-                "expired_before_it_was_spent",
-                |model: &BreakGlassModel, state: &ProposalState| {
-                    state.now_ms >= EXPIRES_AT
-                        && distinct(&state.approvals) >= model.config.required_approvals
-                        && state.consumes == 0
-                },
-            ),
-        ]
-    }
-
-    fn within_boundary(&self, state: &Self::State) -> bool {
-        state.approvals.len() <= self.principals.len() && state.now_ms <= EXPIRES_AT
-    }
-}
-
-fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
-    BreakGlassConfig {
-        approvers: approvers.iter().map(|name| (*name).to_owned()).collect(),
-        required_approvals,
-        proposal_ttl: millis(u32::try_from(EXPIRES_AT).expect("a small logical expiry")),
-        signed_actions: Vec::new(),
-        ..BreakGlassConfig::default()
-    }
-}
-
-fn run(model: BreakGlassModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < TARGET_STATE_COUNT,
-        "[{label}] truncated, so the run is not exhaustive"
-    );
-    assert2::assert!(
-        checker.unique_state_count() < MAX_UNIQUE_STATES,
-        "[{label}] unique-state bound exceeded"
-    );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
-}
-
-#[test]
-fn two_approvals_of_three_approvers() {
-    // The default rule. `User:mallory` is outside the approver set, and
-    // `User:alice` proposed, so neither can supply an approval.
-    run(
-        BreakGlassModel {
-            config: config(&["User:alice", "User:bob", "User:carol"], 2),
-            principals: vec!["User:alice", "User:bob", "User:carol", "User:mallory"],
-        },
-        "two_approvals_of_three_approvers",
-        PINNED_UNIQUE_STATES_TWO_OF_THREE,
-    );
-}
-
-#[test]
-fn three_approvals_of_four_approvers() {
-    // A stricter rule, so an interleaving needs three different people before
-    // a consume can succeed.
-    run(
-        BreakGlassModel {
-            config: config(&["User:alice", "User:bob", "User:carol", "User:dave"], 3),
-            principals: vec!["User:alice", "User:bob", "User:carol", "User:dave"],
-        },
-        "three_approvals_of_four_approvers",
-        PINNED_UNIQUE_STATES_THREE_OF_FOUR,
-    );
-}
+#[cfg(test)]
+#[path = "state_model/tests.rs"]
+mod tests;

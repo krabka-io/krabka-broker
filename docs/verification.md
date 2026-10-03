@@ -555,6 +555,12 @@ Stateright enumerates reachable states within explicit bounds. It can find a
 counterexample in that state space. It does not prove behavior outside the
 bounds. Each model states its bounds and properties in its module comments.
 
+Large model sources use subdirectories for the checker, transitions, shared
+state or observations, and checks. The public entry modules retain the bounds
+and scope notes. The data-path, share-acquisition and KRaft checker interfaces
+delegate to separate action, transition and property methods; splitting those
+methods does not change the state identity, search bounds or property order.
+
 The current model entry points are:
 
 | Area | Model entry points |

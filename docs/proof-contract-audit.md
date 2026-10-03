@@ -2851,3 +2851,24 @@ helper's two artifacts change and one new consumer session is added; all 1,192
 unrelated parent artifact files remain byte-identical. All 325 authored
 verified Rust sources stay under 300 lines (largest: 297). Remote CI remains
 separate from this local qualification.
+
+## Remaining large model sources
+
+The earlier source split covered the Creusot kernels but left 21 Stateright
+model sources at 300–1,032 lines. They now use child modules for their checker,
+transitions, support and checks, with every resulting source under 300 lines.
+The 364-line independent ACL verification suite is split as well. The
+data-path, share-acquisition and KRaft trait methods delegate to unchanged
+method bodies. A Rust syntax comparison preserves all 353 original function
+bodies, 234 data declarations and the ACL suite’s property-test macros, allowing
+only module visibility and relative path adjustments. The existing properties,
+reachability witnesses, bounds and unique-state pins are retained. This refactor adds no proof claim: the throttle
+model still excludes debt accounting and nanosecond fractions, and the WAL
+model still assumes leader completeness and atomic successful filesystem calls.
+Creusot sources and generated proof artifacts are unchanged.
+
+Local qualification passes all five Stateright Bazel targets and the ACL unit
+target, including 4,654 broker tests. Final focused runs cover all five KRaft
+configurations, eight throttle checks and six share-acquisition configurations.
+Strict six-package library/test Clippy, formatting and the syntax comparison
+pass. All 185 authored model sources and the ACL suite stay under 300 lines.
