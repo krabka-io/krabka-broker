@@ -121,3 +121,5 @@ mod rotation_marker;
 mod marker_admission;
 
 mod token_session;
+
+mod oauth_completion;

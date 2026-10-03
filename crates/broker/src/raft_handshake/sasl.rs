@@ -217,16 +217,11 @@ pub(super) async fn run_inbound_sasl(
                         )
                     }
                     SaslMechanism::OAuthBearer => {
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |duration| {
-                                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-                            });
                         handle_authenticate_oauthbearer(
                             &req,
                             &mut auth,
                             &cfg.oauthbearer_validator,
-                            now_ms,
+                            crate::time_util::now_ms,
                             CONTROLLER_MAX_REAUTH,
                         )
                         .await

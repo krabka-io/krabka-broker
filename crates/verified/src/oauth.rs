@@ -70,7 +70,7 @@ pub enum OAuthSessionDecision {
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open(crate))]
 pub fn oauth_session_admissible(facts: OAuthSessionFacts) -> bool {
     pearlite! {
         facts.expiry == OAuthExpiryPresence::Present
@@ -87,7 +87,7 @@ pub fn oauth_session_admissible(facts: OAuthSessionFacts) -> bool {
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open(crate))]
 pub fn oauth_session_lifetime(facts: OAuthSessionFacts) -> Int {
     pearlite! {
         let token_lifetime = facts.token_expires_at_ms@ - facts.now_ms@;
@@ -241,3 +241,6 @@ mod tests {
         }
     }
 }
+
+mod completion;
+pub use completion::oauth_validation_admission;

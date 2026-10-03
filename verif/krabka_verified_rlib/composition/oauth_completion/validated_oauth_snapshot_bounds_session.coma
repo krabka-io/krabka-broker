@@ -1,0 +1,217 @@
+(* #"/workspace/crates/verified/src/composition/oauth_completion.rs" 70 0 74 25 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span scompletion = "/workspace/crates/verified/src/oauth/completion.rs" 8 10 16 2
+let%span soauth_completion = "/workspace/crates/verified/src/composition/oauth_completion.rs" 76 20 76 43
+let%span soauth_completion'0 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 87 8 87 77
+let%span soauth_completion'1 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 91 4 91 34
+let%span soauth_completion'2 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 45 11 45 78
+let%span soauth_completion'3 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 46 10 54 1
+let%span soauth_completion'4 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 55 10 69 1
+let%span soauth_completion'5 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 25 8 34 9
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 31 10 40 1
+let%span soauth = "/workspace/crates/verified/src/oauth.rs" 104 10 112 1
+let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 76 8 81 67
+let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 93 8 93 72
+
+use creusot.int.UInt64
+use creusot.int.Int64
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+type t_JwksCacheFacts = {
+  generation_before: UInt64.t;
+  generation_after: UInt64.t;
+  last_successful_fetch_ms: Int64.t;
+  now_ms: Int64.t;
+  expiry_enabled: bool;
+  expiry_ms: Int64.t }
+
+type t_Option_JwksCacheFacts = None | Some t_JwksCacheFacts
+
+let elim_Some (_x: t_Option_JwksCacheFacts) (return (f0: t_JwksCacheFacts)) = any
+  [ _k (f0: t_JwksCacheFacts) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_JwksCacheDecision = Reject | Admit
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let jwks_cache_admission (facts: t_JwksCacheFacts) (return (x: t_JwksCacheDecision)) = any
+  [ return (result: t_JwksCacheDecision) -> {[@stop_split] [@expl:jwks_cache_admission ensures] [%#sjwks] (result
+      = Admit)
+    = (ComputerDivision.mod (UInt64.t'int facts.generation_before) 2 = 0
+    /\ UInt64.t'int facts.generation_before = UInt64.t'int facts.generation_after
+    /\ (not facts.expiry_enabled
+    \/ ge_log_Int (Int64.to_int facts.expiry_ms) 0
+    /\ gt_log_Int (Int64.to_int facts.last_successful_fetch_ms) 0
+    /\ ge_log_Int (Int64.to_int facts.now_ms) (Int64.to_int facts.last_successful_fetch_ms)
+    /\ Int64.to_int facts.now_ms - Int64.to_int facts.last_successful_fetch_ms <= Int64.to_int facts.expiry_ms))}
+    (! return {result}) ]
+
+type t_OAuthSessionDecision = Reject'0 | Admit'0 Int64.t Int64.t
+
+type tup2_i64_u64 = { f0: Int64.t; f1: UInt64.t }
+
+type t_OAuthExpiryPresence = Missing | Present
+
+type t_OAuthSessionCap = Disabled | Enabled
+
+type t_OAuthAuthenticationKind = Initial | Reauthentication
+
+type t_OAuthPrincipalMatch = Matches | Differs
+
+type t_OAuthSessionFacts = {
+  expiry'0: t_OAuthExpiryPresence;
+  token_expires_at_ms'0: Int64.t;
+  now_ms'0: Int64.t;
+  cap'0: t_OAuthSessionCap;
+  cap_ms'0: Int64.t;
+  authentication'0: t_OAuthAuthenticationKind;
+  principal'0: t_OAuthPrincipalMatch }
+
+let oauth_validation_admission (started_ms: Int64.t) (completed_ms: Int64.t) (cache: t_Option_JwksCacheFacts)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:oauth_validation_admission ensures] [%#scompletion] result
+    = (ge_log_Int (Int64.to_int started_ms) 0
+    /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int started_ms)
+    /\ match cache with
+      | None -> true
+      | Some facts -> ComputerDivision.mod (UInt64.t'int facts.generation_before) 2 = 0
+      /\ UInt64.t'int facts.generation_before = UInt64.t'int facts.generation_after
+      /\ (not facts.expiry_enabled
+      \/ ge_log_Int (Int64.to_int facts.expiry_ms) 0
+      /\ gt_log_Int (Int64.to_int facts.last_successful_fetch_ms) 0
+      /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int facts.last_successful_fetch_ms)
+      /\ Int64.to_int completed_ms - Int64.to_int facts.last_successful_fetch_ms <= Int64.to_int facts.expiry_ms)
+      end)}
+    (! return {result}) ]
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate oauth_session_admissible [#"/workspace/crates/verified/src/oauth.rs" 74 0 74 65] (facts: t_OAuthSessionFacts) =
+  [%#soauth'0] facts.expiry'0 = Present
+  /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) (Int64.to_int facts.now_ms'0)
+  /\ Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int facts.now_ms'0 <= Int64.to_int const_MAX
+  /\ (facts.cap'0 = Disabled \/ gt_log_Int (Int64.to_int facts.cap_ms'0) 0)
+  /\ (facts.authentication'0 = Initial \/ facts.principal'0 = Matches)
+
+function oauth_session_lifetime [#"/workspace/crates/verified/src/oauth.rs" 91 0 91 62] (facts: t_OAuthSessionFacts) : int
+ = [%#soauth'1] let token_lifetime = Int64.to_int facts.token_expires_at_ms'0
+  - Int64.to_int facts.now_ms'0 in if facts.cap'0 = Enabled /\ Int64.to_int facts.cap_ms'0 < token_lifetime then
+    Int64.to_int facts.cap_ms'0
+  else
+    token_lifetime
+
+
+let oauth_session_admission (facts: t_OAuthSessionFacts) (return (x: t_OAuthSessionDecision)) = any
+  [ return (result: t_OAuthSessionDecision) ->
+  {[@stop_split] [@expl:oauth_session_admission ensures] [%#soauth] match result with
+      | Reject'0 -> not oauth_session_admissible facts
+      | Admit'0 session_lifetime_ms effective_expires_at_ms -> oauth_session_admissible facts
+      /\ Int64.to_int session_lifetime_ms = oauth_session_lifetime facts
+      /\ Int64.to_int effective_expires_at_ms = Int64.to_int facts.now_ms'0 + Int64.to_int session_lifetime_ms
+      end}
+    (! return {result}) ]
+
+predicate completed_snapshot_admissible [#"/workspace/crates/verified/src/composition/oauth_completion.rs" 19 0 23 9] (cache: t_Option_JwksCacheFacts) (started_ms: Int64.t) (completed: tup2_i64_u64) =
+  [%#soauth_completion'5] ge_log_Int (Int64.to_int started_ms) 0
+  /\ ge_log_Int (Int64.to_int completed.f0) (Int64.to_int started_ms)
+  /\ match cache with
+    | None -> true
+    | Some c -> ComputerDivision.mod (UInt64.t'int c.generation_before) 2 = 0
+    /\ UInt64.t'int c.generation_before = UInt64.t'int c.generation_after
+    /\ UInt64.t'int c.generation_before = UInt64.t'int completed.f1
+    /\ (not c.expiry_enabled
+    \/ ge_log_Int (Int64.to_int c.expiry_ms) 0
+    /\ gt_log_Int (Int64.to_int c.last_successful_fetch_ms) 0
+    /\ ge_log_Int (Int64.to_int started_ms) (Int64.to_int c.last_successful_fetch_ms)
+    /\ Int64.to_int completed.f0 - Int64.to_int c.last_successful_fetch_ms <= Int64.to_int c.expiry_ms)
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let validated_oauth_snapshot_bounds_session [#"/workspace/crates/verified/src/composition/oauth_completion.rs" 70 0 74 25]
+  (facts: t_OAuthSessionFacts) (cache: t_Option_JwksCacheFacts) (completed: tup2_i64_u64)
+  (return (x: t_OAuthSessionDecision)) =
+{[@stop_split] [@expl:validated_oauth_snapshot_bounds_session requires] [%#soauth_completion'2] match cache with
+    | None -> true
+    | Some c -> Int64.to_int c.now_ms = Int64.to_int facts.now_ms'0
+    end}
+  (! bb0
+  [ bb0 = any [ br0 -> {cache = None} (! bb10) | br1 (x0: t_JwksCacheFacts) -> {cache = Some x0} (! bb2) ]
+  | bb2 = s0
+    [ s0 = elim_Some {cache} (fun (r0: t_JwksCacheFacts) -> [ &c <- r0 ] s1)
+    | s1 = jwks_cache_admission [%#soauth_completion] {c} (fun (_x: t_JwksCacheDecision) -> [ &_30 <- _x ] s2)
+    | s2 = any [ br0 -> {_30 = Reject} (! bb6) | br1 -> {_30 = Admit} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_29 <- false ] s1 | s1 = bb7 ]
+  | bb6 = s0 [ s0 = [ &_29 <- true ] s1 | s1 = bb7 ]
+  | bb7 = any [ br0 -> {_29 = false} (! bb10) | br1 -> {_29} (! bb8) ]
+  | bb8 = s0 [ s0 = [ &_ret <- Reject'0 ] s1 | s1 = return {_ret} ]
+  | bb10 = any [ br0 -> {cache = None} (! bb14) | br1 (x0: t_JwksCacheFacts) -> {cache = Some x0} (! bb13) ]
+  | bb13 = s0
+    [ s0 = elim_Some {cache} (fun (r0: t_JwksCacheFacts) -> [ &c'0 <- r0 ] s1)
+    | s1 = [ &c'0 <- { c'0 with generation_after = completed.f1 } ] s2
+    | s2 = [ &finished_cache <- Some c'0 ] s3
+    | s3 = bb15 ]
+  | bb14 = s0 [ s0 = [ &finished_cache <- None ] s1 | s1 = bb15 ]
+  | bb15 = s0
+    [ s0 = oauth_validation_admission [%#soauth_completion'0] {facts.now_ms'0} {completed.f0} {finished_cache}
+        (fun (_x: bool) -> [ &_40 <- _x ] s1)
+    | s1 = any [ br0 -> {_40 = false} (! bb18) | br1 -> {_40} (! bb17) ] ]
+  | bb17 = s0
+    [ s0 = [ &facts <- { facts with now_ms'0 = completed.f0 } ] s1
+    | s1 = oauth_session_admission [%#soauth_completion'1] {facts}
+        (fun (_x: t_OAuthSessionDecision) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb18 = s0 [ s0 = [ &_ret <- Reject'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthSessionDecision = Any.any_l ()
+  | & facts: t_OAuthSessionFacts = facts
+  | & cache: t_Option_JwksCacheFacts = cache
+  | & completed: tup2_i64_u64 = completed
+  | & c: t_JwksCacheFacts = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _30: t_JwksCacheDecision = Any.any_l ()
+  | & finished_cache: t_Option_JwksCacheFacts = Any.any_l ()
+  | & c'0: t_JwksCacheFacts = Any.any_l ()
+  | & _40: bool = Any.any_l () ])
+  [ return (result: t_OAuthSessionDecision) ->
+  {[@stop_split] [@expl:validated_oauth_snapshot_bounds_session ensures] ([@stop_split] [@expl:validated_oauth_snapshot_bounds_session ensures #0] [%#soauth_completion'3] (result
+        = Reject'0)
+      = (not completed_snapshot_admissible cache facts.now_ms'0 completed
+      \/ not (facts.expiry'0 = Present
+      /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) (Int64.to_int completed.f0)
+      /\ Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int completed.f0 <= Int64.to_int const_MAX
+      /\ (facts.cap'0 = Disabled \/ gt_log_Int (Int64.to_int facts.cap_ms'0) 0)
+      /\ (facts.authentication'0 = Initial \/ facts.principal'0 = Matches))))
+    /\ ([@stop_split] [@expl:validated_oauth_snapshot_bounds_session ensures #1] [%#soauth_completion'4] match result with
+      | Reject'0 -> true
+      | Admit'0 session_lifetime_ms effective_expires_at_ms -> completed_snapshot_admissible cache facts.now_ms'0 completed
+      /\ gt_log_Int (Int64.to_int session_lifetime_ms) 0
+      /\ Int64.to_int effective_expires_at_ms = Int64.to_int completed.f0 + Int64.to_int session_lifetime_ms
+      /\ Int64.to_int completed.f0 < Int64.to_int effective_expires_at_ms
+      /\ Int64.to_int effective_expires_at_ms <= Int64.to_int facts.token_expires_at_ms'0
+      /\ Int64.to_int session_lifetime_ms
+        = (if facts.cap'0 = Enabled
+        /\ Int64.to_int facts.cap_ms'0 < Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int completed.f0 then
+          Int64.to_int facts.cap_ms'0
+        else
+          Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int completed.f0
+        )
+      /\ (facts.authentication'0 = Reauthentication -> facts.principal'0 = Matches)
+      end)}
+    (! return {result}) ]
