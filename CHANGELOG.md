@@ -18,6 +18,8 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-02
+
 ### Added
 
 - `group.streams.rack.aware.assignment.tags` is the `[runtime]` key
@@ -751,7 +753,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.7.0
 [0.6.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.1
 [0.6.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.0
 [0.5.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.4
