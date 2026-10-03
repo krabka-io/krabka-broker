@@ -1,0 +1,84 @@
+(* #"/workspace/crates/verified/src/jwks/publication.rs" 15 0 15 74 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 274 30 274 115
+let%span spublication = "/workspace/crates/verified/src/jwks/publication.rs" 16 34 16 35
+let%span spublication'0 = "/workspace/crates/verified/src/jwks/publication.rs" 16 8 16 36
+let%span spublication'1 = "/workspace/crates/verified/src/jwks/publication.rs" 16 64 16 65
+let%span spublication'2 = "/workspace/crates/verified/src/jwks/publication.rs" 16 53 16 61
+let%span spublication'3 = "/workspace/crates/verified/src/jwks/publication.rs" 16 53 16 65
+let%span spublication'4 = "/workspace/crates/verified/src/jwks/publication.rs" 19 27 19 28
+let%span spublication'5 = "/workspace/crates/verified/src/jwks/publication.rs" 19 14 19 28
+let%span spublication'6 = "/workspace/crates/verified/src/jwks/publication.rs" 19 43 19 44
+let%span spublication'7 = "/workspace/crates/verified/src/jwks/publication.rs" 19 30 19 44
+let%span spublication'8 = "/workspace/crates/verified/src/jwks/publication.rs" 7 10 7 83
+let%span spublication'9 = "/workspace/crates/verified/src/jwks/publication.rs" 8 10 13 1
+
+use creusot.int.UInt64
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+let is_multiple_of (self_: UInt64.t) (rhs: UInt64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_multiple_of ensures] [%#snum] if self_ = (0: UInt64.t) then
+      result = (self_ = (0: UInt64.t))
+    else
+      result = (ComputerDivision.mod (UInt64.t'int self_) (UInt64.t'int rhs) = 0)
+    }
+    (! return {result}) ]
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+type t_Option_tup2_u64_u64 = None | Some tup2_u64_u64
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let jwks_publication_generations [#"/workspace/crates/verified/src/jwks/publication.rs" 15 0 15 74]
+  (generation: UInt64.t) (return (x: t_Option_tup2_u64_u64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = is_multiple_of [%#spublication'0] {generation} {[%#spublication] (2: UInt64.t)}
+        (fun (_x: bool) -> [ &_6 <- _x ] s1)
+    | s1 = any [ br0 -> {_6 = false} (! bb6) | br1 -> {_6} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = UInt64.sub [%#spublication'3] {[%#spublication'2] const_MAX} {[%#spublication'1] (2: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_10 <- _x ] s1)
+    | s1 = [ &_8 <- UInt64.gt generation _10 ] s2
+    | s2 = any [ br0 -> {_8 = false} (! bb5) | br1 -> {_8} (! bb6) ] ]
+  | bb5 = s0
+    [ s0 = UInt64.add [%#spublication'5] {generation} {[%#spublication'4] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_12 <- _x ] s1)
+    | s1 = UInt64.add [%#spublication'7] {generation} {[%#spublication'6] (2: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_14 <- _x ] s2)
+    | s2 = [ &_11 <- { f0 = _12; f1 = _14 } ] s3
+    | s3 = [ &_ret <- Some _11 ] s4
+    | s4 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_u64_u64 = Any.any_l ()
+  | & generation: UInt64.t = generation
+  | & _6: bool = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: UInt64.t = Any.any_l ()
+  | & _11: tup2_u64_u64 = Any.any_l ()
+  | & _12: UInt64.t = Any.any_l ()
+  | & _14: UInt64.t = Any.any_l () ])
+  [ return (result: t_Option_tup2_u64_u64) ->
+  {[@stop_split] [@expl:jwks_publication_generations ensures] ([@stop_split] [@expl:jwks_publication_generations ensures #0] [%#spublication'8] (result
+        = None)
+      = (ComputerDivision.mod (UInt64.t'int generation) 2 <> 0
+      \/ gt_log_Int (UInt64.t'int generation) (UInt64.t'int const_MAX - 2)))
+    /\ ([@stop_split] [@expl:jwks_publication_generations ensures #1] [%#spublication'9] match result with
+      | None -> true
+      | Some {f0 = writing; f1 = committed} -> UInt64.t'int writing = UInt64.t'int generation + 1
+      /\ UInt64.t'int committed = UInt64.t'int generation + 2
+      /\ ComputerDivision.mod (UInt64.t'int generation) 2 = 0
+      /\ ComputerDivision.mod (UInt64.t'int writing) 2 = 1 /\ ComputerDivision.mod (UInt64.t'int committed) 2 = 0
+      end)}
+    (! return {result}) ]

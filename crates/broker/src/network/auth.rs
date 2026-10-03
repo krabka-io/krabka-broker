@@ -42,9 +42,7 @@ pub use self::state::AuthenticatedSnapshot;
 pub use self::{
     gssapi::{GssapiConfig, handle_authenticate_gssapi},
     handshake::{ReauthClock, handle_handshake},
-    oauthbearer::{
-        handle_authenticate_oauthbearer, handle_authenticate_oauthbearer_with_jwks_cache,
-    },
+    oauthbearer::handle_authenticate_oauthbearer_with_jwks_cache,
     plain::handle_authenticate_plain,
     response::generic_failure_message,
     scram::handle_authenticate_scram,

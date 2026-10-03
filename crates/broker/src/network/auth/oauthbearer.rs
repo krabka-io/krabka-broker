@@ -37,6 +37,7 @@ use super::{
 // Reauth-success / Reauth-failure / fall-through. Extracting per-arm helpers
 // would obscure the shape and force ferrying `mech` / `prev_mech` / now_ms /
 // the cap through a parameter wall.
+#[cfg(test)]
 pub async fn handle_authenticate_oauthbearer(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,

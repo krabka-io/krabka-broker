@@ -18,7 +18,9 @@ use std::{
 
 use krabka_security::JwksHandle;
 use krabka_units::{Time, convert::TimeExt};
-use krabka_verified::{JwksOnDemandDecision, jwks_on_demand_refresh_decision};
+use krabka_verified::{
+    JwksOnDemandDecision, jwks_on_demand_refresh_decision, jwks_publication_generations,
+};
 use qubit_clock::Timer;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -219,24 +221,23 @@ impl JwksRefresher {
             Ok(jwks) => {
                 let key_count = jwks.len();
                 let generation = self.cache_generation.load(Ordering::Acquire);
-                let Some(writing_generation) = generation.checked_add(1) else {
-                    tracing::error!("JWKS cache generation exhausted; fetched keys not installed");
+                let Some((writing_generation, committed_generation)) =
+                    jwks_publication_generations(generation)
+                else {
+                    tracing::error!(
+                        "JWKS cache generation exhausted or writer in flight; fetched keys not installed"
+                    );
                     return;
                 };
-                let Some(committed_generation) = writing_generation.checked_add(1) else {
-                    tracing::error!("JWKS cache generation exhausted; fetched keys not installed");
-                    return;
-                };
-                if !generation.is_multiple_of(2)
-                    || self
-                        .cache_generation
-                        .compare_exchange(
-                            generation,
-                            writing_generation,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        )
-                        .is_err()
+                if self
+                    .cache_generation
+                    .compare_exchange(
+                        generation,
+                        writing_generation,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
                 {
                     tracing::error!(
                         "JWKS cache already has an in-flight writer; fetched keys not installed"

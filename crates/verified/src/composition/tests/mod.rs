@@ -123,3 +123,5 @@ mod marker_admission;
 mod token_session;
 
 mod oauth_completion;
+
+mod jwks_publication;

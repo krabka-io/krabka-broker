@@ -289,3 +289,6 @@ use session_cap::credential_free_session_cap_bounds_requests;
 
 mod oauth_completion;
 use oauth_completion::validated_oauth_snapshot_bounds_session;
+
+mod jwks_publication;
+use jwks_publication::published_keys_bound_oauth_session;

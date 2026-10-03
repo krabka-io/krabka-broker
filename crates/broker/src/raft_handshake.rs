@@ -15,7 +15,13 @@
 //!     `correlation_id` and a 1-byte tagged-fields section.
 //!   - The `ApiVersions (18)` response header is *always* v0 by Kafka spec.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, AtomicU64},
+    },
+};
 
 use krabka_client_core::ClientDuplex;
 use krabka_raft::{
@@ -70,6 +76,9 @@ pub struct BrokerRaftHandshake {
     pub enabled_sasl_mechanisms: Vec<SaslMechanism>,
     pub gssapi: Option<crate::network::auth::GssapiConfig>,
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
+    /// Same publication metadata as the shared JWKS refresher and data listener.
+    pub oauthbearer_jwks_cache_generation: Arc<AtomicU64>,
+    pub oauthbearer_jwks_last_successful_fetch_ms: Arc<AtomicI64>,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
     /// Kafka's `delegation.token.secret.key`: the key that recomputes a
@@ -228,6 +237,8 @@ mod tests {
             enabled_sasl_mechanisms: vec![],
             gssapi: None,
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
+            oauthbearer_jwks_cache_generation: Arc::new(AtomicU64::new(0)),
+            oauthbearer_jwks_last_successful_fetch_ms: Arc::new(AtomicI64::new(0)),
             protocol: ListenerProtocol::Plaintext,
             controller: Arc::new(OnceCell::new()),
             delegation_token_secret_key: None,
