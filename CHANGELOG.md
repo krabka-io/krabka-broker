@@ -50,7 +50,7 @@ the `krabka-*` names to crates.io.
   and `krabka format`. CIDR ACL hosts (4.4-IV1) and controller unregistration
   (4.4-IV2) are therefore unreachable by default. A group resource carries
   4.3.1's 20 `GroupConfig` keys, and trunk's seven are `Unknown group config
-  name`. A topic resource carries 4.3.1's `LogConfig` keys (with krabka's
+name`. A topic resource carries 4.3.1's `LogConfig` keys (with krabka's
   own), so trunk's `remote.copy.lag.ms`, `remote.copy.lag.bytes`,
   `max.decompressed.message.bytes` and `errors.deadletterqueue.group.enable`
   are `Unknown topic config name` in `CreateTopics`, `AlterConfigs` and
