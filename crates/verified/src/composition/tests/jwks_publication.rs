@@ -2,7 +2,7 @@ use super::*;
 use crate::{jwks::*, oauth::*};
 
 // A wide integer closed-form oracle, independent of the incremental publisher.
-fn expected_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
+pub(super) fn expected_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
     let requested = fetches.iter().filter(|&&success| success).count() as u128;
     let capacity = (u128::from(u64::MAX) - 1 - u128::from(initial)) / 2;
     let installed = requested.min(capacity);

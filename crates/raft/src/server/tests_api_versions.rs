@@ -104,10 +104,12 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
                 peer: "127.0.0.1:9093".parse().unwrap(),
                 principal: None,
                 authenticated_via_token: false,
+                expires_at_ms: None,
                 grants: Arc::new(AllowAllGrants),
                 unstable,
                 limits: crate::ListenerLimits::default(),
             },
+            crate::kraft::KraftController::wall_clock_ms,
         ));
 
         for (correlation_id, (version, body, body_version, error_code, full)) in (1..).zip(rows) {

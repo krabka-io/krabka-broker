@@ -127,6 +127,7 @@ struct ConnectionContext {
     peer: SocketAddr,
     principal: Option<krabka_security::Principal>,
     authenticated_via_token: bool,
+    expires_at_ms: Option<i64>,
     grants: Arc<dyn crate::ClusterGrants>,
     /// Kafka's `unstable.*.enable` settings for this listener.
     unstable: Unstable,
@@ -214,6 +215,7 @@ pub(crate) async fn run(
                                     stream: Box::new(stream) as Box<dyn krabka_client_core::ClientDuplex>,
                                     principal: None,
                                     authenticated_via_token: false,
+                                    expires_at_ms: None,
                                     grants: Arc::new(crate::AllowAllGrants),
                                 }
                             };
@@ -227,10 +229,12 @@ pub(crate) async fn run(
                                     peer,
                                     principal: connection.principal,
                                     authenticated_via_token: connection.authenticated_via_token,
+                                    expires_at_ms: connection.expires_at_ms,
                                     grants: connection.grants,
                                     unstable,
                                     limits,
                                 },
+                                crate::kraft::KraftController::wall_clock_ms,
                             ).await {
                                 error!(%peer, error = %e, "controller connection error");
                             }
@@ -265,6 +269,7 @@ async fn handle_conn<S>(
     shard_router: Option<Arc<dyn crate::RaftShardRouter>>,
     admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
     context: ConnectionContext,
+    clock_ms: impl Fn() -> i64 + Send,
 ) -> Result<(), RaftError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -300,6 +305,14 @@ where
                         return Err(e);
                     }
                 };
+                if let Some(expiry) = context.expires_at_ms
+                    && !krabka_verified::authz::controller_request_admission(
+                        Some(expiry), api_key_n.get(), clock_ms(),
+                    )
+                {
+                    tracing::debug!(peer = %context.peer, "controller credential expired, closing");
+                    return Ok(());
+                }
                 // ApiVersions (18) is the bootstrap handshake performed by
                 // `Connection::connect`. It arrives at v0 with a header v1 (no
                 // tagged-fields byte) and expects a ResponseHeader v0 reply (also

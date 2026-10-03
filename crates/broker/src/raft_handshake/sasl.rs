@@ -34,16 +34,11 @@ fn pre_auth_state() -> ConnectionAuth {
     ConnectionAuth::Anonymous
 }
 
-/// The re-auth cap the controller listener advertises: none.
-///
-/// KIP-368 expiry is enforced lazily and per request by the data-plane
-/// dispatch loop, which closes a connection when a non-SASL api arrives on an
-/// expired session (`ConnectionAuth::expired_for_request`). This handshake
-/// hands the raw stream to the raft engine as soon as SASL completes, so no
-/// later frame passes an expiry check and a peer's re-authentication frames
-/// would never reach this loop again. A finite `session_lifetime_ms` here
-/// would therefore be a deadline the broker never enforces, so the response
-/// advertises none.
+/// Regular controller credentials have no configured reauthentication cap.
+/// OAuth and delegation-token credentials retain their own absolute deadline,
+/// which the controller checks before each request. This listener currently
+/// requires reconnecting to reauthenticate; its post-handshake SASL APIs return
+/// `ILLEGAL_SASL_STATE`.
 const CONTROLLER_MAX_REAUTH: Option<krabka_units::Time> = None;
 
 /// Waits out Kafka's `connection.failed.authentication.delay.ms`, which holds
@@ -118,7 +113,7 @@ pub(super) async fn run_inbound_sasl(
     cfg: &BrokerRaftHandshake,
     peer: &SocketAddr,
     api_versions: &dyn ControllerApiVersions,
-) -> Result<(krabka_security::Principal, bool), RaftHandshakeError> {
+) -> Result<(krabka_security::Principal, bool, Option<i64>), RaftHandshakeError> {
     let mut auth = pre_auth_state();
     // A valid `ApiVersions` has been answered before any handshake: Kafka's
     // `SaslServerAuthenticator` then takes only a `SaslHandshake`.
@@ -264,6 +259,7 @@ pub(super) async fn run_inbound_sasl(
                 if let ConnectionAuth::Authenticated {
                     principal,
                     authenticated_via_token,
+                    expires_at_ms,
                     ..
                 } = &auth
                 {
@@ -275,7 +271,7 @@ pub(super) async fn run_inbound_sasl(
                         krabka_audit::AuditOutcome::Success,
                         None,
                     );
-                    return Ok((principal.clone(), *authenticated_via_token));
+                    return Ok((principal.clone(), *authenticated_via_token, *expires_at_ms));
                 }
                 // Multi-round mechanisms and the RFC 7628 rejection exchange
                 // loop for the next `SaslAuthenticate` frame.
@@ -343,7 +339,7 @@ mod tests {
         password: &str,
     ) -> (
         SaslAuthenticateResponse,
-        Result<(krabka_security::Principal, bool), RaftHandshakeError>,
+        Result<(krabka_security::Principal, bool, Option<i64>), RaftHandshakeError>,
     ) {
         let (mut client, mut server) = tokio::io::duplex(4096);
         let task = tokio::spawn(async move {
@@ -517,10 +513,12 @@ mod tests {
         // error_code 0.
         assert!(authenticate[0..7] == [0, 0, 0, 3, 0, 0, 0]);
 
-        let (principal, via_token) = server.await.expect("server task").expect("authenticated");
+        let (principal, via_token, expires_at_ms) =
+            server.await.expect("server task").expect("authenticated");
         assert!(principal.name == "broker");
         assert!(principal.auth_method == krabka_security::AuthMethod::SaslPlain);
         assert!(!via_token);
+        assert!(expires_at_ms.is_none());
     }
 
     #[tokio::test]

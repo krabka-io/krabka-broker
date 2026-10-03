@@ -23,6 +23,9 @@ pub struct RaftConnection {
     /// Whether SCRAM authenticated with a delegation token rather than a
     /// regular credential.
     pub authenticated_via_token: bool,
+    /// Absolute credential deadline, enforced before controller request dispatch.
+    /// `None` means this credential has no finite session deadline.
+    pub expires_at_ms: Option<i64>,
     /// The cluster grants of the connection principal. The listener asks it
     /// once for each request, as Kafka's `ControllerApis` does.
     pub grants: Arc<dyn ClusterGrants>,
