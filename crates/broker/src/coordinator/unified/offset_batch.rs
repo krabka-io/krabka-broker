@@ -27,10 +27,49 @@ impl OffsetRecordBatchBuilder {
     pub(crate) fn finish(self, now_ms: i64) -> RecordBatch {
         let last_delta = i32::try_from(self.records.len().saturating_sub(1)).unwrap_or(0);
         RecordBatch {
+            base_timestamp: now_ms,
             max_timestamp: now_ms,
             records: self.records,
             last_offset_delta: last_delta,
             ..RecordBatch::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use krabka_log::{Log, LogConfig};
+    use krabka_units::convert::TimeExt;
+
+    use super::*;
+
+    #[test]
+    fn coordinator_records_roll_only_after_the_segment_age_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = LogConfig::default();
+        let roll_ms = config.segment_roll_interval.millis_i64_trunc();
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        let first_ms = 1_700_000_000_000;
+        for elapsed_ms in [0, 1, 2, 3, roll_ms] {
+            let mut builder = OffsetRecordBatchBuilder::default();
+            builder.push(
+                Bytes::from_static(b"metadata"),
+                Some(Bytes::from_static(b"value")),
+            );
+            builder.push(Bytes::from_static(b"offset"), None);
+            log.append(&mut builder.finish(first_ms + elapsed_ms))
+                .unwrap();
+        }
+        check!(log.tierable_segments().is_empty());
+
+        // Recovery must retain the original record timestamp used for rolling.
+        log.close();
+        let mut log = Log::open(dir.path(), config).unwrap();
+        let mut builder = OffsetRecordBatchBuilder::default();
+        builder.push(Bytes::from_static(b"offset"), None);
+        log.append(&mut builder.finish(first_ms + roll_ms + 1))
+            .unwrap();
+        check!(log.tierable_segments().len() == 1);
     }
 }

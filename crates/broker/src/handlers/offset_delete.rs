@@ -184,8 +184,10 @@ pub(crate) async fn handle(
     if !tombstones.is_empty() {
         let last_offset_delta =
             i32::try_from(tombstones.len().saturating_sub(1)).unwrap_or(i32::MAX);
+        let timestamp = now_ms();
         let batch = RecordBatch {
-            max_timestamp: now_ms(),
+            base_timestamp: timestamp,
+            max_timestamp: timestamp,
             last_offset_delta,
             records: tombstones,
             ..RecordBatch::default()
