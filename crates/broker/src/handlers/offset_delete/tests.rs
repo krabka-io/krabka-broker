@@ -235,6 +235,7 @@ async fn offset_delete_matches_kafka_whole_responses() {
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = request_context(&principal, &peer, "offset-delete-client");
     let version = offset_delete_response::MAX_VERSION;
+    let before_ms = super::tombstone::now_ms();
     for (name, broker, group_id, topics, want) in rows {
         let req = krabka_protocol::owned::offset_delete_request::OffsetDeleteRequest {
             group_id: group_id.into(),
@@ -251,6 +252,31 @@ async fn offset_delete_matches_kafka_whole_responses() {
         .expect("OffsetDelete");
         let resp: OffsetDeleteResponse = decode_response(&resp, version);
         check!(resp == want, "{name}");
+    }
+
+    // The successful delete writes a tombstone whose record timestamp must
+    // be the broker's clock, so later commits do not age this segment from 1970.
+    {
+        let broker = allowed.broker_arc_for_test();
+        let partition = super::local_partition_for_group(
+            &broker.controller.current_image(),
+            broker.config.node_id,
+            "classic-g",
+        )
+        .unwrap();
+        let part = broker
+            .partitions
+            .get(
+                crate::coordinator::bootstrap::OFFSETS_TOPIC,
+                krabka_ids::PartitionIndex(partition),
+            )
+            .unwrap();
+        let log = part.log.lock().unwrap();
+        let (offset, timestamp) = log
+            .offset_for_timestamp(before_ms)
+            .expect("dated tombstone");
+        check!(offset == log.log_end_offset() - 1);
+        check!(timestamp <= super::tombstone::now_ms());
     }
 
     allowed.shutdown().await;

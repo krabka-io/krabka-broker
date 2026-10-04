@@ -460,6 +460,7 @@ fn commit_records(
     commit: Commit<'_>,
 ) -> Result<CommitRecords, BrokerError> {
     let mut batch = RecordBatch {
+        base_timestamp: commit.now_ms,
         max_timestamp: commit.now_ms,
         ..RecordBatch::default()
     };
@@ -569,9 +570,44 @@ fn encode(version: i16, resp: &OffsetCommitResponse) -> Result<Bytes, BrokerErro
 #[cfg(test)]
 mod tests {
     use assert2::check;
+    use krabka_log::{Log, LogConfig};
+    use krabka_metadata::MetadataImage;
     use krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition;
+    use krabka_units::convert::TimeExt;
 
     use super::*;
+
+    #[test]
+    fn offset_commits_roll_only_after_the_segment_age_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = LogConfig::default();
+        let roll_ms = config.segment_roll_interval.millis_i64_trunc();
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        let request = OffsetCommitRequest {
+            group_id: "group".into(),
+            topics: vec![OffsetCommitRequestTopic {
+                name: "topic".into(),
+                partitions: vec![OffsetCommitRequestPartition {
+                    committed_offset: 42,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let first_ms = 1_700_000_000_000;
+        for elapsed_ms in [0, 1, 2, 3, roll_ms, roll_ms + 1] {
+            let commit = Commit {
+                now_ms: first_ms + elapsed_ms,
+                expire_timestamp_ms: None,
+                image: &image,
+            };
+            log.append(&mut commit_records(&request, commit).unwrap().batch)
+                .unwrap();
+            check!(log.tierable_segments().len() == usize::from(elapsed_ms > roll_ms));
+        }
+    }
 
     /// KIP-211: `-1` is the "use the broker's own retention" sentinel, and it
     /// is also what the decoder leaves behind for a version that does not

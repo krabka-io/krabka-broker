@@ -62,6 +62,7 @@ pub(super) async fn append_txn_batch(
 ) -> Result<Option<AppendedTxnOffsets>, i16> {
     let mut batch = RecordBatch {
         attributes: Attributes::default().with_transactional(true),
+        base_timestamp: now_ms,
         max_timestamp: now_ms,
         producer_id: req.producer_id,
         producer_epoch: req.producer_epoch,
@@ -250,6 +251,7 @@ mod tests {
         let batch = &read.batches[0];
         check!(batch.attributes.is_transactional());
         check!(batch.max_timestamp == 12_345);
+        check!(log.offset_for_timestamp(12_345) == Some((Offset(0), 12_345)));
         check!(batch.producer_id == 47);
         check!(batch.producer_epoch == 5);
         check!(batch.base_sequence == 0);
