@@ -540,6 +540,24 @@ struct VerificationCase {
     produce_version: i16,
 }
 
+async fn ready_leader_addr(
+    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
+    topic: &str,
+    partition: i32,
+    leader: i32,
+) -> String {
+    let (handle, cfg, _) = cluster
+        .iter()
+        .find(|(_, cfg, _)| i64::from(leader) == i64::try_from(cfg.node_id.0).unwrap())
+        .expect("the leader is in the cluster");
+    // Metadata can precede the local epoch and ISR installation.
+    // Wait for the selected leader's Produce gate before sending the batch.
+    handle
+        .wait_until_local_partition_leader(topic, partition, cfg.node_id)
+        .await;
+    cfg.listen_addr.to_string()
+}
+
 /// KIP-890 verification of a transactional `Produce` when the transaction
 /// coordinator is on another broker, in a cluster with ACLs.
 ///
@@ -649,11 +667,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
             .copied()
             .find(|&(_, leader)| leader != coordinator)
             .expect("a partition led by a broker that is not the coordinator");
-        let leader_addr = cluster
-            .iter()
-            .find(|(_, cfg, _)| i64::from(leader) == i64::try_from(cfg.node_id.0).unwrap())
-            .map(|(_, cfg, _)| cfg.listen_addr.to_string())
-            .expect("the leader is in the cluster");
+        let leader_addr = ready_leader_addr(&cluster, case.name, partition, leader).await;
         let to_coordinator = sasl_client_as(
             &format!("{coordinator_host}:{coordinator_port}"),
             (CLIENT_USER, CLIENT_PASS),
