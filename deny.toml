@@ -10,13 +10,6 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-    # Match O11y's existing exception for object_store 0.13's cloud XML parser.
-    # This copy is enabled only by object-store-013 for DataFusion/Parquet
-    # compatibility. It parses responses from the configured storage endpoint,
-    # not documents supplied by Kafka clients. The broker's default 0.14
-    # backend uses fixed quick-xml. Remove when the 0.13 backend upgrades XML.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
     # RSA "Marvin" timing side-channel. Pulled in transitively by `picky`
     # (a hard dependency of the vendored `sspi` Kerberos stack). Our GSSAPI
     # path is auth-only over AES keytab keys and performs no RSA private-key
