@@ -79,7 +79,7 @@ impl ReaderPool {
         // both get in when only one slot is left.
         let taken = self
             .pending
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
                 (pending < self.max_pending_tasks).then_some(pending + 1)
             });
         if taken.is_err() {

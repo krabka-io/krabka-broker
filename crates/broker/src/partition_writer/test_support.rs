@@ -120,7 +120,7 @@ impl crate::wal::WalStore for GatedWal {
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, crate::error::BrokerError> {
         if self
             .trim_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

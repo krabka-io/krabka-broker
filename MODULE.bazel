@@ -55,20 +55,12 @@ git_override(
 # same build, and is what rules_rs_mutants needs on macOS, where Xcode's
 # cc_wrapper leaves a mutant link without `DEVELOPER_DIR`.
 #
-# The toolchain's LLVM has to be the one rustc is built on (`rustc -vV`): its
-# `llvm-profdata` merges the raw profiles that `bazel coverage` collects, and it
-# refuses a raw profile from a newer LLVM ("no profile can be merged"). 0.8.18
-# ships LLVM 22.1.8, as rustc 1.98 does; 0.8.24 ships LLVM 23. Move this with
-# the Rust toolchain, not ahead of it.
-bazel_dep(name = "llvm", version = "0.8.18")
+# Keep llvm-profdata on the same LLVM major as rustc (`rustc -vV`), so
+# coverage can merge the raw profiles. Rust 1.99 uses LLVM 23.
+bazel_dep(name = "llvm", version = "0.8.24")
 
-# rules_rs merges coverage with this module's llvm-profdata, which reads only
-# the raw profile version of its own LLVM. rustc writes the version of the LLVM
-# it was built on, so the two majors must match: 22.x for Rust 1.98 (`rustc
-# -vV` prints it). The module's own default, 23.x, fails every test in `bazel
-# coverage` with "raw profile version mismatch". Move this with the toolchain.
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
-llvm.version(llvm_version = "22.1.8")
+llvm.version(llvm_version = "23.1.2")
 use_repo(llvm, "llvm-project")
 
 register_toolchains("@llvm//toolchain:all")
