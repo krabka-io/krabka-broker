@@ -1,18 +1,15 @@
 # Mutation Sweep Baseline
 
-The mutation sweeps are a
-[nightly gate](https://github.com/krabka-io/krabka-broker/blob/2a08a12ad4003c4c0807391ada24cfb89959b697/.github/workflows/mutants.yml), not an on-demand check. The
-`mutants` workflow runs every Sunday at 07:00 UTC over the crates listed below,
-splitting each crate's sweep across the shard width its `BUILD.bazel` declares.
+The scheduled `mutants` workflow has been removed. Run mutation sweeps locally
+with the commands in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 A shard fails when a mutant it built and ran survived every test, because
 [`.cargo/mutants.toml`](../.cargo/mutants.toml) admits no survivor baseline:
 the excluded and equivalent mutants are named there individually, with a line
 saying why, and everything else has to die.
 
 The table records, per crate, the last scheduled run in which every shard of
-that crate passed. It is the answer to "is this crate's sweep currently green,
-and when was it last known to be". A crate whose row is old is a crate whose
-mutation coverage nobody has confirmed since that date.
+that crate passed. CI no longer updates these rows. They do not show the
+current mutation-test status.
 
 <!-- BEGIN last-green -->
 | Crate | Last green sweep | Run |
@@ -27,7 +24,13 @@ mutation coverage nobody has confirmed since that date.
 | `verified` | never | -- |
 <!-- END last-green -->
 
-## How the table is maintained
+## Archived workflow behavior
+
+The notes below describe the removed workflow. It ran every Sunday at
+07:00 UTC over the crates listed above, splitting each crate's sweep across
+the shard width its `BUILD.bazel` declares.
+
+### How the table was maintained
 
 The workflow's `report` job rewrites the rows between the two comment markers
 above and commits the result to the default branch. Only the crates that were
@@ -44,7 +47,7 @@ summary is the record whenever the commit did not land. If the dates below are
 stale while the workflow is green, the push is what is failing: the run's
 summary carries a `could not push` warning, and the table in it is current.
 
-## Reading a red sweep
+### Reading a red sweep
 
 Every shard uploads its log as `mutants-<crate>-<shard>`, holding `sweep.log`
 -- the whole shard, including the `N mutants: C caught, M missed, U unviable`

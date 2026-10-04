@@ -213,7 +213,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self
                 .fail_submissions
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::SeqCst,
                     std::sync::atomic::Ordering::SeqCst,
                     |remaining| remaining.checked_sub(1),

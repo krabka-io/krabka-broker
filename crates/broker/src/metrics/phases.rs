@@ -58,7 +58,7 @@ impl RequestPhases {
     /// nearly zero and report a request as instantaneous.
     fn add(slot: &AtomicU64, elapsed: Duration) {
         let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
-        slot.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        slot.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             Some(current.saturating_add(nanos))
         })
         .ok();

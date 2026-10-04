@@ -824,9 +824,9 @@ mod wire_tests {
 
     /// A request older than v3 has no `previousBrokerEpoch` field to carry a
     /// proof, so the controller cannot detect a clean shutdown and assumes
-    /// unclean -- Kafka's `cleanShutdownDetectionEnabled = requestApiVersion
-    /// >= 3`. The epoch on the struct is ignored because it never reaches the
-    /// wire.
+    /// unclean -- Kafka enables `cleanShutdownDetectionEnabled` only when
+    /// `requestApiVersion >= 3`. The epoch on the struct is ignored because it
+    /// never reaches the wire.
     #[tokio::test]
     async fn a_pre_v3_registration_cannot_prove_anything() {
         assert!(

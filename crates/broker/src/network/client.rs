@@ -1,6 +1,6 @@
 //! Outbound inter-broker client. It establishes TCP, and it optionally wraps
 //! the connection in TLS and runs the SASL client handshake. It returns a
-//! generic `AsyncRead + `AsyncWrite` stream that the caller uses for normal
+//! generic `AsyncRead` + `AsyncWrite` stream that the caller uses for normal
 //! RPCs.
 //!
 //! The replicator's Fetch path, the raft transport's outbound dial, and the
