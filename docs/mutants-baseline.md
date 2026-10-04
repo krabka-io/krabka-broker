@@ -1,7 +1,7 @@
 # Mutation Sweep Baseline
 
 The mutation sweeps are a
-[nightly gate](../.github/workflows/mutants.yml), not an on-demand check. The
+[nightly gate](https://github.com/krabka-io/krabka-broker/blob/2a08a12ad4003c4c0807391ada24cfb89959b697/.github/workflows/mutants.yml), not an on-demand check. The
 `mutants` workflow runs every Sunday at 07:00 UTC over the crates listed below,
 splitting each crate's sweep across the shard width its `BUILD.bazel` declares.
 A shard fails when a mutant it built and ran survived every test, because
