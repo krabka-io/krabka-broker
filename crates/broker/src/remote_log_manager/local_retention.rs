@@ -594,6 +594,7 @@ mod tests {
             let mut b = batch(2);
             log.append(&mut b).unwrap();
         }
+        log.sync().expect("flush sealed segments before archiving");
         let exports = log.tierable_segments();
         assert!(exports.len() >= 2, "test needs multiple sealed segments");
         let log_config = log.config_snapshot();
