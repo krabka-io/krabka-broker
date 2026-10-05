@@ -354,9 +354,11 @@ the `krabka-*` names to crates.io.
   listener, as Kafka's `ControllerServer` opens only the listeners that
   `controller.listener.names` names. Before, it also bound `--listen-addr`,
   `127.0.0.1:9092` by default, so a client reached it there and two
-  controller-only nodes on one host competed for that port. The node binds
-  none of its `[[listeners]]`, with a warning, and closes a data-plane
-  listener passed to `Broker::start_with_listeners`. It starts no KIP-405
+  controller-only nodes on one host competed for that port. A
+  controller-only node that names `[[listeners]]` does not start: Kafka's
+  `KafkaConfig` refuses a `listeners` config that names any listener outside
+  `controller.listener.names` when `process.roles=controller`. The node closes
+  a data-plane listener passed to `Broker::start_with_listeners`. It starts no KIP-405
   tiered storage, which Kafka runs on brokers only. Every node now logs
   `krabka-broker started` when its start is complete, as Kafka logs
   `Kafka Server started`. The line names `listen_addr` for the client

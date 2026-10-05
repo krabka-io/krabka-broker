@@ -95,13 +95,6 @@ pub(super) async fn bind_listeners_and_recover_moves(
     partitions: &Arc<PartitionRegistry>,
     throttle_state: &Arc<crate::throttle::ThrottleState>,
 ) -> Result<ListenerStartup, BrokerError> {
-    if !config.is_broker() && !config.listeners.is_empty() {
-        tracing::warn!(
-            listeners = config.listeners.len(),
-            "a node without the broker role opens no data-plane listener; its [[listeners]] \
-             entries are not bound"
-        );
-    }
     let bound = adopt_or_bind_listeners(
         Sockets::TARGET,
         data_plane_listener_specs(config),
