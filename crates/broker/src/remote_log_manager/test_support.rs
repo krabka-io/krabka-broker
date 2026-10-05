@@ -203,6 +203,7 @@ pub fn rolled_log(dir: &std::path::Path) -> Log {
         let mut b = batch(2);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     log
 }
 
@@ -230,6 +231,7 @@ pub fn rolled_tiered_partition_at(
         let mut b = batch(2);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     leading_partition_over(index, log_dir, log)
 }
 

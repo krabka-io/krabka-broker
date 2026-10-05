@@ -257,6 +257,8 @@ jobs:
 
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
+          # Avoid the cli.codecov.io download endpoint's TLS handshake failures.
+          use_pypi: true
           use_oidc: true
           files: bazel-out/_coverage/_coverage_report.dat
           disable_search: true

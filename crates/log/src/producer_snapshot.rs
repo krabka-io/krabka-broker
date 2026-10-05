@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bytes::{BufMut as _, BytesMut};
+use bytes::BufMut as _;
 use krabka_ids::{Offset, ProducerId};
 use krabka_verified::producer_snapshot::{self as kernel, ProducerReloadRange};
 
@@ -201,29 +201,103 @@ pub(crate) fn write(
     offset: Offset,
     entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
 ) -> Result<PathBuf, LogError> {
+    write_if_missing(io, dir, offset, || prepare(dir, offset, entries))
+}
+
+fn write_if_missing(
+    io: &dyn LogIo,
+    dir: &Path,
+    offset: Offset,
+    prepare: impl FnOnce() -> Result<PreparedSnapshot, LogError>,
+) -> Result<PathBuf, LogError> {
     let destination = path(dir, offset);
     if destination.exists() {
+        // A prior rename may have succeeded while its directory sync failed.
+        io.sync_dir(dir)?;
         return Ok(destination);
     }
+    Ok(prepare()?.write(io)?)
+}
 
-    let bytes = encode(entries)?;
-    let temporary = destination.with_extension("snapshot.tmp");
-    let file = File::create(&temporary)?;
-    crate::io::write_all(io, IoTarget::ProducerSnapshot, &file, &bytes)?;
-    io.sync_file(IoTarget::ProducerSnapshot, &file)?;
-    drop(file);
-    io.rename(IoTarget::ProducerSnapshot, &temporary, &destination)?;
-    Ok(destination)
+/// Captured at the roll boundary, before subsequent appends change the state.
+#[derive(Debug)]
+pub(crate) struct PreparedSnapshot {
+    dir: PathBuf,
+    offset: Offset,
+    bytes: Vec<u8>,
+}
+
+#[cfg(all(test, not(target_os = "wasi")))]
+std::thread_local! {
+    static PREPARING: std::cell::RefCell<Option<std::sync::mpsc::Sender<()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, not(target_os = "wasi")))]
+pub(crate) fn test_observe_prepare(observer: std::sync::mpsc::Sender<()>) {
+    PREPARING.set(Some(observer));
+}
+
+pub(crate) fn prepare(
+    dir: &Path,
+    offset: Offset,
+    entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
+) -> Result<PreparedSnapshot, LogError> {
+    #[cfg(all(test, not(target_os = "wasi")))]
+    PREPARING.with_borrow(|observer| {
+        if let Some(observer) = observer {
+            let _ = observer.send(());
+        }
+    });
+    Ok(PreparedSnapshot {
+        dir: dir.to_path_buf(),
+        offset,
+        bytes: encode(entries)?,
+    })
+}
+
+impl PreparedSnapshot {
+    pub(crate) fn write(&self, io: &dyn LogIo) -> std::io::Result<PathBuf> {
+        let destination = path(&self.dir, self.offset);
+        if destination.exists() {
+            io.sync_dir(&self.dir)?;
+            return Ok(destination);
+        }
+
+        let temporary = destination.with_extension("snapshot.tmp");
+        let file = File::create(&temporary)?;
+        crate::io::write_all(io, IoTarget::ProducerSnapshot, &file, &self.bytes)?;
+        io.sync_file(IoTarget::ProducerSnapshot, &file)?;
+        drop(file);
+        io.rename(IoTarget::ProducerSnapshot, &temporary, &destination)?;
+        io.sync_dir(&self.dir)?;
+        Ok(destination)
+    }
+}
+
+fn encoded_size(entries: usize) -> Result<usize, LogError> {
+    HEADER_LEN
+        .checked_add(4)
+        .and_then(|size| size.checked_add(entries.checked_mul(ENTRY_LEN)?))
+        .ok_or_else(|| LogError::InvalidArgument("producer snapshot size overflow".into()))
+}
+
+#[cfg(not(target_os = "wasi"))]
+pub(crate) fn allocation_size(entries: usize) -> Result<usize, LogError> {
+    encoded_size(entries)?
+        .checked_add(
+            entries
+                .checked_mul(std::mem::size_of::<ProducerSnapshotEntry>())
+                .ok_or_else(|| {
+                    LogError::InvalidArgument("producer snapshot size overflow".into())
+                })?,
+        )
+        .ok_or_else(|| LogError::InvalidArgument("producer snapshot size overflow".into()))
 }
 
 fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8>, LogError> {
     let count = i32::try_from(entries.len())
         .map_err(|_| LogError::InvalidArgument("too many producer snapshot entries".into()))?;
-    let capacity = HEADER_LEN
-        .checked_add(4)
-        .and_then(|size| size.checked_add(entries.len().checked_mul(ENTRY_LEN)?))
-        .ok_or_else(|| LogError::InvalidArgument("producer snapshot size overflow".into()))?;
-    let mut buffer = BytesMut::with_capacity(capacity);
+    let mut buffer = Vec::with_capacity(encoded_size(entries.len())?);
     buffer.put_i16(VERSION);
     buffer.put_u32(0);
     buffer.put_i32(count);
@@ -243,7 +317,7 @@ fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8
 
     let crc = crc32c::crc32c(&buffer[HEADER_LEN..]);
     buffer[2..6].copy_from_slice(&crc.to_be_bytes());
-    Ok(buffer.to_vec())
+    Ok(buffer)
 }
 
 fn read(
@@ -600,6 +674,69 @@ mod tests {
 
         assert2::assert!(write(&FileIo, dir.path(), Offset(102), &HashMap::new()).unwrap() == path);
         assert2::assert!(read(&path, Offset(102)).unwrap() == first);
+    }
+
+    #[derive(Debug, Default)]
+    struct DirectoryDebt {
+        fail: std::sync::atomic::AtomicBool,
+        syncs: std::sync::atomic::AtomicUsize,
+    }
+
+    impl LogIo for DirectoryDebt {
+        fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.syncs.fetch_add(1, SeqCst);
+            if self.fail.load(SeqCst) {
+                Err(std::io::ErrorKind::StorageFull.into())
+            } else {
+                FileIo.sync_dir(dir)
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_retry_pays_directory_sync_debt_without_overwriting_state() {
+        use std::sync::atomic::Ordering::SeqCst;
+        for prepared in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let io = DirectoryDebt::default();
+            io.fail.store(true, SeqCst);
+            let snapshot = prepare(dir.path(), Offset(102), &sample()).unwrap();
+            let attempt = || {
+                if prepared {
+                    snapshot.write(&io).map_err(LogError::from)
+                } else {
+                    write(&io, dir.path(), Offset(102), &sample())
+                }
+            };
+            assert2::assert!(
+                matches!(attempt(), Err(LogError::Io(e)) if e.kind() == std::io::ErrorKind::StorageFull)
+            );
+            // The rename succeeded, but this name still owes directory durability.
+            assert2::assert!(path(dir.path(), Offset(102)).exists());
+            assert2::assert!(
+                matches!(attempt(), Err(LogError::Io(e)) if e.kind() == std::io::ErrorKind::StorageFull)
+            );
+            io.fail.store(false, SeqCst);
+            let destination = attempt().unwrap();
+            assert2::assert!(io.syncs.load(SeqCst) == 3);
+            assert2::assert!(read(&destination, Offset(102)).unwrap() == sample());
+        }
+    }
+
+    #[test]
+    fn existing_snapshot_does_not_prepare_state_but_still_syncs_the_directory() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let io = DirectoryDebt::default();
+        let result = write_if_missing(&io, dir.path(), Offset(102), || {
+            panic!("an existing snapshot must not encode or sort producer state")
+        })
+        .unwrap();
+        assert2::assert!(result == destination);
+        assert2::assert!(io.syncs.load(SeqCst) == 1);
+        assert2::assert!(read(&destination, Offset(102)).unwrap() == sample());
     }
 
     #[test]

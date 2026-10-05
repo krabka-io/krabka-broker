@@ -48,6 +48,7 @@ impl Log {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn tick(&mut self, now: SystemTime, high_watermark: Offset) -> Result<(), LogError> {
+        self.rollover_flusher.check()?;
         // Tiered topics' segment lifecycle is owned by the RemoteLogManager.
         if self.config.read().unwrap().remote_storage_enable {
             return Ok(());
@@ -136,6 +137,9 @@ impl Log {
             .take(evict_len)
             .map(Segment::base_offset)
             .collect();
+        if !to_evict.is_empty() {
+            self.rollover_flusher.finish()?;
+        }
 
         // Unlink first, and forget only what actually left the disk. A failed
         // unlink otherwise drops the segment from `self.segments` -- and from

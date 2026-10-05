@@ -34,6 +34,7 @@ mod delivery;
 mod faults;
 mod open;
 mod read;
+mod rollover_flush;
 mod stamp;
 mod state;
 mod sync;
@@ -74,6 +75,7 @@ pub struct Log {
     segments: Vec<Segment>,
     active: Option<Segment>,
     dir_sync_needed: bool,
+    rollover_flusher: rollover_flush::Flusher,
     /// The global log start (Kafka's `logStartOffset`): the first offset any
     /// reader may ask for, wherever the records for it live.
     ///

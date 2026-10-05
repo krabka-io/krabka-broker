@@ -457,6 +457,7 @@ async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
         }
         let end = log.log_end_offset().0;
         let seed = expected[1].3;
+        log.sync().unwrap();
         assert!(krabka_log::name::producer_snapshot_path(dir.path(), seed).exists());
         drop(log);
         for offset in (seed + 1)..=end {
@@ -533,8 +534,8 @@ async fn replay_chooses_first_retained_alias_after_sequence_wrap() {
         })
         .unwrap();
     }
-    assert!(krabka_log::name::producer_snapshot_path(dir.path(), 1).exists());
     log.sync().unwrap();
+    assert!(krabka_log::name::producer_snapshot_path(dir.path(), 1).exists());
     drop(log);
     for offset in [i64::from(i32::MAX) + 1, i64::from(i32::MAX) + 2] {
         let path = krabka_log::name::producer_snapshot_path(dir.path(), offset);

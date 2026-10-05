@@ -50,7 +50,7 @@ pub(crate) mod sync_observer {
 }
 
 impl Log {
-    /// Flush and `fsync` the active segment to stable storage, independent of
+    /// Drain rollover work and `fsync` every segment to stable storage, independent of
     /// [`crate::LogConfig::flush_on_append`].
     ///
     /// This method also fsyncs the log directory after it creates a new
@@ -60,6 +60,7 @@ impl Log {
     /// # Errors
     /// Returns a [`LogError`] if the underlying segment or directory flush fails.
     pub fn sync(&mut self) -> Result<(), LogError> {
+        self.rollover_flusher.finish()?;
         for segment in &mut self.segments {
             Self::segment_flush(segment)?;
         }
@@ -191,10 +192,8 @@ mod tests {
         log.append(&mut sample_batch(1)).unwrap();
         log.sync().unwrap();
 
-        // Rolling flushes offset 0 before publishing its producer snapshot;
-        // explicit sync then flushes both the sealed and active segments.
-        assert2::assert!(
-            sync_observer::take_segment_flushes() == vec![Offset(0), Offset(0), Offset(1)]
-        );
+        // The rollover worker flushed offset 0 before its snapshot. This
+        // thread's explicit sync then flushes sealed and active segments.
+        assert2::assert!(sync_observer::take_segment_flushes() == vec![Offset(0), Offset(1)]);
     }
 }

@@ -353,6 +353,7 @@ impl Log {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn compact(&mut self, ctx: &CompactionContext) -> Result<(), LogError> {
+        self.rollover_flusher.check()?;
         if self.segments.is_empty() {
             return Ok(());
         }
@@ -394,6 +395,7 @@ impl Log {
         // `.swap` files are written before any of them is promoted. One
         // transaction tracker walks all the groups in order, as a transaction
         // can span two of them.
+        self.rollover_flusher.finish()?;
         let mut rewrites: Vec<(Vec<Offset>, crate::compact::RewriteOutput)> = Vec::new();
         {
             let sealed_refs: Vec<&Segment> = self.segments[..consumed].iter().collect();

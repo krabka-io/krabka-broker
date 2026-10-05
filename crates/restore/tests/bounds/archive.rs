@@ -72,6 +72,7 @@ pub(crate) fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBa
     log.append(&mut roll_trigger())
         .expect("append roll trigger");
 
+    log.sync().unwrap();
     let sealed = log.tierable_segments();
     assert!(
         sealed.len() == batches.len(),

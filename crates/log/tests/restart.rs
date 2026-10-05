@@ -189,8 +189,8 @@ fn a_reopened_segment_keeps_a_maximum_that_predates_its_newest_batch() {
         for ts in [now_ms, stale_ms, stale_ms, now_ms, now_ms] {
             log.append(&mut batch_at(ts)).unwrap();
         }
-        check!(log.tierable_segments().len() == 1);
         log.sync().unwrap();
+        check!(log.tierable_segments().len() == 1);
     }
 
     let mut log = Log::open(dir.path(), config).unwrap();
