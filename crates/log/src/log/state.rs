@@ -326,22 +326,6 @@ impl Log {
         self.pending.get(&producer_id).copied()
     }
 
-    /// Transaction fields reported by `DescribeProducers` for `producer_id`.
-    ///
-    /// The coordinator epoch is the last epoch embedded in a durable end
-    /// marker, or `-1` before the first marker. The start offset is present
-    /// only while a transaction is open on this partition.
-    #[must_use]
-    pub fn producer_transaction_state(&self, producer_id: ProducerId) -> (i32, Option<Offset>) {
-        (
-            self.coordinator_epochs
-                .get(&producer_id)
-                .copied()
-                .unwrap_or(-1),
-            self.pending_transaction_start(producer_id),
-        )
-    }
-
     /// Producer and coordinator generations used to admit one transaction
     /// marker, plus whether that producer currently has an open transaction.
     /// Missing generations use Kafka's `-1` sentinel.

@@ -700,6 +700,7 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::InvalidInterBrokerListener { .. }
         | BrokerError::EmptyRoles
         | BrokerError::NonControllerIsVoter { .. }
+        | BrokerError::ControllerOnlyNodeListeners { .. }
         | BrokerError::WitnessRequiresBrokerRole
         | BrokerError::WitnessRequiresControllerRole
         | BrokerError::StretchProfileNeedsThreeSites { .. }

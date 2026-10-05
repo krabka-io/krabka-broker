@@ -1,8 +1,12 @@
-//! The writer's Compact arm and the producer snapshot that feeds it.
+//! The writer's Compact arm.
 //!
-//! Compaction is the one writer message that has to consult producer state
-//! before it touches the log, because an active producer id must survive the
-//! rewrite, so that lookup lives next to the arm that needs it.
+//! A pass keeps the last record of each active producer, so that the state of
+//! the producer survives the rewrite. [`Log::compact`] reads those records
+//! from the producer state of the log, which a leader and a follower both
+//! update for each batch that they append. This is Kafka's
+//! `Cleaner.cleanSegments`, which reads `UnifiedLog.lastRecordsOfActiveProducers`
+//! on every replica. The tracker of the produce path does not take part: on a
+//! follower it does not hold the replicated data batches.
 
 use std::{
     path::PathBuf,
@@ -10,39 +14,16 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use krabka_ids::PartitionIndex;
 use krabka_log::Log;
-use krabka_units::Time;
 
 use super::storage::{flag_storage_failure, lock_log, storage_failure_error};
-use crate::{
-    log_dir_status::LogDirRegistry, producer_state::ProducerState, replica_state::ReplicaState,
-};
-
-async fn active_producers_for_compaction(
-    producer_state: &ProducerState,
-    topic: &str,
-    partition: PartitionIndex,
-    now_ms: i64,
-    producer_id_expiration: Time,
-) -> std::collections::HashMap<krabka_log::ProducerId, krabka_log::ProducerLastRecord> {
-    producer_state
-        .active_snapshot(topic, partition, now_ms, producer_id_expiration)
-        .await
-        .into_iter()
-        .map(|(producer_id, last)| (krabka_log::ProducerId(producer_id), last))
-        .collect()
-}
+use crate::{log_dir_status::LogDirRegistry, replica_state::ReplicaState};
 
 pub(super) async fn handle_compact(
-    identity: (&str, PartitionIndex),
     storage: (&Arc<Mutex<Log>>, &Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
-    producer_state: &ProducerState,
-    producer_id_expiration: Time,
     replica_state: &tokio::sync::Mutex<ReplicaState>,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
 ) {
-    let (topic, partition) = identity;
     let (log, log_dir, log_dir_status) = storage;
     // The pass is bounded at the last stable offset, not the high watermark:
     // Kafka's `LogCleanerManager.cleanableOffsets` takes `lastStableOffset`,
@@ -55,19 +36,6 @@ pub(super) async fn handle_compact(
     // rewrite.
     let high_watermark = replica_state.lock().await.hw;
     let now = std::time::SystemTime::now();
-    let now_ms = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-        });
-    let active_producers = active_producers_for_compaction(
-        producer_state,
-        topic,
-        partition,
-        now_ms,
-        producer_id_expiration,
-    )
-    .await;
     let log_for_blocking = Arc::clone(log);
     let join = crate::blocking::spawn_blocking(move || {
         let mut log = lock_log(&log_for_blocking);
@@ -75,7 +43,6 @@ pub(super) async fn handle_compact(
         let context = krabka_log::CompactionContext {
             now,
             last_stable_offset,
-            active_producers,
         };
         log.compact(&context)
             .map_err(crate::error::BrokerError::from)
@@ -88,40 +55,4 @@ pub(super) async fn handle_compact(
         flag_storage_failure(err, log_dir, log_dir_status);
     }
     let _ = ack.send(result);
-}
-
-#[cfg(test)]
-mod tests {
-    use assert2::assert;
-    use krabka_log::Offset;
-    use krabka_units::millis;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn nondefault_ttl_controls_producer_compaction_snapshot() {
-        let state = ProducerState::new();
-        state
-            .commit("t", PartitionIndex(0), (7, 0), (0, 0), (12, 100, false))
-            .await;
-
-        let expired =
-            active_producers_for_compaction(&state, "t", PartitionIndex(0), 102, millis(2)).await;
-        let active =
-            active_producers_for_compaction(&state, "t", PartitionIndex(0), 102, millis(3)).await;
-
-        assert!(expired.is_empty());
-        assert!(
-            active
-                == [(
-                    krabka_log::ProducerId(7),
-                    krabka_log::ProducerLastRecord {
-                        last_data_offset: Some(Offset(12)),
-                        producer_epoch: 0,
-                    },
-                )]
-                .into_iter()
-                .collect()
-        );
-    }
 }

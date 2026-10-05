@@ -94,6 +94,7 @@ pub(super) fn spawn_storage_security_maintenance(
 
 fn spawn_producer_expiry(
     producer_state: Arc<crate::producer_state::ProducerState>,
+    partitions: Arc<PartitionRegistry>,
     scan_interval: Time,
     expiration: Time,
     shutdown: CancellationToken,
@@ -109,14 +110,39 @@ fn spawn_producer_expiry(
         loop {
             tokio::select! {
                 _ = tick.tick() => {
-                    producer_state
-                        .expire_older_than(crate::time_util::now_ms(), expiration)
-                        .await;
+                    let now_ms = crate::time_util::now_ms();
+                    producer_state.expire_older_than(now_ms, expiration).await;
+                    expire_log_producers(&partitions, now_ms, expiration).await;
                 }
                 () = shutdown.cancelled() => return,
             }
         }
     });
+}
+
+/// Remove the expired producers from the log of every partition that this
+/// broker hosts, leader or follower.
+///
+/// Kafka's `PeriodicProducerExpirationCheck` runs
+/// `ProducerStateManager.removeExpiredProducers` on each `UnifiedLog`, and
+/// `DescribeProducers` answers from that state. The logs are locked on the
+/// blocking pool: a log lock can wait behind a segment write, and that wait
+/// must not hold a runtime worker thread.
+async fn expire_log_producers(partitions: &PartitionRegistry, now_ms: i64, expiration: Time) {
+    let hosted = partitions.arcs();
+    let expiration_ms = expiration.millis_i64();
+    let sweep = crate::blocking::spawn_blocking(move || {
+        for partition in hosted {
+            partition
+                .log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove_expired_producers(now_ms, expiration_ms);
+        }
+    });
+    if let Err(error) = sweep.await {
+        tracing::warn!(%error, "producer expiry over the partition logs failed");
+    }
 }
 
 fn cleaner_config(config: &BrokerConfig) -> crate::cleaner::CleanerConfig {
@@ -167,6 +193,7 @@ pub(super) fn spawn_cluster_data_maintenance(
     ));
     spawn_producer_expiry(
         Arc::clone(producer_state),
+        Arc::clone(partitions),
         config.producer_id_expiration_scan_interval,
         config.producer_id_expiration,
         shutdown.child_token(),
@@ -204,4 +231,76 @@ pub(super) fn spawn_cluster_data_maintenance(
         shutdown.child_token(),
         metrics.clone(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::assert;
+    use bytes::Bytes;
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{ActiveProducer, ProducerId};
+    use krabka_protocol::records::{Record, RecordBatch};
+    use tokio::sync::Notify;
+
+    use super::expire_log_producers;
+    use crate::{partition::test_support::test_partition, partition_registry::PartitionRegistry};
+
+    /// A one-record idempotent batch of `producer_id` at sequence 0.
+    fn idempotent_batch(producer_id: i64, max_timestamp: i64) -> RecordBatch {
+        RecordBatch {
+            base_timestamp: max_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch: 0,
+            base_sequence: 0,
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"v")),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        }
+    }
+
+    /// Kafka runs `removeExpiredProducers` on every `UnifiedLog` that the
+    /// broker hosts. The sweep removes the producer whose last write is
+    /// `producer.id.expiration.ms` old from the log of each hosted partition,
+    /// and keeps the recent one.
+    #[tokio::test]
+    async fn the_producer_expiry_sweeps_the_log_of_every_hosted_partition() {
+        const TOPICS: [&str; 2] = ["first", "second"];
+        let partitions = PartitionRegistry::new();
+        let mut dirs = Vec::new();
+        for topic in TOPICS {
+            let (partition, dir) = test_partition(Arc::new(Notify::new()));
+            {
+                let mut log = partition.log.lock().expect("log lock");
+                log.append(&mut idempotent_batch(1, 1_000))
+                    .expect("append the idle producer");
+                log.append(&mut idempotent_batch(2, 9_500))
+                    .expect("append the recent producer");
+            }
+            partitions.insert(Arc::from(topic), PartitionIndex(0), Arc::new(partition));
+            dirs.push(dir);
+        }
+
+        expire_log_producers(&partitions, 10_000, krabka_units::millis(1_000)).await;
+
+        let recent = vec![ActiveProducer {
+            producer_id: ProducerId(2),
+            producer_epoch: 0,
+            last_sequence: 0,
+            last_timestamp: 9_500,
+            coordinator_epoch: -1,
+            current_txn_start_offset: None,
+        }];
+        for topic in TOPICS {
+            let partition = partitions
+                .get(topic, PartitionIndex(0))
+                .expect("hosted partition");
+            let active = partition.log.lock().expect("log lock").active_producers();
+            assert!(active == recent, "{topic}");
+        }
+    }
 }

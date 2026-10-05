@@ -26,6 +26,10 @@ mod support;
 // Cargo compiles this file as its own test binary, so `#[path]` re-bases the
 // part onto the sibling `replication/` directory, where it does not become a
 // test binary of its own.
+#[path = "replication/compaction_replicas.rs"]
+mod compaction_replicas;
+#[path = "replication/describe_producers_replicas.rs"]
+mod describe_producers_replicas;
 #[path = "replication/idempotent_failover.rs"]
 mod idempotent_failover;
 

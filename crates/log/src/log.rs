@@ -26,6 +26,7 @@ use crate::{
     txn_index::TxnIndex,
 };
 
+mod active_producers;
 mod append;
 mod compaction;
 pub(crate) mod control;
@@ -49,6 +50,7 @@ mod verbatim;
 mod verification;
 
 pub use self::{
+    active_producers::ActiveProducer,
     compaction::CompactionContext,
     control::BARRIER_CONTROL_TYPE,
     read::{RawRead, ReadOutput},

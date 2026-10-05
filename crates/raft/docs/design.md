@@ -80,6 +80,20 @@ The voters of a dynamic format are in the bootstrap checkpoint, and a replica th
 
 A controller bound to a wildcard address advertises the host name of its machine, in its voter updates and in its `RegisterControllerRecord`, as Kafka's `ListenerInfo.withWildcardHostnamesResolved` does. A loopback address there would send the heartbeats of every other node back to that node.
 
+### Bootstrap records
+
+The bootstrap records seed the metadata of a new cluster: the feature levels, with `metadata.version` first, and the SCRAM credentials, ACLs and topics that the format adds. Only the active controller writes them, once, as Kafka's `QuorumController` does in its activation with `ActivationRecordsGenerator.recordsForEmptyLog`. A broker never writes them. Every replica, a broker-only observer too, applies them from the log.
+
+The records come from one of two sources. A static quorum gives them to `ControllerConfig::bootstrap_records`, from the `bootstrap.records.bin` that `krabka-format` writes into the metadata log directory, Kafka's `bootstrap.checkpoint`. A dynamic quorum also has the bootstrap checkpoint, `00000000000000000000-0000000000.checkpoint`. `KraftController::open` in [`kraft/controller/startup.rs`](../src/kraft/controller/startup.rs) takes the KIP-853 control state of that checkpoint, but it does not apply the metadata records of the checkpoint to the image. They replace the configured records when there are any, as Kafka's `handleLoadBootstrap` does. Kafka's `MetadataLoader` ignores the bootstrap checkpoint in the same way, and the leader never sends it in a `FetchSnapshot` answer. Records that do not finalize `metadata.version` stop the start, as Kafka's `BootstrapMetadata.fromRecords` stops it. A last `FeatureLevelRecord` at level 0 removes `metadata.version`, so it stops the start too.
+
+[`kraft/controller/activation.rs`](../src/kraft/controller/activation.rs) appends the records directly after the `LeaderChange` batch of a new epoch, so they come before every other write of the epoch. It appends them only when the log holds no `metadata.version`. The committed image counts, and so do the batches between the high watermark and the epoch start, which an earlier leader appended and which commit with the new epoch. A new leader of a seeded log, and a leader of a later epoch, write nothing. The records go through the same validation and encoding as `submit_change`.
+
+When the bootstrap records finalize `eligible.leader.replicas.version` above 0, the same batch ends with the cluster-level `min.insync.replicas`: a `ConfigRecord` of the `BROKER` resource `""`, at the static `min.insync.replicas` of the controller, `ControllerConfig::default_min_insync_replicas`. Kafka's `recordsForEmptyLog` writes it in the same place and at the same value. The batch commits whole, as Kafka writes these records in one atomic batch or metadata transaction.
+
+A leader that refuses its own activation records, or that cannot read its log tail to decide, stops its engine. The controller then publishes `exception while completing controller activation`, the `failureMessage` of Kafka's `QuorumController`, with the cause, on `watch_fatal`, and the broker process halts with status 1, as it does over an unsupported feature level.
+
+A broker waits until its image finalizes `metadata.version` before it registers, as Kafka's broker publishes no metadata before its `MetadataLoader` catches up. A controller-only node does not wait: it registers once its image finalizes a `metadata.version` that supports `ControllerRegistration`.
+
 ## Integration
 
 ### What the broker builds on top
@@ -98,7 +112,7 @@ The controller policy runs in the broker crate, on whichever node currently lead
 
 - **Storage.** `KraftLog` sits on [`krabka-log`](../../log/docs/design.md), which owns the segment files, the leader-epoch checkpoint, the log-start-offset checkpoint that carries a prune inside the active segment across a restart, and fsync. A write to the metadata log directory that returns an I/O error stops the engine, and the controller publishes it as a fatal fault: Kafka shuts a node down when its metadata log directory fails (KIP-858).
 - **Transport.** Outbound peer RPCs use `krabka_client_core::Connection::raw_request` over one cached connection per voter, in [`network/peer_sender.rs`](../src/network/peer_sender.rs).
-- **Formatting.** A node refuses to boot on an unformatted directory. [`krabka-format`](../../format/src/lib.rs) seeds Kafka's `meta.properties`, the bootstrap records, and the singleton `VotersRecord`.
+- **Formatting.** A node refuses to boot on an unformatted directory. [`krabka-format`](../../format/src/lib.rs) writes Kafka's `meta.properties`, the bootstrap records, and the singleton `VotersRecord`. The active controller writes the bootstrap records to the log, as [Bootstrap records](#bootstrap-records) describes.
 - **Diskless WAL shards.** The [diskless WAL](../../broker/docs/diskless-wal-design.md) reuses the KIP-595 `Fetch` envelope, the `LogView` seam, and the `RaftShardRouter` hook, and reserves its offsets through `submit_change`.
 
 ## Kafka / KIP Compliance

@@ -86,6 +86,7 @@ async fn restart_recovers_image() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         metadata_log(),
+        krabka_raft::kraft::Activation::default(),
     )
     .expect("reopen");
     // The recovered image must contain the committed topic.

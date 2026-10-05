@@ -68,7 +68,6 @@ pub(super) fn spawn_replicator_supervisor(
             throttle_state: Arc::clone(runtime.1),
             log_dir_status: storage.log_dir_status.clone(),
             producer_state: Arc::clone(storage.producer_state),
-            producer_id_expiration: config.producer_id_expiration,
             max_produce_group: config.max_produce_group,
             partition_writer_queue_depth: config.partition_writer_queue_depth,
             diskless_wal_local_replica_count: config.diskless_wal_local_replica_count,

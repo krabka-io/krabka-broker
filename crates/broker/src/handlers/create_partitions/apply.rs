@@ -9,7 +9,6 @@
 
 use krabka_metadata::{MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
-use krabka_units::Time;
 
 use crate::{
     handlers::create_topics::InitialLeadership, replicator_supervisor::materialize_partition,
@@ -58,7 +57,6 @@ pub(super) struct MaterializeContext<'a> {
     pub(super) log_config: &'a krabka_log::LogConfig,
     pub(super) log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
     pub(super) producer_state: &'a std::sync::Arc<crate::producer_state::ProducerState>,
-    pub(super) producer_id_expiration: Time,
     pub(super) max_produce_group: usize,
     pub(super) partition_writer_queue_depth: usize,
     pub(super) diskless_wal_local_replica_count: usize,
@@ -91,7 +89,6 @@ pub(super) async fn materialize_new_partitions(
                 log_config: context.log_config,
                 log_dir_status: context.log_dir_status,
                 producer_state: context.producer_state,
-                producer_id_expiration: context.producer_id_expiration,
                 max_produce_group: context.max_produce_group,
                 partition_writer_queue_depth: context.partition_writer_queue_depth,
                 diskless_wal_local_replica_count: context.diskless_wal_local_replica_count,

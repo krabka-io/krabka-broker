@@ -327,33 +327,39 @@ impl Engine {
         Ok(())
     }
 
-    /// The names of the topics that uncommitted records from earlier leader
-    /// epochs create.
+    /// Replay the uncommitted records of earlier leader epochs into a copy of
+    /// the committed image, and give each record to `visit` before it
+    /// applies.
     ///
     /// The records between the high watermark and this leader's epoch start
     /// offset were appended by an earlier leader, possibly this node, and are
     /// not committed. They commit when this epoch's first record does. Each
     /// value is decoded against the image that the values before it produce,
-    /// as a replica replays it. A value that does not decode or validate adds
-    /// no name.
-    fn earlier_epoch_topic_names(&self) -> Vec<String> {
+    /// as a replica replays it. A value that does not decode or validate is
+    /// skipped. A node that does not lead has no such records, and gets the
+    /// committed image.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of a log read that fails. `visit` has then seen the
+    /// records before that read.
+    pub(super) fn replay_earlier_epoch_tail(
+        &self,
+        mut visit: impl FnMut(&MetadataImage, &MetadataRecord),
+    ) -> Result<MetadataImage, RaftError> {
+        let mut image = self.image.clone();
         let Role::Leader {
             epoch_start_offset, ..
         } = self.core.role()
         else {
-            return Vec::new();
+            return Ok(image);
         };
         let end = Offset(*epoch_start_offset);
-        let mut image = self.image.clone();
-        let mut names = Vec::new();
         let mut cursor = self.log.hwm();
         while cursor < end {
-            let Ok(batches) = self
+            let batches = self
                 .log
-                .read_decoded(cursor, self.metadata_raft_fetch_max.size())
-            else {
-                break;
-            };
+                .read_decoded(cursor, self.metadata_raft_fetch_max.size())?;
             let Some(next) = next_batch_offset(&batches).filter(|next| *next > cursor) else {
                 break;
             };
@@ -372,16 +378,28 @@ impl Engine {
                     if image.validate(&record).is_err() {
                         continue;
                     }
-                    if let MetadataRecord::V1Topic(topic) = &record
-                        && image.topic(&topic.name).is_none()
-                    {
-                        names.push(topic.name.clone());
-                    }
+                    visit(&image, &record);
                     image.apply(&record);
                 }
             }
             cursor = next;
         }
+        Ok(image)
+    }
+
+    /// The names of the topics that uncommitted records from earlier leader
+    /// epochs create, as [`Self::replay_earlier_epoch_tail`] replays them.
+    fn earlier_epoch_topic_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        // A tail that does not read adds no more names, the same as a tail
+        // that ends there.
+        let _ = self.replay_earlier_epoch_tail(|image, record| {
+            if let MetadataRecord::V1Topic(topic) = record
+                && image.topic(&topic.name).is_none()
+            {
+                names.push(topic.name.clone());
+            }
+        });
         names
     }
 
@@ -458,14 +476,17 @@ impl Engine {
             }
             _ => false,
         };
+        // A new leader reserves no offsets until its own epoch commits. The
+        // refusal is transient, as the refusal of a compare-and-set behind
+        // an uncommitted tail is, so it is the same error. A broker then
+        // tells the refusal apart from a failed reservation, and the forward
+        // path keeps it.
         if records
             .iter()
             .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
             && !epoch_ready
         {
-            let _ = reply.send(Err(RaftError::ChangeRejected(
-                "leader epoch must commit before reserving offsets".to_string(),
-            )));
+            let _ = reply.send(Err(RaftError::UncommittedTail));
             return;
         }
 

@@ -13,7 +13,7 @@ use crate::{
         endpoints::static_controller_voter_set,
         registration::{
             register_broker, register_controller, spawn_deferred_controller_registration,
-            submit_bootstrap_records,
+            submit_stretch_defaults,
         },
     },
     config::BrokerConfig,
@@ -94,39 +94,58 @@ fn prepare_raft_transport(
 
 fn prepare_initial_voters(
     config: &BrokerConfig,
-    bootstrap_records: &mut Vec<krabka_metadata::MetadataRecord>,
+    bootstrap_records: &[krabka_metadata::MetadataRecord],
 ) -> krabka_metadata::VoterSet {
-    let mut voters = crate::bootstrap::initial_voters(bootstrap_records);
+    let voters = crate::bootstrap::initial_voters(bootstrap_records);
     if !voters.is_empty() || config.controller_quorum_voters.is_empty() {
         return voters;
     }
-    voters = static_controller_voter_set(
-        &config.controller_quorum_voters,
-        config.node_id,
-        config.directory_id,
-        config.controller_listen_addr,
-    );
     tracing::info!(
         node_id = config.node_id.0,
         voter_count = config.controller_quorum_voters.len(),
         mode = ?config.bootstrap_mode,
         "deriving static KIP-595 voters from controller_quorum_voters"
     );
-    // An explicitly formatted bootstrap stream already contains the exact
-    // feature levels selected by `krabka format --feature`. KIP-853 keeps its
-    // voter controls in the checkpoint rather than this stream, so reaching
-    // the static discovery fallback does not mean the feature records are
-    // absent. Appending release defaults here would replay after the selected
-    // levels and overwrite them.
-    if !bootstrap_records
+    static_controller_voter_set(
+        &config.controller_quorum_voters,
+        config.node_id,
+        config.directory_id,
+        config.controller_listen_addr,
+    )
+}
+
+/// The bootstrap metadata this controller writes when it activates on an
+/// empty metadata log: Kafka's `BootstrapMetadata`.
+///
+/// The KIP-853 control records are not metadata. A dynamic format keeps them
+/// in the bootstrap checkpoint, and the leader writes them in the
+/// `LeaderChange` batch of its first epoch. So they are not in the list.
+///
+/// A stream without a feature level gets the feature levels of the latest
+/// production release, as Kafka's `BootstrapMetadata.fromDirectory` falls
+/// back to the default bootstrap without a `bootstrap.checkpoint`. A stream
+/// with feature levels is the one `krabka format --feature` selected. Release
+/// defaults appended to it would replay after the selected levels and
+/// overwrite them.
+fn controller_bootstrap_records(
+    mut records: Vec<krabka_metadata::MetadataRecord>,
+) -> Vec<krabka_metadata::MetadataRecord> {
+    records.retain(|record| {
+        !matches!(
+            record,
+            krabka_metadata::MetadataRecord::V1Voters(_)
+                | krabka_metadata::MetadataRecord::V1KRaftVersion(_)
+        )
+    });
+    if !records
         .iter()
         .any(|record| matches!(record, krabka_metadata::MetadataRecord::V1FeatureLevel(_)))
     {
-        bootstrap_records.extend(krabka_metadata::bootstrap_feature_records(
+        records.extend(krabka_metadata::bootstrap_feature_records(
             crate::features::LATEST_PRODUCTION_METADATA_VERSION,
         ));
     }
-    voters
+    records
 }
 
 /// Validate `metadata_snapshot_fetch_max` for the observer's snapshot
@@ -143,7 +162,7 @@ fn observer_snapshot_fetch_max(
 
 async fn start_metadata_source(
     config: &BrokerConfig,
-    bootstrap_records: &mut Vec<krabka_metadata::MetadataRecord>,
+    bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
     controller_listener: Option<tokio::net::TcpListener>,
     transport: RaftTransport,
     wal_shards: Arc<crate::wal::quorum::registry::WalShardRegistry>,
@@ -170,7 +189,7 @@ async fn start_metadata_source(
             directory_id: config.directory_id,
             auto_join: config.auto_join,
             observer_lag_bound: config.observer_lag_bound,
-            initial_voters: prepare_initial_voters(config, bootstrap_records),
+            initial_voters: prepare_initial_voters(config, &bootstrap_records),
             controller_listen_addr: config.controller_listen_addr,
             log_dir: config.metadata_dir().to_path_buf(),
             election_timeout: config.controller_election_timeout,
@@ -182,6 +201,10 @@ async fn start_metadata_source(
             metadata_raft_fetch_max: config.metadata_raft_fetch_max,
             client_id: format!("krabka-broker-{}-controller", config.broker_id),
             bootstrap_mode: config.bootstrap_mode,
+            bootstrap_records: controller_bootstrap_records(bootstrap_records),
+            // Kafka's `ControllerServer` reads the static `min.insync.replicas`
+            // from this node's own configuration.
+            default_min_insync_replicas: config.default_min_insync_replicas,
             cluster_id: config.cluster_id,
             dialer,
             handshake,
@@ -325,6 +348,37 @@ async fn wait_for_metadata_leader(
     Ok(())
 }
 
+/// Waits until the metadata image of this node finalizes `metadata.version`.
+///
+/// The bootstrap records finalize it, and the active controller writes them
+/// to an empty log. A broker-only node reads them from that log.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Startup`] when the image does not finalize
+/// `metadata.version` within `timeout`, or when the image channel closes
+/// before it does.
+async fn wait_for_metadata_version(
+    controller: &dyn crate::metadata_source::MetadataSource,
+    timeout: std::time::Duration,
+) -> Result<(), BrokerError> {
+    let mut images = controller.watch_image();
+    match tokio::time::timeout(
+        timeout,
+        images.wait_for(|image| image.finalized_metadata_version().is_some()),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(_)) => Err(BrokerError::Startup(
+            "the metadata image closed before it finalized metadata.version".into(),
+        )),
+        Err(_) => Err(BrokerError::Startup(format!(
+            "the metadata image did not finalize metadata.version within {timeout:?}"
+        ))),
+    }
+}
+
 /// Binds the controller listener before the quorum starts when the config asks
 /// for an OS-assigned port, and publishes the port it got.
 ///
@@ -386,12 +440,18 @@ pub(super) async fn start_metadata_phase(
         bind_ephemeral_controller_listener(config, controller_listener).await?;
     let transport = prepare_raft_transport(config, tls_dynamic, inter_broker_client);
     let audit_cell = Arc::clone(&transport.audit_cell);
-    // Kafka loads the bootstrap metadata from `metadata.log.dir`, which is
-    // where `krabka-format` writes it.
-    let mut bootstrap_records = crate::bootstrap::load_bootstrap_records(config.metadata_dir())?;
+    // Kafka's controller loads the bootstrap metadata from
+    // `metadata.log.dir`, which is where `krabka-format` writes it. A broker
+    // never reads it: it applies the records the controller writes to the
+    // log.
+    let bootstrap_records = if config.is_controller() {
+        crate::bootstrap::load_bootstrap_records(config.metadata_dir())?
+    } else {
+        Vec::new()
+    };
     let controller = start_metadata_source(
         config,
-        &mut bootstrap_records,
+        bootstrap_records,
         controller_listener,
         transport,
         wal_shards,
@@ -404,20 +464,30 @@ pub(super) async fn start_metadata_phase(
     // message, so the fault ends the join and is what a failed start reports.
     or_fatal_fault(
         controller.0.watch_fatal(),
-        join_metadata_quorum(config, &controller.0, bootstrap_records),
+        join_metadata_quorum(config, &controller.0),
     )
     .await?;
     Ok((controller.0, controller.1, audit_cell))
 }
 
-/// Waits for the metadata leader, then seeds the log and registers this node
-/// with it.
+/// Waits for the metadata leader and, on a broker, for the bootstrap
+/// records, then registers this node with the leader.
+///
+/// The active controller writes the bootstrap records when it activates on
+/// an empty log, so no node submits them. A broker waits until its image
+/// finalizes `metadata.version`, as Kafka's broker publishes no metadata
+/// before its `MetadataLoader` has caught up. A controller-only node does not
+/// wait: [`register_controller`] defers its registration until the image
+/// finalizes a `metadata.version` that supports it.
 async fn join_metadata_quorum(
     config: &mut BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
 ) -> Result<(), BrokerError> {
-    wait_for_metadata_leader(&**controller, config.startup_leader_wait_timeout.to_std()).await?;
+    let timeout = config.startup_leader_wait_timeout.to_std();
+    wait_for_metadata_leader(&**controller, timeout).await?;
+    if config.is_broker() {
+        wait_for_metadata_version(&**controller, timeout).await?;
+    }
     if config.is_controller() || config.is_broker() {
         config.incarnation_id = crate::incarnation::load_or_generate(&config.log_dir);
         // Spend the clean-shutdown proof the last stop left, if it left one.
@@ -425,7 +495,7 @@ async fn join_metadata_quorum(
         // `register_broker` tell a graceful restart from a crash.
         config.previous_broker_epoch = crate::clean_shutdown::take(&config.log_dir);
     }
-    submit_bootstrap_records(config, &**controller, bootstrap_records).await?;
+    submit_stretch_defaults(config, &**controller).await?;
     register_controller(config, &**controller).await?;
     if let Some(epoch) = register_broker(config, &**controller).await? {
         config.broker_epoch = epoch;
@@ -490,6 +560,99 @@ mod tests {
             expected_rows.push((roles, protocol, expected));
         }
         assert!(warned_rows == expected_rows);
+    }
+
+    /// The controller writes the metadata of the bootstrap stream without
+    /// its KIP-853 controls, and the release defaults when the stream sets no
+    /// feature level.
+    #[test]
+    fn the_controller_bootstraps_from_the_streams_metadata_or_the_release_defaults() {
+        use krabka_metadata::{
+            FeatureLevelRecord, KRaftVersionRecord, MetadataRecord, VotersRecord,
+        };
+
+        let selected = MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: "metadata.version".into(),
+            level: 21,
+        });
+        let controls = [
+            MetadataRecord::V1KRaftVersion(KRaftVersionRecord { kraft_version: 1 }),
+            MetadataRecord::V1Voters(VotersRecord {
+                voters: krabka_metadata::VoterSet::default(),
+            }),
+        ];
+        let defaults = krabka_metadata::bootstrap_feature_records(
+            crate::features::LATEST_PRODUCTION_METADATA_VERSION,
+        );
+        // (what, the bootstrap stream, the records the controller writes)
+        let cases = [
+            ("no stream", vec![], defaults.clone()),
+            (
+                "a formatted stream",
+                vec![selected.clone()],
+                vec![selected.clone()],
+            ),
+            (
+                "a stream of controls and a selected level",
+                vec![controls[0].clone(), selected.clone(), controls[1].clone()],
+                vec![selected],
+            ),
+            ("a stream of controls alone", controls.to_vec(), defaults),
+        ];
+        for (what, stream, written) in cases {
+            assert!(controller_bootstrap_records(stream) == written, "{what}");
+        }
+    }
+
+    /// A broker waits until its image finalizes `metadata.version`, which the
+    /// active controller writes, and stops the start when the image does not
+    /// finalize it in time. Records that set no `metadata.version` do not end
+    /// the wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_broker_waits_until_its_image_finalizes_the_metadata_version() {
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+
+        use crate::test_support::FakeMetadataSource;
+
+        let feature = |name: &str| {
+            MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: name.into(),
+                level: 1,
+            })
+        };
+        let timeout = std::time::Duration::from_secs(5);
+        let refusal = "startup failed: the metadata image did not finalize metadata.version \
+                       within 5s"
+            .to_owned();
+        // (what, the records the image gets after a second, the wait's outcome)
+        let cases = [
+            (
+                "the bootstrap records",
+                vec![feature("metadata.version"), feature("group.version")],
+                Ok(()),
+            ),
+            (
+                "a feature level that is not metadata.version",
+                vec![feature("group.version")],
+                Err(refusal.clone()),
+            ),
+            ("nothing", vec![], Err(refusal)),
+        ];
+        for (what, records, outcome) in cases {
+            let source = Arc::new(FakeMetadataSource::builder().build());
+            let waiting = tokio::spawn({
+                let source = Arc::clone(&source);
+                async move {
+                    wait_for_metadata_version(&*source, timeout)
+                        .await
+                        .map_err(|error| error.to_string())
+                }
+            });
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            assert!(!waiting.is_finished(), "{what}");
+            source.set_records(&records);
+            assert!(waiting.await.expect("the wait") == outcome, "{what}");
+        }
     }
 
     #[test]

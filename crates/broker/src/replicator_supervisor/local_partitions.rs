@@ -190,7 +190,6 @@ impl ReplicatorSupervisor {
                 log_config: &self.log_config,
                 log_dir_status: &self.log_dir_status,
                 producer_state: &self.producer_state,
-                producer_id_expiration: self.producer_id_expiration,
                 max_produce_group: self.max_produce_group,
                 partition_writer_queue_depth: self.partition_writer_queue_depth,
                 diskless_wal_local_replica_count: self.diskless_wal_local_replica_count,

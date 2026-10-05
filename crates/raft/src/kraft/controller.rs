@@ -82,6 +82,7 @@ use crate::{
     },
 };
 
+mod activation;
 mod apply;
 /// The KIP-630 `.checkpoint` artifacts under a node's metadata directory. It
 /// is public because a broker-only observer keeps its `__cluster_metadata`
@@ -109,10 +110,14 @@ mod submit;
 mod timing;
 
 pub(crate) use self::checkpoint::parse_checkpoint_name;
-pub use self::{control_state::control_batch_image_records, records::is_kip835_noop};
+pub use self::{
+    activation::Activation, control_state::control_batch_image_records, records::is_kip835_noop,
+};
 
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tests_activation;
 #[cfg(test)]
 mod tests_apply;
 #[cfg(test)]
@@ -169,9 +174,11 @@ struct Engine {
     /// Clone of the command sender, handed to fire-and-forget send tasks so
     /// they can post the decoded `Receive*Response` event back to the loop.
     cmd_tx: mpsc::Sender<Command>,
-    /// Publishes the failure of the metadata log directory, once a write to
-    /// it returned an I/O error. Kafka shuts the node down over it (KIP-858).
-    storage_fault_tx: watch::Sender<Option<String>>,
+    /// Publishes the fault that stops the engine, which Kafka halts the
+    /// process over: the failure of the metadata log directory, once a write
+    /// to it returned an I/O error (KIP-858), or a controller activation that
+    /// failed. See [`Engine::publish_fault`].
+    fault_tx: watch::Sender<Option<String>>,
     /// The metadata partition directory, `__cluster_metadata-0`: it holds the
     /// log segments, the KIP-630 checkpoints and the quorum-state file, as
     /// Kafka's does.
@@ -298,6 +305,12 @@ struct Engine {
     /// Fetches that found nothing new and wait for new records, a high
     /// watermark change or their `MaxWaitMs`: Kafka's `fetchPurgatory`.
     fetch_purgatory: Vec<inbound::ParkedFetch>,
+    /// What this node writes when it becomes leader of a log that holds no
+    /// `metadata.version`. See [`Engine::complete_activation`].
+    activation: Activation,
+    /// The reason the last activation of this node failed, which stops the
+    /// engine. `None` while no activation has failed.
+    activation_fault: Option<String>,
 }
 
 #[derive(Clone)]
@@ -346,7 +359,7 @@ struct CommitWaiter {
 pub struct KraftController {
     cmd_tx: mpsc::Sender<Command>,
     image_rx: watch::Receiver<Arc<MetadataImage>>,
-    storage_fault_rx: watch::Receiver<Option<String>>,
+    fault_rx: watch::Receiver<Option<String>>,
     leader_rx: watch::Receiver<Option<NodeId>>,
     quorum_rx: watch::Receiver<QuorumStateSnapshot>,
     peers: Arc<dyn PeerSender>,
@@ -382,4 +395,8 @@ pub struct KraftConfig {
     /// covers, and how often this node appends a KIP-835 `NoOpRecord` while
     /// it leads.
     pub metadata_log: MetadataLogConfig,
+    /// What this node writes when it becomes leader of a log that holds no
+    /// `metadata.version`: the bootstrap records and the static
+    /// `min.insync.replicas`.
+    pub activation: Activation,
 }

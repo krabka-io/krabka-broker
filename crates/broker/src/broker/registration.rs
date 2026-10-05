@@ -1,7 +1,11 @@
-//! Self-registration and bootstrap-record submission for this node. The
-//! module holds the metadata records a broker or controller publishes about
-//! itself, and the retrying submit paths that commit them, kept apart from the
-//! startup sequence that calls them.
+//! Self-registration of this node. The module holds the metadata records a
+//! broker or controller publishes about itself, and the retrying submit paths
+//! that commit them, kept apart from the startup sequence that calls them.
+//!
+//! No node submits the bootstrap records. The active controller writes them
+//! when it activates on an empty metadata log, as Kafka's
+//! `ActivationRecordsGenerator.recordsForEmptyLog` does, and every node reads
+//! them from the log.
 
 use std::sync::Arc;
 
@@ -392,46 +396,31 @@ async fn wait_for_self_registration_published(
     })
 }
 
-pub(super) async fn submit_bootstrap_records(
+/// The stretch cluster default this node publishes at startup: the
+/// [`stretch_default_records`] of a controller that starts a new cluster, and
+/// nothing for every other node.
+///
+/// The default is a krabka record, not a bootstrap record, so the controller
+/// node submits it as it submits its registration. Every controller of a new
+/// stretch cluster submits the same value, so a second submit changes
+/// nothing.
+fn stretch_defaults_to_submit(config: &BrokerConfig) -> Vec<krabka_metadata::MetadataRecord> {
+    if config.is_controller() && matches!(config.bootstrap_mode, crate::BootstrapMode::Bootstrap) {
+        stretch_default_records(config)
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) async fn submit_stretch_defaults(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
-    mut records: Vec<krabka_metadata::MetadataRecord>,
 ) -> Result<(), BrokerError> {
-    if !matches!(config.bootstrap_mode, crate::BootstrapMode::Bootstrap) {
-        return Ok(());
-    }
-    let checkpoint_loaded = controller.current_image().finalized_features_epoch() >= 0;
-    if checkpoint_loaded {
-        tracing::info!("bootstrap records already loaded from metadata checkpoint");
-    }
-    records = bootstrap_records_to_submit(config, records, checkpoint_loaded);
+    let records = stretch_defaults_to_submit(config);
     if records.is_empty() {
         return Ok(());
     }
-    tracing::info!(count = records.len(), "submitting bootstrap records");
-    submit_startup_records(config, controller, records, "bootstrap submit").await
-}
-
-fn bootstrap_records_to_submit(
-    config: &BrokerConfig,
-    mut records: Vec<krabka_metadata::MetadataRecord>,
-    checkpoint_loaded: bool,
-) -> Vec<krabka_metadata::MetadataRecord> {
-    if checkpoint_loaded {
-        records.clear();
-    } else {
-        records.retain(|record| {
-            !matches!(
-                record,
-                krabka_metadata::MetadataRecord::V1Voters(_)
-                    | krabka_metadata::MetadataRecord::V1KRaftVersion(_)
-            )
-        });
-    }
-    if config.is_controller() {
-        records.extend(stretch_default_records(config));
-    }
-    records
+    submit_startup_records(config, controller, records, "stretch cluster default").await
 }
 
 #[cfg(test)]

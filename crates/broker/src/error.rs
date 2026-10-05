@@ -240,6 +240,19 @@ pub enum BrokerError {
     #[error("node {node_id} is not a controller but appears in its own controller_quorum_voters")]
     NonControllerIsVoter { node_id: krabka_raft::NodeId },
 
+    /// A controller-only node names `[[listeners]]`. Kafka refuses a
+    /// `listeners` config that names any listener outside
+    /// `controller.listener.names` when `process.roles=controller`. Krabka's
+    /// controller listener is `controller_listen_addr`, so `[[listeners]]`
+    /// must be empty.
+    #[error(
+        "The [[listeners]] config must be empty when process.roles=controller, as Kafka's \
+         listeners config must only contain KRaft controller listeners from \
+         controller.listener.names: a controller-only node opens only its controller listener, \
+         controller_listen_addr. It names: {names}"
+    )]
+    ControllerOnlyNodeListeners { names: String },
+
     /// `process.roles` names `witness` without `broker`.
     #[error(
         "process.roles names `witness` without `broker`: a witness holds a full copy of every \

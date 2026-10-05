@@ -120,9 +120,9 @@ pub(crate) struct Config {
     /// producers.
     ///
     /// The replicator forwards this tracker into `spawn_partition` through
-    /// `ensure_local_partition`. The `Compact` handler of the per-partition
-    /// writer can then snapshot the active producers for KIP-534
-    /// `RETAIN_EMPTY`.
+    /// `ensure_local_partition`, so that the per-partition writer copies the
+    /// producer state of each replicated transaction marker into it. The
+    /// replicator also removes the entries of a tail that it truncates.
     pub producer_state: Arc<crate::producer_state::ProducerState>,
     /// Broker-wide metrics handle.
     ///

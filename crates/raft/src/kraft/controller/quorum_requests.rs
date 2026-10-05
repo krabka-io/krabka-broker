@@ -19,7 +19,10 @@
 
 use bytes::Bytes;
 
-use super::{Engine, checkpoint::load_checkpoint_by_id};
+use super::{
+    Engine,
+    checkpoint::{BOOTSTRAP_SNAPSHOT_ID, load_checkpoint_by_id},
+};
 use crate::kraft::{
     event::{Event, LogEnd, SuccessorRank},
     transport::wire,
@@ -35,10 +38,6 @@ const SNAPSHOT_NOT_FOUND: i16 = 98;
 const POSITION_OUT_OF_RANGE: i16 = 99;
 pub(super) const INCONSISTENT_CLUSTER_ID: i16 = 104;
 const INVALID_VOTER_KEY: i16 = 125;
-
-/// Kafka's `BOOTSTRAP_SNAPSHOT_ID`. The bootstrap checkpoint is not
-/// replicated.
-const BOOTSTRAP_SNAPSHOT_ID: (i64, i32) = (0, 0);
 
 /// The listener name a controller advertises its peer RPCs on. A voter
 /// endpoint with another name is used only when the voter has no such

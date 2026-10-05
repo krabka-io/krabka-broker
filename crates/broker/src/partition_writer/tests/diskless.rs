@@ -6,14 +6,106 @@ use std::sync::atomic::Ordering;
 use assert2::{assert, check};
 use bytes::BytesMut;
 use krabka_log::{LogConfig, Offset};
+use krabka_raft::RaftError;
 use tempfile::tempdir;
 use tokio::sync::oneshot;
 
 use super::*;
 use crate::{
+    codes,
     partition::{ProduceData, ProduceJob},
     partition_writer::test_support::{GatedWal, sample_batch, test_sequencer},
+    test_support::FakeMetadataSource,
+    wal::{ControllerSequencer, OffsetSequencer},
 };
+
+/// The controller quorum refuses an offset reservation before it reserves
+/// anything when it has no leader, when its leader moved, and when its new
+/// leader has not yet committed its epoch. That is a leader election, not a
+/// disk failure. The group appends nothing, the log directory stays online,
+/// and the group answers `NOT_LEADER_OR_FOLLOWER`: the code that Kafka's
+/// produce path gives when a broker cannot append because leadership moves.
+/// The client then refreshes its metadata and sends the batch again.
+#[tokio::test]
+async fn a_reservation_refused_during_a_controller_election_answers_not_leader() {
+    /// Builds the refusal of the controller for one case.
+    type Refusal = fn() -> RaftError;
+    // (what, the refusal of the controller)
+    let cases: [(&str, Refusal); 4] = [
+        ("no controller leader is known", || RaftError::NotLeader {
+            current_leader: None,
+        }),
+        ("the controller leader moved", || RaftError::NotLeader {
+            current_leader: Some(krabka_raft::NodeId(2)),
+        }),
+        ("a controller election is in progress", || {
+            RaftError::LeaderUnknown
+        }),
+        (
+            "the new controller leader has not committed its epoch",
+            || RaftError::UncommittedTail,
+        ),
+    ];
+    for (what, refusal) in cases {
+        let dir = tempdir().expect("tempdir");
+        let log = Arc::new(Mutex::new(
+            Log::open(dir.path(), LogConfig::default()).expect("open log"),
+        ));
+        let controller = Arc::new(
+            FakeMetadataSource::builder()
+                .term(7)
+                .on_submit(move |_| Err(refusal()))
+                .build(),
+        );
+        let sequencer: Arc<dyn OffsetSequencer> = Arc::new(ControllerSequencer::new(controller));
+        let wal: crate::wal::SharedWal = Arc::new(crate::wal::LocalFsyncWal::new(log.clone()));
+        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+        let (tx, rx) = mpsc::channel(1);
+        let writer = tokio::spawn(run_with_sequencer(
+            ("t".to_string(), PartitionIndex(0)),
+            (
+                log.clone(),
+                Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
+            ),
+            rx,
+            (
+                Arc::new(Notify::new()),
+                Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
+                Arc::new(Notify::new()),
+                DeliveryHandles::new(),
+            ),
+            (
+                log_dir_status.clone(),
+                Arc::new(ProducerState::new()),
+                Some(wal),
+            ),
+            crate::config::BrokerConfig::default().max_produce_group,
+            Some(sequencer),
+        ));
+
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Produce(ProduceJob {
+            data: ProduceData::Owned(sample_batch(1)),
+            ack,
+            producer_check: None,
+        }))
+        .await
+        .expect("send job");
+        let answer = ack_rx
+            .await
+            .expect("ack recv")
+            .map_err(|error| codes::from_broker_error(&error));
+        drop(tx);
+        writer.await.expect("writer join");
+
+        let log_end = log.lock().expect("lock").log_end_offset();
+        check!(
+            (answer, log_end, log_dir_status.offline())
+                == (Err(codes::NOT_LEADER_OR_FOLLOWER), Offset(0), Vec::new()),
+            "{what}"
+        );
+    }
+}
 
 #[tokio::test]
 async fn diskless_writer_acks_all_gates_on_durable_hw() {
@@ -56,10 +148,7 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
             Arc::new(ProducerState::new()),
             wal,
         ),
-        (
-            crate::config::BrokerConfig::default().producer_id_expiration,
-            crate::config::BrokerConfig::default().max_produce_group,
-        ),
+        crate::config::BrokerConfig::default().max_produce_group,
         Some(test_sequencer()),
     ));
 
@@ -138,10 +227,7 @@ async fn diskless_acked_record_survives_reopen() {
                 Arc::new(ProducerState::new()),
                 wal,
             ),
-            (
-                crate::config::BrokerConfig::default().producer_id_expiration,
-                crate::config::BrokerConfig::default().max_produce_group,
-            ),
+            crate::config::BrokerConfig::default().max_produce_group,
             Some(test_sequencer()),
         ));
 

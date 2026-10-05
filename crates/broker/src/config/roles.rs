@@ -137,6 +137,78 @@ mod tests {
         ));
     }
 
+    /// A node without the broker role names no `[[listeners]]`, as Kafka's
+    /// `KafkaConfig` refuses a `listeners` config that names a listener outside
+    /// `controller.listener.names` when `process.roles=controller`.
+    #[test]
+    fn only_a_node_with_the_broker_role_names_listeners() {
+        // (roles, the [[listeners]] entries, what validation answers)
+        type Case = (
+            Vec<NodeRole>,
+            Vec<crate::config::ListenerSpec>,
+            Result<(), String>,
+        );
+        let listener = |name: &str, port: u16| crate::config::ListenerSpec {
+            name: name.to_owned(),
+            bind_addr: std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            advertised: format!("127.0.0.1:{port}"),
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
+        };
+        let refused = |names: &str| {
+            Err(format!(
+                "The [[listeners]] config must be empty when process.roles=controller, as \
+                 Kafka's listeners config must only contain KRaft controller listeners from \
+                 controller.listener.names: a controller-only node opens only its controller \
+                 listener, controller_listen_addr. It names: {names}"
+            ))
+        };
+        let cases: [Case; 5] = [
+            (vec![NodeRole::Controller], vec![], Ok(())),
+            (
+                vec![NodeRole::Controller],
+                vec![listener("PLAINTEXT", 9092)],
+                refused("PLAINTEXT"),
+            ),
+            (
+                vec![NodeRole::Controller],
+                vec![listener("PLAINTEXT", 9092), listener("INTERNAL", 9094)],
+                refused("PLAINTEXT, INTERNAL"),
+            ),
+            (
+                vec![NodeRole::Broker],
+                vec![listener("PLAINTEXT", 9092)],
+                Ok(()),
+            ),
+            (
+                vec![NodeRole::Controller, NodeRole::Broker],
+                vec![listener("PLAINTEXT", 9092)],
+                Ok(()),
+            ),
+        ];
+        for (roles, listeners, want) in cases {
+            // A broker-only node is not its own voter, so it names another.
+            let voter = if roles.contains(&NodeRole::Controller) {
+                NodeId(1)
+            } else {
+                NodeId(3001)
+            };
+            let config = BrokerConfig {
+                roles: roles.clone(),
+                node_id: NodeId(1),
+                controller_quorum_voters: vec![(voter, "127.0.0.1:9093".to_string())],
+                listeners,
+                ..BrokerConfig::default()
+            };
+            check!(
+                config.validate().map_err(|error| error.to_string()) == want,
+                "{roles:?}"
+            );
+        }
+    }
+
     #[test]
     fn combined_default_passes_role_validation() {
         BrokerConfig::default()

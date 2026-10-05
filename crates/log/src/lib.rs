@@ -112,7 +112,6 @@ mod stamp_source;
 pub mod topic_name;
 mod txn_index;
 
-pub use compact::ProducerLastRecord;
 pub use config::{
     CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DeliveryPolicy, LogConfig, RemoteTierFlags,
     ScheduleOrder,
@@ -130,8 +129,9 @@ sendfile_cfg! {
     pub use log::RawReadDesc;
 }
 pub use log::{
-    ActiveSegmentExport, BARRIER_CONTROL_TYPE, CompactionContext, Log, RawRead, ReadOutput,
-    SegmentExport, TransactionAppendRefusal, TransactionalBatch, VerbatimBatch, VerificationGuard,
+    ActiveProducer, ActiveSegmentExport, BARRIER_CONTROL_TYPE, CompactionContext, Log, RawRead,
+    ReadOutput, SegmentExport, TransactionAppendRefusal, TransactionalBatch, VerbatimBatch,
+    VerificationGuard,
 };
 pub use producer_snapshot::{
     NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,

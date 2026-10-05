@@ -5,7 +5,7 @@
 //! same transactional batch and the same control marker are what several
 //! submodules assert on.
 
-use std::{collections::HashMap, time::SystemTime};
+use std::time::SystemTime;
 
 use bytes::Bytes;
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
@@ -223,6 +223,16 @@ pub struct PartitionState {
     pub producers: Vec<ProducerSnapshotEntry>,
 }
 
+/// The transaction state the log keeps for `producer_id` beside its producer
+/// entry: the coordinator epoch of its last durable end marker, `-1` before
+/// the first one, and the first offset of its open transaction.
+pub fn transaction_fields(log: &Log, producer_id: ProducerId) -> (i32, Option<Offset>) {
+    (
+        log.transaction_marker_state(producer_id).1,
+        log.pending_transaction_start(producer_id),
+    )
+}
+
 /// Collect the [`PartitionState`] of `log`, with one transaction entry per
 /// id in `producer_ids` and the producer entries in id order.
 pub fn partition_state(log: &Log, producer_ids: &[i64]) -> PartitionState {
@@ -232,7 +242,7 @@ pub fn partition_state(log: &Log, producer_ids: &[i64]) -> PartitionState {
         lso: log.lso(),
         transactions: producer_ids
             .iter()
-            .map(|pid| (*pid, log.producer_transaction_state(ProducerId(*pid))))
+            .map(|pid| (*pid, transaction_fields(log, ProducerId(*pid))))
             .collect(),
         aborted: log.aborted_in_range(Offset(0), Offset(i64::MAX)),
         producers,
@@ -265,15 +275,14 @@ pub fn keyed_batch(base: i64, items: &[(i32, &[u8], &[u8])]) -> RecordBatch {
     }
 }
 
-/// A `CompactionContext` with a fixed, deterministic epoch, no active
-/// producers, and a last stable offset past every offset a log can hold. The
-/// in-crate compaction tests use it where tombstone age, marker age and the
-/// watermark bound are not under test.
+/// A `CompactionContext` with a fixed, deterministic epoch and a last stable
+/// offset past every offset a log can hold. The in-crate compaction tests use
+/// it where tombstone age, marker age and the watermark bound are not under
+/// test.
 pub fn compaction_ctx() -> CompactionContext {
     CompactionContext {
         now: SystemTime::UNIX_EPOCH,
         last_stable_offset: krabka_ids::Offset(i64::MAX),
-        active_producers: HashMap::new(),
     }
 }
 

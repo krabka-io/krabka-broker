@@ -6,7 +6,6 @@ use std::{path::PathBuf, sync::Arc};
 
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
-use krabka_units::Time;
 
 use crate::partition_registry::PartitionRegistry;
 
@@ -31,7 +30,6 @@ pub(crate) struct MaterializePartitionConfig<'a> {
     pub log_config: &'a LogConfig,
     pub log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
     pub producer_state: &'a Arc<crate::producer_state::ProducerState>,
-    pub producer_id_expiration: Time,
     pub max_produce_group: usize,
     pub partition_writer_queue_depth: usize,
     pub diskless_wal_local_replica_count: usize,
@@ -58,7 +56,6 @@ pub(super) fn materialize_partition_with_replication_target(
         log_config,
         log_dir_status,
         producer_state,
-        producer_id_expiration,
         max_produce_group,
         partition_writer_queue_depth,
         diskless_wal_local_replica_count,
@@ -142,7 +139,6 @@ pub(super) fn materialize_partition_with_replication_target(
             log,
             log_dir_status: log_dir_status.clone(),
             producer_state: producer_state.clone(),
-            producer_id_expiration,
             max_produce_group,
             partition_writer_queue_depth,
             diskless_wal_local_replica_count,
@@ -173,7 +169,6 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use assert2::assert;
-    use krabka_units::hours;
 
     use super::*;
 
@@ -200,7 +195,6 @@ mod tests {
             log_config: &LogConfig::default(),
             log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
             producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            producer_id_expiration: hours(24),
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             diskless_wal_local_replica_count: 3,
@@ -244,7 +238,6 @@ mod tests {
             log_config: &LogConfig::default(),
             log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
             producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            producer_id_expiration: hours(24),
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             diskless_wal_local_replica_count: 3,
@@ -295,7 +288,6 @@ mod tests {
                 log_config: &LogConfig::default(),
                 log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
                 producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-                producer_id_expiration: hours(24),
                 max_produce_group: 1_024,
                 partition_writer_queue_depth: 64,
                 diskless_wal_local_replica_count: 3,
@@ -348,7 +340,6 @@ mod tests {
             log_config: &LogConfig::default(),
             log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
             producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            producer_id_expiration: hours(24),
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             diskless_wal_local_replica_count: 3,
@@ -448,7 +439,6 @@ mod tests {
             log_config: &LogConfig::default(),
             log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
             producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            producer_id_expiration: hours(24),
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             diskless_wal_local_replica_count: 3,

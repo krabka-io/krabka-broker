@@ -1,6 +1,12 @@
 //! Data-plane listener binding and the resumption of interrupted KIP-113
 //! log-dir moves. Both run at the point where the broker is ready to accept
 //! traffic, and both need the resolved listener set, so they share a module.
+//!
+//! Only a node with the broker role opens data-plane listeners. Kafka's
+//! `ControllerServer` opens only the listeners that `controller.listener.names`
+//! names, and `KafkaConfig` refuses a controller-only node whose `listeners`
+//! name another one. A controller-only node serves the controller APIs on its
+//! controller listener, which the metadata phase binds.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -20,7 +26,10 @@ use crate::{
 
 pub(super) struct ListenerStartup {
     pub(super) bound: Vec<(crate::config::ListenerSpec, TcpListener, SocketAddr)>,
-    pub(super) listen_addr: SocketAddr,
+    /// The bound address of the inter-broker listener, or of the first
+    /// listener when none has that name. `None` on a node without the broker
+    /// role, which binds no data-plane listener.
+    pub(super) listen_addr: Option<SocketAddr>,
     pub(super) future_logs:
         Arc<DashMap<(String, PartitionIndex), Arc<crate::future_log::FutureLogState>>>,
 }
@@ -42,12 +51,14 @@ pub(super) struct ListenerStartup {
 ///
 /// A caller-supplied data-plane listener, a concrete port, and a
 /// `config.listeners` (KIP-113 multi-listener) setup all keep their config as
-/// it is.
+/// it is. A node without the broker role binds nothing: it opens no
+/// data-plane listener and does not register as a broker.
 pub(super) async fn bind_ephemeral_data_plane_listener(
     config: &mut BrokerConfig,
     data_plane_listeners: &mut Vec<TcpListener>,
 ) -> Result<(), BrokerError> {
-    if !data_plane_listeners.is_empty()
+    if !config.is_broker()
+        || !data_plane_listeners.is_empty()
         || !config.listeners.is_empty()
         || config.listen_addr.port() != 0
     {
@@ -63,6 +74,21 @@ pub(super) async fn bind_ephemeral_data_plane_listener(
     Ok(())
 }
 
+/// The data-plane listeners that this node opens: every listener of the
+/// config on a node with the broker role, and none on a node without it.
+fn data_plane_listener_specs(config: &BrokerConfig) -> Vec<crate::config::ListenerSpec> {
+    if config.is_broker() {
+        config.effective_listeners()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Binds the data-plane listeners of [`data_plane_listener_specs`] and resumes
+/// the interrupted log-dir moves.
+///
+/// A supplied listener that serves no spec is closed. On a node without the
+/// broker role that is every supplied listener.
 pub(super) async fn bind_listeners_and_recover_moves(
     config: &mut BrokerConfig,
     supplied_listeners: Vec<TcpListener>,
@@ -71,15 +97,17 @@ pub(super) async fn bind_listeners_and_recover_moves(
 ) -> Result<ListenerStartup, BrokerError> {
     let bound = adopt_or_bind_listeners(
         Sockets::TARGET,
-        config.effective_listeners(),
+        data_plane_listener_specs(config),
         supplied_listeners,
     )
     .await?;
     let listen_addr = bound
         .iter()
         .find(|(spec, _, _)| spec.name == config.inter_broker_listener_name)
-        .map_or(bound[0].2, |(_, _, address)| *address);
-    if config.advertised_listener.ends_with(":0")
+        .or_else(|| bound.first())
+        .map(|(_, _, address)| *address);
+    if let Some(listen_addr) = listen_addr
+        && config.advertised_listener.ends_with(":0")
         && let Some((host, _)) = config.advertised_listener.rsplit_once(':')
     {
         config.advertised_listener = format!("{host}:{}", listen_addr.port());
@@ -173,11 +201,14 @@ pub(super) fn spawn_listener_tasks(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_security::ListenerProtocol;
 
     use super::*;
-    use crate::config::ListenerSpec;
+    use crate::config::{
+        ListenerSpec,
+        NodeRole::{Broker, Controller},
+    };
 
     fn spec(name: &str, bind_addr: SocketAddr) -> ListenerSpec {
         ListenerSpec {
@@ -266,5 +297,97 @@ mod tests {
                     ("INTERNAL".to_owned(), locals.0, locals.0),
                 ]
         );
+    }
+
+    /// What a node opens of its data plane, for each `process.roles`: the
+    /// names of the bound listeners, the address `listen_addr` reports, and
+    /// whether the port of the supplied listener still answers a connect.
+    type DataPlane = (Vec<String>, Option<SocketAddr>, bool);
+
+    /// A node with the broker role serves its data plane on the listener the
+    /// caller supplied. A node without it closes that listener and binds
+    /// nothing, as Kafka's controller-only node opens only the listeners that
+    /// `controller.listener.names` names.
+    #[tokio::test]
+    async fn only_a_node_with_the_broker_role_opens_the_data_plane() {
+        // (roles, whether the node opens the data plane)
+        let cases = [
+            (vec![Controller], false),
+            (vec![Broker], true),
+            (vec![Controller, Broker], true),
+        ];
+        for (roles, opens) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let supplied = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let address = supplied.local_addr().expect("local address");
+            let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+            config.listen_addr = address;
+            config.advertised_listener = address.to_string();
+            config.roles.clone_from(&roles);
+
+            let startup = bind_listeners_and_recover_moves(
+                &mut config,
+                vec![supplied],
+                &Arc::new(PartitionRegistry::new()),
+                &Arc::new(crate::throttle::ThrottleState::new()),
+            )
+            .await
+            .expect("bind the data plane");
+            let names = startup
+                .bound
+                .iter()
+                .map(|(spec, _, _)| spec.name.clone())
+                .collect();
+            let answers = tokio::net::TcpStream::connect(address).await.is_ok();
+
+            let expected: DataPlane = if opens {
+                (vec!["PLAINTEXT".to_owned()], Some(address), true)
+            } else {
+                (Vec::new(), None, false)
+            };
+            check!(
+                (names, startup.listen_addr, answers) == expected,
+                "{roles:?}"
+            );
+        }
+    }
+
+    /// A configured port 0 binds an ephemeral data-plane listener before the
+    /// broker registers, and only a node with the broker role registers. A
+    /// controller-only node binds nothing and keeps its config.
+    #[tokio::test]
+    async fn only_a_node_with_the_broker_role_binds_an_ephemeral_data_plane_port() {
+        // (roles, whether the node binds a listener)
+        let cases = [
+            (vec![Controller], false),
+            (vec![Broker], true),
+            (vec![Controller, Broker], true),
+        ];
+        for (roles, binds) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+            config.listen_addr = "127.0.0.1:0".parse().expect("literal");
+            config.advertised_listener = "127.0.0.1:0".to_owned();
+            config.roles.clone_from(&roles);
+            let mut listeners = Vec::new();
+
+            bind_ephemeral_data_plane_listener(&mut config, &mut listeners)
+                .await
+                .expect("bind the ephemeral port");
+
+            let bound: Vec<SocketAddr> = listeners
+                .iter()
+                .map(|listener| listener.local_addr().expect("local address"))
+                .collect();
+            let expected = if binds {
+                (
+                    vec![config.listen_addr],
+                    format!("127.0.0.1:{}", config.listen_addr.port()),
+                )
+            } else {
+                (Vec::new(), "127.0.0.1:0".to_owned())
+            };
+            check!((bound, config.advertised_listener) == expected, "{roles:?}");
+        }
     }
 }

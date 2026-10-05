@@ -674,7 +674,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
         )])
         .await;
 
-    assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+    assert!(matches!(result, Err(RaftError::UncommittedTail)));
     assert!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
 
     let create_ctrl = ctrl.clone();

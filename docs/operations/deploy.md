@@ -258,7 +258,15 @@ The broker logs `health server listening` first, before it opens the log
 directory, so the probes answer through recovery. It then logs
 `selected bootstrap mode`: `Bootstrap` on a fresh directory, `Rejoin` on one
 it has run from before. It logs `metrics server listening` once `/metrics` is
-up. Logs are one JSON object
+up. It logs `krabka-broker started` when its start is complete. That line
+names the listeners that the node opened: `listen_addr` for the client
+listener of a node with the `broker` role, and `controller_listen_addr` for
+the controller listener of a node with the `controller` role. A
+controller-only node opens no client listener, as a Kafka controller-only
+node opens only the listeners in `controller.listener.names`. A
+controller-only node that names `[[listeners]]` does not start, as Kafka
+refuses a `listeners` config with any other listener when
+`process.roles=controller`. Logs are one JSON object
 per line on stdout; `RUST_LOG` sets the level.
 
 Start the three voters within a few seconds of each other. The

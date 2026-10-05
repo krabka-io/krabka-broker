@@ -20,21 +20,34 @@ fn broker_bin() -> std::path::PathBuf {
 /// tree to build from, which a Bazel test sandbox does not have. This test is
 /// synchronous, so it drives the async formatter on a current-thread runtime.
 fn run_krabka_format(log_dir: &std::path::Path, node_id: u32, controller_listener: &str) {
-    let code = tokio::runtime::Builder::new_current_thread()
+    format_log_dir(
+        log_dir,
+        node_id,
+        &["--standalone", "--controller-listener", controller_listener],
+    );
+}
+
+/// Formats a fresh log directory for `node_id` with the `quorum` flags of
+/// `krabka-format`, as [`run_krabka_format`] does.
+fn format_log_dir(log_dir: &std::path::Path, node_id: u32, quorum: &[&str]) {
+    let node_id = node_id.to_string();
+    let mut argv = vec![
+        "krabka-format",
+        "--log-dir",
+        log_dir.to_str().unwrap(),
+        "--node-id",
+        &node_id,
+    ];
+    argv.extend_from_slice(quorum);
+    let code = current_thread_runtime().block_on(krabka_format::run_from_args(argv));
+    assert!(code == 0, "krabka-format exited {code}");
+}
+
+fn current_thread_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("current-thread runtime")
-        .block_on(krabka_format::run_from_args([
-            "krabka-format",
-            "--log-dir",
-            log_dir.to_str().unwrap(),
-            "--standalone",
-            "--node-id",
-            &node_id.to_string(),
-            "--controller-listener",
-            controller_listener,
-        ]));
-    assert!(code == 0, "krabka-format exited {code}");
 }
 
 #[test]
@@ -194,4 +207,258 @@ fn refuses_a_log_dir_formatted_for_another_node() {
         log_dir.join("meta.properties").display()
     );
     assert!(stderr.contains(&want), "{stderr}");
+}
+
+/// The cluster id of the nodes that [`each_role_opens_only_its_own_listeners`]
+/// starts.
+const CLUSTER_ID: &str = "I2eXt9rvSnyhct8BYmW6-w";
+
+/// How long a node has to log its startup line. A broker-only node waits for
+/// its first unfence, which a few heartbeats bring.
+const STARTUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// The line that a node logs when its start is complete.
+const STARTED: &str = "krabka-broker started";
+
+/// A free loopback port. Something else can take it between this call and
+/// the broker's bind, as in [`boots_with_config_file_listener`].
+fn free_port() -> std::net::SocketAddr {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .expect("bind an ephemeral loopback port")
+}
+
+/// A running `krabka-broker` process. Dropping it kills the process, so a
+/// failed assertion leaves none behind.
+struct Process {
+    child: std::process::Child,
+    /// The stdout lines of the process, one JSON object each.
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Process {
+    fn spawn(args: &[String]) -> Self {
+        let mut child = Command::new(broker_bin())
+            .args(args)
+            .arg("--metrics-listen-addr=none")
+            .arg("--health-listen-addr=none")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("spawn krabka-broker");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let (sender, lines) = std::sync::mpsc::channel();
+        // The reader drains stdout for the whole life of the process, so the
+        // broker never blocks on a full pipe.
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if sender.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        Self { child, lines }
+    }
+
+    /// The fields of the startup line. Fails the test when the process does
+    /// not log it within [`STARTUP_DEADLINE`], with the lines it did log.
+    fn wait_until_started(&self) -> Started {
+        let deadline = std::time::Instant::now() + STARTUP_DEADLINE;
+        let mut logged = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let Ok(line) = self.lines.recv_timeout(left) else {
+                panic!(
+                    "no `{STARTED}` line within {STARTUP_DEADLINE:?}; the process logged:\n{}",
+                    logged.join("\n")
+                );
+            };
+            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line)
+                && entry.get("message").and_then(serde_json::Value::as_str) == Some(STARTED)
+            {
+                let field = |name: &str| {
+                    entry
+                        .get(name)
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                };
+                return Started {
+                    listen_addr: field("listen_addr"),
+                    controller_listen_addr: field("controller_listen_addr"),
+                };
+            }
+            logged.push(line);
+        }
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The listener addresses that the startup line names.
+#[derive(Debug, PartialEq, Eq)]
+struct Started {
+    listen_addr: Option<String>,
+    controller_listen_addr: Option<String>,
+}
+
+/// What a port answers.
+#[derive(Debug, PartialEq, Eq)]
+enum Listener {
+    /// The connection is refused: nothing listens on the port.
+    Closed,
+    /// `ApiVersions` advertises `Produce`: a broker listener.
+    Broker,
+    /// `ApiVersions` advertises no `Produce`: a controller listener, as Kafka
+    /// tags `Produce` for the broker listeners only.
+    Controller,
+}
+
+fn probe(runtime: &tokio::runtime::Runtime, addr: std::net::SocketAddr) -> Listener {
+    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5)) {
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            return Listener::Closed;
+        }
+        Err(error) => panic!("connect to {addr}: {error}"),
+        Ok(stream) => drop(stream),
+    }
+    let connection = runtime
+        .block_on(krabka_client_core::Connection::connect(
+            addr,
+            krabka_client_core::ConnectionOptions {
+                client_id: "cli-smoke".to_owned(),
+                ..krabka_client_core::ConnectionOptions::default()
+            },
+        ))
+        .unwrap_or_else(|error| panic!("ApiVersions on {addr}: {error}"));
+    let produce = connection.advertised_api_range(krabka_protocol::owned::produce_request::API_KEY);
+    connection.close();
+    if produce.is_some() {
+        Listener::Broker
+    } else {
+        Listener::Controller
+    }
+}
+
+/// What one node logs and what its two ports answer once it has started.
+#[derive(Debug, PartialEq, Eq)]
+struct Observed {
+    roles: &'static str,
+    started: Started,
+    client_port: Listener,
+    controller_port: Listener,
+}
+
+/// One node of [`each_role_opens_only_its_own_listeners`].
+struct Case {
+    /// `--process-roles`.
+    roles: &'static str,
+    node_id: u32,
+    /// `--controller-listen-addr`.
+    controller: std::net::SocketAddr,
+    /// `--controller-quorum-voters` of a node that is not a voter. A node
+    /// without it is formatted as the standalone voter of its own quorum.
+    voters: Option<String>,
+    /// Whether the startup line names the client listener and the controller
+    /// listener.
+    names: (bool, bool),
+    /// What the client port and the controller port answer.
+    ports: (Listener, Listener),
+}
+
+/// Every `process.roles` value opens the listeners of its roles and no other,
+/// as Kafka does. Kafka's `ControllerServer` opens only the listeners that
+/// `controller.listener.names` names, and `KafkaConfig` refuses a
+/// controller-only node whose `listeners` name another one. So a client cannot
+/// reach a controller-only node on the client port, and two controller-only
+/// nodes on one host do not compete for that port.
+///
+/// Each node gets a `--listen-addr` and a `--controller-listen-addr` of its
+/// own. The startup line names the listeners that the node opened.
+///
+/// The controller-only node is the quorum of the broker-only node, which
+/// cannot start without one, so the cases run in order and every node runs
+/// until the end. The combined node is a standalone quorum of its own.
+#[test]
+fn each_role_opens_only_its_own_listeners() {
+    let runtime = current_thread_runtime();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let quorum = free_port();
+    let cases = [
+        Case {
+            roles: "controller",
+            node_id: 1,
+            controller: quorum,
+            voters: None,
+            names: (false, true),
+            ports: (Listener::Closed, Listener::Controller),
+        },
+        Case {
+            roles: "broker",
+            node_id: 2,
+            controller: free_port(),
+            voters: Some(format!("1@{quorum}")),
+            names: (true, false),
+            ports: (Listener::Broker, Listener::Closed),
+        },
+        Case {
+            roles: "broker,controller",
+            node_id: 3,
+            controller: free_port(),
+            voters: None,
+            names: (true, true),
+            ports: (Listener::Broker, Listener::Controller),
+        },
+    ];
+
+    let mut running = Vec::new();
+    let mut observed = Vec::new();
+    let mut expected = Vec::new();
+    for case in cases {
+        let log_dir = tmp.path().join(format!("node-{}", case.node_id));
+        let controller = case.controller.to_string();
+        let mut quorum_flags = vec!["--cluster-id", CLUSTER_ID];
+        if case.voters.is_none() {
+            quorum_flags.extend(["--standalone", "--controller-listener", controller.as_str()]);
+        }
+        format_log_dir(&log_dir, case.node_id, &quorum_flags);
+        let client = free_port();
+        let mut args = vec![
+            format!("--log-dir={}", log_dir.display()),
+            format!("--broker-id={}", case.node_id),
+            format!("--process-roles={}", case.roles),
+            format!("--listen-addr={client}"),
+            format!("--controller-listen-addr={controller}"),
+        ];
+        args.extend(
+            case.voters
+                .map(|voters| format!("--controller-quorum-voters={voters}")),
+        );
+        let process = Process::spawn(&args);
+        observed.push(Observed {
+            roles: case.roles,
+            started: process.wait_until_started(),
+            client_port: probe(&runtime, client),
+            controller_port: probe(&runtime, case.controller),
+        });
+        expected.push(Observed {
+            roles: case.roles,
+            started: Started {
+                listen_addr: case.names.0.then(|| client.to_string()),
+                controller_listen_addr: case.names.1.then(|| controller.clone()),
+            },
+            client_port: case.ports.0,
+            controller_port: case.ports.1,
+        });
+        running.push(process);
+    }
+    drop(running);
+
+    assert!(observed == expected);
 }

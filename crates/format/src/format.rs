@@ -9,20 +9,25 @@
 //!
 //! ## Output
 //!
-//! Non-Raft metadata is written as a bootstrap stream for the broker to
-//! pre-load. Dynamic KIP-853 modes also write the authoritative offset-zero
-//! metadata checkpoint. Only the metadata log directory receives them. Kafka
-//! trunk also writes its bootstrap snapshot only into a metadata directory,
-//! and the broker reads the bootstrap records only from there:
+//! Non-Raft metadata is written as a bootstrap stream. The active controller
+//! writes it to the metadata log when it activates on an empty log, and a
+//! broker never writes it. Dynamic KIP-853 modes also write the offset-zero
+//! bootstrap checkpoint, and a controller takes the records from that
+//! checkpoint first, as Kafka's does. Only the metadata log directory
+//! receives them. Kafka trunk also writes its bootstrap snapshot only into a
+//! metadata directory, and the controller reads the bootstrap records only
+//! from there:
 //!
 //! - `bootstrap.json` — a human-readable manifest with the cluster id and a
 //!   base64'd `serde_wincode` blob per metadata record.
 //! - `bootstrap.records.bin` — the same records concatenated as
 //!   length-prefixed `serde_wincode<SerdeCompat<MetadataRecord>>` payloads, so
-//!   the broker can stream them without touching JSON.
+//!   the controller can stream them without touching JSON.
 //! - `__cluster_metadata-0/00000000000000000000-0000000000.checkpoint` — the
 //!   KIP-630/KIP-853 bootstrap snapshot for dynamic membership, for a dynamic
-//!   format only. The path is Kafka's.
+//!   format only. It holds the control state, then the same records in the
+//!   same order, as Kafka's `Formatter.writeBoostrapSnapshot` writes them. The
+//!   path is Kafka's.
 //!
 //! Every directory receives Kafka's `meta.properties`, with the cluster id,
 //! the node id, and the directory's own id, written last. A data directory

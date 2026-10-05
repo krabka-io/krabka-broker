@@ -116,6 +116,23 @@ impl BrokerHandle {
         topic: &str,
         partition: i32,
     ) -> Option<Vec<i64>> {
+        let batches = self.local_batches_for_test(topic, partition)?;
+        Some(batches.iter().map(|batch| batch.base_offset).collect())
+    }
+
+    /// Test-only: return every batch in the local log of `(topic,
+    /// partition)`, in log order. Returns `None` if the partition is not
+    /// hosted on this broker, or if the read fails.
+    ///
+    /// The read budget is larger than any test log, so the read gives the whole
+    /// log. A compaction test compares the batches that each replica keeps.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[must_use]
+    pub fn local_batches_for_test(
+        &self,
+        topic: &str,
+        partition: i32,
+    ) -> Option<Vec<krabka_protocol::records::RecordBatch>> {
         let part = self
             .broker
             .partitions
@@ -124,7 +141,32 @@ impl BrokerHandle {
         let read = log
             .read(log.log_start_offset(), krabka_units::gibibytes(4))
             .ok()?;
-        Some(read.batches.iter().map(|batch| batch.base_offset).collect())
+        Some(read.batches)
+    }
+
+    /// Test-only: run one compaction pass on the local log of `(topic,
+    /// partition)` now, through its writer, as the cleaner does on each tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Replication`] if the partition is not hosted on
+    /// this broker, and the error of the pass otherwise.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn compact_local_log_for_test(
+        &self,
+        topic: &str,
+        partition: i32,
+    ) -> Result<(), crate::error::BrokerError> {
+        let part = self
+            .broker
+            .partitions
+            .get(topic, PartitionIndex(partition))
+            .ok_or_else(|| {
+                crate::error::BrokerError::Replication(format!(
+                    "partition {topic}-{partition} not local"
+                ))
+            })?;
+        part.compact_log().await
     }
 
     /// Test-only: return the `log_start_offset` of `(topic, partition)` as

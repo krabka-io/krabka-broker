@@ -185,6 +185,7 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
+        crate::kraft::Activation::default(),
     )
     .expect("restart completes mandatory downgrade recovery");
 
@@ -261,6 +262,7 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
+        crate::kraft::Activation::default(),
     )
     .expect("restart finishes checkpoint-before-prune recovery");
     assert2::assert!(controller.current_image().finalized_metadata_version() == Some(16));
@@ -321,6 +323,7 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
+        crate::kraft::Activation::default(),
     );
     let Err(error) = result else {
         panic!("persistent mandatory-checkpoint failure must fail open");

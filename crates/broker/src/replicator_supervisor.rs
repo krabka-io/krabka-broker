@@ -28,7 +28,6 @@ use std::{
 use dashmap::DashMap;
 use krabka_log::LogConfig;
 use krabka_raft::NodeId;
-use krabka_units::Time;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -141,11 +140,10 @@ pub(crate) struct ReplicatorSupervisor {
     /// offline broker-wide.
     log_dir_status: crate::log_dir_status::LogDirRegistry,
     /// Broker-wide idempotent/transactional producer-sequence tracker.
-    /// Forwarded into each `materialize_partition` so the partition
-    /// writer's `Compact` handler can snapshot active producers for
-    /// KIP-534 `RETAIN_EMPTY`.
+    /// Forwarded into each `materialize_partition`, so that the partition
+    /// writer copies the producer state of each replicated transaction marker
+    /// into it, and into each spawned replicator.
     producer_state: Arc<crate::producer_state::ProducerState>,
-    producer_id_expiration: Time,
     max_produce_group: usize,
     partition_writer_queue_depth: usize,
     diskless_wal_local_replica_count: usize,
@@ -202,7 +200,6 @@ pub(crate) struct ReplicatorSupervisorConfig {
     pub throttle_state: Arc<ThrottleState>,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
     pub producer_state: Arc<crate::producer_state::ProducerState>,
-    pub producer_id_expiration: Time,
     pub max_produce_group: usize,
     pub partition_writer_queue_depth: usize,
     pub diskless_wal_local_replica_count: usize,
@@ -234,7 +231,6 @@ impl ReplicatorSupervisor {
             throttle_state,
             log_dir_status,
             producer_state,
-            producer_id_expiration,
             max_produce_group,
             partition_writer_queue_depth,
             diskless_wal_local_replica_count,
@@ -283,7 +279,6 @@ impl ReplicatorSupervisor {
             throttle_state,
             log_dir_status,
             producer_state,
-            producer_id_expiration,
             max_produce_group,
             partition_writer_queue_depth,
             diskless_wal_local_replica_count,

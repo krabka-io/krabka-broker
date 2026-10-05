@@ -17,7 +17,8 @@ macro_rules! identity_fields {
             /// broker (`Broker`), or both. Default: `[Controller, Broker]`.
             pub roles: Vec<NodeRole>,
 
-            /// TCP address to listen on. Default: `127.0.0.1:9092`.
+            /// TCP address of the client listener. Default: `127.0.0.1:9092`.
+            /// A node without the `broker` role opens no client listener.
             pub listen_addr: SocketAddr,
 
             /// `host:port` returned in `Metadata` responses as this broker's

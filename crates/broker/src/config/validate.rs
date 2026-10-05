@@ -29,6 +29,8 @@ impl BrokerConfig {
     /// - `inter_broker_listener_name` does not match any listener name.
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
     /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
+    /// - A node without the broker role names `[[listeners]]`, which Kafka's
+    ///   `KafkaConfig` refuses for `process.roles=controller`.
     /// - `audit_topic` is named outside the internal-topic convention.
     /// - On `wasm32-wasip1`, a subsystem that the platform cannot run is
     ///   configured: the metrics server, the OTLP forwarding of client
@@ -48,6 +50,16 @@ impl BrokerConfig {
         {
             return Err(BrokerError::NonControllerIsVoter {
                 node_id: self.node_id,
+            });
+        }
+        if !self.is_broker() && !self.listeners.is_empty() {
+            return Err(BrokerError::ControllerOnlyNodeListeners {
+                names: self
+                    .listeners
+                    .iter()
+                    .map(|listener| listener.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
             });
         }
 

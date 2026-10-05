@@ -29,18 +29,30 @@ const VERSION: i16 = 7;
 /// carried reports.
 const DYNAMIC_TOPIC_CONFIG: i8 = 1;
 
+/// `ConfigSource.DYNAMIC_DEFAULT_BROKER_CONFIG`, the source of a cluster-level
+/// broker config.
+const DYNAMIC_DEFAULT_BROKER_CONFIG: i8 = 3;
+
 /// `ConfigSource.DEFAULT_CONFIG`, the source an untouched key reports.
 const DEFAULT_CONFIG: i8 = 5;
 
+/// The cluster-level `min.insync.replicas` of the test broker. Its bootstrap
+/// records enable ELR, so its controller writes the static value, Kafka's
+/// default of 1, as the cluster default when it seeds the log, as Kafka's
+/// `ActivationRecordsGenerator.recordsForEmptyLog` does.
+const CLUSTER_MIN_INSYNC_REPLICAS: (&str, &str) = ("min.insync.replicas", "1");
+
 /// The KIP-525 configs list a v5+ row carries for a topic created with
-/// `overrides` on a cluster that holds no dynamic defaults.
+/// `overrides` on a cluster whose only dynamic default is the cluster-level
+/// `min.insync.replicas`.
 ///
 /// Every topic-scope key is in it, so spelling the list out row by row would
 /// transcribe the registry rather than say anything about the handler. What
 /// this states instead is the layering the response must show: a key the
-/// request set reads its value at `DYNAMIC_TOPIC_CONFIG`, every other key
-/// reads the built-in default at `DEFAULT_CONFIG`, a sensitive key's value is
-/// withheld, and the list is sorted by name.
+/// request set reads its value at `DYNAMIC_TOPIC_CONFIG`, the cluster default
+/// reads at `DYNAMIC_DEFAULT_BROKER_CONFIG`, every other key reads the
+/// built-in default at `DEFAULT_CONFIG`, a sensitive key's value is withheld,
+/// and the list is sorted by name.
 fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
     use crate::config_keys::registry::{self, ConfigScope};
 
@@ -56,9 +68,14 @@ fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
                 .iter()
                 .find(|(key, _)| *key == row.name)
                 .map(|(_, value)| *value);
-            let (value, config_source) = stored.map_or((row.default, DEFAULT_CONFIG), |value| {
-                (Some(value), DYNAMIC_TOPIC_CONFIG)
-            });
+            let (cluster_key, cluster_value) = CLUSTER_MIN_INSYNC_REPLICAS;
+            let unset = if row.name == cluster_key {
+                (Some(cluster_value), DYNAMIC_DEFAULT_BROKER_CONFIG)
+            } else {
+                (row.default, DEFAULT_CONFIG)
+            };
+            let (value, config_source) =
+                stored.map_or(unset, |value| (Some(value), DYNAMIC_TOPIC_CONFIG));
             CreatableTopicConfigs {
                 name: row.name.to_owned(),
                 value: (!row.is_sensitive())

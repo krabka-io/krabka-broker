@@ -1,6 +1,15 @@
 //! Per-(topic, partition) producer-sequence tracking. Drives the
 //! idempotent-producer dedup / out-of-order / epoch-fence checks in
 //! `handlers::produce`.
+//!
+//! This tracker is a second copy of the producer state that the partition log
+//! keeps (`krabka_log::Log::recovered_producers`). The produce path reads only
+//! this copy. A follower copies the transaction markers that it replicates
+//! into it, but not the data batches, so the copy is complete only on a
+//! leader. `Partition::install_local_leadership` replaces it with the state of
+//! the log on each promotion. A reader that must also answer on a follower
+//! reads the log instead: `DescribeProducers`, and the log cleaner, which
+//! keeps the last record of each producer.
 
 use std::sync::Arc;
 
@@ -208,17 +217,13 @@ impl ProducerState {
             .clone()
     }
 
-    /// Read-only snapshot of every active producer entry on
-    /// `(topic, partition)`.
+    /// Read-only snapshot of every tracked producer entry on
+    /// `(topic, partition)`, for tests.
     ///
     /// This function returns an empty list when the partition has no entries.
-    /// That means no idempotent or transactional producer has produced to it
-    /// yet. The `DescribeProducers` admin handler (`api_key=61`, KIP-664)
-    /// calls it to show per-partition producer state to admin clients such as
-    /// `kafka-admin --describe-producers`.
-    ///
-    /// The snapshot drops the mutex before it returns, so callers do not
-    /// hold the per-partition lock across response encoding.
+    /// `DescribeProducers` does not read the tracker: it answers from the
+    /// producer state of the partition log, which a follower also updates.
+    #[cfg(test)]
     pub async fn snapshot(
         &self,
         topic: &str,
@@ -239,9 +244,6 @@ impl ProducerState {
         let handle = part_ref.value().clone();
         drop(part_ref);
         let state = handle.lock().await;
-        // Keep the public return `i64`: unwrap the map's `ProducerId` key at the
-        // snapshot boundary (the `DescribeProducers` handler writes it straight
-        // into the raw-`i64` wire field).
         state
             .entries
             .iter()

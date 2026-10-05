@@ -22,7 +22,9 @@ pub struct Args {
     #[command(flatten)]
     pub profiling: krabka_telemetry::profiling::ProfilingConfig,
 
-    /// TCP address to listen on. Mutually exclusive with `--config-file`.
+    /// TCP address of the client listener. Mutually exclusive with
+    /// `--config-file`. A node without the `broker` role opens no client
+    /// listener, as a Kafka controller-only node does not.
     #[arg(long, default_value = "127.0.0.1:9092", conflicts_with = "config_file")]
     pub listen_addr: SocketAddr,
 

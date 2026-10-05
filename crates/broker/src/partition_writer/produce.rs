@@ -13,6 +13,7 @@ use std::{
 use arc_swap::ArcSwap;
 use krabka_ids::PartitionIndex;
 use krabka_log::Log;
+use krabka_raft::RaftError;
 use tokio::sync::{Notify, mpsc};
 
 use super::{
@@ -20,6 +21,7 @@ use super::{
     storage::{flag_storage_failure, storage_failure_error},
 };
 use crate::{
+    error::BrokerError,
     log_dir_status::LogDirRegistry,
     partition::{ProduceData, ProduceJob, WriterMessage},
     producer_state::ProducerState,
@@ -108,10 +110,7 @@ pub(super) async fn handle_produce(
             }
             Err(error) => {
                 for ack in acks {
-                    let _ = ack.send(Err(storage_failure_error(
-                        "offset assignment failed",
-                        &error,
-                    )));
+                    let _ = ack.send(Err(reservation_failure(&error)));
                 }
                 return;
             }
@@ -200,5 +199,26 @@ pub(super) async fn handle_produce(
         if advanced {
             hw_advance_notify.notify_waiters();
         }
+    }
+}
+
+/// The answer to each job of a group whose offset reservation failed.
+///
+/// A controller quorum without an active leader refuses the reservation
+/// before it reserves an offset, so the group appended nothing. That is a
+/// leader election, not a disk failure. The job gets the same
+/// [`RaftError::NotLeader`] that the sequencer returned, and the produce path
+/// answers `NOT_LEADER_OR_FOLLOWER`, as Kafka does when a broker cannot append
+/// because leadership moves. The client refreshes its metadata and sends the
+/// batch again. Every other failure of the reservation fails the group as a
+/// storage failure, and the log directory stays online.
+fn reservation_failure(error: &BrokerError) -> BrokerError {
+    match error {
+        BrokerError::Raft(RaftError::NotLeader { current_leader }) => {
+            BrokerError::Raft(RaftError::NotLeader {
+                current_leader: *current_leader,
+            })
+        }
+        other => storage_failure_error("offset assignment failed", other),
     }
 }
