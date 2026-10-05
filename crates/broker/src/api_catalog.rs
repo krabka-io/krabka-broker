@@ -131,6 +131,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "The measured throttled-replication rate is published as `krabka_broker_replication_throttled_bytes_out` and `krabka_broker_replication_throttled_bytes_in`, which stand for Kafka's `kafka.server:type=LeaderReplication,name=byte-rate` and its `FollowerReplication` twin, with `krabka_broker_replication_throttle_sleeps` for the rounds the throttle held back entirely. Kafka delays a throttled fetch; krabka drops the partition from the round and the follower re-asks, so there is no `throttle_time_ms` to attribute and the byte-rate is what says whether the throttle is biting.",
     },
     KipAnnotation {
+        key: "KIP-74",
+        claim: "Fetch response size limits: max_bytes and partition_max_bytes",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/log/read.rs",
+        tests: &[
+            "crates/log/src/log/read/tests.rs::a_read_never_skips_past_a_segment_its_budget_clipped",
+            "crates/log/src/log/read/tests.rs::a_descriptor_read_never_skips_past_a_segment_its_budget_clipped",
+            "crates/broker/tests/replication.rs::a_follower_that_catches_up_across_segments_copies_every_batch",
+        ],
+        note: "Only the first batch of a read can be larger than the budget, so a fetch always makes progress, and a read that the budget stops inside a segment does not go on into the next one.",
+    },
+    KipAnnotation {
         key: "KIP-98",
         claim: "Transactions and idempotent producers, with transactional-id expiry",
         status: KipStatus::Implemented,
@@ -791,6 +803,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/broker/src/handlers/describe_log_dirs/dirs.rs",
         tests: &["crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs"],
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-835",
+        claim: "The KRaft leader appends a NoOpRecord every metadata.max.idle.interval.ms",
+        status: KipStatus::Partial,
+        module: "crates/raft/src/kraft/controller/idle.rs",
+        tests: &[
+            "crates/raft/src/kraft/controller/tests_cleaning.rs::a_leader_appends_kip835_no_ops_that_change_nothing",
+            "crates/raft/src/kraft/controller/tests_cleaning.rs::the_no_op_timer_runs_only_on_a_leader_with_an_interval",
+        ],
+        note: "The NoOpRecord heartbeat is in the tree. The quorum-health metrics of the KIP, such as `last-applied-record-offset` and `last-applied-record-lag-ms`, are not published.",
     },
     KipAnnotation {
         key: "KIP-841",

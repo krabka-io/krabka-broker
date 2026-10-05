@@ -29,12 +29,20 @@ pub(crate) fn advertised_host(
 
 /// This machine's host name, as the operating system reports it, or `None`
 /// when it reports none.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn local_host_name() -> Option<String> {
     hostname::get()
         .ok()?
         .into_string()
         .ok()
         .filter(|name| !name.is_empty())
+}
+
+/// WASI reports no host name. Its listeners come from the embedder, which
+/// binds them, so no wildcard bind needs one.
+#[cfg(target_family = "wasm")]
+pub(crate) fn local_host_name() -> Option<String> {
+    None
 }
 
 #[cfg(test)]

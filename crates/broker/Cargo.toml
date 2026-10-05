@@ -117,7 +117,6 @@ crc32c = { workspace = true }
 prost = { workspace = true }
 hex = { workspace = true }
 # The host name a controller bound to a wildcard address advertises.
-hostname = { workspace = true }
 # SHA-256 fingerprint of the configured break-glass approver set
 # (`operator_keys::approver_set_fingerprint`), recorded on every break-glass
 # audit event so a per-broker divergence in the set is visible afterwards.
@@ -132,6 +131,8 @@ exponential-backoff = "2.1.1"
 # validation, OTLP forwarding of client metrics, the metrics and health
 # servers.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+# The host name a wildcard-bound controller advertises. WASI has none.
+hostname = { workspace = true }
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
 krabka-schema-serde = { version = "0.4.1", features = ["avro", "protobuf", "json"] }
