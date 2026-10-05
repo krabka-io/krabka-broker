@@ -201,10 +201,7 @@ impl BrokerProcess {
         let cluster = format!("--cluster-id={cluster_id}");
         let initial = format!("--initial-controllers={voters}");
         let node = format!("--node-id={}", self.node_id);
-        let directory = format!(
-            "--directory-id={}",
-            directory_uuid(self.node_id)
-        );
+        let directory = format!("--directory-id={}", directory_uuid(self.node_id));
         let mut args = vec!["run", "--rm", "--user", &user, "--volume", &mount];
         let primary_mount;
         if let Some(primary) = primary {
