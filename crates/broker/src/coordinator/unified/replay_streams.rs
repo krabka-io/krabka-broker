@@ -48,6 +48,7 @@ impl GroupCoordinator {
             if replay_epoch_is_admissible(seed.group_epoch, epoch) {
                 seed.group_epoch = epoch;
                 seed.metadata_hash = value.metadata_hash;
+                seed.description_epochs = value.description;
             }
         }
         {
@@ -58,6 +59,7 @@ impl GroupCoordinator {
             if replay_epoch_is_admissible(cached.group_epoch, epoch) {
                 cached.group_epoch = epoch;
                 cached.metadata_hash = value.metadata_hash;
+                cached.description_epochs = value.description;
             }
         }
     }
@@ -333,6 +335,10 @@ mod tests {
             streams::persistence::StreamsGroupMetadataValue {
                 epoch: 30,
                 metadata_hash: 44,
+                description: streams::persistence::DescriptionEpochs {
+                    stored: 3,
+                    failed: -1,
+                },
             },
         );
         coord.replay_streams_member_metadata("st", "streams-member", member.clone());
@@ -345,6 +351,10 @@ mod tests {
         let expected = StreamsGroupSeed {
             group_epoch: 30,
             metadata_hash: 44,
+            description_epochs: streams::persistence::DescriptionEpochs {
+                stored: 3,
+                failed: -1,
+            },
             assignment_epoch: 32,
             topology: Some(topology),
             partition_metadata: Some(partition_metadata),
@@ -368,6 +378,7 @@ mod tests {
             streams::persistence::StreamsGroupMetadataValue {
                 epoch: 2,
                 metadata_hash: 7,
+                description: streams::persistence::DescriptionEpochs::default(),
             },
         );
 
@@ -390,6 +401,7 @@ mod tests {
             streams::persistence::StreamsGroupMetadataValue {
                 epoch: 2,
                 metadata_hash: 0,
+                description: streams::persistence::DescriptionEpochs::default(),
             },
         );
         coord.replay_streams_member_metadata("st", "m", streams_member("m"));

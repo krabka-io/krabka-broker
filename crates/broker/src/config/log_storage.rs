@@ -44,10 +44,19 @@ impl BrokerConfig {
         }
     }
 
+    /// The metadata log directory, Kafka's `metadata.log.dir`:
+    /// [`metadata_log_dir`][Self::metadata_log_dir] when it is set, and
+    /// otherwise [`log_dir`][Self::log_dir], the first entry of `log.dirs`.
+    #[must_use]
+    pub fn metadata_dir(&self) -> &std::path::Path {
+        self.metadata_log_dir.as_deref().unwrap_or(&self.log_dir)
+    }
+
     /// All log directories this broker stores partition data in, primary
-    /// first and de-duplicated. This is the placement and `DescribeLogDirs`
-    /// surface (KIP-113). The list excludes `__cluster_metadata`, which lives
-    /// on [`log_dir`][Self::log_dir] only.
+    /// first and de-duplicated: Kafka's `log.dirs`. This is the placement and
+    /// `DescribeLogDirs` surface (KIP-113). A separate
+    /// [`metadata_log_dir`][Self::metadata_log_dir] is not in it, as Kafka's
+    /// `metadata.log.dir` is not in `log.dirs`.
     #[must_use]
     pub fn all_log_dirs(&self) -> Vec<PathBuf> {
         let mut out = vec![self.log_dir.clone()];

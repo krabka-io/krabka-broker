@@ -282,7 +282,7 @@ fn a_fenced_broker_is_a_tagged_last_resort_candidate() {
     let views = site_broker_views(
         &image,
         Some(NodeId(1)),
-        &automatic_placement_exclusions(&image),
+        &automatic_placement_exclusions(&image, &fenced),
         &fenced,
     );
 
@@ -311,7 +311,7 @@ fn a_fenced_broker_is_a_tagged_last_resort_candidate() {
     let views = site_broker_views(
         &image,
         Some(NodeId(1)),
-        &automatic_placement_exclusions(&image),
+        &automatic_placement_exclusions(&image, &fenced),
         &fenced,
     );
     assert!(
@@ -324,6 +324,110 @@ fn a_fenced_broker_is_a_tagged_last_resort_candidate() {
                 cannot be reached because only 2 broker(s) are registered or some brokers have \
                 all their log directories cordoned."
     );
+}
+
+/// A fenced broker is out of controlled shutdown. Kafka's
+/// `BrokerHeartbeatManager.touch` clears the controlled-shutdown offset of a
+/// broker it fences, so `UsableBrokerIterator` hands the broker to the placer
+/// again, as a fenced last resort. The registration keeps
+/// `InControlledShutdown` until the broker registers again, so only the fence
+/// says that the controlled shutdown is over.
+///
+/// The second row is a broker after a clean stop, the state that
+/// `ShareConsumerTest.test_broker_failure` leaves broker 1 in. Without it,
+/// `__share_group_state` at replication factor 3 could not be created on the
+/// two brokers left, and the share group never initialized its partitions.
+#[test]
+fn a_fenced_broker_is_out_of_controlled_shutdown() {
+    struct Case {
+        what: &'static str,
+        /// The fence on the registration of broker 3, which is in controlled
+        /// shutdown.
+        registration_fenced: bool,
+        /// What the controller's heartbeat registry holds unavailable.
+        registry_unavailable: &'static [u64],
+        /// `(node id, fenced)` of each view.
+        views: Vec<(NodeId, bool)>,
+        /// The sorted replicas and ISR of an automatic partition at
+        /// replication factor 3, or the `CreateTopics` refusal.
+        created: Result<(Vec<NodeId>, Vec<NodeId>), String>,
+    }
+    let cases = [
+        Case {
+            what: "still in controlled shutdown",
+            registration_fenced: false,
+            registry_unavailable: &[],
+            views: vec![(NodeId(1), false), (NodeId(2), false)],
+            created: Err(
+                "Unable to replicate the partition 3 time(s): The target replication \
+                          factor of 3 cannot be reached because only 2 broker(s) are \
+                          registered or some brokers have all their log directories cordoned."
+                    .to_owned(),
+            ),
+        },
+        Case {
+            what: "stopped after its controlled shutdown",
+            registration_fenced: true,
+            registry_unavailable: &[],
+            views: vec![(NodeId(1), false), (NodeId(2), false), (NodeId(3), true)],
+            created: Ok((
+                vec![NodeId(1), NodeId(2), NodeId(3)],
+                vec![NodeId(1), NodeId(2)],
+            )),
+        },
+        Case {
+            what: "session expired on the controller before the fence is replicated",
+            registration_fenced: false,
+            registry_unavailable: &[3],
+            views: vec![(NodeId(1), false), (NodeId(2), false), (NodeId(3), true)],
+            created: Ok((
+                vec![NodeId(1), NodeId(2), NodeId(3)],
+                vec![NodeId(1), NodeId(2)],
+            )),
+        },
+    ];
+    for case in cases {
+        let mut image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);
+        let mut registration = image.broker(NodeId(3)).expect("registered").clone();
+        registration.in_controlled_shutdown = true;
+        registration.fenced = case.registration_fenced;
+        image.apply(&MetadataRecord::V1BrokerRegistration(registration));
+        // `unavailable_brokers`: the replicated fence, with the controller's
+        // registry on top.
+        let mut unavailable = crate::heartbeat::fencing::fenced_node_ids(&image);
+        unavailable.extend(case.registry_unavailable);
+
+        let views = site_broker_views(
+            &image,
+            Some(NodeId(1)),
+            &automatic_placement_exclusions(&image, &unavailable),
+            &unavailable,
+        );
+        let created = match assign(&auto_topic(1, 3), &views, None, 0) {
+            Ok(assignments) if assignments.is_empty() => Err(placement_failure_message(3, &views)),
+            Ok(assignments) => {
+                let leaderships =
+                    automatic_leaderships(&assignments, &inactive_brokers(&image, &unavailable));
+                let mut replicas = assignments[0].clone();
+                replicas.sort_unstable();
+                let mut isr = leaderships[0].isr.clone();
+                isr.sort_unstable();
+                Ok((replicas, isr))
+            }
+            Err((code, message)) => panic!("{}: refused with {code}: {message}", case.what),
+        };
+
+        assert!(
+            views
+                .iter()
+                .map(|view| (view.node_id, view.fenced))
+                .collect::<Vec<_>>()
+                == case.views,
+            "{}",
+            case.what
+        );
+        assert!(created == case.created, "{}", case.what);
+    }
 }
 
 /// Kafka's `createTopic` builds the ISR from the replicas that pass
@@ -625,7 +729,7 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
         if let Some(node_id) = shutting_down {
             enter_controlled_shutdown(&mut image, node_id);
         }
-        let excluded = automatic_placement_exclusions(&image);
+        let excluded = automatic_placement_exclusions(&image, &std::collections::HashSet::new());
         let views = site_broker_views(
             &image,
             Some(NodeId(1)),
@@ -643,7 +747,7 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
     registration.log_dirs = vec![dir(10)];
     registration.cordoned_log_dirs = Some(vec![dir(10)]);
     all_cordoned.apply(&MetadataRecord::V1BrokerRegistration(registration));
-    let excluded = automatic_placement_exclusions(&all_cordoned);
+    let excluded = automatic_placement_exclusions(&all_cordoned, &std::collections::HashSet::new());
     let views = site_broker_views(
         &all_cordoned,
         Some(NodeId(1)),

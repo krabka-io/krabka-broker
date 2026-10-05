@@ -1,6 +1,11 @@
-//! The observer's serve loop: it picks a controller voter round robin, fetches
-//! from it, records the applied offset and the leader hint, and parks on the
-//! poll interval whenever it is caught up or the voter is unreachable.
+//! The observer's serve loop: it picks a controller, fetches from it, records
+//! the applied offset and the leader the answer names, and parks on the poll
+//! interval whenever it is caught up or the controller is unreachable.
+//!
+//! The controllers it picks from are the voters and bootstrap servers that
+//! [`quorum_targets`] lists, read again before every fetch. A node in a KIP-853
+//! dynamic quorum starts with bootstrap servers alone and learns the voters,
+//! and the endpoint of the leader, from the records it applies.
 //!
 //! The loop starts from what this node last checkpointed rather than from
 //! offset 0, and checkpoints again as it advances, so a restart does not replay
@@ -14,7 +19,7 @@ use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
 use super::{MetadataObserver, ObserverConfig, fetch::fetch_once, store::ObserverStore};
-use crate::time_util;
+use crate::{controller_endpoint::quorum_targets, time_util};
 
 /// Names this loop in the timer-failure logs that [`time_util::arm`] and
 /// [`time_util::fired`] emit.
@@ -32,35 +37,78 @@ async fn park(config: &ObserverConfig) -> bool {
     time_util::fired(tick.await, TASK)
 }
 
-/// Round-robin pick into a non-empty voter list: the index `idx` wrapped by
-/// the list length.
+/// Which controller the loop fetches from next, and what the last answers
+/// said.
 ///
-/// This helper is separate from the serve loop so that a unit test covers the
-/// wrap-around. A `/` written for `%` would stop the observer from rotating to
-/// the next voter when the current one is unreachable, and strand it on a dead
-/// voter.
-fn voter_at(voters: &[(NodeId, String)], idx: usize) -> &(NodeId, String) {
-    &voters[idx % voters.len()]
+/// The cursor names controllers by node id, never by their position in the
+/// target list, because the loop reads that list again before every fetch and
+/// the voter set at its head can change between two fetches.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Cursor {
+    /// The controller that answered last, or the one to try after a failure.
+    current: Option<NodeId>,
+    /// The leader the last answer named.
+    leader: Option<NodeId>,
+    /// The controller whose fetch failed most recently, until one answers
+    /// naming a different leader, or this one answers again.
+    failed: Option<NodeId>,
 }
 
-/// The index in `voters` the loop should move to, given the leader the last
-/// answer named.
-///
-/// Any controller serves the fetch, but only the leader records an observer's
-/// progress for `DescribeQuorum`, so an observer that landed on a follower
-/// moves to the leader that follower names, as a Kafka broker only ever fetches
-/// from the leader. It stays where it is when the hint names no other voter of
-/// the list, or the voter that just failed: a leader this node cannot reach
-/// would otherwise cost a failed dial on every second poll, for as long as the
-/// follower keeps naming it.
-fn leader_to_follow(
-    voters: &[(NodeId, String)],
-    target: NodeId,
-    leader_hint: Option<NodeId>,
-    failed: Option<NodeId>,
-) -> Option<usize> {
-    let leader = leader_hint.filter(|leader| *leader != target && Some(*leader) != failed)?;
-    voters.iter().position(|(id, _)| *id == leader)
+impl Cursor {
+    /// The controller to fetch from next, out of a non-empty `targets`.
+    ///
+    /// Any controller serves the fetch, but only the leader records an
+    /// observer's progress for `DescribeQuorum`, so the loop goes to the leader
+    /// the last answer named, as a Kafka broker only ever fetches from the
+    /// leader. It does not go back to a leader that has just failed: a leader
+    /// this node cannot reach would otherwise cost a failed dial on every
+    /// second poll, for as long as a follower keeps naming it. Short of the
+    /// leader, the loop stays on the controller it is on, and short of that it
+    /// takes the first target.
+    fn pick<'a>(&self, targets: &'a [(NodeId, String)]) -> &'a (NodeId, String) {
+        let leader = self.leader.filter(|leader| Some(*leader) != self.failed);
+        [leader, self.current]
+            .into_iter()
+            .flatten()
+            .find_map(|id| targets.iter().find(|(target, _)| *target == id))
+            .unwrap_or(&targets[0])
+    }
+
+    /// `target`, one of `targets`, answered and named `leader`.
+    ///
+    /// An answer that names no leader comes from a controller that knows of
+    /// none. The quorum can be in an election, or the controller can have left
+    /// the voter set and not found its successor yet. So the loop moves on to
+    /// the next target, as a Kafka observer looks for the leader elsewhere
+    /// when its fetch names none.
+    fn answered(&mut self, targets: &[(NodeId, String)], target: NodeId, leader: Option<NodeId>) {
+        if self.failed == Some(target) || leader.is_some_and(|leader| Some(leader) != self.failed) {
+            self.failed = None;
+        }
+        self.current = if leader.is_some() {
+            Some(target)
+        } else {
+            target_after(targets, target)
+        };
+        self.leader = leader;
+    }
+
+    /// `target`, one of `targets`, did not answer: the loop moves on to the
+    /// target after it.
+    fn missed(&mut self, targets: &[(NodeId, String)], target: NodeId) {
+        self.failed = Some(target);
+        self.current = target_after(targets, target);
+    }
+}
+
+/// The target after `target` in `targets`, wrapping round to the first. A
+/// target that has left the list is followed by the first.
+fn target_after(targets: &[(NodeId, String)], target: NodeId) -> Option<NodeId> {
+    let next = targets
+        .iter()
+        .position(|(id, _)| *id == target)
+        .map_or(0, |index| (index + 1) % targets.len());
+    targets.get(next).map(|(id, _)| *id)
 }
 
 /// Successive fetches that leave the image empty while the quorum has
@@ -121,22 +169,24 @@ pub(super) async fn run_loop(
 ) {
     let mut store = ObserverStore::open(&config.data_dir, config.snapshot_interval_records);
     let mut fetch_offset: u64 = resume(&config, &mut store, &observer);
-    let mut target_idx: usize = 0;
-    // The voter whose fetch failed most recently, until one succeeds or a
-    // different leader is named.
-    let mut last_failed: Option<NodeId> = None;
+    let mut cursor = Cursor::default();
     let mut empty_image = EmptyImageWatch::default();
     loop {
         if shutdown.is_cancelled() {
             return;
         }
-        if config.voters.is_empty() {
+        let targets = quorum_targets(
+            &observer.current_image(),
+            &config.voters,
+            &config.bootstrap_servers,
+        );
+        if targets.is_empty() {
             if !park(&config).await {
                 return;
             }
             continue;
         }
-        let (target, addr) = voter_at(&config.voters, target_idx).clone();
+        let (target, addr) = cursor.pick(&targets).clone();
         let result = tokio::select! {
             () = shutdown.cancelled() => return,
             r = fetch_once(&config, &addr, target, fetch_offset, &observer.image, &mut store) => r,
@@ -156,16 +206,14 @@ pub(super) async fn run_loop(
                 outcome.quorum_high_watermark.saturating_sub(1),
                 Ordering::Release,
             );
-            let _ = observer.leader.send_replace(Some(target));
-            if last_failed == Some(target) {
-                last_failed = None;
+            // The leader is the one the answer names, which a bootstrap
+            // server knows by node id even though this node knows the server
+            // only by its address. An answer that names none, from a quorum in
+            // the middle of an election, leaves the last one standing.
+            if let Some(leader) = outcome.leader_hint {
+                let _ = observer.leader.send_replace(Some(leader));
             }
-            if let Some(index) =
-                leader_to_follow(&config.voters, target, outcome.leader_hint, last_failed)
-            {
-                target_idx = index;
-                last_failed = None;
-            }
+            cursor.answered(&targets, target, outcome.leader_hint);
             // Every poll is answered and nothing is ever applied: the stall
             // shows up as a readiness lag this node can never close, with
             // nothing saying why. The responder's log start is what separates
@@ -180,6 +228,7 @@ pub(super) async fn run_loop(
                     log_start_offset = outcome.log_start_offset,
                     quorum_high_watermark = outcome.quorum_high_watermark,
                     voter = target.0,
+                    %addr,
                     "observer metadata image is still empty while the quorum has committed \
                      records; this node is not making progress"
                 );
@@ -194,8 +243,7 @@ pub(super) async fn run_loop(
                 store.maybe_checkpoint(&observer.current_image(), fetch_offset);
             }
         } else {
-            last_failed = Some(target);
-            target_idx = target_idx.wrapping_add(1);
+            cursor.missed(&targets, target);
             tokio::select! {
                 () = shutdown.cancelled() => return,
                 held = park(&config) => if !held { return; },
@@ -313,86 +361,145 @@ mod tests {
         assert!(watch.observe(true, 10_000));
     }
 
+    fn targets(ids: &[u64]) -> Vec<(NodeId, String)> {
+        ids.iter()
+            .map(|&id| (NodeId(id), format!("controller-{id}:9093")))
+            .collect()
+    }
+
+    /// A controller that does not answer hands over to the next target, and
+    /// the last one wraps round to the first. A target that has left the list
+    /// since it was picked hands over to the first.
     #[test]
-    fn voter_at_wraps_round_robin_by_modulo() {
-        let voters = vec![
-            (krabka_raft::NodeId(1), "a:9093".to_string()),
-            (krabka_raft::NodeId(2), "b:9093".to_string()),
-            (krabka_raft::NodeId(3), "c:9093".to_string()),
-        ];
-        // In-range picks each distinct voter. `idx / len` (the `%`→`/` mutant)
-        // would collapse 1 and 2 to index 0 ("a"), so distinguishing 0/1/2 here
-        // proves the modulo, not integer division, indexes the list.
-        // Wrap-around: index 3 must rotate back to the first voter (3 % 3 == 0);
-        // `3 / 3 == 1` would return the second voter instead.
-        let cases = [
-            (0usize, krabka_raft::NodeId(1)),
-            (1, krabka_raft::NodeId(2)),
-            (2, krabka_raft::NodeId(3)),
-            (3, krabka_raft::NodeId(1)),
-            (4, krabka_raft::NodeId(2)),
-        ];
-        for (idx, expected_id) in cases {
-            assert!(voter_at(&voters, idx).0 == expected_id, "idx {idx}");
+    fn a_missed_controller_hands_over_to_the_next_target() {
+        let listed = targets(&[1, 2, 3]);
+        let node = NodeId;
+        // (target that missed, cursor afterwards)
+        let cases = [(1, 2), (2, 3), (3, 1), (9, 1)].map(|(missed, next)| {
+            (
+                missed,
+                Cursor {
+                    current: Some(node(next)),
+                    leader: Some(node(2)),
+                    failed: Some(node(missed)),
+                },
+            )
+        });
+        for (missed, expected) in cases {
+            let mut cursor = Cursor {
+                current: Some(node(missed)),
+                leader: Some(node(2)),
+                failed: None,
+            };
+            cursor.missed(&listed, node(missed));
+            assert!(cursor == expected, "missed {missed}");
         }
     }
 
-    /// The loop moves to the leader a follower names, so that the leader sees
-    /// this node fetch, and does not go back to a voter that has just failed.
+    /// The loop moves to the leader an answer names, so that the leader sees
+    /// this node fetch, and does not go back to a controller that has just
+    /// failed. A bootstrap server is known only by its address, so the leader
+    /// it names is reached once the voter set read from the log lists it.
     #[test]
     fn the_loop_follows_a_named_leader_unless_it_just_failed() {
-        let voters = vec![
-            (krabka_raft::NodeId(1), "a:9093".to_string()),
-            (krabka_raft::NodeId(2), "b:9093".to_string()),
-            (krabka_raft::NodeId(3), "c:9093".to_string()),
-        ];
-        let node = krabka_raft::NodeId;
-        // (label, target just fetched, leader it named, voter that failed last,
-        // index to move to)
+        let node = NodeId;
+        let voters = targets(&[1, 2, 3]);
+        let before_the_voter_set = targets(&[u64::MAX, u64::MAX - 1]);
+        let after_the_voter_set = targets(&[3001, u64::MAX - 1]);
+        let failed = |id| Cursor {
+            failed: Some(node(id)),
+            ..Cursor::default()
+        };
+        // (label, cursor before the answer, target that answered, leader it
+        // named, targets of the answer and of the next poll, target the next
+        // poll picks)
         let cases = [
             (
                 "a follower names the leader",
-                node(1),
-                Some(node(3)),
-                None,
-                Some(2),
+                Cursor::default(),
+                1,
+                Some(3),
+                &voters,
+                3,
             ),
             (
                 "the target is the leader",
-                node(3),
-                Some(node(3)),
-                None,
-                None,
-            ),
-            ("no leader is known", node(1), None, None, None),
-            (
-                "the leader is not a configured voter",
-                node(1),
-                Some(node(9)),
-                None,
-                None,
+                Cursor::default(),
+                3,
+                Some(3),
+                &voters,
+                3,
             ),
             (
-                "the named leader is the one that just failed",
-                node(1),
-                Some(node(3)),
-                Some(node(3)),
+                "an answer that names no leader moves on",
+                Cursor::default(),
+                1,
                 None,
+                &voters,
+                2,
             ),
             (
-                "a different leader than the one that failed",
-                node(1),
-                Some(node(2)),
-                Some(node(3)),
-                Some(1),
+                "the last target names no leader",
+                Cursor::default(),
+                3,
+                None,
+                &voters,
+                1,
+            ),
+            (
+                "the leader is not a target",
+                Cursor::default(),
+                1,
+                Some(9),
+                &voters,
+                1,
+            ),
+            (
+                "the named leader just failed",
+                failed(3),
+                1,
+                Some(3),
+                &voters,
+                1,
+            ),
+            (
+                "a leader other than the one that failed",
+                failed(3),
+                1,
+                Some(2),
+                &voters,
+                2,
+            ),
+            (
+                "a bootstrap server names a leader the voter set does not list yet",
+                Cursor::default(),
+                u64::MAX,
+                Some(3001),
+                &before_the_voter_set,
+                u64::MAX,
+            ),
+            (
+                "the voter set lists the leader a bootstrap server named",
+                Cursor::default(),
+                u64::MAX,
+                Some(3001),
+                &after_the_voter_set,
+                3001,
             ),
         ];
-        for (label, target, hint, failed, expected) in cases {
-            assert!(
-                leader_to_follow(&voters, target, hint, failed) == expected,
-                "{label}"
-            );
-        }
+        let picked: Vec<(&str, NodeId)> = cases
+            .iter()
+            .map(|&(label, cursor, target, leader, next_targets, _)| {
+                let mut cursor = cursor;
+                cursor.answered(next_targets, node(target), leader.map(node));
+                (label, cursor.pick(next_targets).0)
+            })
+            .collect();
+        let expected: Vec<(&str, NodeId)> = cases
+            .iter()
+            .map(|&(label, .., next)| (label, node(next)))
+            .collect();
+        assert!(picked == expected);
     }
 
     #[tokio::test]

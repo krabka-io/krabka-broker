@@ -670,7 +670,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             Some("10485760"),
-            "Size cap on a segment's offset index. krabka sizes its sparse indexes from index.interval.bytes, so this value is stored and reported only.",
+            "Size cap on each of a segment's two sparse indexes. The active segment rolls once its offset index holds this many bytes of 8-byte entries, or its time index is one 12-byte entry short of this many bytes.",
             ValueCheck::I32AtLeast(4),
         )
     },

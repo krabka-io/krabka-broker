@@ -297,3 +297,28 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
         h.shutdown().await;
     }
 }
+
+/// A controller-only node has no partitions to drain and no heartbeat client
+/// to carry the request, so the drain must not wait for an answer that never
+/// comes. Before, it waited out the whole timeout and returned
+/// `ShutdownTimeout`, so every stop of an isolated controller took the full
+/// drain timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let mut config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.roles = vec![krabka_broker::config::NodeRole::Controller];
+    let controller = krabka_broker::Broker::start(config)
+        .await
+        .expect("controller-only start");
+    controller.wait_until_controller_leader().await;
+
+    let stopped = tokio::time::timeout(
+        Duration::from_secs(20),
+        controller.controlled_shutdown(Duration::from_secs(10)),
+    )
+    .await
+    .expect("the stop does not wait out the drain timeout");
+
+    assert!(let Ok(()) = stopped);
+}

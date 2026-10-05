@@ -193,6 +193,22 @@ async fn discovery_peer_distinguishes_voter_and_observer() {
     check!(attached_observer.discovery_peer().is_none());
 }
 
+/// A leaderless observer asks each peer in turn, so a peer that is down, or
+/// one that knows no leader, does not hold its discovery for good.
+#[tokio::test]
+async fn discovery_takes_the_peers_in_turn() {
+    use crate::kraft::controller::test_support::build_engine_only;
+
+    let (mut observer, _dir) = build_engine_only(NodeId(3), &[NodeId(1), NodeId(2)]);
+    let picked: Vec<Option<NodeId>> = (0..3)
+        .map(|attempt| {
+            observer.discovery_attempts = attempt;
+            observer.discovery_peer()
+        })
+        .collect();
+    check!(picked == vec![Some(NodeId(1)), Some(NodeId(2)), Some(NodeId(1))]);
+}
+
 #[tokio::test]
 async fn fetch_misses_increment_and_trigger_timeout_at_limit() {
     use crate::kraft::{controller::test_support::build_engine_only, transport::TimerTick};

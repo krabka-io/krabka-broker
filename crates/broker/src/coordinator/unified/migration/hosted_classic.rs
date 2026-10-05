@@ -17,7 +17,7 @@ use super::assignment::member_target_assignment;
 use crate::{
     codes,
     coordinator::unified::{
-        actor::{JoinResult, JoinResultMember, SyncResult},
+        actor::{JoinResult, SyncResult},
         consumer_state::{ClassicMemberFacade, GroupState as ConsumerState, MemberState},
         persistence_next_gen::MemberAssignmentState,
         reconciler::ReconcileInput,
@@ -189,31 +189,29 @@ pub(crate) fn upsert_classic_member(
     });
 }
 
-/// Builds the `JoinGroup` result for a hosted classic member. The group is
-/// server-assigned, so the member is its own leader of a single-member view at
-/// `generation = group_epoch`. The real assignment arrives on the next
-/// `SyncGroup`.
+/// Builds the `JoinGroup` result for a hosted classic member, as Kafka's
+/// `classicGroupJoinToConsumerGroup` does.
+///
+/// The coordinator computes the assignment, so the result names no leader and
+/// lists no members. A classic client then joins as a follower and sends an
+/// empty `SyncGroup`, which returns its assignment. A client that finds its own
+/// id in `leader` runs its assignor over the member list. An entry with no
+/// subscription metadata makes the Java client fail to parse it.
+///
+/// The generation is the member epoch. The client sends it back in `SyncGroup`,
+/// `Heartbeat` and `OffsetCommit`, and the offset-commit fence of a consumer
+/// group compares it with the member epoch.
 pub(crate) fn build_hosted_classic_join_result(
-    state: &ConsumerState,
-    member_id: &str,
+    member: &MemberState,
     protocol_name: Option<String>,
 ) -> JoinResult {
     JoinResult {
         error_code: codes::NONE,
-        generation_id: state.group_epoch,
+        generation_id: member.member_epoch,
         protocol_type: Some("consumer".into()),
         protocol_name,
-        leader: member_id.to_string(),
-        skip_assignment: false,
-        member_id: member_id.to_string(),
-        members: vec![JoinResultMember {
-            member_id: member_id.to_string(),
-            group_instance_id: state
-                .members
-                .get(member_id)
-                .and_then(|m| m.instance_id.clone()),
-            metadata: Bytes::new(),
-        }],
+        member_id: member.member_id.clone(),
+        ..JoinResult::default()
     }
 }
 

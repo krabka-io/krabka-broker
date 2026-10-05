@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{BrokerConfig, BrokerHandle, api_catalog::UnstableApiVersions};
+use krabka_broker::{
+    BrokerConfig, BrokerHandle, RemoteStorageBackend, api_catalog::UnstableApiVersions,
+};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
@@ -23,6 +25,7 @@ use krabka_protocol::{
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
         share_acknowledge_request::{
             AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
         },
@@ -184,8 +187,12 @@ async fn dead_letter_records(broker: &BrokerHandle, client: &Client) -> Vec<Reco
         })
         .await
         .expect("Fetch");
-    let row = &response.responses[0].partitions[0];
-    match row.records.as_ref() {
+    records_of(response.responses[0].partitions[0].records.as_ref())
+}
+
+/// The records of a response row, decoded or not.
+fn records_of(payload: Option<&RecordsPayload>) -> Vec<Record> {
+    match payload {
         Some(RecordsPayload::V2(batches)) => batches
             .iter()
             .flat_map(|batch| batch.records.clone())
@@ -194,7 +201,7 @@ async fn dead_letter_records(broker: &BrokerHandle, client: &Client) -> Vec<Reco
             let mut cursor = bytes.clone();
             let mut records = Vec::new();
             while !cursor.is_empty() {
-                let batch = RecordBatch::decode(&mut cursor).expect("decode dead-letter batch");
+                let batch = RecordBatch::decode(&mut cursor).expect("decode a record batch");
                 records.extend(batch.records);
             }
             records
@@ -754,4 +761,126 @@ async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
             )]
     );
     cluster.broker.shutdown().await;
+}
+
+/// Kafka resource type id of `TOPIC`.
+const RESOURCE_TYPE_TOPIC: i8 = 2;
+/// Kafka's `ListOffsetsRequest.EARLIEST_LOCAL_TIMESTAMP` (KIP-405).
+const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
+
+// Turns `t` into a tiered topic whose records leave local disk as soon as the
+// remote tier holds them: `produce_n` stamps no record timestamp, so every
+// segment is past a one-millisecond `local.retention.ms` at once, and
+// `retention.ms=-1` keeps the tier from deleting them for the same reason.
+async fn tier_the_source_topic(broker: &BrokerHandle, client: &Client) {
+    set_configs(
+        client,
+        RESOURCE_TYPE_TOPIC,
+        "t",
+        &[
+            ("remote.storage.enable", "true"),
+            ("local.retention.ms", "1"),
+            ("retention.ms", "-1"),
+        ],
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if broker
+                .partition_log_config_for_test("t", 0)
+                .is_some_and(|config| {
+                    config.remote_storage_enable
+                        && config.local_retention == Some(krabka_units::millis(1))
+                })
+            {
+                return;
+            }
+            // intentional: the reconcile loop applies the topic config to the
+            // partition's `LogConfig` with no awaiter or metric.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the tiered-storage config reached the partition");
+}
+
+// Waits until `ListOffsets(EARLIEST_LOCAL)` on `t` answers `offset`: every
+// record below it is in the remote tier and gone from local disk.
+async fn wait_until_local_log_start(client: &Client, offset: i64) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let mut response = client
+                .send(ListOffsetsRequest {
+                    replica_id: -1,
+                    topics: vec![ListOffsetsTopic {
+                        name: "t".into(),
+                        partitions: vec![ListOffsetsPartition {
+                            partition_index: 0,
+                            timestamp: EARLIEST_LOCAL_TIMESTAMP,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    timeout_ms: 5_000,
+                    ..Default::default()
+                })
+                .await
+                .expect("ListOffsets");
+            let row = response.topics.remove(0).partitions.remove(0);
+            if row.error_code == NONE && row.offset == offset {
+                return;
+            }
+            // intentional: the remote-log manager moves the local log start
+            // on its own timer, and nothing signals it to the test.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the records left local disk for the remote tier");
+}
+
+// Kafka's `ShareConsumerDLQTieredStorageTest`: every record of the source topic
+// is in the remote tier and gone from local disk before the group fetches it.
+// The member acquires the records out of the tier, with their values, and
+// rejects them, and the dead-letter records carry the values that the copy
+// read back from the tier.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered() {
+    let _permit = broker_test_permit().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let remote_dir = tempfile::TempDir::new().unwrap();
+    let mut config = trunk_config(&dir);
+    config.remote_storage_backend = Some(RemoteStorageBackend::Local {
+        dir: remote_dir.path().to_path_buf(),
+    });
+    config.remote_log_manager_interval = krabka_units::millis(100);
+    let broker = krabka_broker::Broker::start(config).await.unwrap();
+    let client = connect(&broker.listen_addr().to_string()).await;
+    create_topic(&broker, &client, "t", 1).await;
+    let tid = topic_id(&broker, "t");
+    bootstrap_share_state(&broker, &client, GROUP).await;
+    finalize_share_version_two(&client).await;
+    create_dead_letter_topic(&broker, &client).await;
+    point_group_at_dead_letter_topic(&client).await;
+    tier_the_source_topic(&broker, &client).await;
+    produce_n(&client, "t", tid, 0, 3).await;
+    wait_until_local_log_start(&client, 3).await;
+
+    let (member, member_epoch) = join(&client, GROUP, "t").await;
+    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let row = fetch_until_acquired(&client, GROUP, &member, tid, 0, 0).await;
+    let values = |records: &[Record]| -> Vec<Option<Bytes>> {
+        records.iter().map(|record| record.value.clone()).collect()
+    };
+    let produced: Vec<_> = (0..3)
+        .map(|offset| Some(Bytes::from(format!("v{offset}"))))
+        .collect();
+    check!(acquired_count(&row) == 3);
+    check!(values(&records_of(row.records.as_ref())) == produced);
+
+    let ack = share_ack(&client, &member, tid, 1, 0, 2, REJECT).await;
+    assert!(ack.error_code == NONE, "reject: {}", ack.error_code);
+    let dead_letters = wait_for_dead_letters(&broker, &client, 3).await;
+    check!(values(&dead_letters) == produced);
+    broker.shutdown().await;
 }

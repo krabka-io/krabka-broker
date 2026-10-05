@@ -55,9 +55,8 @@ pub(crate) struct AutoJoinParams {
     ///
     /// The voter RPCs publish this rather than the address the controller
     /// socket is bound to. A controller that binds `0.0.0.0` has no routable
-    /// address to report, and the fallback for one is a guess -- `HOSTNAME`,
-    /// or `127.0.0.1` -- so publishing it would replace a committed endpoint
-    /// every other node can reach with one only this node can.
+    /// address of its own. Without this entry it publishes the machine's host
+    /// name, as Kafka does for a wildcard controller listener.
     pub advertised_controller: Option<String>,
     /// Protocol of the bootstrap server's controller listener.
     pub listener_protocol: krabka_security::ListenerProtocol,

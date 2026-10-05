@@ -26,6 +26,7 @@ load("./check_version_pins_test.axl", "check_version_pins_tests")
 load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
 load("./generate_config_reference_test.axl", "generate_config_reference_tests")
 load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
+load("./kafka_system_tests_test.axl", "kafka_system_tests_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
 load("./testing.axl", "run_suites")
 
@@ -48,6 +49,7 @@ SUITES = [
     creusot_image_tag_tests,
     generate_config_reference_tests,
     generate_kip_matrix_tests,
+    kafka_system_tests_tests,
     mutants_shard_tests,
 ]
 

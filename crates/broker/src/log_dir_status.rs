@@ -49,6 +49,17 @@ type Status = Option<String>;
 #[derive(Clone, Default)]
 pub struct LogDirRegistry {
     inner: Arc<DashMap<PathBuf, Status>>,
+    /// The metadata log directory, when it is registered, and the fault the
+    /// registry publishes once that directory goes offline. Kafka's
+    /// `ReplicaManager.handleLogDirFailure` halts the node when the failed
+    /// directory is its `metadata.log.dir` (KIP-858).
+    metadata_dir: Option<Arc<MetadataDirWatch>>,
+}
+
+/// The metadata log directory and the fault its failure publishes.
+struct MetadataDirWatch {
+    dir: PathBuf,
+    fault: tokio::sync::watch::Sender<Option<String>>,
 }
 
 impl LogDirRegistry {
@@ -81,7 +92,61 @@ impl LogDirRegistry {
         }
         Self {
             inner: Arc::new(inner),
+            metadata_dir: None,
         }
+    }
+
+    /// Watch `dir` as the metadata log directory: when it goes offline, at
+    /// the startup probe or at runtime, the registry publishes Kafka's
+    /// "Shutdown broker because the metadata log dir ... has failed" on
+    /// [`Self::watch_metadata_dir_fault`]. A metadata log directory that is
+    /// one of the data directories goes offline when a partition write to it
+    /// fails, and the node then stops, as Kafka's does (KIP-858). A separate
+    /// metadata log directory gets the startup probe here. It does not join
+    /// the data directories, so `DescribeLogDirs` and placement never see it.
+    #[must_use]
+    pub fn with_metadata_dir(mut self, dir: &Path) -> Self {
+        let watch = MetadataDirWatch {
+            dir: dir.to_path_buf(),
+            fault: tokio::sync::watch::channel(None).0,
+        };
+        let offline = match self.inner.get(dir) {
+            Some(status) => status.value().is_some(),
+            None => probe_one(dir)
+                .inspect_err(|reason| {
+                    tracing::error!(
+                        metadata_log_dir = %dir.display(),
+                        %reason,
+                        "the metadata log directory failed its startup writability probe",
+                    );
+                })
+                .is_err(),
+        };
+        if offline {
+            watch.fault.send_replace(Some(metadata_dir_fault(dir)));
+        }
+        self.metadata_dir = Some(Arc::new(watch));
+        self
+    }
+
+    /// The fault the failure of the metadata log directory published, or
+    /// `None` while the directory is online or is not registered.
+    #[must_use]
+    pub fn metadata_dir_fault(&self) -> Option<String> {
+        self.metadata_dir
+            .as_ref()
+            .and_then(|watch| watch.fault.borrow().clone())
+    }
+
+    /// A receiver of the fault the failure of the metadata log directory
+    /// publishes. It holds `None` while the directory is online, and forever
+    /// when no metadata log directory is registered.
+    #[must_use]
+    pub fn watch_metadata_dir_fault(&self) -> tokio::sync::watch::Receiver<Option<String>> {
+        self.metadata_dir.as_ref().map_or_else(
+            || tokio::sync::watch::channel(None).1,
+            |watch| watch.fault.subscribe(),
+        )
     }
 
     /// True when the dir has been registered AND is currently marked
@@ -165,6 +230,11 @@ impl LogDirRegistry {
                 "log dir flipped to OFFLINE at runtime; subsequent produce/fetch on partitions \
                  in this dir will return KAFKA_STORAGE_ERROR until broker restart",
             );
+            if let Some(watch) = self.metadata_dir.as_ref().filter(|watch| watch.dir == dir) {
+                let fault = metadata_dir_fault(dir);
+                tracing::error!(%fault, "the metadata log directory failed");
+                watch.fault.send_replace(Some(fault));
+            }
         }
         flipped
     }
@@ -178,6 +248,15 @@ impl std::fmt::Debug for LogDirRegistry {
             .field("offline", &offline)
             .finish()
     }
+}
+
+/// Kafka's message when the metadata log directory fails, from
+/// `ReplicaManager.handleLogDirFailure`.
+fn metadata_dir_fault(dir: &Path) -> String {
+    format!(
+        "Shutdown broker because the metadata log dir {} has failed",
+        dir.display()
+    )
 }
 
 /// Single-dir probe: `create_dir_all` → write a sentinel → `sync_data`
@@ -281,6 +360,66 @@ mod tests {
         check!(!reg.is_offline(&good));
         check!(reg.is_offline(&blocker));
         check!(reg.online_subset(&[good.clone(), blocker]) == vec![good]);
+    }
+
+    /// KIP-858: the failure of the metadata log directory is fatal, as
+    /// Kafka's `ReplicaManager.handleLogDirFailure` halts the node over it.
+    /// The failure of another data directory is not, and a separate metadata
+    /// log directory never joins the data directories.
+    #[test]
+    fn only_the_metadata_log_directory_failing_publishes_a_fatal_fault() {
+        let tmp = tempdir().unwrap();
+        let data = tmp.path().join("data");
+        let other = tmp.path().join("other");
+        let separate = tmp.path().join("meta");
+        let unwritable = tmp.path().join("blocked");
+        std::fs::write(&unwritable, b"a file where the directory should be").unwrap();
+        let fault = |dir: &Path| {
+            Some(format!(
+                "Shutdown broker because the metadata log dir {} has failed",
+                dir.display()
+            ))
+        };
+        // (what, metadata dir, dir that fails at runtime, expected fault)
+        let cases = [
+            (
+                "the metadata dir is a data dir that fails",
+                &data,
+                Some(&data),
+                fault(&data),
+            ),
+            ("another data dir fails", &data, Some(&other), None),
+            (
+                "a separate metadata dir, nothing fails",
+                &separate,
+                None,
+                None,
+            ),
+            (
+                "a separate metadata dir that is not writable",
+                &unwritable,
+                None,
+                fault(&unwritable),
+            ),
+        ];
+        for (what, metadata, failing, want) in cases {
+            let reg =
+                LogDirRegistry::probe(&[data.clone(), other.clone()]).with_metadata_dir(metadata);
+            let mut faults = reg.watch_metadata_dir_fault();
+            if let Some(dir) = failing {
+                reg.mark_offline(dir, "EIO from segment fsync");
+            }
+            check!(
+                (
+                    reg.metadata_dir_fault(),
+                    faults.borrow_and_update().clone(),
+                    reg.offline()
+                        .iter()
+                        .any(|(dir, _)| dir == metadata && dir != &data),
+                ) == (want.clone(), want, false),
+                "{what}"
+            );
+        }
     }
 
     /// Dirs the broker never probed report `is_offline = false`. This

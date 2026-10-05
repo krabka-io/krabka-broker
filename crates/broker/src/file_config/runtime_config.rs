@@ -640,13 +640,47 @@ pub struct RuntimeFileConfig {
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub metadata_max_snapshot_interval: Option<Time>,
     /// KIP-630: snapshot the metadata log once the committed offset advances
-    /// this many records past the last snapshot, then prune below it.
+    /// this many records past the last snapshot. The metadata log keeps the
+    /// records below a snapshot until its retention limits let them go.
     pub metadata_snapshot_interval_records: Option<u64>,
     /// Maximum metadata snapshot size a follower fetches. The Raft core
     /// enforces an immutable 1 GiB ceiling above it.
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub metadata_snapshot_fetch_max: Option<ByteSize>,
+    /// Largest size of one metadata-log segment, Kafka's
+    /// `metadata.log.segment.bytes`. The active segment rolls before an
+    /// append that takes it past this size. A whole number of bytes from
+    /// 8 MiB to 2147483647 bytes, as Kafka's `INT` with `atLeast(8388608)`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub metadata_log_segment_bytes: Option<ByteSize>,
+    /// Longest time one metadata-log segment stays active, Kafka's
+    /// `metadata.log.segment.ms`. A positive whole number of milliseconds.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub metadata_log_segment_roll_interval: Option<Time>,
+    /// Largest combined size of the metadata log and its snapshots before the
+    /// oldest snapshot and the log prefix it covers are deleted, Kafka's
+    /// `metadata.max.retention.bytes`. A whole number of bytes. Zero is a
+    /// value. Kafka's negative value, which sets no size limit, has no form
+    /// here.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub metadata_max_retention_bytes: Option<ByteSize>,
+    /// Age after which a metadata snapshot and the log prefix it covers are
+    /// deleted, Kafka's `metadata.max.retention.ms`. A whole number of
+    /// milliseconds. Zero is a value. Kafka's negative value, which sets no
+    /// age limit, has no form here.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub metadata_max_retention: Option<Time>,
+    /// KIP-835: how often the active controller appends a `NoOpRecord` to the
+    /// metadata log, Kafka's `metadata.max.idle.interval.ms`. A whole number
+    /// of milliseconds up to 2147483647 ms. Zero disables the no-op records.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub metadata_max_idle_interval: Option<Time>,
     /// KIP-98: how often the idle-transaction reaper scans for `Ongoing`
     /// transactions whose timeout has elapsed and aborts them. Kafka's
     /// `transaction.abort.timed.out.transaction.cleanup.interval.ms`. Zero
@@ -812,6 +846,26 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub streams_group_heartbeat_interval: Option<Time>,
+    /// Lowest session timeout a streams group may run with, Kafka's
+    /// `group.streams.min.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub streams_group_min_session_timeout: Option<Time>,
+    /// Highest session timeout a streams group may run with, Kafka's
+    /// `group.streams.max.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub streams_group_max_session_timeout: Option<Time>,
+    /// Lowest heartbeat interval a streams group may run with, Kafka's
+    /// `group.streams.min.heartbeat.interval.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub streams_group_min_heartbeat_interval: Option<Time>,
+    /// Highest heartbeat interval a streams group may run with, Kafka's
+    /// `group.streams.max.heartbeat.interval.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub streams_group_max_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one streams group.
     pub streams_group_max_size: Option<usize>,
     /// Number of standby replicas the assignor places for each task, the

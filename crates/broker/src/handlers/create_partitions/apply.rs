@@ -121,6 +121,7 @@ pub(super) async fn materialize_new_partitions(
         if let Err(error) = leadership
             .install(
                 &partition,
+                context.producer_state,
                 context.topic_id,
                 context.node_id,
                 replicas,

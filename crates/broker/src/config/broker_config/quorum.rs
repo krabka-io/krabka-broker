@@ -37,7 +37,7 @@ macro_rules! quorum_fields {
             pub bootstrap_servers: Vec<String>,
 
             /// KIP-853: this replica's stable directory id, recovered from
-            /// `meta.properties.json` at boot. Identifies which voter this node *is*.
+            /// `meta.properties` at boot. Identifies which voter this node *is*.
             pub directory_id: uuid::Uuid,
 
             /// UUID for this broker process invocation. The broker keeps it in
@@ -127,12 +127,19 @@ macro_rules! quorum_fields {
             pub metadata_max_snapshot_interval: Time,
 
             /// KIP-630: snapshot the metadata log once committed offset advances this
-            /// many records past the last snapshot, then prune below it.
+            /// many records past the last snapshot. The metadata log keeps the
+            /// records below a snapshot until its retention limits let them go.
             pub metadata_snapshot_interval_records: u64,
 
             /// Maximum metadata snapshot size a follower will fetch. The core enforces
             /// an immutable 1 GiB security ceiling.
             pub metadata_snapshot_fetch_max: ByteSize,
+
+            /// Kafka's `MetadataLogConfig`: `metadata.log.segment.bytes`,
+            /// `metadata.log.segment.ms`, `metadata.max.retention.bytes`,
+            /// `metadata.max.retention.ms` and `metadata.max.idle.interval.ms`.
+            /// The defaults are Kafka's.
+            pub metadata_log: krabka_raft::MetadataLogConfig,
 
             /// How this broker takes part in cluster formation. See
             /// [`krabka_raft::BootstrapMode`] for the trade-offs. The first broker of

@@ -688,7 +688,7 @@ fn single_voter_leader_with_checkpoints() -> (Engine, tempfile::TempDir) {
             engine.core.quorum_state().leader_epoch
         ) == (true, 1)
     );
-    let checkpoints = checkpoint_dir(&engine.data_dir);
+    let checkpoints = engine.data_dir.clone();
     checkpoint::write_checkpoint(&checkpoints, 10, 1, b"0123456789").expect("checkpoint 10/1");
     checkpoint::write_checkpoint(&checkpoints, 0, 0, b"bootstrap").expect("checkpoint 0/0");
     (engine, dir)

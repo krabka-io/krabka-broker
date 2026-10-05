@@ -32,15 +32,28 @@ pub fn parse_future_partition_dir(name: &str) -> Option<(String, i32)> {
     parse_partition_dir(base)
 }
 
+/// The topic of the metadata partition, `__cluster_metadata-0`. Its
+/// directory sits in the metadata log directory, which can be a data
+/// directory, but it is never a partition the broker hosts.
+const METADATA_TOPIC: &str = "__cluster_metadata";
+
+/// [`parse_partition_dir`] for a directory the broker hosts: a partition
+/// directory of any topic but `__cluster_metadata`, which Kafka's
+/// `LogManager.loadLogs` skips too.
+fn parse_hosted_partition_dir(name: &str) -> Option<(String, i32)> {
+    parse_partition_dir(name).filter(|(topic, _)| topic != METADATA_TOPIC)
+}
+
 /// Walks `log_dir` and returns every `(topic, partition)` whose directory
 /// exists. Broker startup uses it to refill the metadata image and the
-/// partition registry from what the last run left on disk.
+/// partition registry from what the last run left on disk. The metadata
+/// partition `__cluster_metadata-0` is not one of them.
 pub fn scan(log_dir: &Path) -> Result<Vec<(String, i32)>, BrokerError> {
     if !log_dir.exists() {
         std::fs::create_dir_all(log_dir)?;
         return Ok(Vec::new());
     }
-    scan_existing(log_dir, parse_partition_dir)
+    scan_existing(log_dir, parse_hosted_partition_dir)
 }
 
 /// Walks `log_dir` and returns every `(topic, partition)` that has a
@@ -81,8 +94,8 @@ fn scan_existing(
 /// `dir`.
 ///
 /// Least-loaded JBOD placement uses this count. A missing directory counts as
-/// zero. This function ignores non-partition entries such as
-/// `__cluster_metadata` and stray files.
+/// zero. This function ignores non-partition entries such as the metadata
+/// partition `__cluster_metadata-0` and stray files.
 #[must_use]
 pub fn count_partitions(dir: &Path) -> usize {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -91,7 +104,7 @@ pub fn count_partitions(dir: &Path) -> usize {
     rd.filter_map(Result::ok)
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| parse_partition_dir(name).is_some())
+        .filter(|name| parse_hosted_partition_dir(name).is_some())
         .count()
 }
 
@@ -213,6 +226,9 @@ mod tests {
         std::fs::create_dir(dir.path().join("foo-1")).expect("mkdir foo-1");
         std::fs::create_dir(dir.path().join("bar-0")).expect("mkdir bar-0");
         std::fs::create_dir(dir.path().join("not_a_partition")).expect("mkdir other");
+        // The metadata partition of a metadata log directory that is also a
+        // data directory.
+        std::fs::create_dir(dir.path().join("__cluster_metadata-0")).expect("mkdir metadata");
         let mut out = scan(dir.path()).expect("scan ok");
         out.sort();
         assert!(out == vec![("bar".into(), 0), ("foo".into(), 0), ("foo".into(), 1),]);
@@ -223,7 +239,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         std::fs::create_dir(dir.path().join("foo-0")).unwrap();
         std::fs::create_dir(dir.path().join("foo-1")).unwrap();
-        std::fs::create_dir(dir.path().join("__cluster_metadata")).unwrap();
+        std::fs::create_dir(dir.path().join("__cluster_metadata-0")).unwrap();
         std::fs::write(dir.path().join("bootstrap.json"), b"{}").unwrap();
         assert!(count_partitions(dir.path()) == 2);
     }

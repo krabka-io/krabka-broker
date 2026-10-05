@@ -100,6 +100,54 @@ pub(super) fn kafka_int_bytes(name: &str, value: ByteSize) -> Result<ByteSize, F
     }
 }
 
+/// A byte count in the domain of Kafka's `metadata.log.segment.bytes`: an
+/// `INT` with `atLeast(8388608)`.
+///
+/// Kafka's internal `internal.metadata.log.segment.bytes` goes below the
+/// 8 MiB floor for tests only, and krabka has no form of it.
+pub(super) fn metadata_log_segment_bytes(
+    name: &str,
+    value: ByteSize,
+) -> Result<ByteSize, FileConfigError> {
+    let bytes = value.bytes_u64();
+    let floor = krabka_raft::MIN_METADATA_LOG_SEGMENT_SIZE.bytes_u64();
+    let ceiling = u64::try_from(i32::MAX).expect("i32::MAX fits u64");
+    if value.bytes_f64().is_finite()
+        && value >= ByteSize::from_bytes(0)
+        && ByteSize::from_bytes(bytes) == value
+        && (floor..=ceiling).contains(&bytes)
+    {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            "must be a whole number of bytes from 8388608 to 2147483647",
+        ))
+    }
+}
+
+/// A byte count that Kafka's `ConfigDef.Type::LONG` can hold, where zero is a
+/// value.
+///
+/// Kafka gives a key of this kind a negative value to set no limit. A TOML
+/// byte size has no negative form, so the operator omits the key instead,
+/// and the built-in limit stays.
+pub(super) fn kafka_long_bytes(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
+    let bytes = value.bytes_u64();
+    if value.bytes_f64().is_finite()
+        && value >= ByteSize::from_bytes(0)
+        && value.bytes_f64() < 9_223_372_036_854_775_808.0
+        && ByteSize::from_bytes(bytes) == value
+    {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            "must be a whole number of bytes from 0 to 9223372036854775807",
+        ))
+    }
+}
+
 pub(super) fn whole_bytes_i32(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
     let value = whole_bytes_u64(name, value)?;
     if value.bytes_u64() <= u64::try_from(i32::MAX).expect("i32::MAX fits u64") {
@@ -206,6 +254,29 @@ pub(super) fn disableable_millis_i32_time(
 
 pub(super) fn whole_millis_i64_time(name: &str, value: Time) -> Result<Time, FileConfigError> {
     let value = positive_time(name, value)?;
+    let millis = value.millis_i64();
+    if Time::from_millis(millis) == value {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            "must be a whole number of milliseconds",
+        ))
+    }
+}
+
+/// A whole number of milliseconds Kafka's `ConfigDef.Type::LONG` can hold,
+/// where zero is a value.
+///
+/// [`whole_millis_i64_time`] refuses zero. A Kafka `LONG` of milliseconds with
+/// no validator, such as `metadata.max.retention.ms`, accepts it, and Kafka
+/// gives the key a negative value to set no limit. A TOML duration has no
+/// negative form here, so the operator omits the key instead.
+pub(super) fn nonnegative_millis_i64_time(
+    name: &str,
+    value: Time,
+) -> Result<Time, FileConfigError> {
+    let value = nonnegative_time(name, value)?;
     let millis = value.millis_i64();
     if Time::from_millis(millis) == value {
         Ok(value)
@@ -542,6 +613,177 @@ mod tests {
             let mut cfg = crate::config::BrokerConfig::default();
             let result = file.apply_to(&mut cfg);
             assert!(result.is_ok() == expect_ok, "{source}: {result:?}");
+        }
+    }
+
+    /// Each of the five `MetadataLogConfig` keys takes the domain Kafka's
+    /// `ConfigDef` gives it, in whole bytes or whole milliseconds. A value
+    /// that is accepted lands in its own field and leaves the other four at
+    /// Kafka's defaults. A value that is refused names its field.
+    #[test]
+    fn metadata_log_keys_take_kafkas_domains() {
+        use krabka_units::{bytes, days, mebibytes, millis};
+
+        let base = krabka_raft::MetadataLogConfig::default();
+        let segment_size = |size| {
+            Ok(krabka_raft::MetadataLogConfig {
+                segment_size: size,
+                ..base
+            })
+        };
+        let segment_roll_interval = |time| {
+            Ok(krabka_raft::MetadataLogConfig {
+                segment_roll_interval: time,
+                ..base
+            })
+        };
+        let max_retention_size = |size| {
+            Ok(krabka_raft::MetadataLogConfig {
+                max_retention_size: Some(size),
+                ..base
+            })
+        };
+        let max_retention = |time| {
+            Ok(krabka_raft::MetadataLogConfig {
+                max_retention: Some(time),
+                ..base
+            })
+        };
+        let max_idle_interval = |time| {
+            Ok(krabka_raft::MetadataLogConfig {
+                max_idle_interval: time,
+                ..base
+            })
+        };
+        let cases: [(&str, Result<krabka_raft::MetadataLogConfig, &str>); 26] = [
+            // `INT` with `atLeast(8388608)`.
+            (
+                "metadata_log_segment_bytes = \"8MiB\"",
+                segment_size(mebibytes(8)),
+            ),
+            (
+                "metadata_log_segment_bytes = \"2147483647B\"",
+                segment_size(bytes(2_147_483_647)),
+            ),
+            (
+                "metadata_log_segment_bytes = \"8388607B\"",
+                Err("metadata_log_segment_bytes"),
+            ),
+            (
+                "metadata_log_segment_bytes = \"0B\"",
+                Err("metadata_log_segment_bytes"),
+            ),
+            (
+                "metadata_log_segment_bytes = \"2147483648B\"",
+                Err("metadata_log_segment_bytes"),
+            ),
+            (
+                "metadata_log_segment_bytes = \"8388608.5B\"",
+                Err("metadata_log_segment_bytes"),
+            ),
+            // A `LONG` that krabka holds positive.
+            (
+                "metadata_log_segment_roll_interval = \"1ms\"",
+                segment_roll_interval(millis(1)),
+            ),
+            (
+                "metadata_log_segment_roll_interval = \"7d\"",
+                segment_roll_interval(days(7)),
+            ),
+            (
+                "metadata_log_segment_roll_interval = \"0ms\"",
+                Err("metadata_log_segment_roll_interval"),
+            ),
+            (
+                "metadata_log_segment_roll_interval = \"250us\"",
+                Err("metadata_log_segment_roll_interval"),
+            ),
+            // A `LONG` where zero is a value.
+            (
+                "metadata_max_retention_bytes = \"0B\"",
+                max_retention_size(bytes(0)),
+            ),
+            (
+                "metadata_max_retention_bytes = \"1GiB\"",
+                max_retention_size(mebibytes(1024)),
+            ),
+            (
+                "metadata_max_retention_bytes = \"1.5B\"",
+                Err("metadata_max_retention_bytes"),
+            ),
+            (
+                "metadata_max_retention_bytes = \"9223372036854775808B\"",
+                Err("metadata_max_retention_bytes"),
+            ),
+            ("metadata_max_retention = \"0ms\"", max_retention(millis(0))),
+            ("metadata_max_retention = \"30d\"", max_retention(days(30))),
+            (
+                "metadata_max_retention = \"250us\"",
+                Err("metadata_max_retention"),
+            ),
+            (
+                "metadata_max_retention = \"1.5ms\"",
+                Err("metadata_max_retention"),
+            ),
+            // `INT` with `atLeast(0)`, where zero stops the KIP-835 no-op
+            // records.
+            (
+                "metadata_max_idle_interval = \"0ms\"",
+                max_idle_interval(millis(0)),
+            ),
+            (
+                "metadata_max_idle_interval = \"500ms\"",
+                max_idle_interval(millis(500)),
+            ),
+            (
+                "metadata_max_idle_interval = \"2147483647ms\"",
+                max_idle_interval(millis(2_147_483_647)),
+            ),
+            (
+                "metadata_max_idle_interval = \"2147483648ms\"",
+                Err("metadata_max_idle_interval"),
+            ),
+            (
+                "metadata_max_idle_interval = \"250us\"",
+                Err("metadata_max_idle_interval"),
+            ),
+            (
+                "metadata_max_idle_interval = \"-1ms\"",
+                Err("metadata_max_idle_interval"),
+            ),
+            // A negative value does not stand for "no limit" in the file.
+            (
+                "metadata_max_retention = \"-1ms\"",
+                Err("metadata_max_retention"),
+            ),
+            (
+                "metadata_log_segment_roll_interval = \"-1ms\"",
+                Err("metadata_log_segment_roll_interval"),
+            ),
+        ];
+
+        for (line, expected) in cases {
+            let source = format!("[runtime]\n{line}\n");
+            let file: FileConfig = toml::from_str(&source).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let actual = file
+                .apply_to(&mut cfg)
+                .map(|()| cfg.metadata_log)
+                .map_err(|error| error.to_string());
+
+            match expected {
+                Ok(want) => {
+                    check!(actual == Ok(want), "{line}");
+                }
+                Err(field) => {
+                    check!(
+                        actual
+                            .as_ref()
+                            .is_err_and(|message| message.contains(&format!("{field}: must"))),
+                        "{line}: {actual:?}"
+                    );
+                }
+            }
         }
     }
 

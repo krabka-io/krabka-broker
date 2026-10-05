@@ -280,7 +280,7 @@ mod tests {
         use krabka_log::ProducerId;
 
         let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
-        let (broker_handle, dir) =
+        let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = &broker.txn_coordinator;
@@ -290,30 +290,15 @@ mod tests {
 
         // Two ids this broker coordinates, and one it does not.
         let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");
+        crate::test_support::lead_transaction_state_partitions(
+            &broker_handle,
+            &[
+                coordinator.partition_for(ongoing_id),
+                coordinator.partition_for(dead_id),
+            ],
+        )
+        .await;
         for (tid, state) in [(ongoing_id, TxnState::Ongoing), (dead_id, TxnState::Dead)] {
-            let partition = coordinator.partition_for(tid);
-            let partition_dir = crate::log_dir::partition_dir(
-                dir.path(),
-                crate::txn::bootstrap::TOPIC,
-                partition.get(),
-            );
-            std::fs::create_dir_all(&partition_dir).expect("create the state directory");
-            let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
-                .expect("open the state log");
-            broker.partitions.insert(
-                crate::txn::bootstrap::TOPIC.into(),
-                partition,
-                crate::broker::spawn_partition(
-                    crate::txn::bootstrap::TOPIC.to_string(),
-                    partition,
-                    dir.path().to_path_buf(),
-                    log,
-                    crate::log_dir_status::LogDirRegistry::default(),
-                    Arc::new(crate::producer_state::ProducerState::new()),
-                    false,
-                ),
-            );
-            coordinator.lead_state_partition_for_test(partition).await;
             let mut entry = TxnEntry::new_empty(
                 tid.to_string(),
                 ProducerId(if state == TxnState::Dead { 200 } else { 100 }),
@@ -415,7 +400,7 @@ mod tests {
         use krabka_log::ProducerId;
 
         let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
-        let (broker_handle, dir) = start_broker(Arc::new(
+        let (broker_handle, _dir) = start_broker(Arc::new(
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
         ))
         .await;
@@ -424,29 +409,11 @@ mod tests {
         let peer = peer();
         let tid = "tx";
 
-        let partition = coordinator.partition_for(tid);
-        let partition_dir = crate::log_dir::partition_dir(
-            dir.path(),
-            crate::txn::bootstrap::TOPIC,
-            partition.get(),
-        );
-        std::fs::create_dir_all(&partition_dir).expect("create the state directory");
-        let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
-            .expect("open the state log");
-        broker.partitions.insert(
-            crate::txn::bootstrap::TOPIC.into(),
-            partition,
-            crate::broker::spawn_partition(
-                crate::txn::bootstrap::TOPIC.to_string(),
-                partition,
-                dir.path().to_path_buf(),
-                log,
-                crate::log_dir_status::LogDirRegistry::default(),
-                Arc::new(crate::producer_state::ProducerState::new()),
-                false,
-            ),
-        );
-        coordinator.lead_state_partition_for_test(partition).await;
+        crate::test_support::lead_transaction_state_partitions(
+            &broker_handle,
+            &[coordinator.partition_for(tid)],
+        )
+        .await;
 
         let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(100), 3, 60_000, 0);
         entry.state = TxnState::Ongoing;

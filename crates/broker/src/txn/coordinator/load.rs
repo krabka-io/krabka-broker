@@ -88,6 +88,10 @@ impl TxnCoordinator {
             }
             changes
         };
+        // A write that waits to commit in a term that just ended stops
+        // waiting, and the load of the next term can take the partition's
+        // write lock from it.
+        self.leadership_changed.notify_waiters();
         for partition in &changes.unload {
             info!(
                 partition = partition.get(),
@@ -187,19 +191,6 @@ impl TxnCoordinator {
         }
     }
 
-    /// The generation of the loaded term of `partition`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BrokerError::Txn`] when the partition is not loaded.
-    pub(super) async fn loaded_generation(
-        &self,
-        partition: PartitionIndex,
-    ) -> Result<u64, BrokerError> {
-        let leaders = self.leader_partitions.read().await;
-        Self::require_loaded(&leaders, partition)
-    }
-
     /// The partition leader epoch of the loaded term of `partition`. The
     /// marker fan-out sends it as the coordinator epoch.
     pub(super) async fn loaded_leader_epoch(&self, partition: PartitionIndex) -> Option<i32> {
@@ -210,22 +201,14 @@ impl TxnCoordinator {
             .map(|leadership| leadership.leader_epoch.0)
     }
 
-    pub(super) fn require_loaded(
-        leaders: &StatePartitionLeaders,
-        partition: PartitionIndex,
-    ) -> Result<u64, BrokerError> {
-        leadership::loaded_generation(leaders, partition).ok_or_else(|| {
-            BrokerError::Txn(format!(
-                "this broker does not coordinate __transaction_state-{partition}"
-            ))
-        })
-    }
-
     /// Checks that `partition` is still loaded in the term of `generation`.
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Txn`] when the term changed.
+    /// Returns [`BrokerError::TransactionStateWriteUncommitted`] when the term
+    /// changed, with the error Kafka's `appendTransactionToLog` callback
+    /// answers for a changed coordinator epoch (see
+    /// [`TxnCoordinator::term_error`]).
     pub(super) fn require_generation(
         leaders: &StatePartitionLeaders,
         partition: PartitionIndex,
@@ -234,9 +217,7 @@ impl TxnCoordinator {
         if leadership::loaded_generation(leaders, partition) == Some(generation) {
             return Ok(());
         }
-        Err(BrokerError::Txn(format!(
-            "the coordinator term of __transaction_state-{partition} changed during the append"
-        )))
+        Err(Self::term_error(leaders, partition))
     }
 
     fn is_local(&self, partition: PartitionIndex) -> bool {

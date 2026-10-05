@@ -156,8 +156,9 @@ pub struct TargetArgs {
     #[arg(long, value_parser = parse_cluster_id)]
     pub cluster_id: Option<Uuid>,
 
-    /// This node's raft id. Required with `--standalone` and
-    /// `--initial-controllers`.
+    /// This node's id, Kafka's `node.id`: an integer from 0 to 2147483647.
+    /// Required: the formatter records it in `meta.properties`, and every
+    /// restored partition names this node as its leader and sole replica.
     #[arg(long, value_parser = parse_node_id)]
     pub node_id: Option<NodeId>,
 

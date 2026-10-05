@@ -194,7 +194,9 @@ pub(crate) async fn handle(
         };
         // A failed coordinator write replaces the whole response, as
         // `OffsetDeleteResponse.Builder.merge` does with a top-level error.
-        if let Err(code) = append_tombstones(broker, offsets_partition, batch).await {
+        // The answer waits for the tombstones to commit, as Kafka's
+        // `CoordinatorRuntime` completes the write only then.
+        if let Err(code) = append_tombstones(broker, &req.group_id, batch).await {
             return encode(version, &whole_error(code));
         }
         let (tx, rx) = oneshot::channel();

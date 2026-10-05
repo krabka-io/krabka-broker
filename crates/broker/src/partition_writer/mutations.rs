@@ -79,14 +79,12 @@ pub(super) async fn handle_replicate(
     .await;
     match result {
         Ok(entry) => {
-            // A follower must mirror a replicated marker's producer-state
-            // effect too, not only a marker it appends as leader: a
-            // leadership change does not rebuild producer state from the
-            // log, so a follower promoted after replicating a
-            // transaction-version-2 marker would otherwise keep an empty or
-            // pre-marker tracker, and could accept an old-epoch retry the
-            // marker fenced, or an empty tracker could accept a nonzero
-            // first sequence at the new epoch.
+            // A follower mirrors a replicated marker's producer-state effect,
+            // as a leader does for a marker it appends, so the tracker keeps
+            // the epoch fence of a transaction-version-2 marker. This arm
+            // does not mirror data batches. A promotion copies all of the
+            // log's producer state into the tracker before the new leader
+            // takes a produce (`Partition::install_local_leadership`).
             if let Some(entry) = entry {
                 producer_state
                     .mirror_log_entries(identity.0, identity.1, vec![entry])

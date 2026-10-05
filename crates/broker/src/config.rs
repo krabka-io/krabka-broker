@@ -45,6 +45,10 @@ pub use self::{
     tiered_storage::{KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
 };
 
+/// The node id of a broker that neither `--broker-id` nor the file's
+/// `broker_id` names.
+pub const DEFAULT_BROKER_ID: i32 = 1;
+
 /// Default number of local durable copies in a diskless WAL quorum.
 pub const DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT: usize = 3;
 /// Default cadence of diskless WAL object-store flushes.

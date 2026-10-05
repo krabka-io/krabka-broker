@@ -15,7 +15,7 @@ on the disks the disaster destroys. This page is about those three.
 | :--- | :--- | :--- |
 | Archived segments | The tiered-storage bucket. Already off the node. | Everything. There is no restore. |
 | RLMM snapshot | `<log.dir>/remote-log-metadata/snapshot` on each broker. | Segment lifecycle. A segment the old cluster had already released is indistinguishable from a live one, and the restore includes it, so records that retention had dropped come back. |
-| Controller metadata checkpoint | `<log.dir>/__cluster_metadata/@metadata-0/<end-offset>-<epoch>.checkpoint` on a controller, or `<log.dir>/__cluster_metadata/observer/` on a broker-only node. | Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels. The topics come back with their ids, their partition counts and default settings, and nothing else. |
+| Controller metadata checkpoint | `<metadata.log.dir>/__cluster_metadata-0/<end-offset>-<epoch>.checkpoint` on a controller, or `<metadata.log.dir>/__cluster_metadata-0/observer/` on a broker-only node. The metadata log directory is the broker's first log directory unless its `metadata_log_dir` names another one. | Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels. The topics come back with their ids, their partition counts and default settings, and nothing else. |
 | Committed group offsets | The `__consumer_offsets` topic in the running cluster. | Every consumer group's position. `__consumer_offsets` is compacted and internal, so it is never tiered and no archive holds it. Each group restarts from its own `auto.offset.reset`. |
 
 Two more things never come back and cannot be captured: the cluster id and the
@@ -98,6 +98,11 @@ spec:
 its own. A capture with only `--bootstrap-server` takes group offsets, which is
 useful from a node that has no volume mounted. A capture that finds nothing at
 all fails rather than writing an empty capture.
+
+A capture reads both files under one `--log-dir`. That holds when the metadata
+log directory is the broker's first log directory, which is the default. For a
+broker with a separate `metadata_log_dir`, run a second capture with `--log-dir`
+set to the metadata log directory to take the checkpoint.
 
 Credentials work the way they do for the broker's own tiered storage. Leave
 `--archive-s3-access-key-id` and `--archive-s3-secret-access-key` off and the

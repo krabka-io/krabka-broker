@@ -21,10 +21,15 @@
 //!   moves the global floor past it and the same read becomes
 //!   `OFFSET_OUT_OF_RANGE` while the expiration pass frees the remote bytes
 //!   below the new floor.
+//! * [`an_idle_tiered_partition_leaves_local_disk_through_its_last_record`][]:
+//!   the active segment of a partition that stops taking writes rolls once
+//!   it breaches `local.retention.ms`, so `ListOffsets(EARLIEST_LOCAL)`
+//!   reaches the log end, as it does on Kafka.
 //!
 //! [`topic_rlmm_activates_against_loopback`]: rlmm_loopback::topic_rlmm_activates_against_loopback
 //! [`topic_rlmm_copy_then_fetch_round_trip`]: rlmm_loopback::topic_rlmm_copy_then_fetch_round_trip
 //! [`delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it`]: rlmm_delete_records::delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it
+//! [`an_idle_tiered_partition_leaves_local_disk_through_its_last_record`]: rlmm_idle_partition::an_idle_tiered_partition_leaves_local_disk_through_its_last_record
 
 mod support;
 
@@ -36,6 +41,8 @@ mod support;
 mod rlmm_cluster;
 #[path = "tiered_storage_topic_rlmm/rlmm_delete_records.rs"]
 mod rlmm_delete_records;
+#[path = "tiered_storage_topic_rlmm/rlmm_idle_partition.rs"]
+mod rlmm_idle_partition;
 #[path = "tiered_storage_topic_rlmm/rlmm_loopback.rs"]
 mod rlmm_loopback;
 #[path = "tiered_storage_topic_rlmm/rlmm_not_ready.rs"]

@@ -22,6 +22,17 @@
 //! the write guard, so it never interleaves with an operation that is still
 //! running on the same partition.
 //!
+//! An operation answers only when the records of its partition are
+//! committed, as a write of Kafka's `CoordinatorRuntime` does. The coordinator
+//! appends a record only while the partition leads locally at the leader epoch
+//! of the term, and it stamps that epoch on the batch. It applies the record
+//! to the in-memory state at once, as the runtime replays a record when it
+//! appends it. It then releases the read guard and waits until the high
+//! watermark covers the last record that the term wrote. If the partition
+//! gets a new leader or a new leader epoch before that, the operation answers
+//! `NOT_COORDINATOR`. If the wait takes longer than
+//! `share.coordinator.write.timeout.ms`, it answers `COORDINATOR_NOT_AVAILABLE`.
+//!
 //! This file holds the coordinator's identity: the shared types, the struct,
 //! and the leadership and partitioning accessors. The state machine lives in
 //! `state_machine`, the durable append and the log prune in `persist`, and the
@@ -208,6 +219,25 @@ pub(super) struct LedPartition {
 
 /// Map from led `__share_group_state` partition to its load status.
 pub(super) type LeaderPartitions = HashMap<PartitionIndex, LedPartition>;
+
+/// One term of a `__share_group_state` partition that this broker leads: the
+/// partition and the leader epoch that its load ran under.
+///
+/// A record of the term is committed only while the partition leads locally
+/// at this epoch. Kafka's `CoordinatorRuntime` unloads the shard, and fails
+/// its pending writes, when the leader epoch changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Term {
+    pub(super) partition: PartitionIndex,
+    pub(super) leader_epoch: i32,
+}
+
+/// A read guard on the leadership map, held while one state partition is
+/// active, and the term that the partition serves.
+pub(super) struct Active<'a> {
+    _led: RwLockReadGuard<'a, LeaderPartitions>,
+    pub(super) term: Term,
+}
 
 /// The load tasks that one [`ShareCoordinator::refresh_leader_partitions`]
 /// call started.
@@ -396,8 +426,8 @@ impl ShareCoordinator {
             .map(|led| led.status)
     }
 
-    /// Returns a read guard on the leadership map when `state_partition` is
-    /// active.
+    /// Returns a read guard on the leadership map, and the term of
+    /// `state_partition`, when the partition is active.
     ///
     /// # Errors
     ///
@@ -407,14 +437,29 @@ impl ShareCoordinator {
     pub(super) async fn active(
         &self,
         state_partition: PartitionIndex,
-    ) -> Result<RwLockReadGuard<'_, LeaderPartitions>, ShareErrorCode> {
+    ) -> Result<Active<'_>, ShareErrorCode> {
         let led = self.leader_partitions.read().await;
-        match led.get(&state_partition).map(|entry| entry.status) {
-            Some(LoadStatus::Active) => Ok(led),
-            Some(LoadStatus::Pending | LoadStatus::Loading) => {
-                Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
-            }
-            Some(LoadStatus::Failed) | None => Err(crate::codes::NOT_COORDINATOR),
+        match led.get(&state_partition).copied() {
+            Some(LedPartition {
+                status: LoadStatus::Active,
+                leader_epoch,
+                ..
+            }) => Ok(Active {
+                _led: led,
+                term: Term {
+                    partition: state_partition,
+                    leader_epoch,
+                },
+            }),
+            Some(LedPartition {
+                status: LoadStatus::Pending | LoadStatus::Loading,
+                ..
+            }) => Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS),
+            Some(LedPartition {
+                status: LoadStatus::Failed,
+                ..
+            })
+            | None => Err(crate::codes::NOT_COORDINATOR),
         }
     }
 
@@ -427,8 +472,12 @@ impl ShareCoordinator {
         self.load_status(state_partition).await.is_some()
     }
 
+    /// Test-only: makes this broker the leader of every local state partition
+    /// at leader epoch 0, as the metadata reconcile does, and marks each
+    /// partition active with no load.
     #[cfg(test)]
     pub(crate) async fn lead_all_partitions_for_test(&self) {
+        self.lead_local_partitions_for_test().await;
         let mut led = self.leader_partitions.write().await;
         led.clear();
         for p in 0..self.config.state_topic_num_partitions {
@@ -443,10 +492,23 @@ impl ShareCoordinator {
         }
     }
 
+    /// Test-only: installs this broker as the leader of every local state
+    /// partition at leader epoch 0, as the metadata reconcile does before the
+    /// coordinator loads a partition.
+    #[cfg(test)]
+    async fn lead_local_partitions_for_test(&self) {
+        for p in 0..self.config.state_topic_num_partitions {
+            if let Some(part) = self.partitions.get(bootstrap::TOPIC, PartitionIndex(p)) {
+                part.install_leader_change(self.node_id.0, 0).await;
+            }
+        }
+    }
+
     /// Test-only: starts a new term on every state partition and replays each
     /// log, as a load after an election does.
     #[cfg(test)]
     pub(crate) async fn reload_all_partitions_for_test(&self) {
+        self.lead_local_partitions_for_test().await;
         let mut terms = Vec::new();
         {
             let mut led = self.leader_partitions.write().await;

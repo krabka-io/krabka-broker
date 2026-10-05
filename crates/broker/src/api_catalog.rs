@@ -131,6 +131,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "The measured throttled-replication rate is published as `krabka_broker_replication_throttled_bytes_out` and `krabka_broker_replication_throttled_bytes_in`, which stand for Kafka's `kafka.server:type=LeaderReplication,name=byte-rate` and its `FollowerReplication` twin, with `krabka_broker_replication_throttle_sleeps` for the rounds the throttle held back entirely. Kafka delays a throttled fetch; krabka drops the partition from the round and the follower re-asks, so there is no `throttle_time_ms` to attribute and the byte-rate is what says whether the throttle is biting.",
     },
     KipAnnotation {
+        key: "KIP-74",
+        claim: "Fetch response size limits: max_bytes and partition_max_bytes",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/log/read.rs",
+        tests: &[
+            "crates/log/src/log/read/tests.rs::a_read_never_skips_past_a_segment_its_budget_clipped",
+            "crates/log/src/log/read/tests.rs::a_descriptor_read_never_skips_past_a_segment_its_budget_clipped",
+            "crates/broker/tests/replication.rs::a_follower_that_catches_up_across_segments_copies_every_batch",
+        ],
+        note: "Only the first batch of a read can be larger than the budget, so a fetch always makes progress, and a read that the budget stops inside a segment does not go on into the next one.",
+    },
+    KipAnnotation {
         key: "KIP-98",
         claim: "Transactions and idempotent producers, with transactional-id expiry",
         status: KipStatus::Implemented,
@@ -793,6 +805,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-835",
+        claim: "The KRaft leader appends a NoOpRecord every metadata.max.idle.interval.ms",
+        status: KipStatus::Partial,
+        module: "crates/raft/src/kraft/controller/idle.rs",
+        tests: &[
+            "crates/raft/src/kraft/controller/tests_cleaning.rs::a_leader_appends_kip835_no_ops_that_change_nothing",
+            "crates/raft/src/kraft/controller/tests_cleaning.rs::the_no_op_timer_runs_only_on_a_leader_with_an_interval",
+        ],
+        note: "The NoOpRecord heartbeat is in the tree. The quorum-health metrics of the KIP, such as `last-applied-record-offset` and `last-applied-record-lag-ms`, are not published.",
+    },
+    KipAnnotation {
         key: "KIP-841",
         claim: "Unclean leader election when the ISR is empty and the topic allows it",
         status: KipStatus::Implemented,
@@ -1180,15 +1203,20 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         key: "KIP-1331",
         claim: "Streams topology descriptions: StreamsGroupHeartbeat, StreamsGroupDescribe v1 and StreamsGroupTopologyDescriptionUpdate",
         status: KipStatus::Partial,
-        module: "crates/broker/src/coordinator/unified/streams/actor/response.rs",
+        module: "crates/broker/src/coordinator/unified/streams/description.rs",
         tests: &[
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::heartbeat_response_carries_the_recovery_lag_at_version_1_only",
             "crates/broker/src/handlers/streams_group_heartbeat.rs::handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request",
             "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
             "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_answers_as_a_trunk_broker_without_a_plugin",
+            "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_refuses_what_a_trunk_broker_with_a_plugin_refuses",
+            "crates/broker/src/coordinator/unified/streams/actor/description/tests.rs::one_member_of_a_group_is_asked_for_the_description",
+            "crates/broker/src/coordinator/unified/streams/actor/description/tests.rs::a_loaded_group_is_not_asked_for_a_stored_epoch",
+            "crates/broker/tests/streams_groups/streams_topology_description.rs::one_member_is_asked_and_its_push_is_described",
+            "crates/broker/tests/streams_groups/streams_topology_description.rs::a_deleted_and_recreated_group_is_asked_again",
         ],
-        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags. DeleteGroups v3, which adds a per-group ErrorMessage, is trunk's too and is advertised only under the same flag. krabka never answers GROUP_DELETION_FAILED, since it has no topology description plugin, so the message is always null.",
+        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. Without `group.streams.topology.description.plugin.class`, as a Kafka broker runs by default, a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass. krabka cannot load a JVM class, so the key accepts only Kafka's reference plugin, `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`, which krabka builds in, and any other class stops the broker at startup. With that plugin, a version 1 heartbeat asks one member for the description under Kafka's back-off of 30 seconds that doubles to one hour. The broker keeps the pushed description in memory and its epoch in the `StoredDescriptionTopologyEpoch` of the group metadata record, a describe answers it as AVAILABLE, and DeleteGroups drops it. As with Kafka's in-memory plugin, a broker restart or a coordinator move loses the description but keeps the stored epoch, so the group is not asked again until its topology epoch changes. Kafka writes the UNCERTAIN epoch before it calls the plugin, and krabka, whose plugin stores in the same step, writes only the pushed epoch. The built-in plugin never fails, so `FailedDescriptionTopologyEpoch` stays -1 and there is no cleanup cycle for a plugin to retry. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags. DeleteGroups v3, which adds a per-group ErrorMessage, is trunk's too and is advertised only under the same flag. krabka never answers GROUP_DELETION_FAILED, since its plugin cannot fail a delete, so the message is always null.",
     },
     KipAnnotation {
         key: "KIP-1357",
@@ -1745,10 +1773,12 @@ fn admin_apis() -> Vec<CatalogApi> {
         // `unstable.api.versions.enable`.
         v!(streams_group_heartbeat_request),
         v!(streams_group_describe_request),
-        // KIP-1331 topology description push (Kafka trunk). krabka has no
-        // topology description plugin, so it answers as a trunk broker
-        // without one. Kafka 4.3.1 has no api key 93, so it is advertised and
-        // accepted only under `unstable.api.versions.enable`.
+        // KIP-1331 topology description push (Kafka trunk). krabka stores it
+        // in Kafka's in-memory plugin when
+        // `group.streams.topology.description.plugin.class` names it, and
+        // answers as a trunk broker without a plugin otherwise. Kafka 4.3.1
+        // has no api key 93, so it is advertised and accepted only under
+        // `unstable.api.versions.enable`.
         v!(streams_group_topology_description_update_request),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),

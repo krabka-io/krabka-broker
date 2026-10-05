@@ -25,6 +25,7 @@ use crate::{
         GroupCoordinator, classic_ops,
         classic_state::GroupState as ClassicGroupState,
         config::{ConsumerGroupMigrationPolicy, NextGenConfig},
+        first_join_member_id,
         group::{CoordinatorGroup, GroupKind},
         migration,
         offsets_log::OffsetsLog,
@@ -173,6 +174,7 @@ pub(super) async fn handle_classic_join_message(
             services.coordinator,
             HostedJoin {
                 request: &request,
+                version,
                 client_id,
                 client_host,
                 reply,
@@ -190,8 +192,23 @@ pub(super) async fn handle_classic_join_message(
     true
 }
 
+/// A classic `JoinGroup` for a consumer group, with the request context that
+/// [`classic_join_hosted`] needs.
+struct HostedJoin<'a> {
+    request: &'a JoinGroupRequest,
+    version: i16,
+    client_id: &'a str,
+    client_host: &'a str,
+    reply: oneshot::Sender<JoinResult>,
+    now_ms: i64,
+}
+
 /// KIP-848 live migration: serves a classic `JoinGroup` for a member hosted in
-/// an upgraded consumer group.
+/// a consumer group, as Kafka's `classicGroupJoinToConsumerGroup` does.
+///
+/// A member with no member id gets a new one. A dynamic member at v4 or later
+/// gets `MEMBER_ID_REQUIRED` with that id, and the group does not change until
+/// the member joins again with it.
 ///
 /// This function upserts the member into the next-gen state. When the member's
 /// subscription is new or changed, which makes the group dirty, it reconciles
@@ -199,18 +216,11 @@ pub(super) async fn handle_classic_join_message(
 /// first-join path does: `run_reconcile`, then `advance_member_epoch`, then
 /// `snapshot_pending_after_change`, then `flush_pending`.
 ///
-/// It replies on `reply` with a server-assigned single-member `JoinResult`.
-/// The member receives the assignment on its next `SyncGroup`. It returns
-/// `Err` only on a log-write failure, so the actor exits, and it first replies
-/// with the same failure code the heartbeat path uses.
-struct HostedJoin<'a> {
-    request: &'a JoinGroupRequest,
-    client_id: &'a str,
-    client_host: &'a str,
-    reply: oneshot::Sender<JoinResult>,
-    now_ms: i64,
-}
-
+/// It replies on `reply` with the follower `JoinResult` of
+/// [`migration::build_hosted_classic_join_result`]. The member receives the
+/// assignment on its next `SyncGroup`. It returns `Err` only on a log-write
+/// failure, so the actor exits, and it first replies with the same failure
+/// code the heartbeat path uses.
 async fn classic_join_hosted(
     group: &mut CoordinatorGroup,
     config: &NextGenConfig,
@@ -221,11 +231,21 @@ async fn classic_join_hosted(
 ) -> Result<(), crate::error::BrokerError> {
     let HostedJoin {
         request: req,
+        version,
         client_id,
         client_host,
         reply,
         now_ms,
     } = hosted;
+    let member_id = first_join_member_id(&req.member_id);
+    if classic_ops::requires_known_member_id(req, version) {
+        let _ = reply.send(JoinResult {
+            error_code: codes::MEMBER_ID_REQUIRED,
+            member_id,
+            ..JoinResult::default()
+        });
+        return Ok(());
+    }
     // Decode the subscription from the first protocol whose metadata is a valid
     // `ConsumerProtocolSubscription` (mirrors `convert_classic_to_consumer`,
     // which derives topics from a member's selected protocol metadata). The
@@ -258,7 +278,7 @@ async fn classic_join_hosted(
     migration::upsert_classic_member(
         state,
         migration::ClassicMemberRegistration {
-            member_id: req.member_id.clone(),
+            member_id: member_id.clone(),
             subscription_topics: topics,
             protocols,
             client_id: client_id.to_string(),
@@ -271,9 +291,8 @@ async fn classic_join_hosted(
     refresh_expired_metadata(state, metadata);
     if state.dirty {
         run_reconcile(state, config, metadata);
-        state.advance_member_epoch(&req.member_id);
-        let pending =
-            snapshot_pending_after_change(state, std::slice::from_ref(&req.member_id), true);
+        state.advance_member_epoch(&member_id);
+        let pending = snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
         if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
             tracing::warn!(
                 group_id = %state.group_id, error = %e,
@@ -287,8 +306,14 @@ async fn classic_join_hosted(
             return Err(e);
         }
     }
-    let result = migration::build_hosted_classic_join_result(state, &req.member_id, protocol_name);
-    let _ = reply.send(result);
+    let member = state
+        .members
+        .get(&member_id)
+        .expect("upsert_classic_member inserted the member");
+    let _ = reply.send(migration::build_hosted_classic_join_result(
+        member,
+        protocol_name,
+    ));
     Ok(())
 }
 
@@ -434,12 +459,20 @@ mod tests {
         handle: &crate::coordinator::unified::actor::GroupActorHandle,
         req: JoinGroupRequest,
     ) -> JoinResult {
+        send_join_at(handle, req, 4).await
+    }
+
+    async fn send_join_at(
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
+        req: JoinGroupRequest,
+        version: i16,
+    ) -> JoinResult {
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::ClassicJoin {
                 req,
-                version: 4,
+                version,
                 client_id: "new-client".into(),
                 client_host: "new-host".into(),
                 reply: tx,
@@ -535,10 +568,11 @@ mod tests {
         let join_c = rpc::classic_join(&handle, "m-classic", "t").await;
         let _ = rpc::classic_sync(&handle, "m-classic", join_c.generation_id).await;
 
-        // A brand-new classic member m2 joins the already-upgraded group.
+        // A brand-new classic member m2 joins the already-upgraded group as a
+        // follower at its member epoch.
         let join2 = rpc::classic_join(&handle, "m2", "t").await;
-        assert!(join2.error_code == codes::NONE);
-        assert!(join2.leader == "m2");
+        let m2 = describe_member(&handle, "m2").await;
+        assert!(join2 == follower_join("m2", m2.member_epoch));
 
         // Both members re-sync at the (new) group epoch to pick up the
         // rebalanced two-way split.
@@ -606,6 +640,12 @@ mod tests {
                 1,
                 (codes::INCONSISTENT_GROUP_PROTOCOL, false, false),
             ),
+            (
+                "live consumer group, policy bidirectional",
+                Policy::Bidirectional,
+                1,
+                (codes::MEMBER_ID_REQUIRED, false, false),
+            ),
         ];
         for (label, policy, members, want) in rows {
             let (coord, log) = make_coordinator_with_topic_policy("t", 1, policy);
@@ -633,5 +673,185 @@ mod tests {
             );
             check!(got == want, "{label}");
         }
+    }
+
+    /// The live `Describe` view of `member_id`.
+    async fn describe_member(
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
+        member_id: &str,
+    ) -> crate::coordinator::unified::actor::DescribeMember {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Describe { reply: tx })
+            .await
+            .unwrap();
+        rx.await
+            .unwrap()
+            .members
+            .into_iter()
+            .find(|member| member.member_id == member_id)
+            .expect("member in the describe view")
+    }
+
+    /// Kafka's `classicGroupJoinToConsumerGroup` answer: no leader and no
+    /// member list, so the client follows, and the member epoch as the
+    /// generation.
+    fn follower_join(member_id: &str, member_epoch: i32) -> JoinResult {
+        JoinResult {
+            error_code: codes::NONE,
+            generation_id: member_epoch,
+            protocol_type: Some("consumer".into()),
+            protocol_name: Some("range".into()),
+            member_id: member_id.into(),
+            ..JoinResult::default()
+        }
+    }
+
+    /// A `JoinGroup` for topic `t` as a classic consumer client sends it.
+    async fn join_at(
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
+        member_id: &str,
+        group_instance_id: Option<&str>,
+        version: i16,
+    ) -> JoinResult {
+        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
+
+        send_join_at(
+            handle,
+            JoinGroupRequest {
+                group_id: "g".into(),
+                session_timeout_ms: 45_000,
+                rebalance_timeout_ms: 300_000,
+                member_id: member_id.into(),
+                group_instance_id: group_instance_id.map(Into::into),
+                protocol_type: "consumer".into(),
+                protocols: vec![JoinGroupRequestProtocol {
+                    name: "range".into(),
+                    metadata: crate::coordinator::unified::actor::test_support::subscription_blob(
+                        &["t"],
+                    ),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            version,
+        )
+        .await
+    }
+
+    /// A classic consumer that a rolling downgrade restarts joins a consumer
+    /// group that still has a native member, as Kafka's
+    /// `classicGroupJoinToConsumerGroup` serves it.
+    ///
+    /// A dynamic member at v4 or later gets `MEMBER_ID_REQUIRED` and a new id,
+    /// and the group does not change. A member at v3 and a static member join
+    /// at once with a new id. Every member then joins as a follower: the
+    /// result has no leader and no member list, so the client sends an empty
+    /// `SyncGroup` and does not run its assignor.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_classic_member_joins_a_consumer_group_as_a_follower() {
+        use crate::coordinator::unified::{
+            actor::GroupKindTag, config::ConsumerGroupMigrationPolicy as Policy,
+        };
+
+        // (label, version, group instance id, MEMBER_ID_REQUIRED first)
+        let rows = [
+            ("dynamic member at v9", 9, None, true),
+            ("dynamic member at v4", 4, None, true),
+            ("dynamic member at v3", 3, None, false),
+            ("static member at v9", 9, Some("instance-1"), false),
+        ];
+        for (label, version, instance_id, member_id_required) in rows {
+            let (coord, _log) = make_coordinator_with_topic_policy("t", 2, Policy::Bidirectional);
+            let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
+            let native = rpc::consumer_heartbeat(&handle, "native", 0, Some("t")).await;
+            assert!(native.error_code == codes::NONE, "{label}");
+
+            let mut joined = join_at(&handle, "", instance_id, version).await;
+            if member_id_required {
+                check!(!joined.member_id.is_empty(), "{label}");
+                check!(
+                    joined
+                        == JoinResult {
+                            error_code: codes::MEMBER_ID_REQUIRED,
+                            member_id: joined.member_id.clone(),
+                            ..JoinResult::default()
+                        },
+                    "{label}"
+                );
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                handle
+                    .tx
+                    .send(GroupActorMessage::Describe { reply: tx })
+                    .await
+                    .unwrap();
+                let members: Vec<String> = rx
+                    .await
+                    .unwrap()
+                    .members
+                    .into_iter()
+                    .map(|member| member.member_id)
+                    .collect();
+                check!(members == ["native"], "{label}");
+                joined = join_at(&handle, &joined.member_id, instance_id, version).await;
+            }
+
+            check!(!joined.member_id.is_empty(), "{label}");
+            let member = describe_member(&handle, &joined.member_id).await;
+            check!(member.is_classic, "{label}");
+            check!(
+                joined == follower_join(&member.member_id, member.member_epoch),
+                "{label}"
+            );
+        }
+    }
+
+    /// The generation that a hosted member's `JoinGroup` gives is the epoch
+    /// that its `OffsetCommit` passes the fence with, also after other members
+    /// moved the group epoch past the member epoch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hosted_member_commits_at_the_generation_its_join_gives() {
+        use crate::coordinator::unified::{
+            actor::{CommitFence, GroupKindTag},
+            config::ConsumerGroupMigrationPolicy as Policy,
+        };
+
+        let (coord, _log) = make_coordinator_with_topic_policy("t", 2, Policy::Bidirectional);
+        let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
+        let native = rpc::consumer_heartbeat(&handle, "native-1", 0, Some("t")).await;
+        assert!(native.error_code == codes::NONE);
+        let joined = rpc::classic_join(&handle, "m-classic", "t").await;
+        assert!(joined.error_code == codes::NONE);
+        let synced = rpc::classic_sync(&handle, "m-classic", joined.generation_id).await;
+        assert!(synced.error_code == codes::NONE);
+
+        // A second native member moves the group epoch, and the classic member
+        // joins again with the same subscription.
+        let second = rpc::consumer_heartbeat(&handle, "native-2", 0, Some("t")).await;
+        assert!(second.error_code == codes::NONE);
+        let rejoined = rpc::classic_join(&handle, "m-classic", "t").await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Describe { reply: tx })
+            .await
+            .unwrap();
+        let group_epoch = rx.await.unwrap().group_epoch;
+        let member = describe_member(&handle, "m-classic").await;
+        assert!(member.member_epoch < group_epoch);
+
+        check!(rejoined == follower_join("m-classic", member.member_epoch));
+        check!(
+            rpc::validate_commit(
+                &handle,
+                "m-classic",
+                rejoined.generation_id,
+                CommitFence::Offset { api_version: 9 },
+                &[],
+            )
+            .await
+                == Ok(())
+        );
     }
 }

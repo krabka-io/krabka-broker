@@ -37,8 +37,16 @@ pub fn submit_waiter_need_offset(base: Offset, blob_count: usize) -> Offset {
     base + i64::try_from(blob_count).unwrap_or(1)
 }
 
-pub fn is_single_voter_majority(majority: usize) -> bool {
-    matches!(majority, 1)
+/// Whether the leader's own append is already a majority, so it commits
+/// without a follower fetch: the voter set holds one voter, and that voter is
+/// the leader.
+///
+/// A leader that an uncommitted `VotersRecord` has removed still leads until
+/// the record commits. If the new set holds one voter, that voter is another
+/// node, and the leader's log does not count toward it. Only that voter's
+/// fetch can commit the record.
+pub fn leader_alone_is_majority(majority: usize, leader_is_voter: bool) -> bool {
+    leader_is_voter && matches!(majority, 1)
 }
 
 pub fn batch_base_in_apply_window(base_offset: i64, prev_hwm: Offset, applied_hwm: Offset) -> bool {

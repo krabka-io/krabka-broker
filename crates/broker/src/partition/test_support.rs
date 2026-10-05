@@ -5,6 +5,8 @@
 //! [`test_partition`] is `pub(crate)` because the fetch read path's own tests
 //! drive [`crate::handlers::fetch`] against a partition too, and a second copy
 //! of this fixture would be a second thing to keep in step with `Partition`.
+//! [`test_partition_with_writer`] is `pub(crate)` for the same reason: the
+//! group coordinator's offsets log appends through a real writer in its tests.
 
 use std::sync::{
     Arc, Mutex,
@@ -51,7 +53,7 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
     (p, dir)
 }
 
-pub(super) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
+pub(crate) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let log = Arc::new(Mutex::new(
         Log::open(dir.path(), LogConfig::default()).expect("open log"),

@@ -248,6 +248,7 @@ mod tests {
             topology: Some(topology_value()),
             configured_topology: None,
             members: vec![describe_member()],
+            topology_description: None,
         });
 
         let expected = DescribedGroup {

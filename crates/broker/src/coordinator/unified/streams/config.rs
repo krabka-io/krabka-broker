@@ -1,6 +1,7 @@
 //! KIP-1071 Streams rebalance-protocol configuration.
 use std::{collections::BTreeMap, time::Duration};
 
+use super::description::TopologyDescriptionPlugin;
 use crate::{
     api_catalog::UnstableApiVersions,
     coordinator::unified::config::{
@@ -329,6 +330,10 @@ pub struct StreamsGroupConfig {
     /// for a member already in it. [`Enabled`][UnstableApiVersions::Enabled]
     /// serves Kafka trunk's behavior for those.
     pub unstable_api_versions: UnstableApiVersions,
+    /// Kafka trunk's `group.streams.topology.description.plugin.class`
+    /// (KIP-1331): the plugin that stores the topology descriptions the
+    /// members push. With none, the default, the broker never asks for one.
+    pub topology_description_plugin: TopologyDescriptionPlugin,
     pub actor_mailbox_capacity: usize,
 }
 
@@ -355,6 +360,7 @@ impl Default for StreamsGroupConfig {
             rack_aware_assignment_tags: Vec::new(),
             share_auto_offset_reset: ShareAutoOffsetReset::Latest,
             unstable_api_versions: UnstableApiVersions::Disabled,
+            topology_description_plugin: TopologyDescriptionPlugin::None,
             actor_mailbox_capacity: 64,
         }
     }
@@ -607,6 +613,7 @@ mod tests {
                     rack_aware_assignment_tags: Vec::new(),
                     share_auto_offset_reset: ShareAutoOffsetReset::Latest,
                     unstable_api_versions: UnstableApiVersions::Disabled,
+                    topology_description_plugin: TopologyDescriptionPlugin::None,
                     actor_mailbox_capacity: 64,
                 }
         );

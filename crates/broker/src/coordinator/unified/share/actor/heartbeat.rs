@@ -556,26 +556,66 @@ mod tests {
         }
     }
 
+    /// A heartbeat whose write fails answers the code of the failure, and the
+    /// failed write leaves no partial batch. A write that is not committed
+    /// answers what Kafka's `CoordinatorOperationExceptionHelper` answers for
+    /// it, so a member that the coordinator never committed looks the
+    /// coordinator up again rather than keep an epoch the next coordinator
+    /// does not know.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn persistence_failure_returns_loading_and_writes_no_partial_batch() {
-        let (metadata, _id) = metadata_with_topic("t", 1);
-        let (coord, log) = make_coordinator(metadata);
-        let handle = coord.get_or_create_share("g");
-        log.fail_next.store(true, Ordering::SeqCst);
+    async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
+        let uncommitted = |code| {
+            Some(crate::error::BrokerError::CoordinatorWriteUncommitted { partition: 0, code })
+        };
+        let cases = [
+            (
+                "the partition writer is gone",
+                None,
+                codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+            (
+                "the leadership moved before the write committed",
+                uncommitted(codes::NOT_COORDINATOR),
+                codes::NOT_COORDINATOR,
+            ),
+            (
+                "the write did not commit in time",
+                uncommitted(codes::COORDINATOR_NOT_AVAILABLE),
+                codes::COORDINATOR_NOT_AVAILABLE,
+            ),
+        ];
+        for (what, failure, expected) in cases {
+            let (metadata, _id) = metadata_with_topic("t", 1);
+            let (coord, log) = make_coordinator(metadata);
+            let handle = coord.get_or_create_share("g");
+            match failure {
+                Some(error) => {
+                    *log.fail_next_with.lock().expect("not poisoned") = Some(error);
+                }
+                None => log.fail_next.store(true, Ordering::SeqCst),
+            }
 
-        let response = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
+            let response = heartbeat(
+                &handle,
+                ShareGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch: 0,
+                    subscribed_topic_names: Some(vec!["t".into()]),
+                    ..Default::default()
+                },
+            )
+            .await;
 
-        check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-        assert!(log.batches().await.is_empty());
+            check!(
+                response
+                    == ShareGroupHeartbeatResponse {
+                        error_code: expected,
+                        ..Default::default()
+                    },
+                "{what}"
+            );
+            check!(log.batches().await.is_empty(), "{what}");
+        }
     }
 }

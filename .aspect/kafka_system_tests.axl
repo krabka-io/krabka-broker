@@ -1,0 +1,345 @@
+"""Run Apache Kafka's own system tests against krabka brokers.
+
+Apache Kafka keeps its nightly ducktape suite in `tests/`. Each test starts a
+cluster in containers. It then drives that cluster with Kafka's producers,
+consumers, admin tools, Connect workers and Streams applications, and it
+bounces or kills brokers on the way. This task runs that suite against krabka:
+
+1. It checks out the Apache Kafka revision that the manifest pins, under
+   `target/kafka-system-tests/`. Kafka's Gradle build makes the test
+   libraries there, so the clients and tools under test are Kafka's.
+2. It builds `krabka-broker` and `krabka-format` with Bazel and copies them
+   into the checkout. ducker-ak mounts the checkout into every node.
+3. It installs `tools/kafkatest/krabka.py` into the checkout. That module
+   replaces `KafkaService`, so each cluster that a test starts runs
+   krabka-broker with the configuration Kafka would have used.
+4. It brings up the ducker-ak containers, runs the selected manifest entries
+   with ducktape, and compares each result with the entry's expectation.
+
+    aspect kafka-system-tests
+    aspect kafka-system-tests --test kafkatest/tests/core/replication_test.py
+    aspect kafka-system-tests --test kafkatest/sanity_checks/ --keep-nodes
+
+The manifest is `tools/kafkatest/suite.json`. Each entry names one
+parametrization of one Kafka test in the form that ducktape uses. An entry
+that krabka does not pass yet has a `known_failure` that tells how it fails.
+The task fails when an entry expected to pass fails or does not run. A known
+failure that passes is reported as fixed, so that its `known_failure` can go.
+
+ducker-ak gives its containers fixed names, `ducker01` and up, on one Docker
+network. So a run replaces any ducker-ak cluster on the machine. The task
+stops the containers at the end, unless `--keep-nodes` keeps them for
+`ducker-ak ssh`.
+"""
+
+MANIFEST = "tools/kafkatest/suite.json"
+ADAPTER = "tools/kafkatest/krabka.py"
+WORK_DIR = "target/kafka-system-tests"
+KAFKA_REPOSITORY = "https://github.com/apache/kafka.git"
+
+# The binaries the adapter starts, by the name it starts them under.
+BINARIES = {
+    "//:broker_bin": "krabka-broker",
+    "//:format_bin": "krabka-format",
+}
+
+# Where the adapter and the suite land inside the Kafka checkout. The adapter
+# sits beside `kafka.py` because ducktape renders a service's templates from
+# the directory of the file that defines its class.
+ADAPTER_DESTINATION = "tests/kafkatest/services/kafka/krabka.py"
+SERVICES_INIT = "tests/kafkatest/services/kafka/__init__.py"
+ADAPTER_IMPORT = "from .krabka import KrabkaService as KafkaService"
+SUITE = "tests/krabka/suite.yml"
+
+# ducker-ak mounts the checkout here in every node.
+NODE_KAFKA_DIR = "/opt/kafka-dev"
+
+_ENTRY_KEYS = ["test", "parameters", "known_failure"]
+_HEX = "0123456789abcdef"
+
+def manifest_problems(document):
+    """Every way `document` falls short of a runnable manifest."""
+    problems = []
+    revision = document.get("kafka_revision", "")
+    if type(revision) != "string" or len(revision) != 40 or [c for c in revision.elems() if c not in _HEX]:
+        problems.append("kafka_revision must be a full 40-character commit, got %r" % (revision,))
+    tests = document.get("tests", [])
+    if type(tests) != "list" or not tests:
+        problems.append("tests must be a non-empty list")
+        return problems
+    for index, entry in enumerate(tests):
+        where = "tests[%d]" % index
+        if type(entry) != "dict":
+            problems.append("%s must be an object" % where)
+            continue
+        for key in entry:
+            if key not in _ENTRY_KEYS:
+                problems.append("%s has unknown key %r" % (where, key))
+        test = entry.get("test", "")
+        if type(test) != "string" or not test.startswith("kafkatest/") or ".py::" not in test or "." not in test.partition("::")[2]:
+            problems.append("%s test must be kafkatest/<path>.py::<Class>.<method>, got %r" % (where, test))
+        if type(entry.get("parameters", {})) != "dict":
+            problems.append("%s parameters must be an object" % where)
+        reason = entry.get("known_failure")
+        if reason != None and (type(reason) != "string" or not reason.strip()):
+            problems.append("%s known_failure must be a non-empty string" % where)
+        for earlier in range(index):
+            other = tests[earlier]
+            if type(other) == "dict" and other.get("test") == test and other.get("parameters", {}) == entry.get("parameters", {}):
+                problems.append("%s repeats tests[%d]" % (where, earlier))
+    return problems
+
+def select(entries, filters):
+    """The entries whose test starts with one of `filters`; all of them when there are none."""
+    if not filters:
+        return entries
+    return [entry for entry in entries if any([entry["test"].startswith(prefix) for prefix in filters])]
+
+def symbol(entry):
+    """The entry as a ducktape test symbol, relative to the suite file.
+
+    An unparametrized test takes no `@`: ducktape compares the parameters a
+    symbol carries with the test's own, and an unparametrized test has none,
+    which an empty object does not equal.
+    """
+    text = "../" + entry["test"]
+    parameters = entry.get("parameters", {})
+    if parameters:
+        text += "@" + json.encode(parameters)
+    return text
+
+def suite_yaml(entries):
+    """A ducktape test suite holding `entries`.
+
+    The parameters ride in the suite file rather than on the command line,
+    where ducker-ak's own `bash -c` would strip the JSON's quotes.
+    """
+    lines = ["krabka:"]
+    for entry in entries:
+        lines.append("  - '%s'" % symbol(entry).replace("'", "''"))
+    return "\n".join(lines) + "\n"
+
+def with_adapter_import(init):
+    """`kafkatest/services/kafka/__init__.py` with the adapter's import last."""
+    if ADAPTER_IMPORT in init.splitlines():
+        return init
+    return init.rstrip("\n") + "\n\n# krabka: every KafkaService a test builds runs krabka-broker.\n" + ADAPTER_IMPORT + "\n"
+
+def test_coordinates(test):
+    """`kafkatest/a/b.py::Class.method` as ducktape reports it: module, class, method."""
+    path, _, member = test.partition("::")
+    cls, _, method = member.partition(".")
+    return path.removesuffix(".py").replace("/", "."), cls, method
+
+def outcomes(entries, results):
+    """Each entry paired with the ducktape result that ran it.
+
+    ducktape's `report.json` names a result by module, class, method and the
+    parameters it injected, which is what an entry names too. An entry no
+    result matches did not run: its symbol matched no test at this Kafka
+    revision, or ducktape stopped before reaching it.
+    """
+    out = []
+    for entry in entries:
+        module, cls, method = test_coordinates(entry["test"])
+        parameters = entry.get("parameters", {})
+        matched = None
+        for result in results:
+            if (result["module_name"] == module and result["cls_name"] == cls and
+                result["function_name"] == method and (result.get("injected_args") or {}) == parameters):
+                matched = result
+                break
+        out.append(struct(
+            entry = entry,
+            status = matched["test_status"] if matched else "NOT RUN",
+            summary = (matched.get("summary") or "") if matched else "",
+            results_dir = matched.get("relative_results_dir", "") if matched else "",
+        ))
+    return out
+
+def verdict(outcome):
+    """`pass`, `regression`, `known failure` or `fixed`."""
+    passed = outcome.status == "PASS"
+    if outcome.entry.get("known_failure") == None:
+        return "pass" if passed else "regression"
+    return "fixed" if passed else "known failure"
+
+def tally(verdicts, kind):
+    return len([v for v in verdicts if v == kind])
+
+def first_line(text):
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+def _cell(text):
+    return text.replace("|", "\\|")
+
+def render_report(revision, results):
+    """The Markdown report of one run: totals, then one row per entry."""
+    verdicts = [verdict(outcome) for outcome in results]
+    lines = [
+        "# Apache Kafka system tests against krabka",
+        "",
+        "Kafka [`%s`](https://github.com/apache/kafka/tree/%s/tests): %d tests, %d passed, %d known failures, %d regressions, %d fixed." % (
+            revision[:12],
+            revision,
+            len(results),
+            tally(verdicts, "pass"),
+            tally(verdicts, "known failure"),
+            tally(verdicts, "regression"),
+            tally(verdicts, "fixed"),
+        ),
+        "",
+        "| Test | Parameters | Result | Verdict | Detail |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+    ]
+    for outcome, kind in zip(results, verdicts):
+        parameters = outcome.entry.get("parameters", {})
+        detail = outcome.entry.get("known_failure", "") if kind == "known failure" else first_line(outcome.summary) if kind == "regression" else ""
+        lines.append("| `%s` | %s | %s | %s | %s |" % (
+            outcome.entry["test"].removeprefix("kafkatest/"),
+            _cell(" ".join(["`%s=%s`" % (key, json.encode(value)) for key, value in parameters.items()])),
+            outcome.status,
+            kind,
+            _cell(detail),
+        ))
+    return "\n".join(lines) + "\n"
+
+def ducktape_argv(results_root, parallel, exit_first):
+    """The command that runs the suite file in the driver container."""
+    argv = [
+        "docker",
+        "exec",
+        "--user",
+        "ducker",
+        "--workdir",
+        NODE_KAFKA_DIR,
+        "ducker01",
+        "ducktape",
+        "--cluster-file",
+        NODE_KAFKA_DIR + "/tests/docker/build/cluster.json",
+        "--results-root",
+        NODE_KAFKA_DIR + "/" + results_root,
+        "--max-parallel",
+        str(parallel),
+        # A failed test copies back every log the service names, its data
+        # directories included. Archived per directory on the node, that is
+        # one file to copy rather than one per partition segment and index.
+        "--compress",
+    ]
+    if exit_first:
+        argv.append("--exit-first")
+    return argv + [SUITE]
+
+def _run(ctx, argv, cwd):
+    return ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(cwd).spawn().wait().code
+
+def _output(ctx, argv, cwd):
+    result = ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(cwd).stdout("piped").spawn().wait_with_output()
+    if result.status.code != 0:
+        fail("%s exited with %d" % (" ".join(argv), result.status.code))
+    return result.stdout.strip()
+
+def _must(ctx, argv, cwd):
+    code = _run(ctx, argv, cwd)
+    if code != 0:
+        fail("%s exited with %d" % (" ".join(argv), code))
+
+def _checkout(ctx, kafka, revision):
+    if not ctx.std.fs.exists(kafka + "/.git"):
+        ctx.std.fs.create_dir_all(kafka)
+        _must(ctx, ["git", "init", "-q"], kafka)
+        _must(ctx, ["git", "remote", "add", "origin", KAFKA_REPOSITORY], kafka)
+        _must(ctx, ["git", "fetch", "-q", "--depth", "1", "origin", revision], kafka)
+        _must(ctx, ["git", "checkout", "-q", "--detach", "FETCH_HEAD"], kafka)
+    head = _output(ctx, ["git", "rev-parse", "HEAD"], kafka)
+    if head != revision:
+        fail("%s is at %s, not the manifest's %s; delete it to check out again" % (kafka, head, revision))
+
+def _install_krabka(ctx, root, kafka):
+    _must(ctx, ["bazel", "build", "-c", "opt"] + list(BINARIES.keys()), root)
+    ctx.std.fs.create_dir_all(kafka + "/krabka")
+    for target, name in BINARIES.items():
+        built = _output(ctx, ["bazel", "cquery", "-c", "opt", "--output=files", target], root)
+        _must(ctx, ["install", "-m", "0755", root + "/" + built, kafka + "/krabka/" + name], root)
+    ctx.std.fs.copy(root + "/" + ADAPTER, kafka + "/" + ADAPTER_DESTINATION)
+    init = kafka + "/" + SERVICES_INIT
+    ctx.std.fs.write(init, with_adapter_import(ctx.std.fs.read_to_string(init)))
+
+def _session_dir(ctx, results_root):
+    # ducktape names a session by its date, `2026-10-04--001`, and links
+    # `latest` beside it to a path inside the container.
+    sessions = sorted([entry.path for entry in ctx.std.fs.read_dir(results_root) if entry.path[:1].isdigit()])
+    if not sessions:
+        fail("ducktape wrote no session under " + results_root)
+    return results_root + "/" + sessions[-1]
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    out = ctx.std.io.stdout
+    document = json.decode(ctx.std.fs.read_to_string(root + "/" + ctx.args.manifest))
+    problems = manifest_problems(document)
+    for problem in problems:
+        ctx.std.io.stderr.write("%s: %s\n" % (ctx.args.manifest, problem))
+    if problems:
+        return 2
+    entries = select(document["tests"], ctx.args.test)
+    if not entries:
+        ctx.std.io.stderr.write("no manifest entry starts with %s\n" % " or ".join(ctx.args.test))
+        return 2
+
+    revision = document["kafka_revision"]
+    work = root + "/" + WORK_DIR
+    kafka = work + "/kafka-" + revision[:12]
+    _checkout(ctx, kafka, revision)
+    _install_krabka(ctx, root, kafka)
+    _must(ctx, ["./gradlew", "systemTestLibs", "--no-daemon"], kafka)
+    ctx.std.fs.create_dir_all(kafka + "/" + SUITE.rsplit("/", 1)[0])
+    ctx.std.fs.write(kafka + "/" + SUITE, suite_yaml(entries))
+
+    ducker = kafka + "/tests/docker/ducker-ak"
+    _run(ctx, [ducker, "down", "--quiet", "--force"], kafka)
+    _must(ctx, [ducker, "up", "--num-nodes", str(ctx.args.nodes)], kafka)
+    if not ctx.args.keep_nodes:
+        ctx.defer(lambda: _run(ctx, [ducker, "down", "--quiet", "--force"], kafka))
+
+    results_root = "results/krabka-" + _output(ctx, ["date", "-u", "+%Y%m%d-%H%M%S"], root)
+
+    # ducktape's exit status only says whether every test passed; the
+    # expectation of each one is the manifest's, read back from report.json.
+    _run(ctx, ducktape_argv(results_root, ctx.args.parallel, ctx.args.exit_first), kafka)
+
+    session = _session_dir(ctx, kafka + "/" + results_root)
+    report = json.decode(ctx.std.fs.read_to_string(session + "/report.json"))
+    results = outcomes(entries, report["results"])
+    markdown = render_report(revision, results)
+    ctx.std.fs.write(session + "/krabka-report.md", markdown)
+    ctx.std.fs.write(work + "/report.md", markdown)
+
+    verdicts = [verdict(outcome) for outcome in results]
+    for outcome, kind in zip(results, verdicts):
+        if kind in ["regression", "fixed"]:
+            out.write("%s: %s %s %s\n" % (kind, outcome.status, outcome.entry["test"], json.encode(outcome.entry.get("parameters", {}))))
+    out.write("kafka-system-tests: %d passed, %d known failures, %d regressions, %d fixed\n" % (
+        tally(verdicts, "pass"),
+        tally(verdicts, "known failure"),
+        tally(verdicts, "regression"),
+        tally(verdicts, "fixed"),
+    ))
+    out.write("report: %s/report.md\nducktape results: %s\n" % (work, session))
+    return 1 if "regression" in verdicts else 0
+
+kafka_system_tests = task(
+    summary = "Run Apache Kafka's ducktape system tests against krabka brokers",
+    implementation = _impl,
+    args = {
+        "manifest": args.string(default = MANIFEST, description = "The repository-relative test manifest."),
+        "test": args.string_list(description = "Run only the entries whose test starts with this prefix. Repeatable."),
+        "parallel": args.int(default = 3, description = "How many tests ducktape runs at once."),
+        "nodes": args.int(default = 14, description = "How many ducker-ak containers to bring up."),
+        "keep_nodes": args.boolean(default = False, description = "Leave the ducker-ak containers up afterwards."),
+        "exit_first": args.boolean(default = False, description = "Stop at the first failed test. The tests after it report NOT RUN."),
+    },
+)

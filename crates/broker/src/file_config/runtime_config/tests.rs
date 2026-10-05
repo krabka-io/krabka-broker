@@ -316,3 +316,50 @@ fn the_runtime_table_records_the_kafka_keys_it_named() {
         )
     );
 }
+
+/// The five keys of Kafka's `MetadataLogConfig` set the whole of
+/// `BrokerConfig::metadata_log` together, and the loader records each Kafka
+/// key the table named, so `DescribeConfigs` reports it at
+/// `STATIC_BROKER_CONFIG`.
+#[test]
+fn the_metadata_log_keys_set_the_whole_metadata_log_config() {
+    let file: FileConfig = toml::from_str(
+        r#"
+[runtime]
+metadata_log_segment_bytes = "16MiB"
+metadata_log_segment_roll_interval = "1h"
+metadata_max_retention_bytes = "0B"
+metadata_max_retention = "2d"
+metadata_max_idle_interval = "0ms"
+"#,
+    )
+    .expect("parse runtime config");
+    let mut cfg = crate::config::BrokerConfig::default();
+
+    file.apply_to(&mut cfg).expect("apply runtime config");
+
+    assert!(
+        (
+            cfg.metadata_log,
+            cfg.static_config_origins
+                .supplied_kafka_keys
+                .into_iter()
+                .collect::<Vec<_>>(),
+        ) == (
+            krabka_raft::MetadataLogConfig {
+                segment_size: mebibytes(16),
+                segment_roll_interval: hours(1),
+                max_retention_size: Some(bytes(0)),
+                max_retention: Some(days(2)),
+                max_idle_interval: millis(0),
+            },
+            vec![
+                "metadata.log.segment.bytes",
+                "metadata.log.segment.ms",
+                "metadata.max.idle.interval.ms",
+                "metadata.max.retention.bytes",
+                "metadata.max.retention.ms",
+            ],
+        )
+    );
+}

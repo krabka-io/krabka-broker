@@ -26,6 +26,7 @@ pub(crate) fn observer_config(cluster_id: uuid::Uuid, data_dir: PathBuf) -> Obse
             krabka_client_core::ConnectionDispatchQueueCapacity::default(),
         client_frame_max: krabka_client_core::ClientFrameMax::default(),
         voters: vec![],
+        bootstrap_servers: vec![],
         dialer: Arc::new(krabka_raft::PlaintextDialer),
         client_id: "test-observer".into(),
         cluster_id,

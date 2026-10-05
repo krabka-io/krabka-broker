@@ -66,6 +66,8 @@ pub struct StreamsGroupSeed {
     pub group_epoch: i32,
     /// The `MetadataHash` of the last group metadata record.
     pub metadata_hash: i64,
+    /// The KIP-1331 description epochs of the last group metadata record.
+    pub description_epochs: streams::persistence::DescriptionEpochs,
     pub assignment_epoch: i32,
     pub topology: Option<streams::persistence::StreamsGroupTopologyValue>,
     pub partition_metadata: Option<streams::persistence::StreamsGroupPartitionMetadataValue>,

@@ -164,7 +164,6 @@ impl GroupCoordinator {
             group_id.into(),
             self.streams_config.clone(),
             self.offsets_log.clone(),
-            self.metadata_source(),
             self.clone(),
         ));
         let inserted = self

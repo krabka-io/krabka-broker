@@ -46,6 +46,9 @@ pub(super) async fn live_coordinator(dir: &Path) -> (Arc<TxnCoordinator>, Arc<Pa
         open_partition(dir, bootstrap::TOPIC),
     );
     let data = open_partition(dir, DATA_TOPIC);
+    // The metadata reconcile installs this broker, node 1, as the leader, so
+    // the partition takes markers.
+    data.install_leader_change(1, 0).await;
     partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), Arc::clone(&data));
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),

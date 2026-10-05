@@ -19,13 +19,15 @@ use bytes::{Bytes, BytesMut};
 use krabka_log::{Offset, RawRead};
 use krabka_protocol::{
     owned::share_fetch_response::{AcquiredRecords, PartitionData},
-    records::{HEADER_LEN, RecordBatchHeader, RecordsPayload},
+    records::{Attributes, HEADER_LEN, RecordBatchHeader, RecordsPayload},
 };
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use zerocopy::FromBytes as _;
 
+use super::tiered::TieredSource;
 use crate::{
     error::BrokerError,
+    remote_reader::RemoteReader,
     share_partition::state::{AcquireShape, AcquiredRange, AcquisitionState},
 };
 
@@ -48,6 +50,9 @@ pub(super) struct AcquireRequest<'a> {
     pub(super) max_attempts: i16,
     /// How the request shapes what it acquires.
     pub(super) mode: AcquireMode,
+    /// The remote tier of a tiered partition (KIP-405), which serves the
+    /// offsets below the local log start.
+    pub(super) tier: Option<TieredSource<'a>>,
 }
 
 /// Kafka's `ShareAcquireMode` with the request's `BatchSize`.
@@ -97,6 +102,12 @@ pub(super) fn read_budget(partition_max_bytes: i32, request_max_bytes: i32) -> i
 /// The read starts at the first offset that the state can hand out. The
 /// response carries each read batch that holds an acquired offset, and no
 /// other batch. It returns the number of offsets that it acquired.
+///
+/// An offset that only the remote tier holds is read from the tier, as Kafka's
+/// `DelayedShareFetch` reads it through `RemoteLogManager.asyncRead`. The
+/// control batches, the aborted transactional data and the not-yet-due
+/// batches of that read are taken out of the window here, because the scans
+/// that do so for the local log cannot read the tier.
 pub(super) async fn acquire_read_records(
     out: &mut PartitionData,
     partition: &Arc<crate::partition::Partition>,
@@ -106,10 +117,31 @@ pub(super) async fn acquire_read_records(
     let Some(from) = state.first_acquirable_offset(request.max_attempts) else {
         return Ok(0);
     };
-    let Some(read) = read_raw(partition, from, request.upper, request.max_bytes).await? else {
-        return Ok(0);
+    let read = match &request.tier {
+        // An offset below an established log start stays with the local
+        // read, whose `OffsetTooLow` moves the share-partition start offset
+        // past it.
+        Some(tier) if RemoteReader::serves(partition, from) => {
+            let Some(read) = tier.read(partition, from, request.max_bytes).await? else {
+                return Ok(0);
+            };
+            for (first, last) in &read.unreadable {
+                state.archive_internal(*first, *last);
+            }
+            for (first, last) in &read.not_due {
+                state.defer_internal(*first, *last);
+            }
+            read.bytes
+        }
+        _ => {
+            let Some(read) = read_raw(partition, from, request.upper, request.max_bytes).await?
+            else {
+                return Ok(0);
+            };
+            read.bytes
+        }
     };
-    let read_bytes = batches_within(&read.bytes, request.max_bytes, request.min_one_batch)?;
+    let read_bytes = batches_within(&read, request.max_bytes, request.min_one_batch)?;
     let bounds = batch_bounds(&read_bytes)?;
     let Some(&(_, read_last)) = bounds.last() else {
         return Ok(0);
@@ -184,16 +216,20 @@ fn rows_of(range: &AcquiredRange, mode: AcquireMode, bases: &[i64]) -> Vec<Acqui
     rows
 }
 
-/// One v2 batch of a read: where its bytes sit, and the offsets it holds.
-struct BatchSpan {
+/// One v2 batch of a read: where its bytes sit, the offsets it holds, and the
+/// header fields that decide whether a share consumer may get it.
+pub(super) struct BatchSpan {
     bytes: std::ops::Range<usize>,
-    base: i64,
-    last: i64,
+    pub(super) base: i64,
+    pub(super) last: i64,
+    pub(super) attributes: Attributes,
+    pub(super) producer_id: i64,
+    pub(super) max_timestamp: i64,
 }
 
 /// Every v2 batch in `bytes`, in the order that the bytes hold them. It reads
 /// only the batch headers.
-fn batch_spans(bytes: &Bytes) -> Result<Vec<BatchSpan>, BrokerError> {
+pub(super) fn batch_spans(bytes: &Bytes) -> Result<Vec<BatchSpan>, BrokerError> {
     let mut spans = Vec::new();
     let mut at = 0_usize;
     while at < bytes.len() {
@@ -211,6 +247,9 @@ fn batch_spans(bytes: &Bytes) -> Result<Vec<BatchSpan>, BrokerError> {
             bytes: at..at + length,
             base,
             last: base + i64::from(header.last_offset_delta.get()),
+            attributes: Attributes(header.attributes.get()),
+            producer_id: header.producer_id.get(),
+            max_timestamp: header.max_timestamp.get(),
         });
         at += length;
     }
@@ -381,6 +420,37 @@ async fn read_raw(
     Ok((raw.total > 0).then_some(raw))
 }
 
+/// The aborted transactions of a window, by producer, as `(first offset,
+/// abort marker offset)` pairs.
+#[derive(Debug, Default)]
+pub(super) struct AbortedRanges(HashMap<i64, Vec<(i64, i64)>>);
+
+impl AbortedRanges {
+    /// Records an aborted transaction of `producer_id` that starts at `first`
+    /// and ends at its abort marker, `marker`.
+    pub(super) fn add(&mut self, producer_id: i64, first: i64, marker: i64) {
+        self.0.entry(producer_id).or_default().push((first, marker));
+    }
+
+    /// Whether a share consumer must never get the batch of `producer_id`
+    /// with `attributes` that holds the offsets `[base, last]`: it is a
+    /// control batch, or transactional data of a transaction this holds,
+    /// which ends after the batch.
+    pub(super) fn excludes(
+        &self,
+        attributes: Attributes,
+        producer_id: i64,
+        (base, last): (i64, i64),
+    ) -> bool {
+        attributes.is_control_batch()
+            || (attributes.is_transactional()
+                && self.0.get(&producer_id).is_some_and(|txns| {
+                    txns.iter()
+                        .any(|&(first, marker)| first <= base && last <= marker)
+                }))
+    }
+}
+
 /// The byte budget, in bytes, of one log read while
 /// [`unreadable_batch_ranges`] walks a window.
 const UNREADABLE_SCAN_CHUNK_BYTES: u64 = 1 << 20;
@@ -412,22 +482,12 @@ pub(super) async fn unreadable_batch_ranges(
     let log = part.log.clone();
     let join = crate::blocking::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
-        // Aborted transactions by producer, as `(first offset, abort marker)`.
-        let mut aborted: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
+        let mut aborted = AbortedRanges::default();
         if read_committed {
             for txn in log.aborted_in_range(start, end) {
-                aborted
-                    .entry(txn.producer_id.get())
-                    .or_default()
-                    .push((txn.start_offset.0, txn.last_offset.0));
+                aborted.add(txn.producer_id.get(), txn.start_offset.0, txn.last_offset.0);
             }
         }
-        let is_aborted = |base: i64, last: i64, producer_id: i64| {
-            aborted.get(&producer_id).is_some_and(|txns| {
-                txns.iter()
-                    .any(|&(first, marker)| first <= base && last <= marker)
-            })
-        };
         // Read the window in bounded chunks, and stop at `end`, so a window
         // far behind the log end does not decode the rest of the log.
         let mut ranges = Vec::new();
@@ -443,9 +503,11 @@ pub(super) async fn unreadable_batch_ranges(
                 if batch.base_offset >= end.0 {
                     break;
                 }
-                let unreadable = batch.attributes.is_control_batch()
-                    || (batch.attributes.is_transactional()
-                        && is_aborted(batch.base_offset, last, batch.producer_id));
+                let unreadable = aborted.excludes(
+                    batch.attributes,
+                    batch.producer_id,
+                    (batch.base_offset, last),
+                );
                 let first = Offset(batch.base_offset).max(start);
                 let last = Offset(last).min(end - 1);
                 if unreadable && first <= last {
@@ -552,6 +614,50 @@ mod tests {
             .await
             .expect("scan the schedule");
         assert!(none == Vec::new());
+    }
+
+    // Kafka's `SharePartition.filterAbortedTransactionalAcquiredRecords` with
+    // the control batches beside them: what a share consumer must never get.
+    // Producer 7 aborted a transaction that runs from offset 10 to its marker
+    // at offset 20. Each case is `(label, attributes, producer, batch range,
+    // excluded)`.
+    #[test]
+    fn control_batches_and_aborted_data_are_excluded() {
+        let mut aborted = AbortedRanges::default();
+        aborted.add(7, 10, 20);
+        let transactional = Attributes::default().with_transactional(true);
+        let cases = [
+            (
+                "a control batch",
+                transactional.with_control(true),
+                7,
+                (20, 20),
+                true,
+            ),
+            ("plain data", Attributes::default(), 7, (12, 14), false),
+            (
+                "data inside the aborted transaction",
+                transactional,
+                7,
+                (12, 14),
+                true,
+            ),
+            (
+                "data past the abort marker",
+                transactional,
+                7,
+                (21, 22),
+                false,
+            ),
+            ("another producer's data", transactional, 8, (12, 14), false),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, attributes, producer_id, range, excluded) in cases {
+            actual.push((label, aborted.excludes(attributes, producer_id, range)));
+            expected.push((label, excluded));
+        }
+        assert!(actual == expected);
     }
 
     /// Three one-record batches of equal size at offsets 0, 1 and 2, whole

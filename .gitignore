@@ -42,5 +42,5 @@ __pycache__/
 
 # A broker run from crates/broker with the default log dir, or a test that
 # forgets its tempdir, writes these. They were committed by accident twice.
-/crates/broker/meta.properties.json
+/crates/broker/meta.properties
 /crates/broker/krabka-data/

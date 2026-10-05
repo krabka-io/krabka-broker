@@ -53,13 +53,14 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
     }
 }
 
-/// Parse one `--initial-controllers` entry: `id@host:port:directory-id`.
+/// Parse one `--initial-controllers` entry: `id@host:port:directory-id`,
+/// whose endpoint is named `listener_name`.
 ///
 /// The directory uuid is the trailing colon-delimited field, so we split
 /// it off the right first, then peel `host:port` off the remainder. It is in
 /// Kafka's base64 form, as `kafka-storage format` takes it, or the hyphenated
 /// form.
-fn parse_initial_controller(spec: &str) -> Result<Voter, String> {
+fn parse_initial_controller(spec: &str, listener_name: &str) -> Result<Voter, String> {
     let (id_part, rest) = spec.split_once('@').ok_or("missing '@'")?;
     let id = krabka_metadata::NodeId(id_part.parse::<u64>().map_err(|_| "bad id")?);
     let (host_port, dir_part) = rest.rsplit_once(':').ok_or("missing directory uuid")?;
@@ -81,7 +82,7 @@ fn parse_initial_controller(spec: &str) -> Result<Voter, String> {
         id,
         directory_id: dir,
         endpoints: vec![VoterEndpoint {
-            name: "CONTROLLER".into(),
+            name: listener_name.to_owned(),
             host: host.to_string(),
             port,
         }],
@@ -92,15 +93,15 @@ fn parse_initial_controller(spec: &str) -> Result<Voter, String> {
 /// Derive the initial controller voter set from the format args.
 ///
 /// - `--standalone`: a singleton set holding just this node (requires
-///   `--node-id` + `--controller-listener`).
-/// - `--initial-controllers`: the explicitly-listed voters.
+///   `--controller-listener`).
+/// - `--initial-controllers`: the explicitly-listed voters, which must
+///   include this node.
 /// - `--no-initial-controllers` or static mode: an empty set.
 pub(super) fn build_initial_voters(
     args: &FormatArgs,
     directory_id: DirectoryId,
 ) -> Result<VoterSet, String> {
     if args.standalone {
-        let id = args.node_id.ok_or("--standalone requires --node-id")?;
         let listener = args
             .controller_listener
             .as_deref()
@@ -116,12 +117,12 @@ pub(super) fn build_initial_voters(
             return Err("--controller-listener port must not be zero".into());
         }
         Ok(VoterSet::from_voters([Voter {
-            id,
+            id: args.node_id,
             // `Voter.directory_id` is a raw `Uuid` (owned by `krabka_voters`);
             // unwrap the newtype at this crate boundary.
             directory_id: directory_id.into(),
             endpoints: vec![VoterEndpoint {
-                name: "CONTROLLER".into(),
+                name: args.controller_listener_name.clone(),
                 host: host.to_string(),
                 port,
             }],
@@ -131,7 +132,7 @@ pub(super) fn build_initial_voters(
         let voters: Vec<_> = args
             .initial_controllers
             .iter()
-            .map(|s| parse_initial_controller(s))
+            .map(|s| parse_initial_controller(s, &args.controller_listener_name))
             .collect::<Result<_, _>>()?;
         let mut node_ids = BTreeSet::new();
         let mut directory_ids = BTreeSet::new();
@@ -147,12 +148,10 @@ pub(super) fn build_initial_voters(
             }
         }
         let voters = VoterSet::from_voters(voters);
-        let node_id = args
-            .node_id
-            .ok_or("--initial-controllers requires --node-id")?;
-        if !voters.contains(node_id) {
+        if !voters.contains(args.node_id) {
             return Err(format!(
-                "--initial-controllers does not contain local --node-id {node_id}"
+                "--initial-controllers does not contain local --node-id {}",
+                args.node_id
             ));
         }
         Ok(voters)
@@ -168,8 +167,11 @@ mod tests {
 
     #[test]
     fn parses_initial_controller_spec() {
-        let v =
-            parse_initial_controller("3@host:9093:00000000-0000-0000-0000-000000000003").unwrap();
+        let v = parse_initial_controller(
+            "3@host:9093:00000000-0000-0000-0000-000000000003",
+            "CONTROLLER",
+        )
+        .unwrap();
         assert2::assert!(
             v == Voter {
                 id: krabka_metadata::NodeId(3),
@@ -188,18 +190,19 @@ mod tests {
     /// `kafka-storage format --initial-controllers` takes.
     #[test]
     fn parses_initial_controller_spec_with_a_kafka_directory_id() {
-        let v = parse_initial_controller("3@host:9093:AAAAAAAAAAAAAAAAAAAAAw").unwrap();
+        let v =
+            parse_initial_controller("3@host:9093:AAAAAAAAAAAAAAAAAAAAAw", "CONTROLLER").unwrap();
         assert2::assert!(v.directory_id == Uuid::from_u128(3));
     }
 
     #[test]
     fn rejects_initial_controller_without_at() {
-        assert2::assert!(parse_initial_controller("3:host:9093:uuid").is_err());
+        assert2::assert!(parse_initial_controller("3:host:9093:uuid", "CONTROLLER").is_err());
     }
 
     #[test]
     fn rejects_initial_controller_bad_uuid() {
-        assert2::assert!(parse_initial_controller("3@host:9093:not-a-uuid").is_err());
+        assert2::assert!(parse_initial_controller("3@host:9093:not-a-uuid", "CONTROLLER").is_err());
     }
 
     /// A `kraft.version` level the feature does not define gets Kafka's
@@ -213,6 +216,8 @@ mod tests {
                 "krabka-format",
                 "--log-dir",
                 "/data",
+                "--node-id",
+                "1",
                 "--no-initial-controllers",
                 "--feature",
                 &format!("kraft.version={level}"),
@@ -227,6 +232,58 @@ mod tests {
         }
     }
 
+    /// The voter endpoints carry the controller listener name, as
+    /// `kafka-storage format` takes it from `controller.listener.names`, in
+    /// Kafka's upper-case form. Without the flag the name is `CONTROLLER`.
+    #[test]
+    fn the_voter_endpoints_carry_the_controller_listener_name() {
+        use clap::Parser as _;
+
+        let directory = DirectoryId(Uuid::from_u128(3));
+        let controllers = "3@host:9093:00000000-0000-0000-0000-000000000003";
+        // (quorum flags, listener name flag, endpoint name written)
+        let cases: [(&[&str], &[&str], &str); 4] = [
+            (
+                &["--standalone", "--controller-listener", "host:9093"],
+                &[],
+                "CONTROLLER",
+            ),
+            (
+                &["--standalone", "--controller-listener", "host:9093"],
+                &["--controller-listener-name", "CONTROLLER_PLAINTEXT"],
+                "CONTROLLER_PLAINTEXT",
+            ),
+            (
+                &["--initial-controllers", controllers],
+                &["--controller-listener-name", "controller_plaintext"],
+                "CONTROLLER_PLAINTEXT",
+            ),
+            (&["--initial-controllers", controllers], &[], "CONTROLLER"),
+        ];
+        let named: Vec<Vec<String>> = cases
+            .iter()
+            .map(|(quorum, name, _)| {
+                let cli = crate::Cli::try_parse_from(
+                    ["krabka-format", "--log-dir", "/data", "--node-id", "3"]
+                        .into_iter()
+                        .chain(quorum.iter().copied())
+                        .chain(name.iter().copied()),
+                )
+                .expect("parse");
+                build_initial_voters(&cli.args, directory)
+                    .expect("voters")
+                    .iter()
+                    .flat_map(|voter| voter.endpoints.iter().map(|endpoint| endpoint.name.clone()))
+                    .collect()
+            })
+            .collect();
+        let expected: Vec<Vec<String>> = cases
+            .iter()
+            .map(|(.., name)| vec![(*name).to_owned()])
+            .collect();
+        assert2::assert!(named == expected);
+    }
+
     #[test]
     fn parse_initial_controller_error_branches() {
         for bad in [
@@ -235,7 +292,7 @@ mod tests {
             "3@host:notaport:00000000-0000-0000-0000-000000000003",   // bad port
             "3@hostonly:00000000-0000-0000-0000-000000000003",        // missing host:port
         ] {
-            assert2::assert!(parse_initial_controller(bad).is_err());
+            assert2::assert!(parse_initial_controller(bad, "CONTROLLER").is_err());
         }
     }
 }

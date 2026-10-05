@@ -3,7 +3,7 @@
 //! `Partition.maybeShrinkIsr` does, admits each out-of-sync follower that
 //! Kafka's `Partition.needsExpandIsr` would, and proposes the resulting
 //! `AlterPartition` shrink or expand, stamped with the committed partition
-//! epoch, to the controller leader.
+//! epoch, to the CONTROLLER listener of the active controller.
 //!
 //! Each pass also hands the partition the [`LeaderPolicy`] its metadata image
 //! implies -- `min.insync.replicas`, the lag bound and every replica's
@@ -34,9 +34,8 @@ use self::{
 };
 
 pub(crate) struct Config {
-    pub outbound_client: Arc<crate::network::client::InterBrokerClient>,
-    pub listener_protocol: krabka_security::ListenerProtocol,
-    pub server_name: String,
+    /// How a leader reaches the CONTROLLER listener of the active controller.
+    pub dialer: crate::controller_endpoint::ControllerDialer,
     pub node_id: NodeId,
     pub scan_interval: Time,
     pub partitions: Arc<PartitionRegistry>,
@@ -123,9 +122,7 @@ pub(crate) async fn run(cfg: Config) {
             let link = ControllerLink {
                 controller: &cfg.controller,
                 broker_id: cfg.broker_id,
-                outbound_client: &cfg.outbound_client,
-                listener_protocol: cfg.listener_protocol,
-                server_name: &cfg.server_name,
+                dialer: &cfg.dialer,
             };
             let change = IsrChange {
                 topic: &part.topic,
@@ -199,9 +196,14 @@ mod tests {
         let metrics = crate::metrics::BrokerMetrics::default();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {
-            outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            server_name: "localhost".into(),
+            dialer: crate::controller_endpoint::ControllerDialer {
+                outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(
+                    None, None,
+                )),
+                listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+                server_name: "localhost".into(),
+                quorum_voters: Vec::new(),
+            },
             node_id: NodeId(1),
             scan_interval: hours(1),
             partitions,

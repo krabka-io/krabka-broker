@@ -24,6 +24,23 @@ use crate::{
     handlers::authorized_operations::authorized_operations_bits,
 };
 
+/// Kafka's `TopologyDescriptionStatus` `NOT_STORED` (1): no description is
+/// recorded for the group.
+const TOPOLOGY_DESCRIPTION_STATUS_NOT_STORED: i8 = 1;
+
+/// Kafka's `TopologyDescriptionStatus` `AVAILABLE` (3): the row carries the
+/// description.
+const TOPOLOGY_DESCRIPTION_STATUS_AVAILABLE: i8 = 3;
+
+/// What the request asks a described row to carry beyond the group.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Included {
+    /// KIP-430's `IncludeAuthorizedOperations`.
+    pub(super) authorized_operations: bool,
+    /// KIP-1331's `IncludeTopologyDescription`.
+    pub(super) topology_description: bool,
+}
+
 /// Kafka's message for a group whose topology names a topic the caller
 /// cannot `Describe`.
 const TOPIC_AUTHZ_DENIED_MESSAGE: &str =
@@ -38,7 +55,7 @@ pub(super) async fn describe_group(
     ng: &GroupCoordinator,
     image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
-    include_authorized_operations: bool,
+    included: Included,
     gid: &str,
 ) -> DescribedGroup {
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, gid) {
@@ -79,7 +96,7 @@ pub(super) async fn describe_group(
             ..Default::default()
         };
     }
-    let Ok(view) = rx.await else {
+    let Ok(mut view) = rx.await else {
         return DescribedGroup {
             group_id: gid.to_owned(),
             error_code: codes::UNKNOWN_SERVER_ERROR,
@@ -103,11 +120,24 @@ pub(super) async fn describe_group(
         }
     }
 
+    let description = view.topology_description.take();
     let mut row = render_group(view);
+    // KIP-1331: Kafka's `StreamsGroupTopologyDescriptionManager.attachTopologyDescriptions`
+    // gives a described group the description its plugin holds for the
+    // group's topology epoch, or `NOT_STORED`. Without a plugin nothing is
+    // ever stored. An error row returned above keeps `NOT_REQUESTED`.
+    if included.topology_description {
+        row.topology_description_status = if description.is_some() {
+            TOPOLOGY_DESCRIPTION_STATUS_AVAILABLE
+        } else {
+            TOPOLOGY_DESCRIPTION_STATUS_NOT_STORED
+        };
+        row.topology_description = description.map(|description| description.to_describe());
+    }
     // KIP-430: fill the bitfield of Group operations the caller is
     // authorized for only when the request opted in; otherwise leave the
     // wire-default `i32::MIN` "not set" sentinel `render_group` already set.
-    if include_authorized_operations {
+    if included.authorized_operations {
         row.authorized_operations = authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             image,

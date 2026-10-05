@@ -868,7 +868,7 @@ mod tests {
 
     /// The newest controller checkpoint, in the directory a controller writes.
     fn write_checkpoint(log_dir: &std::path::Path) {
-        let metadata = log_dir.join("__cluster_metadata/@metadata-0");
+        let metadata = log_dir.join("__cluster_metadata-0");
         std::fs::create_dir_all(&metadata).expect("create the metadata dir");
         std::fs::write(
             metadata.join("00000000000000000042-0000000001.checkpoint"),

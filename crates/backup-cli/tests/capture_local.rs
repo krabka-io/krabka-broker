@@ -38,7 +38,7 @@ impl FixtureNode {
         std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
         std::fs::write(rlmm.join("snapshot"), RLMM_BYTES).expect("write the rlmm snapshot");
 
-        let metadata = log_dir.path().join("__cluster_metadata/@metadata-0");
+        let metadata = log_dir.path().join("__cluster_metadata-0");
         std::fs::create_dir_all(&metadata).expect("create the metadata dir");
         std::fs::write(
             metadata.join("00000000000000000009-0000000000.checkpoint"),

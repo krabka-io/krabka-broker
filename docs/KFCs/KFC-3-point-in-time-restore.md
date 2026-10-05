@@ -47,7 +47,7 @@ One command restores; a second one supplies what the archive cannot. `krabka bac
 | `--archive-gcs-bucket BUCKET` | Read from Google Cloud Storage. `--archive-gcs-service-account-path`, `--archive-gcs-endpoint`, and `--archive-gcs-allow-http` refine it. |
 | `--archive-prefix PREFIX` | Key prefix inside the archive, for a bucket that holds more than the tiered tree. It applies to every backend. |
 | `--rlmm-snapshot PATH` | A broker's `<log.dir>/remote-log-metadata/snapshot`. |
-| `--metadata-snapshot PATH` | A controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/`. Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels are restored from it. |
+| `--metadata-snapshot PATH` | A controller `<offset>-<epoch>.checkpoint` from `<metadata.log.dir>/__cluster_metadata-0/`. The metadata log directory is the broker's first log directory unless its `metadata_log_dir` names another one. Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels are restored from it. |
 | `--diskless-wal-capture PATH` | A backup capture's committed diskless-WAL projection, including delete floors and recovery cutoffs. |
 | `--worm-key-id ID`, `--worm-public-key PATH` | A repeatable trusted Ed25519 key pair that enables authenticated restore. |
 | `--worm-expect-head PARTITION_DIR=HEX` | An independently retained classic partition-chain tip or the synthetic `diskless-capture` tip. Every authenticated source needs exact tip coverage. |

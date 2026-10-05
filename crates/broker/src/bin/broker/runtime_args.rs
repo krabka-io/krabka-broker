@@ -327,6 +327,14 @@ pub struct RuntimeArgs {
     pub streams_group_session_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub streams_group_min_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub streams_group_max_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub streams_group_min_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub streams_group_max_heartbeat_interval: Option<Time>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     pub streams_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]

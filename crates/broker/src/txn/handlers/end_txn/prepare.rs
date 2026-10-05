@@ -86,7 +86,9 @@ pub(super) async fn prepare_transaction(
             error = %error,
             "EndTxn: failed to persist PrepareCommit/PrepareAbort"
         );
-        return Err(coordinator.append_error_code(transactional_id).await);
+        return Err(coordinator
+            .append_error_code(transactional_id, &error)
+            .await);
     }
     // The append published a new handle. A caller that already waits on this
     // one sees the durable Prepare state too.

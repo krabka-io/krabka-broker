@@ -1,13 +1,13 @@
 //! The files a format leaves in a log directory.
 //!
-//! Every formatted directory holds `meta.properties.json` and the bootstrap
-//! manifest with its binary record stream. The metadata log directory of a
-//! dynamic KIP-853 format also holds the offset-zero metadata checkpoint. Each
+//! Every formatted directory holds Kafka's `meta.properties`. The metadata log
+//! directory also holds the bootstrap manifest with its binary record stream,
+//! and for a dynamic KIP-853 format the offset-zero metadata checkpoint. Each
 //! writer serializes records the run has already resolved, so the encoding and
 //! the I/O sit together here, apart from the flag handling that decides what
 //! goes in them.
 
-use std::{ffi::OsString, io::Write as _, path::Path};
+use std::{ffi::OsString, io, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use krabka_metadata::MetadataRecord;
@@ -15,17 +15,9 @@ use serde::Serialize;
 use serde_wincode::SerdeCompat;
 use wincode::Serialize as _;
 
-use crate::ids::{ClusterId, DirectoryId};
+use crate::{ids::ClusterId, meta_properties::MetaProperties};
 
 pub(super) const ZERO_CHECKPOINT_NAME: &str = "00000000000000000000-0000000000.checkpoint";
-
-/// The format stamp of `meta.properties.json`. Version 3 stores both ids in
-/// Kafka's 22-character base64 form. The broker refuses any other stamp.
-pub const META_PROPERTIES_VERSION: u64 = 3;
-
-/// The name `meta.properties.json` has while it is written, before the rename
-/// that publishes it.
-pub(super) const META_PROPERTIES_TMP: &str = "meta.properties.json.tmp";
 
 /// The environment variable that makes a run fail after it writes the file of
 /// the given name. It is a test seam: it is how the tests interrupt a run
@@ -54,51 +46,33 @@ impl Fault {
     }
 }
 
-/// The content of `meta.properties.json`.
-#[derive(Serialize)]
-struct MetaPropertiesFile {
-    cluster_id: ClusterId,
-    directory_id: DirectoryId,
-    version: u64,
-}
-
-/// Writes `meta.properties.json`: the marker of a formatted directory, and the
-/// file the broker reads its cluster and directory ids from on every boot.
+/// Writes Kafka's `meta.properties`: the marker of a formatted directory, and
+/// the file the broker reads its cluster, node, and directory ids from on
+/// every boot.
 ///
 /// The file is written under a temporary name, synced, and renamed into
 /// place, as Kafka's `PropertiesUtils.writePropertiesFile` does. A run that
-/// stops partway therefore never leaves a truncated marker.
+/// stops partway therefore never leaves a truncated marker. A failure gets
+/// the message of the `FormatterException` that `Formatter.doFormat` throws.
 #[tracing::instrument(
     level = "debug",
     name = "cli.write_meta_properties",
     skip_all,
-    fields(log_dir = %log_dir.display(), %cluster_id, %directory_id),
+    fields(log_dir = %log_dir.display(), cluster_id = %meta.cluster_id, node_id = meta.node_id),
     err
 )]
 pub(super) fn write_meta_properties(
     log_dir: &Path,
-    cluster_id: ClusterId,
-    directory_id: DirectoryId,
+    meta: &MetaProperties,
     fault: &Fault,
 ) -> Result<(), String> {
-    let meta = MetaPropertiesFile {
-        cluster_id,
-        directory_id,
-        version: META_PROPERTIES_VERSION,
-    };
-    let bytes = serde_json::to_vec_pretty(&meta)
-        .map_err(|e| format!("serialize meta.properties.json: {e}"))?;
-    let tmp = log_dir.join(META_PROPERTIES_TMP);
-    let write = || -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()
-    };
-    write().map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    fault.after(&tmp)?;
-    let path = log_dir.join(super::META_PROPERTIES);
-    std::fs::rename(&tmp, &path).map_err(|e| format!("write {}: {e}", path.display()))?;
-    fault.after(&path)
+    meta.write_observed(log_dir, |path| fault.after(path).map_err(io::Error::other))
+        .map_err(|e| {
+            format!(
+                "Error while writing meta.properties file {}: {e}",
+                log_dir.display()
+            )
+        })
 }
 
 /// Human-readable manifest written to `<log_dir>/bootstrap.json`.
@@ -117,9 +91,10 @@ struct BootstrapManifest {
 }
 
 /// Write the authoritative KIP-630/KIP-853 offset-zero checkpoint for a
-/// dynamically formatted controller.
+/// dynamically formatted controller into
+/// `<metadata_log_dir>/__cluster_metadata-0/`, where Kafka writes it.
 pub(super) fn write_dynamic_checkpoint(
-    log_dir: &Path,
+    metadata_log_dir: &Path,
     cluster_id: ClusterId,
     control_records: &[MetadataRecord],
     metadata_records: &[MetadataRecord],
@@ -131,8 +106,7 @@ pub(super) fn write_dynamic_checkpoint(
     }
     let bytes = krabka_raft::serialize_metadata_snapshot(&image, 0)
         .map_err(|e| format!("serialize offset-zero checkpoint: {e}"))?;
-    let checkpoint_dir =
-        krabka_raft::kraft::checkpoint_dir(&log_dir.join(super::ensemble::CLUSTER_METADATA));
+    let checkpoint_dir = krabka_raft::metadata_partition_dir(metadata_log_dir);
     std::fs::create_dir_all(&checkpoint_dir)
         .map_err(|e| format!("create checkpoint directory: {e}"))?;
     let path = checkpoint_dir.join(ZERO_CHECKPOINT_NAME);

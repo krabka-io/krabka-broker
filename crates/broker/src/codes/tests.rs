@@ -168,6 +168,31 @@ fn from_broker_error_maps_variants_to_wire_codes() {
             FENCED_LEADER_EPOCH, // 74
         ),
         (BrokerError::UnknownLeaderEpoch(2), UNKNOWN_LEADER_EPOCH), // 75
+        // A coordinator write carries the code Kafka's
+        // `CoordinatorOperationExceptionHelper` answers for it.
+        (
+            BrokerError::CoordinatorWriteUncommitted {
+                partition: 0,
+                code: NOT_COORDINATOR,
+            },
+            NOT_COORDINATOR, // 16
+        ),
+        (
+            BrokerError::CoordinatorWriteUncommitted {
+                partition: 0,
+                code: COORDINATOR_NOT_AVAILABLE,
+            },
+            COORDINATOR_NOT_AVAILABLE, // 15
+        ),
+        // So does a `__transaction_state` write, with the code Kafka's
+        // `TransactionStateManager.appendTransactionToLog` answers.
+        (
+            BrokerError::TransactionStateWriteUncommitted {
+                partition: 0,
+                code: COORDINATOR_LOAD_IN_PROGRESS,
+            },
+            COORDINATOR_LOAD_IN_PROGRESS, // 14
+        ),
         // `LocalLog.maybeHandleIOException`: a disk fault is a storage error.
         (
             BrokerError::Log(krabka_log::LogError::Io(std::io::Error::other("EIO"))),

@@ -334,20 +334,20 @@ mod tests {
         );
 
         // 2. JoinGroup (rejoin of the existing member, unchanged subscription):
-        //    success, server-assigned single-member view at group_epoch, self leader.
+        //    success as a follower, with no leader and no member list, at the
+        //    member epoch.
         let join = rpc::classic_join(&handle, "m-classic", "t").await;
-        check!(join.error_code == codes::NONE);
-        check!(join.leader.as_str() == "m-classic");
-        check!(join.member_id.as_str() == "m-classic");
-        // Generation equals the group epoch (read it back from Describe).
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .unwrap();
-        let describe = rx.await.unwrap();
-        assert!(join.generation_id == describe.group_epoch);
+        let member = describe_member(&handle, "m-classic").await;
+        check!(
+            join == crate::coordinator::unified::actor::JoinResult {
+                error_code: codes::NONE,
+                generation_id: member.member_epoch,
+                protocol_type: Some("consumer".into()),
+                protocol_name: Some("range".into()),
+                member_id: "m-classic".into(),
+                ..Default::default()
+            }
+        );
 
         // 3. SyncGroup: returns the translated target assignment for "t".
         let sync = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;

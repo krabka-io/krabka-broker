@@ -14,10 +14,13 @@
 //! [`MetadataSource`], which resolves the topology and creates internal
 //! topics, instead of the consumer `MetadataProvider`.
 //!
-//! Reconciliation needs a connected [`MetadataSource`]. The pure-coordinator
-//! unit tests have no source, so the group stays `NotReady` with empty
-//! assignments. Members there still mint a `member_id` and advance their
-//! epoch, but the actor assigns no tasks.
+//! Reconciliation needs the coordinator's [`MetadataSource`]. The actor reads
+//! it from the coordinator when it wakes, not when it starts: the
+//! `__consumer_offsets` replay spawns the actors of the loaded groups before
+//! the broker connects the source. The pure-coordinator unit tests have no
+//! source, so the group stays `NotReady` with empty assignments. Members there
+//! still mint a `member_id` and advance their epoch, but the actor assigns no
+//! tasks.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -30,6 +33,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod description;
 mod heartbeat;
 mod reconciliation;
 mod records;
@@ -42,6 +46,7 @@ mod streams_group_model;
 #[cfg(test)]
 mod tests;
 
+pub use self::description::{DescriptionPush, PushAnswer};
 use self::{
     heartbeat::{handle_heartbeat, handle_session_tick},
     reconciliation::reconcile,
@@ -50,7 +55,10 @@ use self::{
 };
 use super::{
     config::StreamsGroupConfig,
-    persistence::{StreamsGroupPartitionMetadataValue, StreamsGroupTopologyValue},
+    description::{SolicitationBackoff, StoredDescription, TopologyDescription},
+    persistence::{
+        DescriptionEpochs, StreamsGroupPartitionMetadataValue, StreamsGroupTopologyValue,
+    },
     state::{self, StreamsGroupState},
 };
 use crate::{
@@ -85,6 +93,12 @@ pub enum StreamsGroupActorMessage {
         fence: CommitFence,
         reply: oneshot::Sender<Result<(), i16>>,
     },
+    /// KIP-1331: a member's `StreamsGroupTopologyDescriptionUpdate`, past the
+    /// handler's protocol gate, group `Read` grant and request checks.
+    PushDescription {
+        push: Box<DescriptionPush>,
+        reply: oneshot::Sender<PushAnswer>,
+    },
     Seed(super::super::StreamsGroupSeed),
     Shutdown(oneshot::Sender<()>),
 }
@@ -115,6 +129,9 @@ pub struct StreamsDescribeView {
     pub configured_topology: Option<super::topology::ConfiguredTopology>,
     /// The members, by member id.
     pub members: Vec<StreamsDescribeMember>,
+    /// KIP-1331: the topology description that the plugin holds for the
+    /// group's current topology epoch.
+    pub topology_description: Option<TopologyDescription>,
 }
 
 /// One member of a [`StreamsDescribeView`].
@@ -155,18 +172,10 @@ impl StreamsGroupActorHandle {
         group_id: String,
         config: Arc<StreamsGroupConfig>,
         offsets_log: Arc<dyn OffsetsLog>,
-        metadata_source: Option<Arc<dyn MetadataSource>>,
         coordinator: Arc<super::super::GroupCoordinator>,
     ) -> Self {
         let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
-        let task = tokio::spawn(actor_loop(
-            group_id,
-            config,
-            offsets_log,
-            metadata_source,
-            coordinator,
-            rx,
-        ));
+        let task = tokio::spawn(actor_loop(group_id, config, offsets_log, coordinator, rx));
         Self { tx, _task: task }
     }
 }
@@ -332,6 +341,14 @@ struct ActorState {
     /// When the last target assignment was computed, for Kafka's assignment
     /// interval. `None` until one is computed.
     assignment_timestamp: Option<tokio::time::Instant>,
+    /// KIP-1331: what the topology description plugin holds for the group,
+    /// as the group metadata record persists it.
+    description_epochs: DescriptionEpochs,
+    /// The description that the in-memory plugin holds for the group. It is
+    /// not persisted: the plugin loses it with the broker.
+    description: Option<StoredDescription>,
+    /// The window in which no other member is asked for the description.
+    description_backoff: SolicitationBackoff,
 }
 
 impl ActorState {
@@ -347,34 +364,112 @@ impl ActorState {
             configured_topology: None,
             initial_rebalance_deadline: None,
             assignment_timestamp: None,
+            description_epochs: DescriptionEpochs::default(),
+            description: None,
+            description_backoff: SolicitationBackoff::default(),
         }
     }
+}
+
+/// What woke the actor loop.
+enum Wake {
+    /// A mailbox message.
+    Message(Box<StreamsGroupActorMessage>),
+    /// The session tick, or an armed rebalance timeout that fired.
+    SessionCheck,
+    /// Kafka's initial rebalance delay ended.
+    InitialDelayEnded,
+    /// A new metadata image, or `None` once the source closed its watch.
+    Image(Option<Arc<krabka_metadata::MetadataImage>>),
+}
+
+/// The coordinator's metadata source and its image watch, once the actor
+/// holds them.
+#[derive(Default)]
+struct MetadataLink {
+    source: Option<Arc<dyn MetadataSource>>,
+    images: Option<tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>>,
+}
+
+impl MetadataLink {
+    /// Takes the coordinator's metadata source when the link has none, and
+    /// returns the current image of the source that it took.
+    ///
+    /// The broker connects the source after the `__consumer_offsets` replay
+    /// has spawned the actors of the loaded groups, so an actor can start
+    /// without one. Kafka's coordinator gives every loaded group the metadata
+    /// image, so the loop takes the source before it handles each wake-up.
+    fn attach(
+        &mut self,
+        coordinator: &super::super::GroupCoordinator,
+    ) -> Option<Arc<krabka_metadata::MetadataImage>> {
+        if self.source.is_some() {
+            return None;
+        }
+        let source = coordinator.metadata_source()?;
+        self.images = Some(source.watch_image());
+        let image = source.current_image();
+        self.source = Some(source);
+        Some(image)
+    }
+}
+
+/// The session tick of `config`: the actor looks for expired sessions once
+/// per heartbeat interval.
+fn session_tick(config: &StreamsGroupConfig) -> tokio::time::Interval {
+    let mut tick = tokio::time::interval(config.heartbeat_interval);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick
 }
 
 async fn actor_loop(
     group_id: String,
     default_config: Arc<StreamsGroupConfig>,
     offsets_log: Arc<dyn OffsetsLog>,
-    metadata_source: Option<Arc<dyn MetadataSource>>,
     coordinator: Arc<super::super::GroupCoordinator>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
-    let mut config = resolve_group_config(&default_config, metadata_source.as_ref(), &group_id);
-    let mut metadata_rx = metadata_source.as_ref().map(|source| source.watch_image());
+    let mut metadata = MetadataLink::default();
+    let mut config = metadata.attach(&coordinator).map_or_else(
+        || (*default_config).clone(),
+        |image| resolve_group_config_from_image(&default_config, &image, &group_id),
+    );
     let mut actor = ActorState::new(group_id);
-    let mut tick = tokio::time::interval(config.heartbeat_interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut tick = session_tick(&config);
     loop {
-        tokio::select! {
-            msg = rx.recv() => {
-                let Some(msg) = msg else { break };
+        let wake = tokio::select! {
+            msg = rx.recv() => match msg {
+                Some(msg) => Wake::Message(Box::new(msg)),
+                // Every handle is gone.
+                None => break,
+            },
+            _ = tick.tick() => Wake::SessionCheck,
+            () = wait_for_initial_rebalance_delay(actor.initial_rebalance_deadline) => {
+                Wake::InitialDelayEnded
+            }
+            () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
+                Wake::SessionCheck
+            }
+            image = wait_for_metadata_change(&mut metadata.images) => Wake::Image(image),
+        };
+        if let Some(image) = metadata.attach(&coordinator) {
+            let next =
+                resolve_group_config_from_image(&default_config, &image, &actor.state.group_id);
+            if next != config {
+                config = next;
+                tick = session_tick(&config);
+            }
+        }
+        let metadata_source = metadata.source.as_ref();
+        match wake {
+            Wake::Message(msg) => {
                 let refused = match handle_message(
                     &mut actor,
                     &config,
                     &*offsets_log,
-                    metadata_source.as_ref(),
+                    metadata_source,
                     &coordinator,
-                    msg,
+                    *msg,
                 )
                 .await
                 {
@@ -397,7 +492,7 @@ async fn actor_loop(
                         &mut actor,
                         &config,
                         &*offsets_log,
-                        metadata_source.as_ref(),
+                        metadata_source,
                         &coordinator,
                         msg,
                     )
@@ -412,47 +507,53 @@ async fn actor_loop(
                 refused.send();
                 break;
             }
-            _ = tick.tick() => {
-                if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
+            Wake::SessionCheck => {
+                if handle_session_tick(
+                    &mut actor,
+                    &config,
+                    &*offsets_log,
+                    metadata_source,
+                    &coordinator,
+                )
+                .await
+                .is_err()
+                {
                     break;
                 }
             }
-            () = wait_for_initial_rebalance_delay(actor.initial_rebalance_deadline) => {
+            Wake::InitialDelayEnded => {
                 // Kafka's `computeDelayedTargetAssignment`.
                 actor.initial_rebalance_deadline = None;
                 if actor.state.members.is_empty() || !actor.assignment_pending() {
                     continue;
                 }
-                reconcile(&mut actor, &config, metadata_source.as_ref());
+                reconcile(&mut actor, &config, metadata_source);
                 let pending = snapshot_pending_after_change(&mut actor, &[]);
-                if flush_pending(&actor, pending, &*offsets_log, &coordinator, chrono_now_ms())
-                    .await
-                    .is_err()
+                if flush_pending(
+                    &actor,
+                    pending,
+                    &*offsets_log,
+                    &coordinator,
+                    chrono_now_ms(),
+                )
+                .await
+                .is_err()
                 {
                     break;
                 }
             }
-            () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
-                if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
-                    break;
-                }
-            }
-            image = wait_for_metadata_change(&mut metadata_rx) => {
+            Wake::Image(image) => {
                 let Some(image) = image else {
-                    metadata_rx = None;
+                    metadata.images = None;
                     continue;
                 };
-                let next = resolve_group_config_from_image(
-                    &default_config,
-                    &image,
-                    &actor.state.group_id,
-                );
+                let next =
+                    resolve_group_config_from_image(&default_config, &image, &actor.state.group_id);
                 if next != config {
                     config = next;
-                    tick = tokio::time::interval(config.heartbeat_interval);
-                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    tick = session_tick(&config);
                     actor.state.dirty = true;
-                    reconcile(&mut actor, &config, metadata_source.as_ref());
+                    reconcile(&mut actor, &config, metadata_source);
                     let pending = snapshot_pending_after_change(&mut actor, &[]);
                     if flush_pending(
                         &actor,
@@ -577,6 +678,14 @@ async fn handle_message(
                         &request,
                         version,
                     );
+                    description::maybe_request_description(
+                        actor,
+                        config,
+                        &request,
+                        version,
+                        &mut response,
+                        std::time::Instant::now(),
+                    );
                     // Kafka answers the internal topics to create only with a
                     // response that the group accepted.
                     let creatable_topics = if response.error_code == codes::NONE {
@@ -596,7 +705,7 @@ async fn handle_message(
                         "streams-group actor exiting after log-write failure",
                     );
                     let _ = reply.send(StreamsHeartbeatResult {
-                        response: response::error_resp(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+                        response: response::error_resp(write_failure_code(&e), None),
                         creatable_topics: Vec::new(),
                     });
                     return Step::Stop;
@@ -604,11 +713,29 @@ async fn handle_message(
             }
         }
         StreamsGroupActorMessage::Describe { reply } => {
-            let _ = reply.send(build_describe(
+            let mut view = build_describe(
                 &actor.state,
                 actor.topology.as_ref(),
                 actor.ready_topology(),
-            ));
+            );
+            view.topology_description = description::stored_description(actor);
+            let _ = reply.send(view);
+        }
+        StreamsGroupActorMessage::PushDescription { push, reply } => {
+            match description::handle_push(actor, offsets_log, coordinator, *push).await {
+                Ok(answer) => {
+                    let _ = reply.send(answer);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = %actor.state.group_id,
+                        error = %e,
+                        "streams-group actor exiting after log-write failure",
+                    );
+                    let _ = reply.send((write_failure_code(&e), None));
+                    return Step::Stop;
+                }
+            }
         }
         StreamsGroupActorMessage::ValidateCommit {
             member_id,
@@ -634,15 +761,19 @@ async fn handle_message(
     Step::Continue
 }
 
-fn resolve_group_config(
-    defaults: &StreamsGroupConfig,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
-    group_id: &str,
-) -> StreamsGroupConfig {
-    metadata_source.map_or_else(
-        || defaults.clone(),
-        |source| resolve_group_config_from_image(defaults, &source.current_image(), group_id),
-    )
+/// The error code of a heartbeat or a description push whose write failed.
+///
+/// A write that is not committed carries the answer of Kafka's
+/// `CoordinatorOperationExceptionHelper` for it: `NOT_COORDINATOR` after a
+/// lost leadership, so that the member looks the coordinator up again, and
+/// `COORDINATOR_NOT_AVAILABLE` after a timeout. Any other failure answers
+/// `COORDINATOR_LOAD_IN_PROGRESS`: the member retries here, and a new actor
+/// serves the retry from the last committed state of the group.
+fn write_failure_code(error: &crate::error::BrokerError) -> i16 {
+    match error {
+        crate::error::BrokerError::CoordinatorWriteUncommitted { code, .. } => *code,
+        _ => codes::COORDINATOR_LOAD_IN_PROGRESS,
+    }
 }
 
 /// The streams config of `group_id`: the group config overrides in `image`

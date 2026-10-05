@@ -54,6 +54,18 @@ pub(crate) fn build_engine(
     build_engine_with_snapshot_interval(me, ids, cluster_id, election_timeout, net, 0)
 }
 
+/// The metadata log configuration of a simulated engine: Kafka's segment
+/// defaults, no KIP-835 no-op records, so the simulated logs hold only the
+/// records the scenario writes, and no size allowance, so every cleaning keeps
+/// only the newest snapshot and moves the log start up to it.
+pub(crate) fn metadata_log() -> krabka_raft::MetadataLogConfig {
+    krabka_raft::MetadataLogConfig {
+        max_retention_size: Some(krabka_units::prelude::bytes(0)),
+        max_idle_interval: millis(0),
+        ..krabka_raft::MetadataLogConfig::default()
+    }
+}
+
 /// Works like [`build_engine`], but with a caller-chosen
 /// `snapshot_interval_records`, where `0` disables snapshots. The snapshot
 /// catch-up acceptance uses a small interval, so the leader snapshots and prunes
@@ -67,7 +79,8 @@ pub(crate) fn build_engine_with_snapshot_interval(
     snapshot_interval_records: u64,
 ) -> (KraftController, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path()).expect("open log");
+    let log =
+        KraftLog::open(dir.path(), &krabka_raft::MetadataLogConfig::default()).expect("open log");
     let ctrl = KraftController::spawn(
         KraftConfig {
             me,
@@ -84,6 +97,7 @@ pub(crate) fn build_engine_with_snapshot_interval(
             max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
             max_snapshot_interval: millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
+            metadata_log: metadata_log(),
         },
         log,
         dir.path().to_path_buf(),

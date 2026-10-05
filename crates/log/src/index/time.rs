@@ -151,8 +151,9 @@ impl TimeIndex {
         self.entries.last().copied()
     }
 
+    /// The number of entries the index holds, which decides when the
+    /// segment is full under `segment.index.bytes`.
     #[must_use]
-    #[cfg(test)]
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }

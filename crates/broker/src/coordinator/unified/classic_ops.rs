@@ -24,7 +24,7 @@ pub(super) use self::{
     heartbeat::handle_heartbeat,
     join::{
         CompleteError, Completion, JoinAction, JoinContext, build_join_result, handle_join,
-        try_complete,
+        requires_known_member_id, try_complete,
     },
     leave::handle_leave,
     offset_validation::{refresh_committer_session, validate_commit, validate_offset_commit},

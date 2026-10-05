@@ -249,6 +249,26 @@ impl RuntimeFileConfig {
             streams_group_heartbeat_interval,
             cfg.streams_group.heartbeat_interval
         );
+        set_runtime_duration!(
+            runtime,
+            streams_group_min_session_timeout,
+            cfg.streams_group.min_session_timeout
+        );
+        set_runtime_duration!(
+            runtime,
+            streams_group_max_session_timeout,
+            cfg.streams_group.max_session_timeout
+        );
+        set_runtime_duration!(
+            runtime,
+            streams_group_min_heartbeat_interval,
+            cfg.streams_group.min_heartbeat_interval
+        );
+        set_runtime_duration!(
+            runtime,
+            streams_group_max_heartbeat_interval,
+            cfg.streams_group.max_heartbeat_interval
+        );
         set_runtime_usize!(runtime, streams_group_max_size, cfg.streams_group.max_size);
         if let Some(value) = runtime.streams_group_num_standby_replicas {
             if value < 0 {
@@ -635,6 +655,63 @@ mod tests {
             expected.push((row, want));
         }
         assert!(actual == expected);
+    }
+
+    /// Kafka's `group.streams.min.session.timeout.ms` and its three siblings
+    /// move the bounds, and the session timeout and the heartbeat interval
+    /// must stay inside them, as `GroupCoordinatorConfig` requires.
+    #[test]
+    fn streams_group_bounds_move_and_hold_the_timings() {
+        type Timings = (Duration, Duration, Duration, Duration, Duration, Duration);
+        let secs = Duration::from_secs;
+        let rows: [(&str, &str, Result<Timings, &str>); 4] = [
+            (
+                "the defaults",
+                "",
+                Ok((secs(45), secs(45), secs(60), secs(5), secs(5), secs(15))),
+            ),
+            (
+                "session timeout lowered with its minimum",
+                "streams_group_min_session_timeout = \"10s\"\n\
+                 streams_group_session_timeout = \"10s\"",
+                Ok((secs(10), secs(10), secs(60), secs(5), secs(5), secs(15))),
+            ),
+            (
+                "heartbeat bounds widened",
+                "streams_group_min_heartbeat_interval = \"1s\"\n\
+                 streams_group_max_heartbeat_interval = \"30s\"\n\
+                 streams_group_heartbeat_interval = \"20s\"",
+                Ok((secs(45), secs(45), secs(60), secs(20), secs(1), secs(30))),
+            ),
+            (
+                "session timeout lowered alone",
+                "streams_group_session_timeout = \"10s\"",
+                Err(
+                    "invalid config: invalid runtime configuration: streams group session \
+                     timeout is outside its bounds",
+                ),
+            ),
+        ];
+        for (row, body, want) in rows {
+            let file: crate::file_config::FileConfig =
+                toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| {
+                    let streams = &cfg.streams_group;
+                    (
+                        streams.session_timeout,
+                        streams.min_session_timeout,
+                        streams.max_session_timeout,
+                        streams.heartbeat_interval,
+                        streams.min_heartbeat_interval,
+                        streams.max_heartbeat_interval,
+                    )
+                })
+                .map_err(|error| error.to_string());
+            assert!(applied == want.map_err(str::to_owned), "{row}");
+        }
     }
 
     /// Kafka trunk's `group.streams.rack.aware.assignment.tags`: the TOML

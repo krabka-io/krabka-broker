@@ -61,11 +61,13 @@ impl Controller {
             )
             .map_err(RaftError::Startup)?;
 
-        // First-boot orchestration validates mode against on-disk log state. The
-        // metadata log lives directly under `log_dir` for the KraftLog engine.
-        let data_dir = config.log_dir.clone();
+        // First-boot orchestration validates mode against on-disk log state.
+        // The metadata log, its checkpoints and the quorum-state file all live
+        // in the `__cluster_metadata-0` directory under `log_dir`, as Kafka's
+        // do under `metadata.log.dir`.
+        let data_dir = crate::config::metadata_partition_dir(&config.log_dir);
         let log_exists = metadata_log_nonempty(&data_dir);
-        let snapshot_voters = load_latest_checkpoint(&crate::kraft::checkpoint_dir(&data_dir))
+        let snapshot_voters = load_latest_checkpoint(&data_dir)
             .and_then(|(_, bytes)| crate::snapshot::SnapshotReader::read(&bytes).ok())
             .and_then(|snapshot| snapshot.control_state.map(|state| state.voters))
             .unwrap_or_default();
@@ -74,14 +76,11 @@ impl Controller {
         } else {
             config.initial_voters.clone()
         };
-        let bootstrap_mode = if config.bootstrap_mode == BootstrapMode::Bootstrap
-            && voters.is_empty()
-            && config.auto_join
-        {
-            BootstrapMode::Join
-        } else {
-            config.bootstrap_mode
-        };
+        let bootstrap_mode = effective_bootstrap_mode(
+            config.bootstrap_mode,
+            voters.is_empty(),
+            config.auto_join || !config.bootstrap_servers.is_empty(),
+        );
         match (bootstrap_mode, log_exists) {
             (BootstrapMode::Bootstrap, false) => {
                 if voters.is_empty() {
@@ -144,6 +143,7 @@ impl Controller {
             config.max_bytes_between_snapshots,
             config.max_snapshot_interval,
             metadata_snapshot_fetch_max,
+            config.metadata_log,
         )?;
 
         // Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws
@@ -184,7 +184,7 @@ impl Controller {
             ),
         ));
         let (fatal_tx, fatal) = watch::channel(None);
-        tokio::spawn(stop_on_unsupported_feature_level(
+        tokio::spawn(stop_on_fatal_fault(
             engine.clone(),
             shutdown.clone(),
             fatal_tx,
@@ -215,40 +215,81 @@ impl Controller {
     }
 }
 
-/// Stops the controller when it replays a feature level that it does not
-/// support, as Kafka's fatal fault on a `FeatureControlManager` replay
-/// exception does. The engine publishes each image it applies, so a node that
-/// follows a leader which finalized a level above its own range sees it here
-/// and stops serving, and never runs at a level it did not advertise.
+/// The mode a node starts in once it knows whether it has initial voters.
 ///
-/// The refusal goes out on `fatal` first, as [`ControllerHandle::watch_fatal`]
+/// A fresh node with no voters, neither configured nor in its bootstrap
+/// checkpoint, is a controller formatted with `--no-initial-controllers`.
+/// Kafka starts it as an observer that finds the leader through
+/// `controller.quorum.bootstrap.servers`. Auto-join or `kafka-metadata-quorum
+/// add-controller` makes it a voter later. So `Bootstrap` becomes `Join` for a
+/// node that can reach the quorum: it has a bootstrap server, or it auto-joins,
+/// which needs one. A node with neither stays in `Bootstrap`, which refuses
+/// the empty voter set.
+fn effective_bootstrap_mode(
+    requested: BootstrapMode,
+    no_initial_voters: bool,
+    reaches_quorum: bool,
+) -> BootstrapMode {
+    if requested == BootstrapMode::Bootstrap && no_initial_voters && reaches_quorum {
+        BootstrapMode::Join
+    } else {
+        requested
+    }
+}
+
+/// Stops the controller over a fatal fault, as Kafka's fatal fault handler
+/// does. Two faults are fatal:
+///
+/// - The replay of a feature level that the controller does not support, as
+///   Kafka's fatal fault on a `FeatureControlManager` replay exception. The
+///   engine publishes each image it applies, so a node that follows a leader
+///   which finalized a level above its own range sees it here and stops
+///   serving, and never runs at a level it did not advertise.
+/// - The failure of the metadata log directory: a write to it that returned
+///   an I/O error. Kafka shuts the node down when its metadata log directory
+///   fails (KIP-858), and the engine has already stopped taking part in the
+///   quorum.
+///
+/// The fault goes out on `fatal` first, as [`ControllerHandle::watch_fatal`]
 /// documents, so that a process hosting the controller can halt over it, as
 /// Kafka's `ProcessTerminatingFaultHandler` does. It is in place before any
 /// later submit can fail with [`RaftError::Shutdown`].
-async fn stop_on_unsupported_feature_level(
+async fn stop_on_fatal_fault(
     engine: KraftController,
     shutdown: CancellationToken,
     fatal: watch::Sender<Option<String>>,
     unstable: UnstableFeatureVersions,
 ) {
     let mut images = engine.watch_image();
+    let mut storage_faults = engine.watch_storage_fault();
     loop {
-        tokio::select! {
+        let (refusal, engine_stopped) = tokio::select! {
             () = shutdown.cancelled() => return,
-            changed = images.changed() => {
-                if changed.is_err() {
-                    return;
-                }
-            }
-        }
-        let refusal = unsupported_feature_level(&images.borrow_and_update(), unstable);
+            changed = images.changed() => match changed {
+                Ok(()) => (
+                    unsupported_feature_level(&images.borrow_and_update(), unstable),
+                    false,
+                ),
+                Err(_) => (None, true),
+            },
+            changed = storage_faults.changed() => (None, changed.is_err()),
+        };
         if let Some(refusal) = refusal {
             tracing::error!(%refusal, "controller stopping: it replayed an unsupported feature level");
             fatal.send_replace(Some(refusal));
-            shutdown.cancel();
-            engine.shutdown().await;
+        } else if let Some(fault) = storage_faults.borrow().clone() {
+            // The engine publishes the failure and then stops, so the fault
+            // can arrive together with the end of the image channel.
+            tracing::error!(%fault, "controller stopping: its metadata log directory failed");
+            fatal.send_replace(Some(fault));
+        } else if engine_stopped {
             return;
+        } else {
+            continue;
         }
+        shutdown.cancel();
+        engine.shutdown().await;
+        return;
     }
 }
 
@@ -289,27 +330,29 @@ fn listener_address(
     }
 }
 
-/// True when the metadata log under `dir` already holds durable raft state (a
-/// previously-running node). Detects either a quorum-state file or any log
-/// segment, indicating a node that has persisted state.
+/// True when the metadata partition directory `dir` already holds durable
+/// raft state, which a node that ran before leaves. A quorum-state file or a
+/// log segment that holds bytes is such state.
 ///
-/// `dir` is the controller data dir (`<log_dir>/__cluster_metadata`). The
-/// broker binary's `detect_bootstrap_mode` calls this so its Bootstrap/Rejoin
-/// choice can never disagree with [`Controller::start_with_listener`]'s mode
-/// validation — a node killed mid-election (segment dir created but no
-/// `quorum-state` yet) reads as un-formatted and re-Bootstraps rather than
-/// dying with "Rejoin requires non-empty raft log".
+/// `dir` is the metadata partition directory,
+/// `<metadata.log.dir>/__cluster_metadata-0`. The broker binary's
+/// `detect_bootstrap_mode` calls this so its Bootstrap/Rejoin choice can never
+/// disagree with [`Controller::start_with_listener`]'s mode validation.
+/// `KraftController::open` creates an empty active segment before the first
+/// election, so an empty segment is not state: a node killed mid-election,
+/// with that segment but no `quorum-state` yet, reads as un-formatted and
+/// re-Bootstraps rather than dying with "Rejoin requires non-empty raft log".
 #[must_use]
 pub fn metadata_log_nonempty(dir: &std::path::Path) -> bool {
     let qs = dir.join("quorum-state");
     if qs.exists() {
         return true;
     }
-    // Any `*.log` segment indicates prior state.
     std::fs::read_dir(dir).is_ok_and(|entries| {
-        entries
-            .flatten()
-            .any(|e| e.path().extension().is_some_and(|ext| ext == "log"))
+        entries.flatten().any(|e| {
+            e.path().extension().is_some_and(|ext| ext == "log")
+                && e.metadata().is_ok_and(|metadata| metadata.len() > 0)
+        })
     })
 }
 
@@ -338,6 +381,11 @@ mod tests {
                 true,
             ),
             (
+                "empty log segment",
+                Some(("00000000000000000000.log", b"".as_slice())),
+                false,
+            ),
+            (
                 "non-log extension",
                 Some(("00000000000000000000.txt", b"log".as_slice())),
                 false,
@@ -349,6 +397,54 @@ mod tests {
             }
             assert2::assert!(metadata_log_nonempty(dir.path()) == expected);
         }
+    }
+
+    /// A write to the metadata log directory that fails stops the controller
+    /// with a fatal fault, as Kafka shuts a node down when its metadata log
+    /// directory fails (KIP-858).
+    #[tokio::test]
+    async fn a_failed_metadata_log_directory_stops_the_controller() {
+        let dir = TempDir::new().unwrap();
+        let ctrl = Controller::start(ControllerConfig::for_tests(
+            NodeId(1),
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start");
+        wait_for_leader(&ctrl).await;
+        // The committed offset is written to this file on every advance. A
+        // directory in its place makes the next write fail with an I/O error.
+        let high_watermark = crate::metadata_partition_dir(dir.path()).join("high-watermark");
+        let _ = std::fs::remove_file(&high_watermark);
+        std::fs::create_dir(&high_watermark).unwrap();
+
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ctrl.submit_change(vec![krabka_metadata::MetadataRecord::V1Topic(
+                krabka_metadata::TopicRecord {
+                    name: "after-the-failure".into(),
+                    topic_id: Uuid::new_v4(),
+                    partitions: 1,
+                    replication_factor: 1,
+                },
+            )]),
+        )
+        .await;
+        let mut fatal = ctrl.watch_fatal();
+        let fault = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            fatal.wait_for(Option::is_some),
+        )
+        .await
+        .expect("the controller publishes a fatal fault")
+        .expect("the fault channel stays open until the fault")
+        .clone();
+
+        assert2::check!(fault.is_some_and(|fault| fault.starts_with(&format!(
+            "the metadata log directory {} has failed: ",
+            dir.path().display()
+        ))));
+        ctrl.shutdown().await;
     }
 
     #[tokio::test]
@@ -434,6 +530,52 @@ mod tests {
         let ctrl = Controller::start(cfg)
             .await
             .expect("Bootstrap with empty voters and auto_join should fall back to Join");
+        ctrl.shutdown().await;
+    }
+
+    /// Only a fresh node with no voters and a way to reach the quorum swaps
+    /// `Bootstrap` for `Join`; every other request stands.
+    #[test]
+    fn a_voterless_node_that_reaches_the_quorum_joins_it() {
+        use BootstrapMode::{Bootstrap, Join, Rejoin};
+        // (requested, no initial voters, reaches the quorum, effective)
+        let cases = [
+            (Bootstrap, true, true, Join),
+            (Bootstrap, true, false, Bootstrap),
+            (Bootstrap, false, true, Bootstrap),
+            (Bootstrap, false, false, Bootstrap),
+            (Join, true, true, Join),
+            (Join, false, false, Join),
+            (Rejoin, true, true, Rejoin),
+            (Rejoin, false, false, Rejoin),
+        ];
+        let effective: Vec<_> = cases
+            .iter()
+            .map(|&(requested, no_voters, reaches, _)| {
+                effective_bootstrap_mode(requested, no_voters, reaches)
+            })
+            .collect();
+        let expected: Vec<_> = cases.iter().map(|&(.., mode)| mode).collect();
+        assert2::assert!(effective == expected);
+    }
+
+    /// A controller formatted with `--no-initial-controllers` and pointed at
+    /// the quorum through bootstrap servers starts as an observer, as Kafka's
+    /// does, rather than refusing its empty voter set.
+    #[tokio::test]
+    async fn bootstrap_with_empty_voters_and_bootstrap_servers_falls_back_to_join() {
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Bootstrap,
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            auto_join: false,
+            bootstrap_servers: vec!["127.0.0.1:1".to_owned()],
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+        let ctrl = Controller::start(cfg)
+            .await
+            .expect("a voterless controller with bootstrap servers starts as an observer");
+        assert2::assert!(ctrl.watch_leader().borrow().is_none());
         ctrl.shutdown().await;
     }
 

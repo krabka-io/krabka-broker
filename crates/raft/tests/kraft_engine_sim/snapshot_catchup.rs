@@ -12,7 +12,7 @@ use krabka_protocol::{
     Decode, owned::fetch_snapshot_response::FetchSnapshotResponse, records::RecordBatch,
 };
 use krabka_raft::kraft::{
-    NodeId, PeerSender, checkpoint_dir,
+    NodeId, PeerSender,
     transport::{api_key, wire},
 };
 
@@ -28,7 +28,7 @@ use crate::{
 /// checkpoint directory is also the metadata log's own segment directory, so
 /// the extension filter is what separates checkpoints from `.log` / `.index`.
 fn checkpoint_names(dir: &std::path::Path) -> BTreeSet<String> {
-    std::fs::read_dir(checkpoint_dir(dir))
+    std::fs::read_dir(dir)
         .expect("read checkpoint dir")
         .flatten()
         .filter(|entry| {
@@ -394,7 +394,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     // batches and drops a trailing fragment, so a chunk ending mid-batch would
     // arrive empty. What this test needs is a transfer left open across the
     // roll, not a particular chunk size.
-    let checkpoint_file = checkpoint_dir(&leader_dir).join(
+    let checkpoint_file = leader_dir.join(
         before_roll
             .iter()
             .next_back()

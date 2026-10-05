@@ -45,6 +45,7 @@ ALLOWED = {
     "tools/creusot/build-layer.sh": "the cmd of the //tools/creusot:installed_toolchain_tar genrule; it runs inside a Bazel action",
     "tools/creusot/install-creusot.sh": "the proof builder image's entrypoint; it runs inside that container",
     "tools/creusot/prove.sh": "the proof image's entrypoint; it runs inside that container",
+    "tools/kafkatest/krabka.py": "the ducktape KafkaService adapter `aspect kafka-system-tests` installs into Apache Kafka's kafkatest package; it runs inside ducktape in Kafka's ducker-ak driver container",
     # The cluster benchmark harness. Every one of these drives a live
     # Kubernetes cluster or a live cloud project through kubectl, helm,
     # terraform, ansible or ssh. An AXL task cannot go there: the Aspect CLI is

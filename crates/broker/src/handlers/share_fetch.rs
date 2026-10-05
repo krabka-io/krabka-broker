@@ -49,6 +49,7 @@ mod records;
 mod request;
 mod resolve;
 mod response;
+mod tiered;
 
 #[cfg(test)]
 mod ack_validation_tests;

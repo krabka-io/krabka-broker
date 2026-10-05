@@ -208,16 +208,22 @@ async fn a_new_term_refuses_the_generation_of_the_old_term() {
         .finished()
         .await;
 
-    let leaders = coordinator.leader_partitions.read().await;
-    let generation = TxnCoordinator::require_loaded(&leaders, P0).expect("loaded");
-    drop(leaders);
+    let generation = coordinator
+        .loaded_term(P0)
+        .await
+        .expect("loaded")
+        .generation;
     let loads = coordinator
         .refresh_leader_partitions(&image(NodeId(1), 1))
         .await;
     loads.finished().await;
+    let newer = coordinator
+        .loaded_term(P0)
+        .await
+        .expect("loaded again")
+        .generation;
     let leaders = coordinator.leader_partitions.read().await;
     check!(TxnCoordinator::require_generation(&leaders, P0, generation).is_err());
-    let newer = TxnCoordinator::require_loaded(&leaders, P0).expect("loaded again");
     check!(TxnCoordinator::require_generation(&leaders, P0, newer).is_ok());
 }
 

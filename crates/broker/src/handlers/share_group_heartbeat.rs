@@ -128,6 +128,7 @@ pub(crate) async fn handle(
 
         ng.mark_share(&req.group_id);
         let handle = ng.get_or_create_share(&req.group_id);
+        let group_id = req.group_id.clone();
         let (tx, rx) = oneshot::channel();
         if handle
             .tx
@@ -147,7 +148,7 @@ pub(crate) async fn handle(
         }
         let resp = rx
             .await
-            .unwrap_or_else(|_| error(codes::UNKNOWN_SERVER_ERROR));
+            .unwrap_or_else(|_| error(stopped_actor_code(broker, &group_id)));
         crate::handlers::encode_response(&resp, version)
     }
 }
@@ -265,6 +266,21 @@ fn error(code: i16) -> ShareGroupHeartbeatResponse {
         error_code: code,
         ..Default::default()
     }
+}
+
+/// The code of a heartbeat that the group's actor dropped unanswered.
+///
+/// The actor stops when this broker unloads the group's offsets partition,
+/// and when a write fails, and the heartbeats still in its mailbox stop with
+/// it. Kafka fails an operation on a shard that unloads with
+/// `NOT_COORDINATOR`, so the routing check runs again: it answers
+/// `NOT_COORDINATOR` once another broker leads the partition. A broker that
+/// still serves the group answers `COORDINATOR_NOT_AVAILABLE`, which the
+/// client retries, and the retry starts a new actor from the committed state
+/// of the group.
+fn stopped_actor_code(broker: &Broker, group_id: &str) -> i16 {
+    crate::handlers::group_coordinator_error(broker, group_id)
+        .unwrap_or(codes::COORDINATOR_NOT_AVAILABLE)
 }
 
 #[cfg(test)]

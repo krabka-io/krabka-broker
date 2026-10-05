@@ -1,26 +1,32 @@
 //! `krabka format` subcommand.
 //!
 //! Formats every log directory of a node, as `kafka-storage format` does:
-//! each directory gets the same cluster id and its own directory id. The
-//! first `--log-dir` is the metadata log directory, the counterpart of Kafka's
-//! `metadata.log.dir`, which defaults to the first entry of `log.dirs`.
+//! each directory gets the same cluster id and its own directory id. The set
+//! is `--metadata-log-dir`, the counterpart of Kafka's `metadata.log.dir`,
+//! and every `--log-dir`, the entries of Kafka's `log.dirs`. Without
+//! `--metadata-log-dir`, the first `--log-dir` is the metadata log directory,
+//! as `metadata.log.dir` defaults to the first entry of `log.dirs`.
 //!
 //! ## Output
 //!
 //! Non-Raft metadata is written as a bootstrap stream for the broker to
-//! pre-load. Dynamic KIP-853 modes additionally write the authoritative
-//! offset-zero metadata checkpoint. Each directory receives:
+//! pre-load. Dynamic KIP-853 modes also write the authoritative offset-zero
+//! metadata checkpoint. Only the metadata log directory receives them. Kafka
+//! trunk also writes its bootstrap snapshot only into a metadata directory,
+//! and the broker reads the bootstrap records only from there:
 //!
 //! - `bootstrap.json` — a human-readable manifest with the cluster id and a
 //!   base64'd `serde_wincode` blob per metadata record.
 //! - `bootstrap.records.bin` — the same records concatenated as
 //!   length-prefixed `serde_wincode<SerdeCompat<MetadataRecord>>` payloads, so
 //!   the broker can stream them without touching JSON.
-//! - `meta.properties.json` — the cluster and directory ids, written last.
+//! - `__cluster_metadata-0/00000000000000000000-0000000000.checkpoint` — the
+//!   KIP-630/KIP-853 bootstrap snapshot for dynamic membership, for a dynamic
+//!   format only. The path is Kafka's.
 //!
-//! The metadata log directory of a dynamic format also receives
-//! `__cluster_metadata/@metadata-0/00000000000000000000-0000000000.checkpoint`,
-//! the KIP-630/KIP-853 bootstrap snapshot for dynamic membership.
+//! Every directory receives Kafka's `meta.properties`, with the cluster id,
+//! the node id, and the directory's own id, written last. A data directory
+//! receives nothing else.
 //!
 //! ## Exit codes
 //!
@@ -36,7 +42,7 @@
 //! | 4 | A write failed, or the quorum flags name an invalid voter set. |
 //! | 5 | A `--feature`, `--release-version`, or quorum-mode combination is invalid. |
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use krabka_metadata::{
     KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
@@ -55,9 +61,9 @@ mod scram;
 mod tests;
 
 pub use self::{
-    args::{FormatArgs, ScramSpec},
+    args::{FormatArgs, ScramSpec, parse_node_id},
     features::LATEST_PRODUCTION_METADATA_VERSION,
-    output::{FAIL_AFTER_ENV, META_PROPERTIES_VERSION},
+    output::FAIL_AFTER_ENV,
 };
 use self::{
     ensemble::{Ensemble, SurveyError, remove_partial_output},
@@ -65,11 +71,10 @@ use self::{
     output::{Fault, write_bootstrap_files, write_dynamic_checkpoint, write_meta_properties},
     quorum::{build_initial_voters, is_dynamic_format},
 };
-use crate::ids::{ClusterId, DirectoryId};
-
-/// The file a formatted directory is recognised by: the broker reads the
-/// cluster and directory ids back out of it on every boot.
-const META_PROPERTIES: &str = "meta.properties.json";
+use crate::{
+    ids::{ClusterId, DirectoryId},
+    meta_properties::MetaProperties,
+};
 
 /// Exit codes. The table in the module documentation gives the cause of each.
 const EXIT_OK: i32 = 0;
@@ -78,7 +83,8 @@ const EXIT_DIRTY_LOG_DIR: i32 = 3;
 const EXIT_BOOTSTRAP_FAIL: i32 = 4;
 const EXIT_INVALID_FEATURE: i32 = 5;
 
-/// Formats `args.log_dirs`, returning the process exit code.
+/// Formats the metadata log directory and `args.log_dirs`, returning the
+/// process exit code.
 ///
 /// Every failure a caller can cause -- an unwritable directory, a malformed
 /// `--add-scram` spec, an unknown feature -- is reported on stderr and returned
@@ -98,8 +104,8 @@ pub async fn run(args: FormatArgs) -> i32 {
 // (purely fs + crypto) but a real raft-log bootstrap would await tokio I/O.
 // The body yields an `i32` (not a future), so `#[instrument]` is safe here
 // w.r.t. `clippy::async_yields_async`.
-/// Formats `args.log_dirs` with `extra` seeded alongside the records the flags
-/// produce, returning the process exit code.
+/// Formats the metadata log directory and `args.log_dirs` with `extra` seeded
+/// alongside the records the flags produce, returning the process exit code.
 ///
 /// A cluster restored from tiered-storage archives has to come up with its
 /// topics already present, so the restore tool hands the topic and partition
@@ -132,6 +138,7 @@ pub async fn run(args: FormatArgs) -> i32 {
     skip_all,
     fields(
         log_dirs = ?args.log_dirs,
+        metadata_log_dir = ?args.metadata_log_dir,
         standalone = args.standalone,
         extra_records = extra.len(),
     )
@@ -160,19 +167,22 @@ fn krabka(code: i32, message: impl std::fmt::Display) -> Failure {
 /// as they were.
 struct Plan {
     cluster_id: ClusterId,
+    /// `--node-id`, as the `int` that `meta.properties` records.
+    node_id: i32,
     metadata_version: String,
     /// The directories to write, the metadata log directory first when it is
     /// one of them.
     targets: Vec<Target>,
     /// The formatted directories `--ignore-formatted` skips.
     skipped: Vec<PathBuf>,
-    /// The directories whose `meta.properties.json` does not read.
+    /// The directories whose `meta.properties` does not read.
     errors: Vec<PathBuf>,
     raft_control_records: Vec<MetadataRecord>,
     records: Vec<MetadataRecord>,
 }
 
 /// One directory to format.
+#[derive(Debug, PartialEq, Eq)]
 struct Target {
     dir: PathBuf,
     kind: DirectoryKind,
@@ -180,7 +190,8 @@ struct Target {
 }
 
 /// Kafka's `Formatter.DirectoryType`: what a directory holds, which decides
-/// whether it gets the checkpoint and how the run describes it.
+/// whether it gets the bootstrap files and the checkpoint, and how the run
+/// describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DirectoryKind {
     Data,
@@ -200,6 +211,13 @@ impl DirectoryKind {
         }
     }
 
+    /// Kafka's `DirectoryType.isMetadataDirectory`: the directory gets the
+    /// bootstrap files.
+    fn is_metadata(self) -> bool {
+        self != Self::Data
+    }
+
+    /// The directory also gets the offset-zero checkpoint.
     fn is_dynamic_metadata(self) -> bool {
         matches!(self, Self::DynamicMetadata | Self::DynamicMetadataVoter)
     }
@@ -230,10 +248,19 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     // reconciled with the quorum flags.
     let dynamic_format = is_dynamic_format(&args).map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
 
+    // `meta.properties` holds the node id as Kafka's `int`. `--node-id`
+    // parses only that range, so this refuses nothing that clap accepted.
+    let node_id = i32::try_from(args.node_id.0).map_err(|_| {
+        krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            "You must specify a valid non-negative node ID.",
+        )
+    })?;
+
     // KIP-853: this node's stable directory id for the metadata log
-    // directory. The broker reads it back from `meta.properties.json` on
-    // every boot; it is the identity component of every `Voter` this node
-    // ever appears as.
+    // directory. The broker reads it back from `meta.properties` on every
+    // boot; it is the identity component of every `Voter` this node ever
+    // appears as.
     let generated_directory_id = args.directory_id.unwrap_or_else(DirectoryId::random);
     let initial_voters = build_initial_voters(&args, generated_directory_id)
         .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
@@ -242,7 +269,7 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     } else {
         DirectoryId(
             initial_voters
-                .get(args.node_id.expect("validated initial controller node id"))
+                .get(args.node_id)
                 .expect("validated local initial controller")
                 .directory_id,
         )
@@ -282,14 +309,10 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
             .map(MetadataRecord::V1AccessControlEntry),
     );
 
-    // Kafka keeps the directories in a set, so a path named twice is
-    // formatted once.
-    let mut log_dirs: Vec<PathBuf> = Vec::with_capacity(args.log_dirs.len());
-    for dir in args.log_dirs {
-        if !log_dirs.contains(&dir) {
-            log_dirs.push(dir);
-        }
-    }
+    let metadata_log_dir = args
+        .metadata_log_dir
+        .unwrap_or_else(|| args.log_dirs[0].clone());
+    let log_dirs = directory_set(&metadata_log_dir, args.log_dirs);
     let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
         SurveyError::Foreign(dir) => krabka(
             EXIT_DIRTY_LOG_DIR,
@@ -304,17 +327,17 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
             format_args!("cannot read log directory {}: {e}", dir.display()),
         ),
     })?;
-    if ensemble.errors.contains(&log_dirs[0]) {
+    if ensemble.errors.contains(&metadata_log_dir) {
         return Err((
             EXIT_DIRTY_LOG_DIR,
             format!(
                 "Encountered I/O error in metadata log directory {}. Cannot continue.",
-                log_dirs[0].display()
+                metadata_log_dir.display()
             ),
         ));
     }
     let cluster_id = ensemble
-        .verify(args.cluster_id)
+        .verify(args.cluster_id, node_id)
         .map_err(|message| (EXIT_DIRTY_LOG_DIR, message))?
         .unwrap_or_else(ClusterId::random);
     if !args.ignore_formatted
@@ -333,14 +356,14 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     let mut used: Vec<DirectoryId> = ensemble
         .formatted
         .iter()
-        .map(|(_, meta)| meta.directory_id)
+        .filter_map(|(_, meta)| meta.directory_id)
         .collect();
     let mut targets = Vec::with_capacity(ensemble.empty.len());
     for dir in ensemble.empty {
-        let (kind, directory_id) = if dir == log_dirs[0] {
+        let (kind, directory_id) = if dir == metadata_log_dir {
             (metadata_kind, metadata_directory_id)
         } else {
-            (DirectoryKind::Data, fresh_directory_id(&used))
+            (DirectoryKind::Data, DirectoryId::random_unused(&used))
         };
         used.push(directory_id);
         targets.push(Target {
@@ -358,6 +381,7 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
 
     Ok(Plan {
         cluster_id,
+        node_id,
         metadata_version,
         targets,
         skipped: ensemble.formatted.into_iter().map(|(dir, _)| dir).collect(),
@@ -365,6 +389,25 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         raft_control_records,
         records,
     })
+}
+
+/// The directories one run formats: `metadata_log_dir` first, then every
+/// `log_dirs` entry in the order given.
+///
+/// This is Kafka's `StorageTool.configToLogDirectories`, which adds
+/// `metadata.log.dir` to the `log.dirs` set. Kafka keeps the set in a
+/// `TreeSet`, so a path named twice is formatted once. The metadata log
+/// directory can also be one of `log_dirs`, and then it is formatted once, as
+/// the metadata log directory.
+fn directory_set(metadata_log_dir: &Path, log_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut set = Vec::with_capacity(log_dirs.len() + 1);
+    set.push(metadata_log_dir.to_path_buf());
+    for dir in log_dirs {
+        if !set.contains(&dir) {
+            set.push(dir);
+        }
+    }
+    set
 }
 
 /// Kafka's `DirectoryType.calculate` for the metadata log directory.
@@ -375,21 +418,10 @@ fn metadata_directory_kind(
 ) -> DirectoryKind {
     if !dynamic_format {
         DirectoryKind::StaticMetadata
-    } else if args.node_id.is_some_and(|id| initial_voters.contains(id)) {
+    } else if initial_voters.contains(args.node_id) {
         DirectoryKind::DynamicMetadataVoter
     } else {
         DirectoryKind::DynamicMetadata
-    }
-}
-
-/// A random directory id that no other directory of the node holds, as
-/// Kafka's `Copier.generateValidDirectoryId` returns.
-fn fresh_directory_id(used: &[DirectoryId]) -> DirectoryId {
-    loop {
-        let id = DirectoryId::random();
-        if !used.contains(&id) {
-            return id;
-        }
     }
 }
 
@@ -474,7 +506,7 @@ impl Plan {
     /// Writes one directory.
     ///
     /// Whatever an interrupted run left is removed first, and
-    /// `meta.properties.json` is written last and published by a rename. Its
+    /// `meta.properties` is written last and published by a rename. Its
     /// presence thus means "a format ran here to completion". A run that
     /// fails partway -- an unwritable checkpoint, a killed process -- leaves a
     /// directory without it, which the next run treats as empty and formats
@@ -497,8 +529,15 @@ impl Plan {
             )
             .map_err(|e| format!("checkpoint failed: {e}"))?;
         }
-        write_bootstrap_files(dir, self.cluster_id, &self.records, fault)
-            .map_err(|e| format!("bootstrap failed: {e}"))?;
-        write_meta_properties(dir, self.cluster_id, target.directory_id, fault)
+        if target.kind.is_metadata() {
+            write_bootstrap_files(dir, self.cluster_id, &self.records, fault)
+                .map_err(|e| format!("bootstrap failed: {e}"))?;
+        }
+        let meta = MetaProperties {
+            cluster_id: self.cluster_id,
+            node_id: self.node_id,
+            directory_id: Some(target.directory_id),
+        };
+        write_meta_properties(dir, &meta, fault)
     }
 }

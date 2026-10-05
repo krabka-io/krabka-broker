@@ -46,8 +46,8 @@ krabka-compression = { version = "0.5.0", default-features = false }
 krabka-raft = { version = "0.7.0", path = "../raft" }
 krabka-kraft-core = { version = "0.7.0", path = "../kraft-core" }
 krabka-verified = { version = "0.7.0", path = "../verified" }
-# `meta.properties.json` is read with the formatter's own id types and format
-# stamp, so the file has one parser. Tests such as `bootstrap_consumption`,
+# Kafka's `meta.properties` is read and written with the formatter's own
+# `MetaProperties`, so the file has one parser and one writer. Tests such as `bootstrap_consumption`,
 # `cli_smoke` and `format_features` also call `krabka_format::run_from_args` to
 # format a log directory before they boot a broker: a subprocess would need a
 # Cargo working tree, which a Bazel test sandbox does not have.
@@ -116,6 +116,7 @@ crc32c = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
+# The host name a controller bound to a wildcard address advertises.
 # SHA-256 fingerprint of the configured break-glass approver set
 # (`operator_keys::approver_set_fingerprint`), recorded on every break-glass
 # audit event so a per-broker divergence in the set is visible afterwards.
@@ -130,6 +131,8 @@ exponential-backoff = "2.1.1"
 # validation, OTLP forwarding of client metrics, the metrics and health
 # servers.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+# The host name a wildcard-bound controller advertises. WASI has none.
+hostname = { workspace = true }
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
 krabka-schema-serde = { version = "0.4.1", features = ["avro", "protobuf", "json"] }

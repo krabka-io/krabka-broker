@@ -217,6 +217,7 @@ mod tests {
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
+            follower_position: None,
             partition: None,
             cpu_micros: u64::try_from(out.partition_index).expect("non-negative index"),
             out,

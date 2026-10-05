@@ -2,21 +2,20 @@
 //! listener it advertises, the bootstrap server it dials next, and the
 //! `AddRaftVoterRequest` body itself.
 //!
-//! These are pure functions with no I/O, which is why they are their own file:
+//! These functions do no network I/O, which is why they are their own file:
 //! both loops in this module build the same identity, and the unit tests can
-//! check it without a socket.
+//! check it without a socket. The one thing they read from the system is the
+//! host name that a controller bound to a wildcard address advertises.
 
 use krabka_protocol::owned::add_raft_voter_request::{AddRaftVoterRequest, Listener};
 
+/// The `CONTROLLER` listener of a controller bound to `bound`: the bound
+/// address, or this machine's host name for a wildcard bind, as
+/// [`crate::host_port::advertised_host`] decides.
 pub(super) fn controller_listener(bound: std::net::SocketAddr) -> Listener {
-    let host = if bound.ip().is_unspecified() {
-        std::env::var("HOSTNAME").unwrap_or_else(|_| "127.0.0.1".to_string())
-    } else {
-        bound.ip().to_string()
-    };
     Listener {
         name: "CONTROLLER".to_string(),
-        host,
+        host: crate::host_port::advertised_host(bound.ip(), crate::host_port::local_host_name),
         port: bound.port(),
         ..Default::default()
     }
@@ -27,14 +26,14 @@ pub(super) fn controller_listener(bound: std::net::SocketAddr) -> Listener {
 /// A controller bound to a concrete address publishes that address: it is what
 /// the socket actually answers on, and it is what the operator chose.
 ///
-/// A controller bound to `0.0.0.0` has no address of its own, and
-/// [`controller_listener`] falls back to a guess -- `HOSTNAME`, or
-/// `127.0.0.1`. Publishing that guess is worse than publishing nothing: it
-/// replaces a committed endpoint every other node can reach with one that
-/// resolves, for whoever reads it, back to the reader. `advertised` -- this
-/// node's own `controller.quorum.voters` entry, which is how the rest of the
-/// cluster is configured to reach it -- is the address to publish instead, and
-/// only that case takes it.
+/// A controller bound to `0.0.0.0` has no address of its own. `advertised`,
+/// this node's own `controller.quorum.voters` entry, is how the rest of the
+/// cluster is configured to reach it, so that is the address to publish.
+/// Without one, [`controller_listener`] publishes this machine's host name, as
+/// Kafka publishes the canonical host name for a wildcard controller listener.
+/// A loopback address would replace a committed endpoint that every other node
+/// can reach with one that resolves, for whoever reads it, back to the reader,
+/// so it is published only by a machine that reports no host name.
 pub(super) fn advertised_controller_listener(
     advertised: Option<&str>,
     bound: std::net::SocketAddr,
@@ -166,12 +165,24 @@ mod tests {
         );
     }
 
-    /// Nothing configured leaves the guess as the only answer there is.
+    /// With nothing configured, a wildcard bind publishes this machine's host
+    /// name, as Kafka does. A controller of a dynamic quorum configures no
+    /// voters, so this is what its voter updates publish, and a loopback
+    /// address there would send every other node's heartbeats back to itself.
     #[test]
-    fn a_wildcard_bind_with_nothing_configured_falls_back_to_the_bound_listener() {
+    fn a_wildcard_bind_with_nothing_configured_publishes_the_host_name() {
         let bound = "0.0.0.0:19093".parse().unwrap();
 
-        assert!(advertised_controller_listener(None, bound) == controller_listener(bound));
+        assert!(
+            advertised_controller_listener(None, bound)
+                == Listener {
+                    name: "CONTROLLER".to_owned(),
+                    host: crate::host_port::local_host_name()
+                        .unwrap_or_else(|| "127.0.0.1".to_owned()),
+                    port: 19093,
+                    ..Default::default()
+                }
+        );
     }
 
     /// An endpoint the port cannot be read out of is no better than nothing.

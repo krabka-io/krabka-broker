@@ -53,6 +53,13 @@ pub(crate) async fn run(
 }
 
 /// Try each queued transaction once, and return the ones to try again.
+///
+/// The attempts run at the same time, as Kafka's
+/// `TransactionMarkerChannelManager` sends the markers of every transaction at
+/// once. An attempt waits until its markers commit, for up to
+/// [`MARKER_COMMIT_TIMEOUT`](crate::txn::handlers::write_txn_markers::MARKER_COMMIT_TIMEOUT),
+/// so one transaction whose partition cannot commit does not hold back the
+/// others.
 pub(crate) async fn complete_once(
     coordinator: &Arc<TxnCoordinator>,
     controller: &dyn MetadataSource,
@@ -63,15 +70,15 @@ pub(crate) async fn complete_once(
     // A load queues its own `Prepare*` transactions when it ends, so the task
     // does not wait for the loads it starts.
     drop(coordinator.refresh_leader_partitions(&image).await);
-    let mut retry = BTreeSet::new();
-    for transactional_id in queued {
-        if coordinator
+    futures_util::future::join_all(queued.into_iter().map(|transactional_id| async move {
+        let attempt = coordinator
             .complete_prepared_transaction(&transactional_id, txnv)
-            .await
-            == CompletionAttempt::Retry
-        {
-            retry.insert(transactional_id);
-        }
-    }
-    retry
+            .await;
+        (transactional_id, attempt)
+    }))
+    .await
+    .into_iter()
+    .filter(|(_, attempt)| *attempt == CompletionAttempt::Retry)
+    .map(|(transactional_id, _)| transactional_id)
+    .collect()
 }

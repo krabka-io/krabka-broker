@@ -234,11 +234,25 @@ pub fn append_time_remote_segment_reader() -> (RemoteReader, tempfile::TempDir) 
 /// The encoded length of the second batch of the sparse fixture, which is the
 /// smallest byte budget that still holds a batch read from its own start.
 pub fn sparse_fixture_second_batch_len() -> usize {
-    let mut buf = bytes::BytesMut::new();
-    timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b')
-        .encode(&mut buf)
-        .unwrap();
-    buf.len()
+    sparse_fixture_batch_bytes()[1].len()
+}
+
+/// The two batches of the sparse fixture, as its segment stores them: offsets
+/// 10 to 13, then 14 to 16.
+pub fn sparse_fixture_batch_bytes() -> [bytes::Bytes; 2] {
+    let encode = |batch: krabka_protocol::records::RecordBatch| {
+        let mut buf = bytes::BytesMut::new();
+        batch.encode(&mut buf).unwrap();
+        buf.freeze()
+    };
+    [
+        encode(timestamped_batch_at(
+            10,
+            &[1_000, 1_100, 1_600, 1_700],
+            b'a',
+        )),
+        encode(timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b')),
+    ]
 }
 
 /// A remote segment whose second batch carries its newest record first, so the

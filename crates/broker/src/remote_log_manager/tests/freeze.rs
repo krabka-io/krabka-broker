@@ -107,12 +107,12 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
         .iter()
         .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
         .count();
-    let local_sealed_after = partition
-        .log
-        .lock()
-        .expect("partition log mutex poisoned")
-        .tierable_segments()
-        .len();
+    // A segment the sweep rolled counts once its rollover flush lands.
+    let local_sealed_after = {
+        let mut log = partition.log.lock().expect("partition log mutex poisoned");
+        log.sync().expect("flush rolled segments");
+        log.tierable_segments().len()
+    };
     TickOutcome {
         sealed_before,
         remote_finished,
@@ -167,7 +167,11 @@ async fn tick_all_evicts_no_local_segment_for_a_frozen_partition() {
             outcome.remote_finished == outcome.sealed_before,
             "{label}: the copy runs whatever the freeze says"
         );
-        let want_local = if frozen { outcome.sealed_before } else { 0 };
+        // The control drops every copied segment. The zero budget covers the
+        // active segment too, so the control also rolls it for the next
+        // copy, as Kafka's `deletableSegments` does, and that one segment
+        // stays.
+        let want_local = if frozen { outcome.sealed_before } else { 1 };
         check!(
             outcome.local_sealed_after == want_local,
             "{label}: local sealed segments after the sweep"

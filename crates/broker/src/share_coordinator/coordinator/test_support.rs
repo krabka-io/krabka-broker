@@ -43,14 +43,21 @@ pub(super) fn batch(first: i64, last: i64) -> StateBatch {
 
 /// Builds a real `__share_group_state`-`p` partition and registers it.
 ///
-/// The partition has a live writer. This function mirrors
-/// `fixture_partition` in `partition_registry`.
+/// The partition has a live writer, and it leads on node 1 at leader epoch
+/// 0. This function mirrors `fixture_partition` in `partition_registry`.
 pub(super) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i32) {
     let part_dir = crate::log_dir::partition_dir(log_dir, bootstrap::TOPIC, p);
     std::fs::create_dir_all(&part_dir).unwrap();
     let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-    let part = crate::broker::spawn_partition(
+    let part = crate::broker::spawn_partition_with_replication_target(
         bootstrap::TOPIC.to_string(),
+        // The metadata reconcile installs the leader of the image before the
+        // partition is visible: here this broker, node 1, at epoch 0.
+        crate::partition::ReplicationTarget {
+            topic_id: None,
+            leader_node_id: krabka_raft::NodeId(1),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
+        },
         PartitionIndex(p),
         log_dir.to_path_buf(),
         log,

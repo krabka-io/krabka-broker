@@ -5,9 +5,13 @@
 //! the batch around them is stamped `is_transactional=true` with the
 //! producer's (pid, epoch), so the log's LSO machinery withholds the offsets
 //! until a commit or abort marker resolves the transaction.
+//!
+//! The append is a group coordinator write like any other: it goes to the log
+//! only while this broker leads the offsets partition, it carries the leader
+//! epoch, and the commit is answered only once the high watermark covers it
+//! (see [`crate::coordinator::unified::offsets_log::append_as_leader`]).
 
-use krabka_ids::PartitionIndex;
-use krabka_log::Offset;
+use krabka_metadata::NodeId;
 use krabka_protocol::{
     owned::txn_offset_commit_request::TxnOffsetCommitRequest,
     records::{Attributes, Record, RecordBatch},
@@ -15,13 +19,17 @@ use krabka_protocol::{
 
 use crate::{
     codes,
-    coordinator::{bootstrap::OFFSETS_TOPIC, persistence::OffsetCommitValue},
+    coordinator::{
+        persistence::OffsetCommitValue,
+        unified::offsets_log::{LeaderAppend, append_as_leader},
+    },
     error::BrokerError,
-    partition::ProduceBatchError,
+    metadata_source::MetadataSource,
+    partition_registry::PartitionRegistry,
 };
 
-/// What one `TxnOffsetCommit` durably wrote: the offsets-log position of its
-/// records, and the `(topic, partition)` keys they cover.
+/// What one `TxnOffsetCommit` wrote to the log: the offsets-log position of
+/// its records, and the `(topic, partition)` keys they cover.
 #[derive(Debug)]
 pub(super) struct AppendedTxnOffsets {
     /// Base offset the batch was assigned in `__consumer_offsets`.
@@ -30,8 +38,9 @@ pub(super) struct AppendedTxnOffsets {
 }
 
 /// Append the transactional offset records to `__consumer_offsets`, and
-/// report where they landed and which `(topic, partition)` keys they cover.
-/// `None` means every row was denied or unknown, and nothing was appended.
+/// report where they landed, which `(topic, partition)` keys they cover, and
+/// the write whose commit the caller still waits for. `None` means every row
+/// was denied or unknown, and nothing was appended.
 ///
 /// The offsets partition's `WriteTxnMarkers` handler materializes these records
 /// into the owning group actor after the commit marker is durable. This keeps
@@ -40,18 +49,19 @@ pub(super) struct AppendedTxnOffsets {
 ///
 /// The returned keys are the ones the caller marks pending on the group actor
 /// for KIP-447. They come from the same walk that builds the batch, so a key
-/// can never be marked pending without a durable record behind it for the
+/// can never be marked pending without a record in the log behind it for the
 /// transaction's marker to find again. The base offset travels with them
 /// because it is what orders the mark against that marker.
 ///
-/// `producer_check` is the KIP-890 check the log runs under its append lock,
-/// with the guard the producer's verification started, and a refusal is
-/// answered as Kafka's append throws it. `record_topic_ids` says whether the
-/// offset records carry the topic ids the handler resolved, which Kafka 4.3.1
-/// does not record.
+/// `local` is this broker's partitions, the metadata that names the offsets
+/// partition's leader, and this broker's id. `producer_check` is the KIP-890
+/// check the log runs under its append lock, with the guard the producer's
+/// verification started, and a refusal is answered as Kafka's append throws
+/// it. `record_topic_ids` says whether the offset records carry the topic ids
+/// the handler resolved, which Kafka 4.3.1 does not record.
 pub(super) async fn append_txn_batch(
     req: &TxnOffsetCommitRequest,
-    partitions: &std::sync::Arc<crate::partition_registry::PartitionRegistry>,
+    local: (&PartitionRegistry, &dyn MetadataSource, NodeId),
     offsets_partition: i32,
     now_ms: i64,
     (denied_topics, unknown_rows): (
@@ -59,7 +69,7 @@ pub(super) async fn append_txn_batch(
         &std::collections::HashSet<(String, i32)>,
     ),
     (producer_check, record_topic_ids): (crate::partition::ProducerAppendCheck, bool),
-) -> Result<Option<AppendedTxnOffsets>, i16> {
+) -> Result<Option<(AppendedTxnOffsets, LeaderAppend)>, i16> {
     let mut batch = RecordBatch {
         attributes: Attributes::default().with_transactional(true),
         base_timestamp: now_ms,
@@ -83,7 +93,7 @@ pub(super) async fn append_txn_batch(
                 continue;
             }
             let value = OffsetCommitValue {
-                offset: Offset(part.committed_offset),
+                offset: krabka_log::Offset(part.committed_offset),
                 leader_epoch: part.committed_leader_epoch,
                 metadata: part.committed_metadata.clone().unwrap_or_default(),
                 commit_timestamp_ms: now_ms,
@@ -127,40 +137,42 @@ pub(super) async fn append_txn_batch(
 
     batch.last_offset_delta = (delta - 1).max(0);
 
-    let Some(part_handle) = partitions.get(OFFSETS_TOPIC, PartitionIndex(offsets_partition)) else {
-        // __consumer_offsets not hosted here — report NOT_COORDINATOR.
-        return Err(codes::NOT_COORDINATOR);
-    };
-    // `produce_batch` drives the single-writer task and returns the assigned
-    // base offset, which is the log position the KIP-447 mark is ordered by.
-    part_handle
-        .produce_batch_checked(batch, Some(producer_check))
-        .await
-        .map(|written_at| {
-            Some(AppendedTxnOffsets {
-                written_at: written_at.get(),
+    match append_as_leader(local, offsets_partition, batch, Some(producer_check)).await {
+        Ok(write) => Ok(Some((
+            AppendedTxnOffsets {
+                written_at: write.base_offset.get(),
                 keys,
-            })
-        })
-        .map_err(|e| {
-            let error = match e {
-                ProduceBatchError::Rejected(error) => error,
-                ProduceBatchError::Indeterminate(error) => BrokerError::Txn(error),
-            };
+            },
+            write,
+        ))),
+        Err(error) => {
             tracing::error!(
                 group = %req.group_id,
                 tid   = %req.transactional_id,
                 %error,
-                "TxnOffsetCommit: produce_batch failed"
+                "TxnOffsetCommit: the offsets append failed"
             );
-            // A refusal of the producer check is the exception Kafka's append
-            // throws: INVALID_PRODUCER_EPOCH, INVALID_TXN_STATE. Anything
-            // else is unexpected.
-            match error {
-                BrokerError::TransactionAppend(_) => codes::from_broker_error(&error),
-                _ => codes::UNKNOWN_SERVER_ERROR,
-            }
-        })
+            Err(append_error_code(&error))
+        }
+    }
+}
+
+/// The code a `TxnOffsetCommit` whose append failed answers, as Kafka's
+/// `CoordinatorOperationExceptionHelper.handleOperationException` maps the
+/// exception `CoordinatorPartitionWriter.append` throws.
+///
+/// A refusal of the producer check is the exception Kafka's append throws:
+/// `INVALID_PRODUCER_EPOCH` or `INVALID_TXN_STATE`. A partition this broker
+/// does not lead, or has no live replica of, is `NOT_LEADER_OR_FOLLOWER`,
+/// which the helper answers `NOT_COORDINATOR`. Anything else is unexpected.
+pub(super) fn append_error_code(error: &BrokerError) -> i16 {
+    match error {
+        BrokerError::TransactionAppend(_) | BrokerError::CoordinatorWriteUncommitted { .. } => {
+            codes::from_broker_error(error)
+        }
+        BrokerError::PartitionWriterDied { .. } => codes::NOT_COORDINATOR,
+        _ => codes::UNKNOWN_SERVER_ERROR,
+    }
 }
 
 #[cfg(test)]
@@ -168,13 +180,54 @@ mod tests {
     use std::{collections::HashSet, path::Path, sync::Arc};
 
     use assert2::{assert, check};
-    use krabka_log::{Log, LogConfig};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig, Offset};
+    use krabka_metadata::{
+        LeaderEpoch, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
+    };
 
     use super::*;
     use crate::{
-        coordinator::bootstrap::OFFSETS_PARTITION, partition_registry::PartitionRegistry,
+        coordinator::bootstrap::{OFFSETS_PARTITION, OFFSETS_TOPIC},
+        test_support::FakeMetadataSource,
         txn::handlers::txn_offset_commit::test_support::request,
     };
+
+    /// This broker.
+    const NODE: NodeId = NodeId(1);
+
+    /// Metadata in which `leader` leads the offsets partition at `epoch`.
+    fn offsets_led_by(leader: NodeId, epoch: i32) -> FakeMetadataSource {
+        FakeMetadataSource::builder()
+            .image(offsets_image(leader, epoch))
+            .build()
+    }
+
+    /// An image in which `leader` leads the offsets partition at `epoch`.
+    fn offsets_image(leader: NodeId, epoch: i32) -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: OFFSETS_TOPIC.into(),
+            topic_id: uuid::Uuid::from_u128(7),
+            partitions: OFFSETS_PARTITION + 1,
+            replication_factor: 1,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: OFFSETS_TOPIC.into(),
+            partition: OFFSETS_PARTITION,
+            leader,
+            leader_epoch: LeaderEpoch(epoch),
+            replicas: vec![leader],
+            isr: vec![leader],
+            ..PartitionRecord::default()
+        }));
+        image
+    }
+
+    /// Metadata in which this broker leads the offsets partition.
+    fn led_here() -> FakeMetadataSource {
+        offsets_led_by(NODE, 0)
+    }
 
     fn open_offsets_partition(registry: &PartitionRegistry, log_dir: &Path) {
         let part_dir = crate::log_dir::partition_dir(log_dir, OFFSETS_TOPIC, OFFSETS_PARTITION);
@@ -226,9 +279,9 @@ mod tests {
         open_offsets_partition(&registry, dir.path());
         let req = request();
 
-        let appended = append_txn_batch(
+        let (appended, _write) = append_txn_batch(
             &req,
-            &registry,
+            (&registry, &led_here(), NODE),
             OFFSETS_PARTITION,
             12_345,
             (&HashSet::new(), &HashSet::new()),
@@ -282,7 +335,7 @@ mod tests {
 
         let appended = append_txn_batch(
             &req,
-            &registry,
+            (&registry, &led_here(), NODE),
             OFFSETS_PARTITION,
             12_345,
             (&denied, &HashSet::new()),
@@ -317,7 +370,7 @@ mod tests {
         };
         let err = append_txn_batch(
             &req,
-            &registry,
+            (&registry, &led_here(), NODE),
             OFFSETS_PARTITION,
             12_345,
             (&HashSet::new(), &HashSet::new()),
@@ -327,6 +380,93 @@ mod tests {
         .expect_err("missing offsets partition");
 
         assert!(err == codes::NOT_COORDINATOR);
+    }
+
+    /// Kafka's `CoordinatorRuntime` writes a `TxnOffsetCommit` as the leader of
+    /// the offsets partition, with its leader epoch on the batch, and answers
+    /// it once the high watermark covers the batch under that leadership. A
+    /// broker that answered at the local append could acknowledge offsets the
+    /// next leader never gets, and the transaction then commits without them.
+    #[tokio::test]
+    async fn the_append_is_a_leader_write_that_commits_under_its_term() {
+        struct Case {
+            what: &'static str,
+            /// The leader and leader epoch of the offsets partition.
+            led_by: (NodeId, i32),
+            /// The leader and epoch the partition moves to after the append.
+            moves_to: Option<(NodeId, i32)>,
+            /// The append's answer, then the commit's.
+            expected: Result<Result<(), i16>, i16>,
+            /// The leader epoch of every batch in the log afterwards.
+            logged_epochs: Vec<i32>,
+        }
+        let cases = [
+            Case {
+                what: "this broker leads",
+                led_by: (NODE, 7),
+                moves_to: None,
+                expected: Ok(Ok(())),
+                logged_epochs: vec![7],
+            },
+            Case {
+                what: "another broker leads",
+                led_by: (NodeId(2), 7),
+                moves_to: None,
+                expected: Err(codes::NOT_COORDINATOR),
+                logged_epochs: vec![],
+            },
+            Case {
+                what: "the partition moves before the commit is confirmed",
+                led_by: (NODE, 7),
+                moves_to: Some((NodeId(2), 8)),
+                expected: Ok(Err(codes::NOT_COORDINATOR)),
+                logged_epochs: vec![7],
+            },
+        ];
+        for case in cases {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            let registry = Arc::new(PartitionRegistry::new());
+            open_offsets_partition(&registry, dir.path());
+            let metadata = offsets_led_by(case.led_by.0, case.led_by.1);
+            let req = request();
+
+            let appended = append_txn_batch(
+                &req,
+                (&registry, &metadata, NODE),
+                OFFSETS_PARTITION,
+                12_345,
+                (&HashSet::new(), &HashSet::new()),
+                (verified(&registry, &req).await, false),
+            )
+            .await;
+            if let Some((leader, epoch)) = case.moves_to {
+                metadata.set_image(offsets_image(leader, epoch));
+            }
+            let outcome = match appended {
+                Ok(Some((_, write))) => Ok(write
+                    .committed()
+                    .await
+                    .map_err(|error| codes::from_broker_error(&error))),
+                Ok(None) => panic!("{}: every row was appended", case.what),
+                Err(code) => Err(code),
+            };
+
+            let part = registry
+                .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
+                .expect("offsets partition");
+            let logged_epochs: Vec<i32> = part
+                .log
+                .lock()
+                .expect("lock offsets log")
+                .read(Offset(0), krabka_units::mebibytes(1))
+                .expect("read offsets log")
+                .batches
+                .iter()
+                .map(|batch| batch.partition_leader_epoch)
+                .collect();
+            assert!(outcome == case.expected, "{}", case.what);
+            assert!(logged_epochs == case.logged_epochs, "{}", case.what);
+        }
     }
 
     #[tokio::test]
@@ -339,7 +479,7 @@ mod tests {
 
         let appended = append_txn_batch(
             &req,
-            &registry,
+            (&registry, &led_here(), NODE),
             OFFSETS_PARTITION,
             12_345,
             (&HashSet::new(), &unknown),
@@ -348,6 +488,7 @@ mod tests {
         .await
         .expect("append batch")
         .expect("one row still appended");
+        let (appended, _write) = appended;
         check!(appended.keys == vec![("orders".to_string(), 2)]);
 
         let part = registry
@@ -379,7 +520,7 @@ mod tests {
 
             append_txn_batch(
                 &req,
-                &registry,
+                (&registry, &led_here(), NODE),
                 OFFSETS_PARTITION,
                 12_345,
                 (&HashSet::new(), &HashSet::new()),
@@ -421,7 +562,7 @@ mod tests {
         let req = request();
         append_txn_batch(
             &req,
-            &registry,
+            (&registry, &led_here(), NODE),
             OFFSETS_PARTITION,
             12_345,
             (&HashSet::new(), &HashSet::new()),
@@ -452,7 +593,7 @@ mod tests {
             };
             let refused = append_txn_batch(
                 &req,
-                &registry,
+                (&registry, &led_here(), NODE),
                 OFFSETS_PARTITION,
                 12_345,
                 (&HashSet::new(), &HashSet::new()),

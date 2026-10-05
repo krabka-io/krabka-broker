@@ -130,8 +130,8 @@ sendfile_cfg! {
     pub use log::RawReadDesc;
 }
 pub use log::{
-    BARRIER_CONTROL_TYPE, CompactionContext, Log, RawRead, ReadOutput, SegmentExport,
-    TransactionAppendRefusal, TransactionalBatch, VerbatimBatch, VerificationGuard,
+    ActiveSegmentExport, BARRIER_CONTROL_TYPE, CompactionContext, Log, RawRead, ReadOutput,
+    SegmentExport, TransactionAppendRefusal, TransactionalBatch, VerbatimBatch, VerificationGuard,
 };
 pub use producer_snapshot::{
     NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,

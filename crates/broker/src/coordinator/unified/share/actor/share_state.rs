@@ -36,13 +36,18 @@ use crate::{
 /// The partitions are first written to the `InitializingTopics` of
 /// `ShareGroupStatePartitionMetadata` (Kafka's `addInitializingTopicsRecords`),
 /// so a group delete finds any state the persister may write. Only then does
-/// the hook call [`SharePersister::initialize`]. A partition the persister
-/// initialized moves to `InitializedTopics` (`initializeShareGroupState`), and
-/// one it failed leaves the initializing set (`uninitializeShareGroupState`),
-/// so the next heartbeat retries it. A partition still initializing after a
-/// restart is retried once `initialize_retry_interval` has passed. The newly
-/// initialized partitions reach the assignment on the next heartbeat, which
-/// sees them unassigned and bumps the group epoch.
+/// the hook start the [`SharePersister::initialize`] calls, in a task of their
+/// own: Kafka's `shareGroupHeartbeat` puts `persisterInitialize` on a timer
+/// task, "async with respect to the heartbeat", so a slow share coordinator
+/// does not hold up the heartbeat or the heartbeats queued behind it. The task
+/// sends the outcome back to the group's actor, and [`apply_initialized`]
+/// moves a partition the persister initialized to `InitializedTopics`
+/// (`initializeShareGroupState`) and takes one it failed out of the
+/// initializing set (`uninitializeShareGroupState`), so a later heartbeat
+/// retries it. A partition still initializing after a restart is retried
+/// once `initialize_retry_interval` has passed. The newly initialized
+/// partitions reach the assignment on the next heartbeat, which sees them
+/// unassigned and bumps the group epoch.
 ///
 /// The hook is best-effort and never fails the heartbeat. `state_epoch` is
 /// the group epoch. For a topic that the group sees for the first time,
@@ -81,9 +86,8 @@ pub(super) async fn reconcile_share_state(
         return;
     }
 
-    let mut changed = false;
     if !to_init.is_empty() {
-        changed |= initialize(
+        initialize(
             state,
             &to_init,
             &topic_names,
@@ -93,6 +97,7 @@ pub(super) async fn reconcile_share_state(
         )
         .await;
     }
+    let mut changed = false;
     for (tid, partition) in to_delete {
         let topic_uuid = uuid::Uuid::from_bytes(tid.0);
         match persister
@@ -119,9 +124,9 @@ pub(super) async fn reconcile_share_state(
     }
 }
 
-/// Records `to_init` as initializing, then initializes each partition through
-/// the persister. Says whether the sets changed after the initializing record
-/// was written.
+/// Records `to_init` as initializing, then starts the persister calls that
+/// initialize them, in a task that reports back to the group's actor. The
+/// outcome changes the sets later, in [`apply_initialized`].
 async fn initialize(
     state: &mut ShareGroupState,
     to_init: &[(Uuid, i32)],
@@ -129,9 +134,9 @@ async fn initialize(
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
-) -> bool {
+) {
     let Some(persister) = coordinator.share_persister() else {
-        return false;
+        return;
     };
     // Kafka's `buildInitializeShareGroupStateRequest`: a new partition of a
     // topic that the group already knows starts at offset 0, so the records
@@ -164,36 +169,116 @@ async fn initialize(
             };
         }
         state.forget_unused_topic_names();
-        return false;
+        return;
     }
 
-    let state_epoch = state.group_epoch;
-    for &(tid, partition) in to_init {
-        let topic_uuid = uuid::Uuid::from_bytes(tid.0);
-        match persister
-            .initialize(
-                &state.group_id,
-                topic_uuid,
-                partition,
-                state_epoch,
-                krabka_log::Offset(initial_start_offset(&known_topics, tid)),
-            )
-            .await
-        {
-            Ok(()) => state.mark_initialized((tid, partition)),
-            Err(e) => {
-                state.initializing.remove(&(tid, partition));
-                tracing::warn!(
-                    group_id = %state.group_id,
-                    topic_id = %topic_uuid,
-                    partition,
-                    error = %e,
-                    "share-state Initialize failed; will retry next heartbeat",
-                );
+    let calls = to_init
+        .iter()
+        .map(|&(tid, partition)| InitializeCall {
+            topic_id: tid,
+            partition,
+            start_offset: initial_start_offset(&known_topics, tid),
+        })
+        .collect();
+    spawn_initialize(
+        std::sync::Arc::clone(persister),
+        std::sync::Arc::clone(&coordinator.share_groups),
+        state.group_id.clone(),
+        state.group_epoch,
+        calls,
+    );
+}
+
+/// One `Initialize` call of the persister: the share partition and the start
+/// offset it is initialized at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InitializeCall {
+    topic_id: Uuid,
+    partition: i32,
+    start_offset: i64,
+}
+
+/// Run `calls` against the persister together, at `state_epoch`, and send the
+/// outcome of each to the actor of `group_id` that `actors` holds then.
+///
+/// The calls run concurrently, as Kafka's persister batches one group's
+/// partitions into one request per share coordinator, so a slow coordinator
+/// costs one wait and not one wait per partition. An actor that is gone by
+/// then, because this broker unloaded the group, gets nothing. The actor that
+/// loads the group next retries the partitions that are still initializing,
+/// once `initialize_retry_interval` has passed.
+fn spawn_initialize(
+    persister: std::sync::Arc<crate::share_coordinator::persister_client::SharePersister>,
+    actors: std::sync::Arc<dashmap::DashMap<String, std::sync::Arc<super::ShareGroupActorHandle>>>,
+    group_id: String,
+    state_epoch: i32,
+    calls: Vec<InitializeCall>,
+) {
+    tokio::spawn(async move {
+        let outcomes = futures_util::future::join_all(calls.into_iter().map(|call| {
+            let (persister, group_id) = (&persister, &group_id);
+            async move {
+                let topic_uuid = uuid::Uuid::from_bytes(call.topic_id.0);
+                let result = persister
+                    .initialize(
+                        group_id,
+                        topic_uuid,
+                        call.partition,
+                        state_epoch,
+                        krabka_log::Offset(call.start_offset),
+                    )
+                    .await;
+                if let Err(e) = &result {
+                    tracing::warn!(
+                        %group_id,
+                        topic_id = %topic_uuid,
+                        partition = call.partition,
+                        error = %e,
+                        "share-state Initialize failed; will retry next heartbeat",
+                    );
+                }
+                ((call.topic_id, call.partition), result.is_ok())
             }
+        }))
+        .await;
+        let actor = actors
+            .get(&group_id)
+            .map(|entry| std::sync::Arc::clone(entry.value()));
+        if let Some(actor) = actor {
+            let _ = actor
+                .tx
+                .send(super::ShareGroupActorMessage::ShareStateInitialized(
+                    outcomes,
+                ))
+                .await;
+        }
+    });
+}
+
+/// Apply the outcome of the `Initialize` calls that [`initialize`] started:
+/// each `(partition, initialized)` pair moves the partition to the
+/// initialized set, or takes it out of the initializing set so a later
+/// heartbeat retries it. Then write the group's
+/// `ShareGroupStatePartitionMetadata`, as Kafka's `initializeShareGroupState`
+/// and `uninitializeShareGroupState` write it.
+pub(super) async fn apply_initialized(
+    state: &mut ShareGroupState,
+    outcomes: &[((Uuid, i32), bool)],
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+    now_ms: i64,
+) {
+    if outcomes.is_empty() {
+        return;
+    }
+    for &(partition, initialized) in outcomes {
+        if initialized {
+            state.mark_initialized(partition);
+        } else {
+            state.initializing.remove(&partition);
         }
     }
-    true
+    write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await;
 }
 
 /// Writes the group's `ShareGroupStatePartitionMetadata` record, and says
@@ -293,9 +378,26 @@ fn deleted_topic_partitions(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest;
 
-    use super::*;
-    use crate::coordinator::unified::share::state::ShareMemberState;
+    use super::{
+        super::{
+            ShareGroupActorMessage,
+            test_support::{heartbeat, make_coordinator, metadata_with_topic},
+        },
+        *,
+    };
+    use crate::{
+        codes,
+        coordinator::unified::{
+            ShareGroupSeed,
+            share::{
+                persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+                state::ShareMemberState,
+            },
+            test_support::{fixed_source, make_share_persister},
+        },
+    };
 
     /// Kafka's `subscribedTopicsChangeMap`: every partition of a subscribed
     /// topic in the image that is neither initialized nor freshly
@@ -332,6 +434,113 @@ mod tests {
                 "{row}"
             );
         }
+    }
+
+    /// The share-partition metadata that the last committed write of `group`
+    /// holds.
+    fn committed_metadata(
+        coordinator: &GroupCoordinator,
+        group: &str,
+    ) -> ShareGroupStatePartitionMetadataValue {
+        coordinator
+            .cached_share_seed(group)
+            .expect("the group wrote a record")
+            .state_partition_metadata
+    }
+
+    fn topic_partitions(topic_id: Uuid, partitions: Vec<i32>) -> TopicPartitionsInfo {
+        TopicPartitionsInfo {
+            topic_id: uuid::Uuid::from_bytes(topic_id.0),
+            topic_name: "t".to_owned(),
+            partitions,
+        }
+    }
+
+    /// Kafka's `shareGroupHeartbeat` runs `persisterInitialize` "async with
+    /// respect to the heartbeat". A share coordinator that cannot answer,
+    /// here because `__share_group_state` does not exist, holds the
+    /// persister for its whole five-second wait, and the heartbeat must not
+    /// wait with it. The partitions are initializing when it answers.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_heartbeat_does_not_wait_for_the_persister() {
+        let (metadata, topic_id) = metadata_with_topic("t", 2);
+        let (coordinator, _log) = make_coordinator(metadata);
+        coordinator.set_share_persister(make_share_persister(fixed_source(
+            krabka_metadata::MetadataImage::default(),
+        )));
+        let handle = coordinator.get_or_create_share("g");
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            heartbeat(
+                &handle,
+                ShareGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch: 0,
+                    subscribed_topic_names: Some(vec!["t".into()]),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .expect("the heartbeat answers before the persister does");
+
+        assert!(response.error_code == codes::NONE);
+        assert!(
+            committed_metadata(&coordinator, "g")
+                == ShareGroupStatePartitionMetadataValue {
+                    initializing: vec![topic_partitions(topic_id, vec![0, 1])],
+                    ..ShareGroupStatePartitionMetadataValue::default()
+                }
+        );
+    }
+
+    /// The outcome of the `Initialize` calls reaches the actor as a message.
+    /// A partition the persister initialized is initialized, one it failed
+    /// leaves the initializing set for a later heartbeat to retry, and one
+    /// with no outcome yet stays initializing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_initialize_outcome_moves_each_partition() {
+        let (metadata, topic_id) = metadata_with_topic("t", 3);
+        let (coordinator, _log) = make_coordinator(metadata);
+        let handle = coordinator.get_or_create_share("g");
+        handle
+            .tx
+            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                    initializing: vec![topic_partitions(topic_id, vec![0, 1, 2])],
+                    ..ShareGroupStatePartitionMetadataValue::default()
+                },
+                ..ShareGroupSeed::default()
+            }))
+            .await
+            .expect("seed the group");
+
+        handle
+            .tx
+            .send(ShareGroupActorMessage::ShareStateInitialized(vec![
+                ((topic_id, 0), true),
+                ((topic_id, 1), false),
+            ]))
+            .await
+            .expect("send the outcome");
+        let (reply, described) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(ShareGroupActorMessage::Describe { reply })
+            .await
+            .expect("describe after the outcome");
+        described.await.expect("the actor answers in order");
+
+        assert!(
+            committed_metadata(&coordinator, "g")
+                == ShareGroupStatePartitionMetadataValue {
+                    initializing: vec![topic_partitions(topic_id, vec![2])],
+                    initialized: vec![topic_partitions(topic_id, vec![0])],
+                    ..ShareGroupStatePartitionMetadataValue::default()
+                }
+        );
     }
 
     #[test]

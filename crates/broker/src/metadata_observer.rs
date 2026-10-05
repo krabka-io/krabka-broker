@@ -46,6 +46,11 @@ pub struct ObserverConfig {
     /// dialer resolves it again on each connect, so it reaches the new pod IP
     /// of a rejoining peer.
     pub voters: Vec<(NodeId, String)>,
+    /// `controller.quorum.bootstrap.servers`, the `"<host>:<port>"` endpoints
+    /// a node in a KIP-853 dynamic quorum finds the controllers through. The
+    /// observer fetches from them until it has read the voter set from the
+    /// log, and goes back to them when no voter answers.
+    pub bootstrap_servers: Vec<String>,
     /// Outbound dialer. It uses the same TLS and SASL path as the raft
     /// transport.
     pub dialer: Arc<dyn OutboundDialer>,
@@ -60,9 +65,10 @@ pub struct ObserverConfig {
     /// This node's directory id, sent beside `node_id` as Kafka's
     /// `ReplicaDirectoryId`: the leader tracks an observer by the pair.
     pub directory_id: uuid::Uuid,
-    /// The node's `__cluster_metadata` directory. The observer keeps its
-    /// KIP-630 checkpoints in a subdirectory of their own under it, beside a
-    /// controller's rather than in it — the `store` module says why.
+    /// The node's metadata partition directory, `__cluster_metadata-0` under
+    /// the metadata log directory. The observer keeps its KIP-630 checkpoints
+    /// in a subdirectory of their own under it, apart from a controller's at
+    /// its top level. The `store` module says why.
     pub data_dir: std::path::PathBuf,
     /// Records applied between the checkpoints the observer writes for itself.
     /// `0` disables them, leaving only the snapshots fetched from a controller

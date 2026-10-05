@@ -2,8 +2,8 @@
 //!
 //! `format` makes or accepts a **cluster id**, and makes a **directory id** for
 //! each log directory. The directory id of the metadata directory is also the
-//! node's KIP-853 voter identity. Both ids go into `meta.properties.json`, and
-//! the cluster id also goes into the bootstrap manifest.
+//! node's KIP-853 voter identity. Both ids go into `meta.properties`, and the
+//! cluster id also goes into the bootstrap manifest.
 //!
 //! Kafka prints an `org.apache.kafka.common.Uuid` as 22 characters of unpadded
 //! base64url, for example `AQIDBAUGBwgJCgsMDQ4PEA`, not as the hyphenated hex
@@ -60,8 +60,8 @@ pub struct ClusterId(pub Uuid);
 /// A log directory's stable id (KIP-858). The metadata directory's id is also
 /// the node's KIP-853 voter identity.
 ///
-/// `format` writes this id to `meta.properties.json`, and the broker reads it
-/// back on every boot. The type is distinct from [`ClusterId`], so a call site
+/// `format` writes this id to `meta.properties`, and the broker reads it back
+/// on every boot. The type is distinct from [`ClusterId`], so a call site
 /// cannot transpose the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, From, Into)]
 pub struct DirectoryId(pub Uuid);
@@ -100,6 +100,19 @@ impl DirectoryId {
         Self(first_accepted(|id| {
             is_reserved_directory_id(id) || starts_with_dash(id)
         }))
+    }
+
+    /// Returns a random directory id that is not in `used`, as Kafka's
+    /// `MetaPropertiesEnsemble.Copier.generateValidDirectoryId` returns one
+    /// that no other directory of the node holds.
+    #[must_use]
+    pub fn random_unused(used: &[Self]) -> Self {
+        loop {
+            let id = Self::random();
+            if !used.contains(&id) {
+                return id;
+            }
+        }
     }
 
     /// Returns `true` for one of the 100 lowest ids, which Kafka reserves as

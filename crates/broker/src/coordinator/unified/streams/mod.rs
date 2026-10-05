@@ -11,6 +11,7 @@
 pub mod actor;
 pub mod assignor;
 pub mod config;
+pub mod description;
 pub(crate) mod migration;
 pub mod persistence;
 pub mod state;

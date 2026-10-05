@@ -1,9 +1,10 @@
 //! Installation of producer state that was rebuilt from a partition's durable
 //! log.
 //!
-//! Startup and follower-prefix hydration call these functions before a
-//! partition becomes request-visible, so a recovered `ProducerState` carries
-//! the sequence and epoch state that survived a restart or a remote-tier copy.
+//! Startup, follower-prefix hydration and a promotion to leader call these
+//! functions before a partition becomes request-visible, so a recovered
+//! `ProducerState` carries the sequence and epoch state that survived a
+//! restart or a remote-tier copy, or that a follower replicated.
 
 use std::{collections::HashMap, sync::Arc};
 

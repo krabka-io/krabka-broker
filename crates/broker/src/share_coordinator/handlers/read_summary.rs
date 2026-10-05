@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, join_all};
 use krabka_metadata::MetadataImage;
 use krabka_protocol::{
     Encode,
@@ -97,53 +97,59 @@ async fn read_summaries(
     {
         return ReadShareGroupStateSummaryResponse::default();
     }
-    let group_id = req.group_id;
+    let group_id = req.group_id.as_str();
 
-    let mut results: Vec<ReadStateSummaryResult> = Vec::with_capacity(req.topics.len());
-    for topic in req.topics {
-        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
-        for pd in topic.partitions {
-            let result = match coordinator
-                .read_summary_checked(image, &group_id, topic_id, pd.partition)
-                .await
-            {
-                Ok(Some((state_epoch, leader_epoch, start_offset, delivery_complete_count))) => {
-                    PartitionResult {
+    // Kafka's `ShareCoordinatorService` schedules one operation for each
+    // partition and answers when every one of them completes. Each operation
+    // waits until its records commit, so the partitions run together.
+    let results: Vec<ReadStateSummaryResult> =
+        join_all(req.topics.into_iter().map(|topic| async move {
+            let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+            let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
+                match coordinator
+                    .read_summary_checked(image, group_id, topic_id, pd.partition)
+                    .await
+                {
+                    Ok(Some((
+                        state_epoch,
+                        leader_epoch,
+                        start_offset,
+                        delivery_complete_count,
+                    ))) => PartitionResult {
                         partition: pd.partition,
                         state_epoch,
                         leader_epoch,
                         start_offset: start_offset.0,
                         delivery_complete_count,
                         ..Default::default()
-                    }
+                    },
+                    // Kafka's `PartitionFactory` sentinels for a key with no state.
+                    Ok(None) => PartitionResult {
+                        partition: pd.partition,
+                        state_epoch: 0,
+                        leader_epoch: 0,
+                        start_offset: UNINITIALIZED_START_OFFSET,
+                        delivery_complete_count: UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
+                        ..Default::default()
+                    },
+                    // Kafka's `toErrorResponseData`: the code and the message, and
+                    // the schema default for every other field.
+                    Err(error) => PartitionResult {
+                        partition: pd.partition,
+                        error_code: error.code(),
+                        error_message: Some(error_message(error)),
+                        ..Default::default()
+                    },
                 }
-                // Kafka's `PartitionFactory` sentinels for a key with no state.
-                Ok(None) => PartitionResult {
-                    partition: pd.partition,
-                    state_epoch: 0,
-                    leader_epoch: 0,
-                    start_offset: UNINITIALIZED_START_OFFSET,
-                    delivery_complete_count: UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
-                    ..Default::default()
-                },
-                // Kafka's `toErrorResponseData`: the code and the message, and
-                // the schema default for every other field.
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error_message(error)),
-                    ..Default::default()
-                },
-            };
-            partitions.push(result);
-        }
-        results.push(ReadStateSummaryResult {
-            topic_id: topic.topic_id,
-            partitions,
-            ..Default::default()
-        });
-    }
+            }))
+            .await;
+            ReadStateSummaryResult {
+                topic_id: topic.topic_id,
+                partitions,
+                ..Default::default()
+            }
+        }))
+        .await;
 
     ReadShareGroupStateSummaryResponse {
         results,

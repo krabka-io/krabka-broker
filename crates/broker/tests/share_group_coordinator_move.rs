@@ -1,0 +1,208 @@
+//! A share group's coordinator answers a heartbeat only once the records it
+//! wrote are committed, so a member's epoch survives the coordinator moving.
+//!
+//! Kafka's `CoordinatorRuntime` completes a write when the high watermark of
+//! the group's `__consumer_offsets` partition passes it. In
+//! `ShareConsumerTest.test_broker_failure`, the coordinator of the group
+//! answered three joins with epochs whose records were in its log only, and
+//! then stopped cleanly. The broker that took the partition over had none of
+//! them, and it answered every member's next heartbeat with
+//! `GROUP_ID_NOT_FOUND`, which a share consumer cannot recover from.
+
+use std::time::{Duration, Instant};
+
+use assert2::{assert, check};
+use krabka_broker::{BrokerConfig, BrokerHandle};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
+    find_coordinator_request::FindCoordinatorRequest,
+    share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+    share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+};
+use tempfile::TempDir;
+
+mod support;
+
+const GROUP: &str = "share-move";
+const KEY_TYPE_GROUP: i8 = 0;
+const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
+const COORDINATOR_NOT_AVAILABLE: i16 = 15;
+
+/// The time a lookup may take to see a creation or a coordinator move.
+const SETTLE: Duration = Duration::from_secs(60);
+
+type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+
+/// Three brokers with one `__consumer_offsets` partition, replicated on all
+/// of them. A stopped broker stays in its ISRs: the leader does not shrink
+/// them on lag, and the controller does not fence the broker, for longer
+/// than any test here runs.
+async fn start_three() -> Cluster {
+    let cluster = support::start_n_node_with(3, |_, config| {
+        *config = config.clone().with_internal_topics_for(3);
+        config.offsets_topic_num_partitions = 1;
+        config.share_coordinator.state_topic_num_partitions = 1;
+        config.replica_lag_time_max = krabka_units::secs(30);
+        config.isr_scan_interval = krabka_units::hours(1);
+        config.heartbeat_timeout = krabka_units::minutes(10);
+    })
+    .await
+    .expect("start the cluster");
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    cluster
+}
+
+async fn client(handle: &BrokerHandle) -> Client {
+    Client::builder()
+        .bootstrap(handle.listen_addr().to_string())
+        .client_id("share-coordinator-move")
+        .build()
+        .await
+        .expect("client")
+}
+
+/// Look `GROUP` up until a broker other than `excluded` answers as its
+/// coordinator, and return that broker's node id.
+async fn coordinator_of(client: &Client, excluded: Option<u64>) -> u64 {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        let found = client
+            .send(FindCoordinatorRequest {
+                key: GROUP.into(),
+                key_type: KEY_TYPE_GROUP,
+                coordinator_keys: vec![GROUP.into()],
+                ..Default::default()
+            })
+            .await
+            .expect("FindCoordinator");
+        if let [row] = found.coordinators.as_slice()
+            && row.error_code == 0
+            && let Ok(node_id) = u64::try_from(row.node_id)
+            && Some(node_id) != excluded
+        {
+            return node_id;
+        }
+        assert!(Instant::now() < deadline, "FindCoordinator: {found:?}");
+        // intentional: a client has no awaiter for the creation or the
+        // move; it retries, as Kafka's clients do.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn heartbeat(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatRequest {
+    ShareGroupHeartbeatRequest {
+        group_id: GROUP.into(),
+        member_id: member_id.into(),
+        member_epoch,
+        subscribed_topic_names: Some(vec!["orders".into()]),
+        ..Default::default()
+    }
+}
+
+fn position_of(cluster: &Cluster, node_id: u64) -> usize {
+    cluster
+        .iter()
+        .position(|(handle, _, _)| handle.node_id() == node_id)
+        .expect("a cluster member")
+}
+
+/// A join whose records cannot commit, because a follower of the group's
+/// offsets partition is down but still in its ISR, is not answered with an
+/// epoch. It times out as Kafka's coordinator write does, and the client
+/// gets `COORDINATOR_NOT_AVAILABLE`, which it retries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_join_that_does_not_commit_is_not_answered() {
+    let mut cluster = start_three().await;
+    let lookup = client(&cluster[0].0).await;
+    let coordinator = coordinator_of(&lookup, None).await;
+    lookup.close();
+    let raft_leader = cluster[0].0.wait_until_controller_leader().await.0;
+    let follower = cluster
+        .iter()
+        .position(|(handle, _, _)| {
+            handle.node_id() != coordinator && handle.node_id() != raft_leader
+        })
+        .unwrap_or_else(|| {
+            cluster
+                .iter()
+                .position(|(handle, _, _)| handle.node_id() != coordinator)
+                .expect("a follower")
+        });
+    let (stopped, _, stopped_dir) = cluster.remove(follower);
+    stopped.crash_for_test().await;
+
+    let member = client(&cluster[position_of(&cluster, coordinator)].0).await;
+    let joined = member
+        .send(heartbeat("member-1", 0))
+        .await
+        .expect("ShareGroupHeartbeat");
+    member.close();
+
+    assert!(
+        joined
+            == ShareGroupHeartbeatResponse {
+                error_code: COORDINATOR_NOT_AVAILABLE,
+                ..Default::default()
+            }
+    );
+
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
+    }
+    drop(stopped_dir);
+}
+
+/// The start of `ShareConsumerTest.test_broker_failure` at a small scale:
+/// a member joins, its coordinator stops cleanly, and the broker that takes
+/// the group over accepts the member's next heartbeat at the epoch it had.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
+    let mut cluster = start_three().await;
+    let lookup = client(&cluster[0].0).await;
+    let coordinator = coordinator_of(&lookup, None).await;
+    lookup.close();
+
+    let position = position_of(&cluster, coordinator);
+    let member = client(&cluster[position].0).await;
+    let joined = member
+        .send(heartbeat("member-1", 0))
+        .await
+        .expect("ShareGroupHeartbeat");
+    member.close();
+    assert!(joined.error_code == 0, "{joined:?}");
+    assert!(joined.member_epoch > 0, "{joined:?}");
+
+    let (stopped, _, stopped_dir) = cluster.remove(position);
+    stopped
+        .controlled_shutdown(Duration::from_secs(30))
+        .await
+        .expect("the controlled shutdown drains");
+    let survivor = client(&cluster[0].0).await;
+    let next = coordinator_of(&survivor, Some(coordinator)).await;
+    survivor.close();
+    let member = client(&cluster[position_of(&cluster, next)].0).await;
+    let deadline = Instant::now() + SETTLE;
+    let resumed = loop {
+        let response = member
+            .send(heartbeat("member-1", joined.member_epoch))
+            .await
+            .expect("ShareGroupHeartbeat");
+        // The new coordinator answers `COORDINATOR_LOAD_IN_PROGRESS` while
+        // it replays the partition.
+        if response.error_code != COORDINATOR_LOAD_IN_PROGRESS || Instant::now() >= deadline {
+            break response;
+        }
+        // intentional: the client retries a coordinator that is loading.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    member.close();
+
+    check!(resumed.error_code == 0, "{resumed:?}");
+    check!(resumed.member_id.as_deref() == Some("member-1"));
+    check!(resumed.member_epoch >= joined.member_epoch);
+
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
+    }
+    drop(stopped_dir);
+}

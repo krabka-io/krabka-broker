@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use krabka_broker::{BootstrapMode, BrokerConfig};
+use krabka_broker::{BootstrapMode, BrokerConfig, file_config::FileConfig};
 use krabka_log::LogConfig;
 
 use crate::cli::Args;
@@ -43,6 +43,44 @@ pub fn parse_optional_listen_addr(
 const DEFAULT_CONTROLLER_PORT: u16 = 9093;
 
 impl Args {
+    /// Reads `--config-file`, when the command line names one, and adopts the
+    /// file's `broker_id` as this node's id.
+    ///
+    /// The id has to be settled before anything derives from it: the
+    /// telemetry resource, the raft node id, and the self-voter that
+    /// [`Self::base_broker_config`] seeds when no voter set is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns the path and the cause when the file cannot be read or is not a
+    /// valid `broker.toml`.
+    pub fn load_config_file(&mut self) -> Result<Option<FileConfig>, String> {
+        let Some(path) = self.config_file.as_ref() else {
+            return Ok(None);
+        };
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let file: FileConfig = toml::from_str(&contents)
+            .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+        self.adopt_file_broker_id(&file);
+        Ok(Some(file))
+    }
+
+    /// Takes the file's `broker_id` unless `--broker-id` named another id.
+    pub fn adopt_file_broker_id(&mut self, file: &FileConfig) {
+        self.broker_id = file.resolved_broker_id(self.broker_id);
+    }
+
+    /// The raft node id: the broker id, as Kafka's `node.id` is both.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the broker id is negative.
+    pub fn node_id(&self) -> Result<u64, String> {
+        u64::try_from(self.broker_id)
+            .map_err(|_| format!("broker_id must be non-negative, got {}", self.broker_id))
+    }
+
     /// Where the controller listener binds: `--controller-listen-addr` when it
     /// is given, and otherwise the client listener's host on port 9093.
     ///
@@ -77,17 +115,11 @@ impl Args {
             advertised_listener,
             log_dir: std::mem::take(&mut self.log_dir),
             extra_log_dirs: std::mem::take(&mut self.extra_log_dirs),
+            metadata_log_dir: self.metadata_log_dir.take(),
             log_config: LogConfig::default(),
             node_id: krabka_broker::NodeId(node_id),
             controller_listen_addr,
-            controller_quorum_voters: if self.controller_quorum_voters.is_empty() {
-                vec![(
-                    krabka_broker::NodeId(node_id),
-                    controller_listen_addr.to_string(),
-                )]
-            } else {
-                std::mem::take(&mut self.controller_quorum_voters)
-            },
+            controller_quorum_voters: std::mem::take(&mut self.controller_quorum_voters),
             bootstrap_servers: std::mem::take(&mut self.controller_bootstrap_servers),
             directory_id: uuid::Uuid::nil(),
             auto_join: self.controller_auto_join,
@@ -214,21 +246,17 @@ mod tests {
     }
 
     #[test]
-    fn base_config_defaults_to_the_local_controller() {
+    fn base_config_seeds_no_voter() {
         let mut args = Args::try_parse_from(["krabka-broker"]).unwrap();
-        let controller = "127.0.0.1:9093".parse().unwrap();
         let config = args.base_broker_config(
             "127.0.0.1:9092".into(),
-            controller,
+            "127.0.0.1:9093".parse().unwrap(),
             3,
             None,
             None,
             krabka_broker::telemetry::OtlpProtocol::Grpc,
         );
 
-        assert!(
-            config.controller_quorum_voters
-                == vec![(krabka_broker::NodeId(3), controller.to_string())]
-        );
+        assert!(config.controller_quorum_voters.is_empty());
     }
 }

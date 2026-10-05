@@ -10,7 +10,7 @@ use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord, from_kraft_va
 use super::{
     Engine, PendingDowngradeSnapshot,
     offsets::{batch_base_in_apply_window, expected_hwm_after_advance, hwm_advanced_as_expected},
-    records::next_batch_offset,
+    records::{is_kip835_noop, next_batch_offset},
 };
 
 impl Engine {
@@ -41,12 +41,12 @@ impl Engine {
                 expected_hwm,
                 "high watermark failed to advance to committed offset",
             );
-            self.maybe_snapshot_and_prune();
+            self.maybe_snapshot();
             return;
         }
         if applied_hwm <= prev_hwm {
             self.try_resolve_waiters();
-            self.maybe_snapshot_and_prune();
+            self.maybe_snapshot();
             return;
         }
         let mut cursor = prev_hwm;
@@ -82,6 +82,10 @@ impl Engine {
                             let Some(value) = rec.value.as_ref() else {
                                 continue;
                             };
+                            // A KIP-835 no-op changes nothing.
+                            if is_kip835_noop(value) {
+                                continue;
+                            }
                             match from_kraft_value(value, &self.image) {
                                 Ok(meta) => match self.image.validate(&meta) {
                                     Ok(()) => {
@@ -167,6 +171,6 @@ impl Engine {
         }
         self.publish_leader();
         self.try_resolve_waiters();
-        self.maybe_snapshot_and_prune();
+        self.maybe_snapshot();
     }
 }

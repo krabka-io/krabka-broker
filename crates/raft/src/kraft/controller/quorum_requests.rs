@@ -19,7 +19,7 @@
 
 use bytes::Bytes;
 
-use super::{Engine, checkpoint::load_checkpoint_by_id, checkpoint_dir};
+use super::{Engine, checkpoint::load_checkpoint_by_id};
 use crate::kraft::{
     event::{Event, LogEnd, SuccessorRank},
     transport::wire,
@@ -444,13 +444,7 @@ impl Engine {
             partition.snapshot_id.epoch,
         );
         let checkpoint = (snapshot_id != BOOTSTRAP_SNAPSHOT_ID)
-            .then(|| {
-                load_checkpoint_by_id(
-                    &checkpoint_dir(&self.data_dir),
-                    snapshot_id.0,
-                    snapshot_id.1,
-                )
-            })
+            .then(|| load_checkpoint_by_id(&self.data_dir, snapshot_id.0, snapshot_id.1))
             .flatten();
         let Some(bytes) = checkpoint else {
             return partition_error(self, SNAPSHOT_NOT_FOUND);

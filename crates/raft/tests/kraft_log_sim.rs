@@ -42,7 +42,8 @@ struct KraftBackedLog {
 impl KraftBackedLog {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let log = KraftLog::open(dir.path()).expect("open KraftLog");
+        let log = KraftLog::open(dir.path(), &krabka_raft::MetadataLogConfig::default())
+            .expect("open KraftLog");
         Self { log, _dir: dir }
     }
 

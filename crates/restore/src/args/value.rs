@@ -74,13 +74,11 @@ impl PartialEq for HeaderPattern {
 
 impl Eq for HeaderPattern {}
 
-/// Parse a node id: a bare `u64` in the [`NodeId`] newtype.
+/// Parse a node id as `krabka-format --node-id` parses it: Kafka's
+/// `node.id`, an `int` that is not negative. The restore formats the target
+/// with the id, so an id that the formatter refuses is refused here first.
 pub(super) fn parse_node_id(s: &str) -> Result<NodeId, String> {
-    let id: u64 = s
-        .trim()
-        .parse()
-        .map_err(|error| format!("node id: {error}"))?;
-    Ok(NodeId(id))
+    krabka_format::parse_node_id(s)
 }
 
 /// Parses a `--cluster-id` value in Kafka's base64 `Uuid` form (what
@@ -419,9 +417,10 @@ mod tests {
     }
 
     #[test]
-    fn node_ids_take_an_integer_and_nothing_else() {
+    fn node_ids_take_kafkas_node_id_range() {
         check!(parse_node_id("3") == Ok(NodeId(3)));
-        for bad in ["-1", "x", ""] {
+        check!(parse_node_id("2147483647") == Ok(NodeId(2_147_483_647)));
+        for bad in ["-1", "x", "", "2147483648"] {
             check!(parse_node_id(bad).is_err(), "{bad:?}");
         }
     }

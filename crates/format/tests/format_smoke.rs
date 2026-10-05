@@ -27,8 +27,7 @@ fn bootstrap_records(dir: &tempfile::TempDir) -> Vec<MetadataRecord> {
 
 fn offset_zero_checkpoint(dir: &tempfile::TempDir) -> std::path::PathBuf {
     dir.path()
-        .join("__cluster_metadata")
-        .join("@metadata-0")
+        .join("__cluster_metadata-0")
         .join("00000000000000000000-0000000000.checkpoint")
 }
 
@@ -38,6 +37,8 @@ fn format_with_add_scram_writes_credential_record() {
     let out = run_format(
         &dir,
         &[
+            "--node-id",
+            "1",
             "--add-scram",
             "SCRAM-SHA-512=[name=admin,password=admin-secret,iterations=4096]",
         ],
@@ -82,6 +83,8 @@ fn format_low_iterations_fails() {
     let out = run_format(
         &dir,
         &[
+            "--node-id",
+            "1",
             "--add-scram",
             "SCRAM-SHA-512=[name=admin,password=p,iterations=1]",
         ],
@@ -93,7 +96,7 @@ fn format_low_iterations_fails() {
 #[test]
 fn no_initial_controllers_writes_offset_zero_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let out = run_format(&dir, &["--no-initial-controllers"]);
+    let out = run_format(&dir, &["--node-id", "1", "--no-initial-controllers"]);
     assert2::assert!(out.status.success());
 
     let records = bootstrap_records(&dir);
@@ -191,13 +194,17 @@ fn initial_controllers_rejects_ambiguous_or_missing_local_identity() {
 #[test]
 fn dynamic_modes_are_mutually_exclusive() {
     for args in [
-        vec!["--standalone", "--no-initial-controllers"],
+        vec!["--node-id", "1", "--standalone", "--no-initial-controllers"],
         vec![
+            "--node-id",
+            "1",
             "--initial-controllers",
             "1@one.example:9093:00000000-0000-0000-0000-000000000001",
             "--no-initial-controllers",
         ],
         vec![
+            "--node-id",
+            "1",
             "--standalone",
             "--initial-controllers",
             "1@one.example:9093:00000000-0000-0000-0000-000000000001",
@@ -213,9 +220,15 @@ fn dynamic_modes_are_mutually_exclusive() {
 #[test]
 fn kraft_version_must_match_the_selected_format_mode() {
     for args in [
-        vec!["--no-initial-controllers", "--feature", "kraft.version=0"],
-        vec!["--feature", "kraft.version=1"],
-        vec!["--feature", "kraft.version=2"],
+        vec![
+            "--node-id",
+            "1",
+            "--no-initial-controllers",
+            "--feature",
+            "kraft.version=0",
+        ],
+        vec!["--node-id", "1", "--feature", "kraft.version=1"],
+        vec!["--node-id", "1", "--feature", "kraft.version=2"],
     ] {
         let dir = tempfile::tempdir().unwrap();
         let out = run_format(&dir, &args);
@@ -224,7 +237,10 @@ fn kraft_version_must_match_the_selected_format_mode() {
     }
 
     let static_dir = tempfile::tempdir().unwrap();
-    let out = run_format(&static_dir, &["--feature", "kraft.version=0"]);
+    let out = run_format(
+        &static_dir,
+        &["--node-id", "1", "--feature", "kraft.version=0"],
+    );
     assert2::assert!(out.status.success());
     assert2::assert!(bootstrap_records(&static_dir).iter().all(|record| {
         !matches!(
@@ -232,4 +248,23 @@ fn kraft_version_must_match_the_selected_format_mode() {
             MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
         )
     }));
+}
+
+/// `--node-id` is required, as Kafka's `node.id` is: without it clap refuses
+/// the command line, exit 2, and nothing is written.
+#[test]
+fn node_id_is_required() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("data");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_krabka-format"))
+        .args([
+            "--log-dir",
+            dir.to_str().unwrap(),
+            "--no-initial-controllers",
+        ])
+        .output()
+        .expect("run krabka-format");
+    assert2::assert!(out.status.code() == Some(2));
+    assert2::assert!(String::from_utf8_lossy(&out.stderr).contains("--node-id <NODE_ID>"));
+    assert2::assert!(!dir.exists());
 }

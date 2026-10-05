@@ -56,6 +56,10 @@ pub(super) fn test_engine_with_voters(
         krabka_units::prelude::bytes(0),
         millis(0),
         krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::default(),
+        crate::MetadataLogConfig {
+            max_idle_interval: millis(0),
+            ..crate::MetadataLogConfig::default()
+        },
     )
     .expect("open engine");
     (ctrl, dir)

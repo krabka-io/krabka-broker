@@ -60,7 +60,8 @@ enum Sender {
 /// What a case expects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Expect {
-    /// The follower reads at the log end, and the high watermark follows it.
+    /// The follower reads at the log end, and the high watermark follows it
+    /// after the read. The row reports the high watermark from before.
     FollowerRead,
     /// The consumer reads up to the high watermark, which is still 0.
     ConsumerRead,
@@ -255,7 +256,7 @@ fn expected(case: Case, label: String, topic: &str) -> Outcome {
     };
     let (row, high_watermark, tracked_followers) = match case.expect {
         Expect::FollowerRead => (
-            read(LOG_END, RecordsPayload::Legacy(Bytes::new())),
+            read(0, RecordsPayload::Legacy(Bytes::new())),
             Offset(LOG_END),
             vec![OTHER_NODE],
         ),

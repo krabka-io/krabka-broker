@@ -155,6 +155,15 @@ pub(crate) const DELETE_TOPIC_ENABLE: &str = "delete.topic.enable";
 /// [`crate::config::BrokerConfig::auto_create_topics_enable`].
 pub(crate) const AUTO_CREATE_TOPICS_ENABLE: &str = "auto.create.topics.enable";
 
+/// The record time a segment may span before it rolls, for a topic that sets
+/// no `segment.ms`. Kafka's `ServerLogConfigs.LOG_ROLL_TIME_MILLIS_CONFIG`, a
+/// long with no default that wins over `log.roll.hours`.
+///
+/// A node reads it from its `server.properties` keys into
+/// [`crate::config::BrokerConfig::log_config`]. `DescribeConfigs` reports it
+/// at `STATIC_BROKER_CONFIG` when the operator named it.
+pub(crate) const LOG_ROLL_MS: &str = "log.roll.ms";
+
 /// KIP-98: how long a transactional id may sit in a terminal or idle state
 /// before the transaction coordinator tombstones it out of
 /// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).

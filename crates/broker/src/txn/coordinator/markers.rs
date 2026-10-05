@@ -4,7 +4,8 @@
 //! `ABORT` control markers to every partition a transaction touched. One path
 //! fans the markers out to the partition leaders through the inter-broker
 //! client, and the fallback path appends to locally-held partitions when no
-//! marker transport is configured.
+//! marker transport is configured. Both count a marker as written only once
+//! it is committed on its partition.
 
 use super::TxnCoordinator;
 use crate::{
@@ -12,8 +13,8 @@ use crate::{
     txn::{
         bootstrap,
         handlers::{
-            end_txn::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
-            write_txn_markers::{MarkerAppend, append_marker_and_materialize},
+            end_txn::{MarkerDispatchContext, MarkerFanOut, dispatch_markers, write_local_markers},
+            write_txn_markers::MarkerAppend,
         },
         marker::MarkerType,
         state::{TopicPartition, TxnEntry, TxnState},
@@ -100,34 +101,28 @@ impl TxnCoordinator {
         marker_type: MarkerType,
     ) -> MarkerFanOut {
         let mut outcome = MarkerFanOut::default();
+        let mut local = Vec::new();
         for tp in &entry.partitions {
-            let Some(part) = self.partitions.get(&tp.topic, tp.partition) else {
-                outcome.fail(BrokerError::Txn(format!(
+            match self.partitions.get(&tp.topic, tp.partition) {
+                Some(part) => local.push((tp.clone(), part)),
+                None => outcome.fail(BrokerError::Txn(format!(
                     "transaction marker transport is not configured for remote partition {}-{}",
                     tp.topic,
                     tp.partition.get()
-                )));
-                continue;
-            };
-            match append_marker_and_materialize(
-                &part,
-                self.group_coordinator.as_ref(),
-                &tp.topic,
-                MarkerAppend {
-                    producer_id: entry.producer_id,
-                    producer_epoch: entry.producer_epoch,
-                    marker_type,
-                    coordinator_epoch: UNKNOWN_COORDINATOR_EPOCH,
-                    commit_stamp: None,
-                    transaction_version: entry.client_transaction_version,
-                },
-            )
-            .await
-            {
-                Ok(()) => outcome.written.push(tp.clone()),
-                Err(error) => outcome.fail(error),
+                ))),
             }
         }
+        let marker = MarkerAppend {
+            producer_id: entry.producer_id,
+            producer_epoch: entry.producer_epoch,
+            marker_type,
+            coordinator_epoch: UNKNOWN_COORDINATOR_EPOCH,
+            commit_stamp: None,
+            transaction_version: entry.client_transaction_version,
+        };
+        outcome.merge(
+            write_local_markers(self.node_id, self.group_coordinator.as_ref(), marker, local).await,
+        );
         outcome
     }
 }
@@ -244,6 +239,8 @@ mod tests {
             Arc::new(crate::producer_state::ProducerState::new()),
             false,
         );
+        // The metadata reconcile installs this broker as the leader.
+        local.install_leader_change(1, 0).await;
         coordinator
             .partitions
             .insert("a".into(), PartitionIndex(0), local);

@@ -40,9 +40,7 @@ impl ControllerHandle {
     /// layer between the decode and the slice index for a quantity to occupy.
     #[must_use]
     pub fn read_snapshot_range(&self, position: i64, max_bytes: i32) -> SnapshotRange {
-        let Some((id, bytes)) =
-            load_latest_checkpoint(&crate::kraft::checkpoint_dir(&self.data_dir))
-        else {
+        let Some((id, bytes)) = load_latest_checkpoint(&self.data_dir) else {
             return SnapshotRange::NoSnapshot;
         };
         let Some(pos) = usize::try_from(position)
@@ -171,7 +169,7 @@ mod tests {
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
         let ctrl = Controller::start(cfg).await.expect("join start");
-        let checkpoint_dir = crate::kraft::checkpoint_dir(dir.path());
+        let checkpoint_dir = crate::metadata_partition_dir(dir.path());
         std::fs::create_dir_all(&checkpoint_dir).unwrap();
         std::fs::write(
             checkpoint_dir.join("00000000000000000010-0000000004.checkpoint"),

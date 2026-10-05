@@ -1,9 +1,10 @@
-//! Tiered storage (KIP-405): describing sealed segments for offload and
-//! dropping the local copies once they are safely remote.
+//! Tiered storage (KIP-405): describing sealed segments for offload, rolling
+//! the active segment when local retention asks for it, and dropping the local
+//! copies once they are safely remote.
 //!
 //! `Log` enforces no tiered-storage invariant of its own. It reports what
-//! a `RemoteLogManager` needs and deletes what that manager tells it to
-//! delete.
+//! a `RemoteLogManager` needs, rolls when that manager tells it to roll, and
+//! deletes what that manager tells it to delete.
 
 use std::{
     collections::HashSet,
@@ -57,6 +58,27 @@ pub struct SegmentExport {
     /// as `(epoch, start_offset)` clamped to `base_offset`, ordered by
     /// offset. May be empty when no epochs were recorded for this log.
     pub leader_epochs: Vec<(LeaderEpoch, Offset)>,
+}
+
+/// The active segment as tiered local retention measures it (KIP-405).
+///
+/// Kafka's `UnifiedLog.deletableSegments` walks a tiered log's active segment
+/// last. When the retention predicate holds for it, Kafka rolls it, so that
+/// the next copy can upload its records and the next retention pass can drop
+/// them from local disk. This value carries what that predicate reads.
+/// [`Log::active_segment_export`] produces it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActiveSegmentExport {
+    /// First absolute offset in the segment.
+    pub base_offset: Offset,
+    /// Kafka's `LogSegment.largestTimestamp()`, as in
+    /// [`SegmentExport::max_timestamp`].
+    pub max_timestamp: i64,
+    /// Kafka's `LogSegment.lastModified()`, as in
+    /// [`SegmentExport::last_modified_ms`].
+    pub last_modified_ms: i64,
+    /// `.log` file size.
+    pub size: ByteSize,
 }
 
 /// Leader epochs whose coverage `[start_e, start_{e+1})` overlaps the
@@ -235,6 +257,55 @@ impl Log {
         }
 
         Ok(removed)
+    }
+
+    /// Describe the active segment for tiered local retention (KIP-405), or
+    /// return `None` when the log has no active segment.
+    ///
+    /// `max_timestamp` is Kafka's `largestTimestamp()`, so an empty segment
+    /// and a segment whose records carry no timestamp both report the `.log`
+    /// file's modification time.
+    #[must_use]
+    pub fn active_segment_export(&self) -> Option<ActiveSegmentExport> {
+        self.active.as_ref().map(|segment| {
+            let base_offset = segment.base_offset();
+            ActiveSegmentExport {
+                base_offset,
+                max_timestamp: self.largest_timestamp(segment),
+                last_modified_ms: last_modified_ms(&name::log_path(&self.dir, base_offset.0)),
+                size: segment.size(),
+            }
+        })
+    }
+
+    /// Kafka's `UnifiedLog.roll()`, as tiered local retention calls it: seal
+    /// the active segment and open an empty one at the log end.
+    ///
+    /// Kafka's `deletableSegments` rolls a tiered log's active segment once
+    /// it breaches `local.retention.ms` or `local.retention.bytes`. The
+    /// remote tier never holds the active segment, so without the roll an
+    /// idle partition keeps its newest records on local disk until
+    /// `segment.ms` or `segment.bytes` rolls the segment.
+    ///
+    /// Returns `true` when the log rolled. It does nothing and returns
+    /// `false` when there is no active segment or the active segment is
+    /// empty: an empty segment holds nothing to copy, and the new segment
+    /// would open at the same base offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the flush, the producer snapshot, the seal, or
+    /// the new segment's files fail.
+    pub fn roll(&mut self) -> Result<bool, LogError> {
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|segment| segment.size() == ByteSize::ZERO)
+        {
+            return Ok(false);
+        }
+        self.roll_active_segment()?;
+        Ok(true)
     }
 
     /// Describe every sealed segment for tiered-storage offload (KIP-405).

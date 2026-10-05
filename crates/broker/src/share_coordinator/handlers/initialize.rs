@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, join_all};
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::{
@@ -84,40 +84,44 @@ async fn initialize_state(
     if req.group_id.is_empty() || req.topics.is_empty() {
         return InitializeShareGroupStateResponse::default();
     }
-    let group_id = req.group_id;
+    let group_id = req.group_id.as_str();
 
-    let mut results: Vec<InitializeStateResult> = Vec::with_capacity(req.topics.len());
-    for topic in req.topics {
-        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
-        for pd in topic.partitions {
-            let result = coordinator
-                .initialize(
-                    image,
-                    &group_id,
-                    topic_id,
-                    pd.partition,
-                    pd.state_epoch,
-                    Offset(pd.start_offset),
-                )
-                .await;
-            let (error_code, error_message) = match result {
-                Ok(()) => (codes::NONE, None),
-                Err(error) => (error.code(), Some(error.row_message("initialize"))),
-            };
-            partitions.push(PartitionResult {
-                partition: pd.partition,
-                error_code,
-                error_message,
+    // Kafka's `ShareCoordinatorService` schedules one operation for each
+    // partition and answers when every one of them completes. Each operation
+    // waits until its records commit, so the partitions run together.
+    let results: Vec<InitializeStateResult> =
+        join_all(req.topics.into_iter().map(|topic| async move {
+            let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+            let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
+                let result = coordinator
+                    .initialize(
+                        image,
+                        group_id,
+                        topic_id,
+                        pd.partition,
+                        pd.state_epoch,
+                        Offset(pd.start_offset),
+                    )
+                    .await;
+                let (error_code, error_message) = match result {
+                    Ok(()) => (codes::NONE, None),
+                    Err(error) => (error.code(), Some(error.row_message("initialize"))),
+                };
+                PartitionResult {
+                    partition: pd.partition,
+                    error_code,
+                    error_message,
+                    ..Default::default()
+                }
+            }))
+            .await;
+            InitializeStateResult {
+                topic_id: topic.topic_id,
+                partitions,
                 ..Default::default()
-            });
-        }
-        results.push(InitializeStateResult {
-            topic_id: topic.topic_id,
-            partitions,
-            ..Default::default()
-        });
-    }
+            }
+        }))
+        .await;
 
     InitializeShareGroupStateResponse {
         results,

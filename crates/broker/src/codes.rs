@@ -683,6 +683,8 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         BrokerError::ProducerIdBlockUnavailable(_) => COORDINATOR_LOAD_IN_PROGRESS,
         BrokerError::FencedLeaderEpoch { .. } => FENCED_LEADER_EPOCH,
         BrokerError::UnknownLeaderEpoch(_) => UNKNOWN_LEADER_EPOCH,
+        BrokerError::CoordinatorWriteUncommitted { code, .. }
+        | BrokerError::TransactionStateWriteUncommitted { code, .. } => *code,
         BrokerError::Replication(_)
         | BrokerError::Shutdown
         | BrokerError::Io(_)

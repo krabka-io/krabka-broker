@@ -4,10 +4,10 @@
 //! Neither file has a stable name. The RLMM snapshot does — it is always
 //! `<log.dir>/remote-log-metadata/snapshot` — but the controller metadata
 //! checkpoint is `<end-offset>-<epoch>.checkpoint` and there are several of
-//! them, in one of two directories depending on whether the node runs a
-//! controller. Picking the right one is this module's whole job, and it is a
-//! pure function over directory listings so a test can pin the choice without
-//! a broker.
+//! them, in one of two directories under the metadata log directory,
+//! depending on whether the node runs a controller. Picking the right one is
+//! this module's whole job, and it is a pure function over directory listings
+//! so a test can pin the choice without a broker.
 
 use std::path::{Path, PathBuf};
 
@@ -16,13 +16,15 @@ use crate::manifest::CAPTURE_ROOT;
 /// The RLMM snapshot's path under a log directory.
 pub const RLMM_SNAPSHOT_RELATIVE: &str = "remote-log-metadata/snapshot";
 
-/// Where a node that runs a controller keeps its metadata checkpoints.
-pub const CONTROLLER_CHECKPOINT_DIR: &str = "__cluster_metadata/@metadata-0";
+/// Where a node that runs a controller keeps its metadata checkpoints, under
+/// the metadata log directory: Kafka's metadata partition directory.
+pub const CONTROLLER_CHECKPOINT_DIR: &str = "__cluster_metadata-0";
 
-/// Where a broker-only node keeps the checkpoints its metadata observer wrote.
-/// They sit beside `@metadata-0` and never inside it, because a controller
-/// must not load one.
-pub const OBSERVER_CHECKPOINT_DIR: &str = "__cluster_metadata/observer";
+/// Where a broker-only node keeps the checkpoints its metadata observer wrote,
+/// under the metadata log directory. They sit in a subdirectory of
+/// `__cluster_metadata-0` and never directly in it, because a controller must
+/// not load one.
+pub const OBSERVER_CHECKPOINT_DIR: &str = "__cluster_metadata-0/observer";
 
 /// Suffix of a KIP-630 checkpoint artifact.
 const CHECKPOINT_SUFFIX: &str = ".checkpoint";
@@ -64,8 +66,8 @@ pub fn newest_checkpoint(names: &[String]) -> Option<String> {
 }
 
 /// Every file name directly inside `dir`. An absent or unreadable directory is
-/// an empty list: a broker-only node has no `@metadata-0`, and that is not a
-/// failure.
+/// an empty list: a node can lack either checkpoint directory, and that is not
+/// a failure.
 #[must_use]
 pub fn file_names(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -77,8 +79,9 @@ pub fn file_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The newest metadata checkpoint under `log_dir`, looking in the controller's
-/// directory and then in the observer's.
+/// The newest metadata checkpoint under `log_dir`, the node's metadata log
+/// directory, looking in the controller's directory and then in the
+/// observer's.
 ///
 /// A node that runs a controller has both; the controller's is authoritative
 /// and is preferred at an equal id, because the observer records a placeholder
@@ -174,7 +177,7 @@ mod tests {
     #[test]
     fn an_observer_checkpoint_is_found_when_there_is_no_controller_directory() {
         let log_dir = tempfile::tempdir().expect("log dir");
-        let observer = log_dir.path().join("__cluster_metadata/observer");
+        let observer = log_dir.path().join("__cluster_metadata-0/observer");
         std::fs::create_dir_all(&observer).expect("create the observer dir");
         let newest = observer.join("00000000000000000042-0000000000.checkpoint");
         std::fs::write(&newest, b"bytes").expect("write a checkpoint");
@@ -191,10 +194,7 @@ mod tests {
     fn the_controller_directory_wins_when_both_hold_the_same_id() {
         let log_dir = tempfile::tempdir().expect("log dir");
         let name = "00000000000000000042-0000000000.checkpoint";
-        for subdir in [
-            "__cluster_metadata/@metadata-0",
-            "__cluster_metadata/observer",
-        ] {
+        for subdir in ["__cluster_metadata-0", "__cluster_metadata-0/observer"] {
             let dir = log_dir.path().join(subdir);
             std::fs::create_dir_all(&dir).expect("create a checkpoint dir");
             std::fs::write(dir.join(name), b"bytes").expect("write a checkpoint");
@@ -202,12 +202,7 @@ mod tests {
 
         check!(
             newest_metadata_checkpoint(log_dir.path())
-                == Some(
-                    log_dir
-                        .path()
-                        .join("__cluster_metadata/@metadata-0")
-                        .join(name)
-                )
+                == Some(log_dir.path().join("__cluster_metadata-0").join(name))
         );
     }
 

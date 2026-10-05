@@ -98,7 +98,7 @@ pub(super) async fn install_snapshot(
     let (end_offset, epoch) = snapshot_id;
     let next_fetch_offset = u64::try_from(end_offset).ok()?;
     let bytes = transfer(config, conn, target, snapshot_id).await?;
-    let records = match krabka_raft::deserialize_metadata_snapshot(&bytes) {
+    let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
         Ok(records) => records,
         Err(error) => {
             warn!(%error, end_offset, epoch, "observer could not decode the fetched snapshot");

@@ -172,7 +172,7 @@ async fn start_metadata_source(
             observer_lag_bound: config.observer_lag_bound,
             initial_voters: prepare_initial_voters(config, bootstrap_records),
             controller_listen_addr: config.controller_listen_addr,
-            log_dir: config.log_dir.join("__cluster_metadata"),
+            log_dir: config.metadata_dir().to_path_buf(),
             election_timeout: config.controller_election_timeout,
             heartbeat_interval: config
                 .controller_heartbeat_interval_explicit
@@ -207,6 +207,7 @@ async fn start_metadata_source(
             max_snapshot_interval: config.metadata_max_snapshot_interval,
             snapshot_interval_records: config.metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max: config.metadata_snapshot_fetch_max,
+            metadata_log: config.metadata_log,
         };
         let controller = Arc::new(
             krabka_raft::Controller::start_with_listener(controller_config, controller_listener)
@@ -234,17 +235,18 @@ async fn start_metadata_source(
             client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
             client_frame_max: config.client_frame_max,
             voters: config.controller_quorum_voters.clone(),
+            bootstrap_servers: config.bootstrap_servers.clone(),
             dialer: Arc::clone(&dialer),
             client_id: format!("krabka-broker-{}-observer", config.broker_id),
             cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
             node_id: config.node_id,
             directory_id: config.directory_id,
-            // The metadata log directory. The observer keeps its checkpoints
-            // in a subdirectory of their own beside the controller's, never in
-            // it: an observer checkpoint carries no KIP-853 control state and
-            // has no log to match its boundary, so a controller must not load
-            // one. See `metadata_observer::store`.
-            data_dir: config.log_dir.join("__cluster_metadata"),
+            // The metadata partition directory. The observer keeps its
+            // checkpoints in a subdirectory of their own, never beside the
+            // controller's: an observer checkpoint has no log to match its
+            // boundary, so a controller must not load one. See
+            // `metadata_observer::store`.
+            data_dir: krabka_raft::metadata_partition_dir(config.metadata_dir()),
             snapshot_interval_records: config.metadata_snapshot_interval_records,
             snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
             max_bytes: config.observer_fetch_max,
@@ -256,6 +258,8 @@ async fn start_metadata_source(
         client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
         client_frame_max: config.client_frame_max,
         voters: config.controller_quorum_voters.clone(),
+        bootstrap_servers: config.bootstrap_servers.clone(),
+        image: observer.watch_image(),
         dialer,
         client_id: format!("krabka-broker-{}-writer", config.broker_id),
         leader: observer.watch_leader(),
@@ -382,7 +386,9 @@ pub(super) async fn start_metadata_phase(
         bind_ephemeral_controller_listener(config, controller_listener).await?;
     let transport = prepare_raft_transport(config, tls_dynamic, inter_broker_client);
     let audit_cell = Arc::clone(&transport.audit_cell);
-    let mut bootstrap_records = crate::bootstrap::load_bootstrap_records(&config.log_dir)?;
+    // Kafka loads the bootstrap metadata from `metadata.log.dir`, which is
+    // where `krabka-format` writes it.
+    let mut bootstrap_records = crate::bootstrap::load_bootstrap_records(config.metadata_dir())?;
     let controller = start_metadata_source(
         config,
         &mut bootstrap_records,

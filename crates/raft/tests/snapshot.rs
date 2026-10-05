@@ -16,7 +16,7 @@ use assert2::check;
 use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord, NodeId, TopicRecord};
 use krabka_raft::{
     BootstrapMode, Controller, ControllerConfig, deserialize_metadata_snapshot,
-    serialize_metadata_snapshot,
+    deserialize_metadata_snapshot_image, serialize_metadata_snapshot,
 };
 use krabka_units::prelude::{Time, millis};
 use tempfile::TempDir;
@@ -42,6 +42,52 @@ fn public_snapshot_codec_round_trips_metadata() {
 
     check!(!decoded.is_empty());
     check!(MetadataImage::from_records(cid, &decoded) == image);
+}
+
+/// A broker-only observer installs a snapshot with its KIP-853 controls, so the
+/// image it rebuilds names the voters and their endpoints, as the image the
+/// controller wrote does. The restore path leaves the controls out.
+#[test]
+fn the_snapshot_image_keeps_the_quorum_controls() {
+    use krabka_metadata::{
+        KRaftVersionRange, KRaftVersionRecord, Voter, VoterEndpoint, VoterSet, VotersRecord,
+    };
+
+    let cid = Uuid::new_v4();
+    let topic = MetadataRecord::V1Topic(TopicRecord {
+        name: "snapshot-image".into(),
+        topic_id: Uuid::new_v4(),
+        partitions: 0,
+        replication_factor: 1,
+    });
+    let controls = [
+        MetadataRecord::V1KRaftVersion(KRaftVersionRecord { kraft_version: 1 }),
+        MetadataRecord::V1Voters(VotersRecord {
+            voters: VoterSet::from_voters([Voter {
+                id: NodeId(3001),
+                directory_id: Uuid::from_u128(3001),
+                endpoints: vec![VoterEndpoint {
+                    name: "CONTROLLER".into(),
+                    host: "controller.example".into(),
+                    port: 9_592,
+                }],
+                kraft_version: KRaftVersionRange { min: 0, max: 1 },
+            }]),
+        }),
+    ];
+    let image = MetadataImage::from_records(
+        cid,
+        &[controls[0].clone(), controls[1].clone(), topic.clone()],
+    );
+    let bytes = serialize_metadata_snapshot(&image, 1_700_000_000_000).unwrap();
+
+    let whole = deserialize_metadata_snapshot_image(&bytes).unwrap();
+    let restored = deserialize_metadata_snapshot(&bytes).unwrap();
+
+    check!(MetadataImage::from_records(cid, &whole) == image);
+    check!(
+        MetadataImage::from_records(cid, &restored) == MetadataImage::from_records(cid, &[topic])
+    );
 }
 
 async fn wait_for_leader(controller: &krabka_raft::ControllerHandle) {
@@ -104,7 +150,9 @@ async fn snapshot_then_restart_recovers_image() {
 
         // The checkpoint is written synchronously inside the engine before
         // `trigger_snapshot` returns; confirm it landed on disk.
-        assert2::assert!(has_checkpoint(&dir.path().join("@metadata-0")));
+        assert2::assert!(has_checkpoint(&krabka_raft::metadata_partition_dir(
+            dir.path()
+        )));
 
         controller.shutdown().await;
     }

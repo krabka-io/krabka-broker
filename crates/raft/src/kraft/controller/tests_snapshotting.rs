@@ -16,8 +16,8 @@ use crate::kraft::controller::{
     test_support::{
         TEST_ELECTION_TIMEOUT, await_leader, build_engine_only,
         build_with_max_bytes_between_snapshots, build_with_snapshot_interval,
-        elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, topic_record,
-        voter_set,
+        elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, test_metadata_log,
+        topic_record, voter_set,
     },
 };
 
@@ -111,10 +111,11 @@ fn ordinary_snapshot_does_not_reload_the_live_image() {
     );
 }
 
-/// A single-voter leader with `snapshot_interval_records = 3` snapshots and
-/// prunes once the committed offset has advanced past the threshold. After
-/// committing four distinct topics, a checkpoint exists on disk and the log
-/// has been pruned (its log-start offset rose above 0).
+/// A single-voter leader with `snapshot_interval_records = 3` snapshots each
+/// time the committed offset advances past the threshold. The test engine
+/// keeps no log beyond its newest snapshot, so the cleaning after the second
+/// snapshot moves the log start up. After four distinct topics, a checkpoint
+/// exists on disk and the log start has risen above 0.
 #[tokio::test]
 async fn leader_snapshots_and_prunes_at_threshold() {
     let (ctrl, dir) = build_with_snapshot_interval(NodeId(1), &[NodeId(1)], 3);
@@ -122,8 +123,8 @@ async fn leader_snapshots_and_prunes_at_threshold() {
     await_leader(&ctrl, Some(NodeId(1))).await;
 
     // Four distinct topics, each committed immediately (single voter). Each
-    // commit advances the HWM well past the 3-record interval, so a
-    // snapshot+prune fires.
+    // commit advances the HWM well past the 3-record interval, so a snapshot
+    // fires, and the second one lets the cleaning move the log start.
     for name in ["a", "b", "c", "d"] {
         submit_change_with_timeout(&ctrl, topic_record(name), "snapshot threshold submit")
             .await
@@ -131,12 +132,12 @@ async fn leader_snapshots_and_prunes_at_threshold() {
     }
 
     // A checkpoint was written.
-    let cp = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+    let cp = load_latest_checkpoint(dir.path())
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     assert2::assert!(!cp.is_empty());
 
-    // The log was pruned: log-start advanced past 0.
+    // The log was cleaned: log-start advanced past 0.
     let qs = ctrl.quorum_state().await.unwrap();
     assert2::assert!(qs.log_start_offset > 0);
     ctrl.shutdown().await;
@@ -175,7 +176,7 @@ async fn leader_snapshots_and_prunes_at_byte_threshold_across_many_small_commits
         }
     }
 
-    let cp = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+    let cp = load_latest_checkpoint(dir.path())
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     assert2::assert!(!cp.is_empty());
@@ -187,7 +188,7 @@ async fn leader_snapshots_and_prunes_at_byte_threshold_across_many_small_commits
 #[test]
 fn latest_checkpoint_id_picks_highest_offset_then_epoch() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
     write_checkpoint(&cp_dir, 10, 2, b"ten-two").expect("write checkpoint 10/2");
     write_checkpoint(&cp_dir, 10, 9, b"ten-nine").expect("write checkpoint 10/9");
     write_checkpoint(&cp_dir, 11, 1, b"eleven-one").expect("write checkpoint 11/1");
@@ -202,7 +203,7 @@ fn latest_checkpoint_id_picks_highest_offset_then_epoch() {
 #[test]
 fn retain_recent_checkpoints_keeps_the_two_newest_ids_and_deletes_the_rest() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
     write_checkpoint(&cp_dir, 5, 1, b"oldest").expect("write oldest");
     write_checkpoint(&cp_dir, 6, 0, b"older-same-offset").expect("write older same offset");
     write_checkpoint(&cp_dir, 6, 1, b"newest").expect("write newest");
@@ -228,7 +229,7 @@ fn retain_recent_checkpoints_keeps_the_two_newest_ids_and_deletes_the_rest() {
 #[test]
 fn retain_recent_checkpoints_keeps_a_lone_checkpoint() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
     write_checkpoint(&cp_dir, 7, 2, b"only").expect("write only");
 
     retain_recent_checkpoints(&cp_dir);
@@ -239,7 +240,7 @@ fn retain_recent_checkpoints_keeps_a_lone_checkpoint() {
 #[test]
 fn retain_latest_checkpoint_keeps_only_the_single_newest_id() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
     write_checkpoint(&cp_dir, 5, 1, b"oldest").expect("write oldest");
     write_checkpoint(&cp_dir, 6, 0, b"older").expect("write older");
     write_checkpoint(&cp_dir, 6, 1, b"newest").expect("write newest");
@@ -269,7 +270,7 @@ fn retain_latest_checkpoint_keeps_only_the_single_newest_id() {
 fn a_snapshot_roll_keeps_the_checkpoint_it_replaces_until_the_next_one() {
     let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     elect_single_voter_engine(&mut engine);
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
 
     let mut ids = Vec::new();
     for name in ["first", "second", "third"] {
@@ -323,7 +324,7 @@ fn the_checkpoint_header_carries_the_last_contained_batch_create_time() {
         .write_snapshot_and_prune()
         .expect("snapshot and prune");
 
-    let bytes = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+    let bytes = load_latest_checkpoint(dir.path())
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     assert2::assert!(snapshot_header_timestamp(&bytes) == newer);
@@ -344,7 +345,7 @@ fn a_snapshot_at_an_already_pruned_boundary_keeps_the_header_timestamp() {
     engine.log.append(&mut batch, stamp).expect("append");
     engine.log.advance_hwm(engine.log.log_end_offset());
 
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
     let mut stamps = Vec::new();
     engine.write_snapshot_and_prune().expect("first snapshot");
     stamps.push(latest_header_timestamp(&cp_dir));
@@ -378,7 +379,7 @@ fn an_installed_snapshot_hands_its_header_timestamp_to_the_next_checkpoint() {
         .do_trigger_snapshot()
         .expect("checkpoint after install");
 
-    assert2::assert!(latest_header_timestamp(&checkpoint_dir(dir.path())) == stamp);
+    assert2::assert!(latest_header_timestamp(dir.path()) == stamp);
 }
 
 /// The same across a restart: the recovered checkpoint's header is the only
@@ -396,7 +397,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
     engine
         .write_snapshot_and_prune()
         .expect("snapshot and prune");
-    let cp_dir = checkpoint_dir(dir.path());
+    let cp_dir = dir.path().to_path_buf();
     assert2::assert!(latest_header_timestamp(&cp_dir) == stamp);
     drop(engine);
 
@@ -416,6 +417,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
         krabka_units::prelude::bytes(0),
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
+        test_metadata_log(),
     )
     .expect("reopen over the same data dir");
     reopened.trigger_snapshot().await.expect("trigger snapshot");
@@ -441,7 +443,7 @@ async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
     }
     let after = Engine::wall_clock_ms();
 
-    let bytes = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+    let bytes = load_latest_checkpoint(dir.path())
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     let stamped = snapshot_header_timestamp(&bytes);

@@ -97,8 +97,15 @@ pub(crate) mod test_support {
         let part_dir = crate::log_dir::partition_dir(log_dir, bootstrap::TOPIC, partition);
         std::fs::create_dir_all(&part_dir).expect("create state partition dir");
         let log = Log::open(&part_dir, LogConfig::default()).expect("open state partition log");
-        let part = crate::broker::spawn_partition(
+        let part = crate::broker::spawn_partition_with_replication_target(
             bootstrap::TOPIC.to_string(),
+            // The metadata reconcile installs the leader of the image before the
+            // partition is visible: here this broker, node 1, at epoch 0.
+            crate::partition::ReplicationTarget {
+                topic_id: None,
+                leader_node_id: krabka_raft::NodeId(1),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+            },
             PartitionIndex(partition),
             log_dir.to_path_buf(),
             log,

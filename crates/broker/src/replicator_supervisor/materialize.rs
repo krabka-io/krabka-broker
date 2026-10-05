@@ -121,13 +121,15 @@ pub(super) fn materialize_partition_with_replication_target(
                 .map_err(|e| format!("hydrate promoted WAL follower: {e}"))?;
             }
         }
-        if diskless {
-            producer_state.install_snapshot_before_materialization(
-                topic,
-                PartitionIndex(partition),
-                log.recovered_producers(),
-            );
-        }
+        // Kafka loads the producer state of a log when it opens the log. A
+        // disk-backed partition that this broker already leads in the image
+        // gets that target below, and a later promotion to the same target
+        // copies nothing, so the tracker takes the log's state here.
+        producer_state.install_snapshot_before_materialization(
+            topic,
+            PartitionIndex(partition),
+            log.recovered_producers(),
+        );
         let owning_dir = dir
             .parent()
             .expect("placed partition dir always has a parent log.dir")

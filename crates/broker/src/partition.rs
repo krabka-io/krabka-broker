@@ -41,6 +41,7 @@ pub(crate) type OwedMarkerResolutions = std::collections::HashMap<
 use crate::{delivery::DeliveryHandles, error::BrokerError, replica_state::ReplicaState};
 
 mod commands;
+mod commit_wait;
 mod leadership;
 mod messages;
 mod watermark;
@@ -56,6 +57,7 @@ pub use self::messages::{
 pub use self::watermark::HwTimeout;
 pub(crate) use self::{
     commands::ProduceBatchError,
+    commit_wait::Uncommitted,
     leadership::{ReplicationTarget, initial_replication_target},
 };
 

@@ -22,6 +22,10 @@ const DEFAULT_RETENTION: Time = days(7);
 /// entry per 4 KiB of `.log`.
 pub(crate) const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
 
+/// Kafka's `segment.index.bytes` default: each sparse index of a segment
+/// holds up to 10 MiB of entries before the segment rolls.
+const DEFAULT_SEGMENT_INDEX_SIZE: ByteSize = mebibytes(10);
+
 /// Kafka's `max.message.bytes` default: 1 MiB of records plus the 12-byte
 /// `Records.LOG_OVERHEAD` that prefixes every batch on the wire. Kafka's
 /// broker-wide `message.max.bytes` carries the same number, and a topic that
@@ -220,6 +224,12 @@ pub struct LogConfig {
     /// `index.interval.bytes`; default 4 KiB.
     pub index_interval: ByteSize,
 
+    /// Roll the active segment once its `.index` or its `.timeindex` holds
+    /// this many bytes of entries. Kafka's `segment.index.bytes`; default
+    /// 10 MiB. Kafka rounds the size down to whole entries, so the offset
+    /// index holds `size / 8` entries and the time index `size / 12`.
+    pub segment_index_size: ByteSize,
+
     /// fsync after every `append`. Default off. The broker manages fsync
     /// separately.
     pub flush_on_append: bool,
@@ -324,6 +334,7 @@ impl Default for LogConfig {
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             max_decompressed_record: None,
             index_interval: DEFAULT_INDEX_INTERVAL,
+            segment_index_size: DEFAULT_SEGMENT_INDEX_SIZE,
             flush_on_append: false,
             validate_on_open: true,
             cleanup_policy: CleanupPolicy::Delete,
@@ -378,6 +389,7 @@ mod tests {
                     max_message_size: bytes(1_048_588),
                     max_decompressed_record: None,
                     index_interval: bytes(4096),
+                    segment_index_size: bytes(10 * 1024 * 1024),
                     flush_on_append: false,
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
@@ -406,6 +418,7 @@ mod tests {
         let c = LogConfig::default();
         assert2::check!(c.segment_size.bytes_u64() == 1_073_741_824);
         assert2::check!(c.index_interval.bytes_u64() == 4_096);
+        assert2::check!(c.segment_index_size.bytes_u64() == 10_485_760);
         assert2::check!(c.max_message_size.bytes_u64() == 1_048_588);
         assert2::check!(c.segment_roll_interval.millis_i64() == 604_800_000);
         assert2::check!(c.retention.map(TimeExt::millis_i64) == Some(604_800_000));

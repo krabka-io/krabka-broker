@@ -439,3 +439,101 @@ fn internal_topic_config_settings_apply_from_cli() {
         )
     );
 }
+
+/// The five `MetadataLogConfig` flags, and their environment variables, set
+/// the whole of `BrokerConfig::metadata_log` over what the file set. A flag
+/// value outside Kafka's domain is refused when the overlay applies, or at
+/// parse time when it is negative.
+#[test]
+fn metadata_log_settings_apply_from_cli_and_environment() {
+    use krabka_units::{bytes, days, hours, mebibytes, millis};
+
+    let _guard = env_guard();
+
+    let file: krabka_broker::file_config::FileConfig = toml::from_str(
+        r#"
+        [runtime]
+        metadata_log_segment_bytes = "32MiB"
+        metadata_max_retention = "1d"
+        metadata_max_idle_interval = "250ms"
+        "#,
+    )
+    .expect("parse runtime file config");
+    let flags = Args::try_parse_from([
+        "krabka-broker",
+        "--metadata-log-segment-bytes=16MiB",
+        "--metadata-log-segment-roll-interval=1h",
+        "--metadata-max-retention-bytes=0B",
+    ])
+    .expect("parse metadata log flags");
+    let mut from_flags = BrokerConfig::default();
+    file.apply_to(&mut from_flags).expect("apply file runtime");
+    flags
+        .apply_runtime_to(&mut from_flags, None)
+        .expect("overlay CLI runtime");
+
+    let from_environment = temp_env::with_vars(
+        [
+            ("KRABKA_METADATA_LOG_SEGMENT_BYTES", Some("8MiB")),
+            ("KRABKA_METADATA_LOG_SEGMENT_ROLL_INTERVAL", Some("2h")),
+            ("KRABKA_METADATA_MAX_RETENTION_BYTES", Some("200MiB")),
+            ("KRABKA_METADATA_MAX_RETENTION", Some("2d")),
+            ("KRABKA_METADATA_MAX_IDLE_INTERVAL", Some("0ms")),
+        ],
+        || {
+            let args = Args::try_parse_from(["krabka-broker"]).expect("parse environment");
+            let mut config = BrokerConfig::default();
+            args.apply_runtime_to(&mut config, None)
+                .expect("apply environment runtime");
+            config.metadata_log
+        },
+    );
+
+    assert!(
+        (from_flags.metadata_log, from_environment)
+            == (
+                krabka_raft::MetadataLogConfig {
+                    segment_size: mebibytes(16),
+                    segment_roll_interval: hours(1),
+                    max_retention_size: Some(bytes(0)),
+                    max_retention: Some(days(1)),
+                    max_idle_interval: millis(250),
+                },
+                krabka_raft::MetadataLogConfig {
+                    segment_size: mebibytes(8),
+                    segment_roll_interval: hours(2),
+                    max_retention_size: Some(mebibytes(200)),
+                    max_retention: Some(days(2)),
+                    max_idle_interval: millis(0),
+                },
+            )
+    );
+
+    // (the flag, whether it parses, whether the overlay then applies)
+    let cases = [
+        ("--metadata-log-segment-bytes=8MiB", true, true),
+        ("--metadata-log-segment-bytes=4MiB", true, false),
+        ("--metadata-log-segment-bytes=2GiB", true, false),
+        ("--metadata-log-segment-bytes=0B", false, false),
+        ("--metadata-log-segment-roll-interval=0ms", false, false),
+        ("--metadata-log-segment-roll-interval=250us", true, false),
+        ("--metadata-max-retention-bytes=1.5B", true, false),
+        ("--metadata-max-retention-bytes=-1B", false, false),
+        ("--metadata-max-retention=0ms", true, true),
+        ("--metadata-max-retention=-1ms", false, false),
+        ("--metadata-max-idle-interval=0ms", true, true),
+        ("--metadata-max-idle-interval=2147483648ms", true, false),
+    ];
+    let mut actual = Vec::with_capacity(cases.len());
+    for (flag, _, _) in cases {
+        let outcome =
+            Args::try_parse_from(["krabka-broker", flag]).map_or((false, false), |args| {
+                let applied = args
+                    .apply_runtime_to(&mut BrokerConfig::default(), None)
+                    .is_ok();
+                (true, applied)
+            });
+        actual.push((flag, outcome.0, outcome.1));
+    }
+    assert!(actual == cases);
+}

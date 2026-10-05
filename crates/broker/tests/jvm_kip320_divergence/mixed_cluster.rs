@@ -97,7 +97,8 @@ fn krabka_mixed_config(
     cfg.listen_addr = format!("0.0.0.0:{client_port}").parse().unwrap();
     cfg.advertised_listener = format!("{advertised_host}:{client_port}");
     cfg.controller_listen_addr = own_controller_addr;
-    cfg.directory_id = Uuid::from_u128(u128::from(cfg.node_id.0));
+    // Outside the 100 lowest ids, which Kafka reserves and the broker refuses.
+    cfg.directory_id = Uuid::from_u64_pair(1, cfg.node_id.0);
     cfg.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg.controller_quorum_voters = voters
         .iter()

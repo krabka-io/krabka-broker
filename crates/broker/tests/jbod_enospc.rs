@@ -189,7 +189,7 @@ impl BrokerProcess {
             "{}@{}:{}",
             self.node_id,
             self.advertised_controller(),
-            uuid::Uuid::from_u128(u128::from(self.node_id))
+            directory_uuid(self.node_id)
         )
     }
 
@@ -201,10 +201,7 @@ impl BrokerProcess {
         let cluster = format!("--cluster-id={cluster_id}");
         let initial = format!("--initial-controllers={voters}");
         let node = format!("--node-id={}", self.node_id);
-        let directory = format!(
-            "--directory-id={}",
-            uuid::Uuid::from_u128(u128::from(self.node_id))
-        );
+        let directory = format!("--directory-id={}", directory_uuid(self.node_id));
         let mut args = vec!["run", "--rm", "--user", &user, "--volume", &mount];
         let primary_mount;
         if let Some(primary) = primary {
@@ -465,15 +462,19 @@ fn partitions_in(
         .collect()
 }
 
+/// The metadata directory id that `node_id` is formatted with: fixed, so the
+/// voter set can name it, and outside the 100 lowest ids, which Kafka reserves
+/// and the broker refuses at startup.
+fn directory_uuid(node_id: u32) -> uuid::Uuid {
+    uuid::Uuid::from_u64_pair(1, u64::from(node_id))
+}
+
 fn directory_id(fs: &TinyFs) -> uuid::Uuid {
-    let raw = docker(&["exec", &fs.holder, "/bin/cat", "/fs/meta.properties.json"]);
-    let text = raw
-        .lines()
-        .find(|line| line.contains("directory_id"))
-        .and_then(|line| line.split('"').nth(3))
-        .expect("meta.properties.json directory_id");
-    text.parse::<krabka_format::DirectoryId>()
-        .expect("directory id in Kafka's base64 form")
+    let raw = docker(&["exec", &fs.holder, "/bin/cat", "/fs/meta.properties"]);
+    krabka_format::MetaProperties::parse(raw.as_bytes())
+        .expect("a Kafka meta.properties")
+        .directory_id
+        .expect("meta.properties directory.id")
         .into()
 }
 

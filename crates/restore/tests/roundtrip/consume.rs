@@ -31,7 +31,7 @@
 //!
 //! The restart case then shuts the broker down, starts another on the same
 //! directory, and repeats the fetch -- the second boot replays an already
-//! populated `__cluster_metadata` rather than seeding one, which nothing else
+//! populated `__cluster_metadata-0` rather than seeding one, which nothing else
 //! exercises. Producing one batch into the restarted broker and finding it at
 //! the archived end offset is what proves the restored high watermark seeded
 //! the next append rather than merely being reported.

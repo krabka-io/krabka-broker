@@ -11,7 +11,7 @@ fn broker_bin() -> std::path::PathBuf {
 /// Formats a fresh standalone log directory.
 ///
 /// KIP-853 needs every node formatted before `krabka-broker` boots: the step
-/// seeds `meta.properties.json` and the singleton `VotersRecord`, and the broker
+/// seeds `meta.properties` and the singleton `VotersRecord`, and the broker
 /// treats an unformatted dir as operator error and aborts startup.
 ///
 /// Called in process rather than spawned. The formatting is setup for the boot
@@ -146,4 +146,52 @@ fn errors_when_config_file_and_listen_addr_both_set() {
         stderr.contains("config-file") && stderr.contains("listen-addr"),
         "expected clap mutual-exclusion error, got stderr:\n{stderr}"
     );
+}
+
+/// A log directory formatted for node 1 does not start node 2. The broker
+/// exits 1 with the message of Kafka's `MetaPropertiesEnsemble.verify`, as
+/// `KafkaRaftServer.initializeLogDirs` refuses the same directory.
+#[test]
+fn refuses_a_log_dir_formatted_for_another_node() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+    run_krabka_format(&log_dir, 1, "127.0.0.1:9093");
+
+    let mut child = Command::new(broker_bin())
+        .arg(format!("--log-dir={}", log_dir.display()))
+        .arg("--broker-id=2")
+        .arg("--listen-addr=127.0.0.1:0")
+        .arg("--controller-listen-addr=127.0.0.1:0")
+        .arg("--metrics-listen-addr=none")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn krabka-broker");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll krabka-broker") {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            break None;
+        }
+        // intentional: waiting on a spawned krabka-broker subprocess to exit;
+        // it has no in-process handle to await.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let output = child.wait_with_output().expect("collect stderr");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        status.and_then(|status| status.code()) == Some(1),
+        "{stderr}"
+    );
+    let want = format!(
+        "startup failed: Stored node id 1 doesn't match previous node id 2 in {}. If you moved \
+         your data, make sure your configured node id matches. If you intend to create a new \
+         node, you should remove all data in your data directories.",
+        log_dir.join("meta.properties").display()
+    );
+    assert!(stderr.contains(&want), "{stderr}");
 }

@@ -23,6 +23,8 @@ use crate::{
     txn::{partitioner::partition_for_tid, state::TxnEntry},
 };
 
+/// The commit rule of a `__transaction_state` write.
+mod commit;
 /// KIP-98 transactional-id expiry: the decision core and the sweep over the
 /// tids this broker coordinates. [`crate::txn::id_expiration`] ticks it.
 /// Completion of transactions whose `Prepare*` record is durable.
@@ -67,6 +69,14 @@ pub(crate) struct TxnCoordinator {
     pid_install: StdMutex<()>,
     /// Source of [`leadership::LeaderTerm::generation`].
     next_generation: AtomicU64,
+    /// Wakes every `__transaction_state` write that waits to commit when a
+    /// term starts or ends, so a write whose term ended stops waiting.
+    leadership_changed: Notify,
+    /// The metadata that names the leader of each `__transaction_state`
+    /// partition. A write waits to commit only while it names this broker at
+    /// the epoch of the write's term. `None` in tests that build no
+    /// controller; such a write follows the coordinator's own terms only.
+    metadata: Option<Arc<dyn crate::metadata_source::MetadataSource>>,
     /// Wakes the callers of [`Self::wait_for_load`] when a load ends.
     load_finished: Notify,
     /// Transactional ids whose `Prepare*` record is durable, queued for
@@ -127,6 +137,8 @@ impl TxnCoordinator {
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),
             next_generation: AtomicU64::new(0),
+            leadership_changed: Notify::new(),
+            metadata: None,
             load_finished: Notify::new(),
             pending_completions: StdMutex::new(BTreeSet::new()),
             completion_requested: Notify::new(),
@@ -155,6 +167,7 @@ impl TxnCoordinator {
         server_name: String,
         group_coordinator: Arc<crate::coordinator::GroupCoordinator>,
     ) {
+        self.metadata = Some(Arc::clone(&controller));
         self.marker_transport = Some(MarkerTransport {
             controller,
             inter_broker_client,
@@ -163,6 +176,16 @@ impl TxnCoordinator {
             server_name,
         });
         self.group_coordinator = Some(group_coordinator);
+    }
+
+    /// Test-only: the metadata a `__transaction_state` write checks its term
+    /// against, without the marker transport that sets it in a broker.
+    #[cfg(test)]
+    pub(crate) fn set_metadata_source_for_test(
+        &mut self,
+        metadata: Arc<dyn crate::metadata_source::MetadataSource>,
+    ) {
+        self.metadata = Some(metadata);
     }
 
     /// Test-only: makes this broker the loaded leader of `partition` without
@@ -205,10 +228,20 @@ impl TxnCoordinator {
         leadership::coordinator_error(self.load_status(self.partition_for(tid)).await)
     }
 
-    /// The error code for a failed append about `tid`: the coordinator error
-    /// when the coordinator term changed, and `UNKNOWN_SERVER_ERROR`
-    /// otherwise.
-    pub(crate) async fn append_error_code(&self, tid: &str) -> i16 {
+    /// The error code for a failed append about `tid`.
+    ///
+    /// A write that did not commit answers the coordinator error Kafka's
+    /// `appendTransactionToLog` answers for it. Any other failure answers the
+    /// coordinator error when the coordinator term changed, and
+    /// `UNKNOWN_SERVER_ERROR` otherwise.
+    pub(crate) async fn append_error_code(
+        &self,
+        tid: &str,
+        error: &crate::error::BrokerError,
+    ) -> i16 {
+        if let crate::error::BrokerError::TransactionStateWriteUncommitted { code, .. } = error {
+            return *code;
+        }
         self.coordinator_error(tid)
             .await
             .unwrap_or(crate::codes::UNKNOWN_SERVER_ERROR)

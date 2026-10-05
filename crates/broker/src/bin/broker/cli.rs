@@ -57,15 +57,25 @@ pub struct Args {
     #[arg(long)]
     pub print_config_schema: bool,
 
-    /// Primary log directory. Holds the cluster-metadata raft log and is
-    /// the default partition data directory.
+    /// Primary log directory, the first entry of Kafka's `log.dirs`. It is
+    /// the default partition data directory, and it holds the
+    /// cluster-metadata raft log unless `--metadata-log-dir` names another
+    /// directory.
     #[arg(long, default_value = "./krabka-data")]
     pub log_dir: PathBuf,
 
+    /// The cluster-metadata log directory, Kafka's `metadata.log.dir`. It
+    /// holds the `__cluster_metadata-0` raft log, its snapshots, this node's
+    /// `meta.properties` and the bootstrap records. Unset, the metadata
+    /// log is in `--log-dir`. A directory that is not one of the data
+    /// directories holds the metadata log only, and no partition goes there.
+    #[arg(long, env = "KRABKA_METADATA_LOG_DIR")]
+    pub metadata_log_dir: Option<PathBuf>,
+
     /// More JBOD data directories (KIP-113), comma-separated. Least-loaded
     /// placement spreads new partitions across `--log-dir` and these
-    /// directories. The cluster-metadata log always stays on `--log-dir`.
-    /// This maps to a Kafka `log.dirs` with more than one entry.
+    /// directories. This maps to a Kafka `log.dirs` with more than one
+    /// entry.
     #[arg(
         long,
         env = "KRABKA_EXTRA_LOG_DIRS",
@@ -74,8 +84,10 @@ pub struct Args {
     )]
     pub extra_log_dirs: Vec<PathBuf>,
 
-    /// Numeric broker id.
-    #[arg(long, default_value_t = 1)]
+    /// Numeric broker id: Kafka's `node.id`, which is also this node's raft
+    /// id. A value other than the default wins over the `broker_id` of
+    /// `--config-file`.
+    #[arg(long, default_value_t = krabka_broker::config::DEFAULT_BROKER_ID)]
     pub broker_id: i32,
 
     /// `KRaft` `process.roles`, comma-separated (`controller`, `broker`,
@@ -264,6 +276,43 @@ pub struct Args {
         value_parser = krabka_units::parse::positive_byte_size
     )]
     pub metadata_snapshot_fetch_max: Option<ByteSize>,
+
+    /// Largest metadata-log segment (`metadata.log.segment.bytes`), from
+    /// 8 MiB to 2147483647 bytes.
+    #[arg(
+        long,
+        env = "KRABKA_METADATA_LOG_SEGMENT_BYTES",
+        value_parser = krabka_units::parse::positive_byte_size
+    )]
+    pub metadata_log_segment_bytes: Option<ByteSize>,
+
+    /// Longest time a metadata-log segment stays active
+    /// (`metadata.log.segment.ms`).
+    #[arg(
+        long,
+        env = "KRABKA_METADATA_LOG_SEGMENT_ROLL_INTERVAL",
+        value_parser = krabka_units::parse::positive_time
+    )]
+    pub metadata_log_segment_roll_interval: Option<Time>,
+
+    /// Largest combined size of the metadata log and its snapshots
+    /// (`metadata.max.retention.bytes`).
+    #[arg(
+        long,
+        env = "KRABKA_METADATA_MAX_RETENTION_BYTES",
+        value_parser = krabka_units::parse::non_negative_byte_size
+    )]
+    pub metadata_max_retention_bytes: Option<ByteSize>,
+
+    /// Age at which a metadata snapshot is deleted
+    /// (`metadata.max.retention.ms`).
+    #[arg(long, env = "KRABKA_METADATA_MAX_RETENTION", value_parser = krabka_units::parse::non_negative_time)]
+    pub metadata_max_retention: Option<Time>,
+
+    /// KIP-835 no-op record cadence of the active controller
+    /// (`metadata.max.idle.interval.ms`). `0s` disables the no-op records.
+    #[arg(long, env = "KRABKA_METADATA_MAX_IDLE_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
+    pub metadata_max_idle_interval: Option<Time>,
 
     /// Idle-transaction abort cleanup interval. `0s` disables the reaper.
     #[arg(long, env = "KRABKA_TXN_ABORT_CLEANUP_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]

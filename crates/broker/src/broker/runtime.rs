@@ -297,7 +297,6 @@ pub(super) async fn start_broker_runtime(
         storage.0,
         controller,
         inter_broker_client,
-        inter_listener_protocol,
         &metrics,
         &supervisor_shutdown,
     );

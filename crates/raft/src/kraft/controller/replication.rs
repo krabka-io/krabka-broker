@@ -18,7 +18,6 @@ use krabka_verified::{
 use super::{
     Engine, KraftControlState, Role,
     checkpoint::{retain_recent_checkpoints, write_checkpoint},
-    checkpoint_dir,
     offsets::fetch_offset_has_records,
     records::{decode_batches, encode_batches},
 };
@@ -408,7 +407,7 @@ impl Engine {
                 voters: control.voters.clone(),
             }));
         }
-        write_checkpoint(&checkpoint_dir(&self.data_dir), end_offset, epoch, bytes)?;
+        write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
         self.image = new_image;
         if let Some(control) = contents.control_state {
             self.controls = KraftControlState::new(control.voters.clone(), control.kraft_version);
@@ -427,7 +426,7 @@ impl Engine {
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
         let _ = self.image_tx.send(Arc::new(self.image.clone()));
-        retain_recent_checkpoints(&checkpoint_dir(&self.data_dir));
+        retain_recent_checkpoints(&self.data_dir);
         Ok(())
     }
 }

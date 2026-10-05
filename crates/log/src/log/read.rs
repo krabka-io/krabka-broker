@@ -3,7 +3,9 @@
 //!
 //! All three walk the sealed segments and then the active one, so a read
 //! can span a segment boundary, and all three ask each segment for at
-//! least one whole batch header to satisfy Kafka's anti-stall rule.
+//! least one whole batch header to satisfy Kafka's anti-stall rule. A read
+//! goes on into the next segment only after it reads the segment before it
+//! to the end. Only the first batch of a read can be larger than its budget.
 
 use bytes::{Bytes, BytesMut};
 use krabka_ids::Offset;
@@ -12,7 +14,10 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
 use tracing::instrument;
 
 use super::Log;
-use crate::{error::LogError, segment::RawSegmentRead};
+use crate::{
+    error::LogError,
+    segment::{RawSegmentRead, Segment},
+};
 
 /// A `usize` byte length as a quantity.
 ///
@@ -30,6 +35,31 @@ fn size_from_len(len: usize) -> ByteSize {
 /// restated constant, so the floor cannot drift from the protocol.
 fn batch_header() -> ByteSize {
     size_from_len(HEADER_LEN)
+}
+
+/// Whether a read that took a run out of `segment` can go on into the next
+/// segment.
+///
+/// `next` is the offset after the run. The read can go on only when the run
+/// reached the end of the segment. A run that stopped before the end stopped
+/// on the budget or on the limit. The next segment starts after batches that
+/// this segment still holds. If the read went on, the response would put the
+/// first batch of the next segment after the run, and skip every offset
+/// between them. Kafka's `LocalLog.read` never leaves the segment that it
+/// found data in.
+fn emptied(segment: &Segment, next: Offset) -> bool {
+    next > segment.last_offset()
+}
+
+/// Whether a run of `len` bytes fits the `remaining` budget of a read that
+/// already has its first batch.
+///
+/// Each segment read gives its first batch whole, however small its budget.
+/// That is Kafka's anti-stall rule, and KIP-74 applies it only to the first
+/// batch of a read. A later run that is larger than the remaining budget
+/// waits for the next read.
+fn fits_after_first(len: ByteSize, remaining: ByteSize) -> bool {
+    len <= remaining
 }
 
 /// Result of [`Log::read`]: the absolute offset of the first batch
@@ -132,23 +162,18 @@ impl Log {
         Ok(())
     }
 
-    /// Read batches from `offset` and return up to about `max_size` of
-    /// `.log` data.
+    /// Read batches from `offset` and return up to `max_size` of `.log`
+    /// data.
     ///
     /// The read walks sealed segments first, then the active segment, so a
-    /// read can span segment boundaries.
+    /// read can span segment boundaries. It goes on into a segment only after
+    /// it reads the segment before it to the end.
     #[instrument(
         level = "debug",
         skip(self),
         fields(batches = tracing::field::Empty),
         err,
     )]
-    // cargo-mutants: the `current_offset = base + last_offset_delta + 1` cursor advance only
-    // ever moves the cursor too LOW under these mutations; each segment's
-    // `read` self-filters via `batch_last >= offset` and clamps sub-base
-    // offsets, so a too-low cursor yields the same batches and `start_offset`
-    // (taken from `batches.first()`). No distinguishing input exists.
-    #[cfg_attr(test, mutants::skip)]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     /// # Panics
@@ -168,33 +193,22 @@ impl Log {
         let mut current_offset = offset;
         let mut remaining = max_size;
 
-        for seg in &self.segments {
+        for seg in self.segments.iter().chain(self.active.as_ref()) {
             if seg.last_offset() < current_offset {
                 continue;
             }
-            let bs = seg.read_with_buffer_cap(current_offset, remaining, read_buffer_cap)?;
-            if !bs.is_empty() {
-                let consumed: usize = bs.iter().map(RecordBatch::encoded_len).sum();
-                remaining = (remaining - size_from_len(consumed)).max(ByteSize::ZERO);
-                let last = bs.last().expect("non-empty by branch");
-                current_offset = Offset(last.base_offset + i64::from(last.last_offset_delta) + 1);
-                batches.extend(bs);
-                if remaining == ByteSize::ZERO {
-                    break;
-                }
-            }
-        }
-
-        if (remaining > ByteSize::ZERO || batches.is_empty())
-            && let Some(active) = &self.active
-            && current_offset <= active.last_offset()
-        {
-            let bs = active.read_with_buffer_cap(
-                current_offset,
-                remaining.max(bytes(1)),
-                read_buffer_cap,
-            )?;
+            let bs =
+                seg.read_with_buffer_cap(current_offset, remaining.max(bytes(1)), read_buffer_cap)?;
+            let Some(last) = bs.last() else {
+                continue;
+            };
+            current_offset = Offset(last.base_offset + i64::from(last.last_offset_delta) + 1);
+            let consumed: usize = bs.iter().map(RecordBatch::encoded_len).sum();
+            remaining = (remaining - size_from_len(consumed)).max(ByteSize::ZERO);
             batches.extend(bs);
+            if remaining == ByteSize::ZERO || !emptied(seg, current_offset) {
+                break;
+            }
         }
 
         let start_offset = batches.first().map_or(offset, |b| Offset(b.base_offset));
@@ -207,9 +221,11 @@ impl Log {
 
     /// Like [`Log::read`], but returns verbatim wire bytes with no decode.
     ///
-    /// The read walks sealed segments and then the active segment. It
-    /// includes only batches with `base_offset < limit_offset`, up to about
-    /// `max_size`, and always at least one batch.
+    /// The read walks sealed segments and then the active segment. It goes on
+    /// into a segment only after it reads the segment before it to the end.
+    /// It includes only batches with `base_offset < limit_offset`, up to
+    /// `max_size`, and always at least one batch. The first batch is included
+    /// whole, even when it is larger than `max_size`.
     #[instrument(
         level = "debug",
         skip(self),
@@ -239,7 +255,7 @@ impl Log {
         let mut got_first = false;
         let mut last_offset = None;
 
-        for seg in &self.segments {
+        for seg in self.segments.iter().chain(self.active.as_ref()) {
             if seg.last_offset() < current {
                 continue;
             }
@@ -249,38 +265,23 @@ impl Log {
                 remaining.max(batch_header()),
                 read_buffer_cap,
             )?;
-            if !r.is_empty() {
-                if !got_first {
-                    start_offset = r.start_offset;
-                    got_first = true;
-                }
-                remaining = (remaining - size_from_len(r.bytes.len())).max(ByteSize::ZERO);
-                current = r.last_offset + 1;
-                last_offset = Some(r.last_offset);
-                chunks.push(r.bytes);
-                if remaining == ByteSize::ZERO || current >= limit_offset {
-                    break;
-                }
+            if r.is_empty() {
+                continue;
             }
-        }
-
-        if (remaining > ByteSize::ZERO || !got_first)
-            && current < limit_offset
-            && let Some(active) = &self.active
-            && current <= active.last_offset()
-        {
-            let r = active.read_raw_with_buffer_cap(
-                current,
-                limit_offset,
-                remaining.max(batch_header()),
-                read_buffer_cap,
-            )?;
-            if !r.is_empty() {
-                if !got_first {
-                    start_offset = r.start_offset;
-                }
-                chunks.push(r.bytes);
-                last_offset = Some(r.last_offset);
+            let len = size_from_len(r.bytes.len());
+            if got_first && !fits_after_first(len, remaining) {
+                break;
+            }
+            if !got_first {
+                start_offset = r.start_offset;
+                got_first = true;
+            }
+            remaining = (remaining - len).max(ByteSize::ZERO);
+            current = r.last_offset + 1;
+            last_offset = Some(r.last_offset);
+            chunks.push(r.bytes);
+            if remaining == ByteSize::ZERO || current >= limit_offset || !emptied(seg, current) {
+                break;
             }
         }
 
@@ -343,40 +344,27 @@ impl Log {
         let mut remaining = max_size;
         let mut got_first = false;
 
-        for seg in &self.segments {
+        for seg in self.segments.iter().chain(self.active.as_ref()) {
             if seg.last_offset() < current {
                 continue;
             }
             let r = seg.read_raw_desc(current, limit_offset, remaining.max(batch_header()))?;
-            if !r.is_empty() {
-                if !got_first {
-                    start_offset = r.start_offset;
-                    got_first = true;
-                }
-                remaining = (remaining - size_from_len(r.len())).max(ByteSize::ZERO);
-                current = r.last_offset + 1;
-                if let Some(region) = r.region {
-                    regions.push(region);
-                }
-                if remaining == ByteSize::ZERO || current >= limit_offset {
-                    break;
-                }
+            let Some(region) = r.region else {
+                continue;
+            };
+            let len = size_from_len(region.len);
+            if got_first && !fits_after_first(len, remaining) {
+                break;
             }
-        }
-
-        if (remaining > ByteSize::ZERO || !got_first)
-            && current < limit_offset
-            && let Some(active) = &self.active
-            && current <= active.last_offset()
-        {
-            let r = active.read_raw_desc(current, limit_offset, remaining.max(batch_header()))?;
-            if !r.is_empty() {
-                if !got_first {
-                    start_offset = r.start_offset;
-                }
-                if let Some(region) = r.region {
-                    regions.push(region);
-                }
+            if !got_first {
+                start_offset = r.start_offset;
+                got_first = true;
+            }
+            remaining = (remaining - len).max(ByteSize::ZERO);
+            current = r.last_offset + 1;
+            regions.push(region);
+            if remaining == ByteSize::ZERO || current >= limit_offset || !emptied(seg, current) {
+                break;
             }
         }
 

@@ -5,17 +5,17 @@
 use std::collections::BTreeMap;
 
 use krabka_ids::Offset;
-use krabka_metadata::VoterSet;
+use krabka_metadata::{KRaftVersionRecord, MetadataRecord, VoterSet, VotersRecord};
 use krabka_protocol::{
     owned::voters_record::{
         Endpoint as WireVoterEndpoint, KRaftVersionFeature as WireKRaftVersionFeature,
         Voter as WireVoter, VotersRecord as WireVotersRecord,
     },
-    records::metadata::control::ControlRecord,
+    records::{RecordBatch, metadata::control::ControlRecord},
 };
 use uuid::Uuid;
 
-use super::KraftControlState;
+use super::{KraftControlState, records::decode_control_record};
 use crate::{error::RaftError, kraft::types::NodeId};
 
 fn history_value_before<T>(history: &BTreeMap<i64, T>, frontier: i64) -> Option<&T> {
@@ -237,6 +237,45 @@ pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftEr
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
     Ok(VoterSet::from_voters(voters))
+}
+
+/// The image records one committed control batch carries, in log order: each
+/// KIP-853 `KRaftVersionRecord` as a `V1KRaftVersion` and each `VotersRecord`
+/// as a `V1Voters`. The KIP-595 `LeaderChange` marker and the snapshot
+/// framing records change no image, so they yield nothing, and so does a batch
+/// that is not a control batch.
+///
+/// A controller folds these into its image when it commits them. A broker-only
+/// observer reads only committed records, and folds them in as it reads them,
+/// so its image names the same voters, and the endpoints that reach them.
+///
+/// # Errors
+/// Returns the [`RaftError`] of a control record that does not decode, or of a
+/// `kraft.version` or voter set that Kafka would refuse.
+pub fn control_batch_image_records(batch: &RecordBatch) -> Result<Vec<MetadataRecord>, RaftError> {
+    if !batch.attributes.is_control_batch() {
+        return Ok(Vec::new());
+    }
+    let mut records = Vec::new();
+    for record in &batch.records {
+        match decode_control_record(record)? {
+            Some(ControlRecord::KRaftVersion(record)) => {
+                let kraft_version = u16::try_from(record.k_raft_version).map_err(|_| {
+                    RaftError::ChangeRejected("negative kraft.version control record".into())
+                })?;
+                records.push(MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
+                    kraft_version,
+                }));
+            }
+            Some(ControlRecord::Voters(record)) => {
+                records.push(MetadataRecord::V1Voters(VotersRecord {
+                    voters: voter_set_from_wire(&record)?,
+                }));
+            }
+            _ => {}
+        }
+    }
+    Ok(records)
 }
 
 #[cfg(test)]

@@ -6,18 +6,19 @@
 //! and pick the record each operation appends. Every record goes through
 //! [`ShareCoordinator::append_state_record`], which appends it and then
 //! applies it to the in-memory state exactly as the log replay in `recovery`
-//! does.
+//! does. Every operation answers through [`ShareCoordinator::answer`], which
+//! waits until the records of the partition are committed.
 
 use std::sync::Arc;
 
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use tokio::sync::{Mutex, MutexGuard};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::{
-    LeaderEpoch, ShareCoordinator, ShareErrorCode, ShareStateError, ShareStateSummary, ShareWrite,
-    StateEpoch, UNINITIALIZED_START_OFFSET, message,
+    Active, LeaderEpoch, ShareCoordinator, ShareErrorCode, ShareStateError, ShareStateSummary,
+    ShareWrite, StateEpoch, Term, UNINITIALIZED_START_OFFSET, message, persist::AppendError,
 };
 use crate::{
     codes,
@@ -70,7 +71,8 @@ impl ShareCoordinator {
     ///
     /// Returns [`ShareStateError::Refused`] when a check fails, and
     /// [`ShareStateError::Operation`] when this broker is not the active
-    /// coordinator of the key or the append fails.
+    /// coordinator of the key, the append fails, or the records of the
+    /// partition do not commit.
     pub(crate) async fn initialize(
         &self,
         image: &MetadataImage,
@@ -81,11 +83,32 @@ impl ShareCoordinator {
         start_offset: Offset,
     ) -> Result<(), ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self
+        let active = self
             .active(state_partition)
             .await
             .map_err(ShareStateError::inactive)?;
+        let result = self
+            .initialize_in_term(
+                active.term,
+                image,
+                (group, topic_id, partition),
+                state_epoch,
+                start_offset,
+            )
+            .await;
+        self.answer(active, result).await
+    }
 
+    /// The body of [`ShareCoordinator::initialize`], under the read guard of
+    /// `term`.
+    async fn initialize_in_term(
+        &self,
+        term: Term,
+        image: &MetadataImage,
+        (group, topic_id, partition): (&str, uuid::Uuid, i32),
+        state_epoch: StateEpoch,
+        start_offset: Offset,
+    ) -> Result<(), ShareStateError> {
         let trunk = self.config.trunk_rules;
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
@@ -140,6 +163,7 @@ impl ShareCoordinator {
         if let Some(st) = stored.as_mut() {
             return self
                 .append_state_record(
+                    term,
                     st,
                     group,
                     topic_id,
@@ -150,7 +174,7 @@ impl ShareCoordinator {
         }
         let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
         let offset = self
-            .persist_record(state_partition, key, Some(snapshot.encode()))
+            .persist_record(term, key, Some(snapshot.encode()))
             .await
             .map_err(|e| {
                 warn!(error = %e, "share initialize persist failed");
@@ -181,7 +205,8 @@ impl ShareCoordinator {
     ///
     /// Returns [`ShareStateError::Refused`] when a check fails, and
     /// [`ShareStateError::Operation`] when this broker is not the active
-    /// coordinator of the key or the append fails.
+    /// coordinator of the key, the append fails, or the records of the
+    /// partition do not commit.
     pub(crate) async fn write(
         &self,
         image: &MetadataImage,
@@ -191,11 +216,27 @@ impl ShareCoordinator {
         request: ShareWrite,
     ) -> Result<(), ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self
+        let active = self
             .active(state_partition)
             .await
             .map_err(ShareStateError::inactive)?;
+        let result = self
+            .write_in_term(active.term, image, group, topic_id, partition, request)
+            .await;
+        self.answer(active, result).await
+    }
 
+    /// The body of [`ShareCoordinator::write`], under the read guard of
+    /// `term`.
+    async fn write_in_term(
+        &self,
+        term: Term,
+        image: &MetadataImage,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+        request: ShareWrite,
+    ) -> Result<(), ShareStateError> {
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
@@ -237,7 +278,7 @@ impl ShareCoordinator {
                 batches: &request.batches,
             },
         );
-        self.append_state_record(&mut st, group, topic_id, partition, record)
+        self.append_state_record(term, &mut st, group, topic_id, partition, record)
             .await
     }
 
@@ -267,11 +308,27 @@ impl ShareCoordinator {
         leader_epoch: LeaderEpoch,
     ) -> Result<SharePartitionState, ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self
+        let active = self
             .active(state_partition)
             .await
             .map_err(ShareStateError::inactive)?;
+        let result = self
+            .read_in_term(active.term, image, group, topic_id, partition, leader_epoch)
+            .await;
+        self.answer(active, result).await
+    }
 
+    /// The body of [`ShareCoordinator::read`], under the read guard of
+    /// `term`.
+    async fn read_in_term(
+        &self,
+        term: Term,
+        image: &MetadataImage,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+        leader_epoch: LeaderEpoch,
+    ) -> Result<SharePartitionState, ShareStateError> {
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
@@ -303,7 +360,7 @@ impl ShareCoordinator {
                 batches: &[],
             },
         );
-        self.append_state_record(&mut st, group, topic_id, partition, record)
+        self.append_state_record(term, &mut st, group, topic_id, partition, record)
             .await?;
         Ok(current)
     }
@@ -369,24 +426,30 @@ impl ShareCoordinator {
         }
     }
 
-    /// Appends `record` for the key and applies it to `st` after the append
-    /// succeeds, as the replay of the record does.
+    /// Appends `record` for the key in `term` and applies it to `st` after
+    /// the append succeeds, as the replay of the record does.
+    ///
+    /// The record is applied before it commits, as Kafka's
+    /// `CoordinatorRuntime` replays a record when it appends it. The
+    /// in-memory state then matches the local log. If the term ends before
+    /// the record commits, the unload drops the state, and the next load
+    /// replays the log of the new leader.
     pub(super) async fn append_state_record(
         &self,
+        term: Term,
         st: &mut MutexGuard<'_, SharePartitionState>,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
         record: StateRecord,
     ) -> Result<(), ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
         let (record_type, value) = match &record {
             StateRecord::Snapshot(snapshot) => (KEY_SHARE_SNAPSHOT, snapshot.encode()),
             StateRecord::Update(update) => (KEY_SHARE_UPDATE, update.encode()),
         };
         let key = state_key(record_type, group, topic_id, partition);
         let offset = self
-            .persist_record(state_partition, key, Some(value))
+            .persist_record(term, key, Some(value))
             .await
             .map_err(|e| {
                 warn!(error = %e, "share state persist failed");
@@ -401,6 +464,48 @@ impl ShareCoordinator {
             StateRecord::Update(update) => st.apply_update(update),
         }
         Ok(())
+    }
+
+    /// Answers `result` once every record of the term up to the last written
+    /// one is committed, as Kafka's `CoordinatorRuntime` completes an
+    /// operation.
+    ///
+    /// The method releases the read guard of `active` before it waits, so a
+    /// load or an unload does not wait for a commit. A result that holds an
+    /// append failure answers at once: the runtime fails a batch that did not
+    /// append, with its operations. Every other result waits for the last
+    /// written offset of the partition, whether the operation wrote a record
+    /// or not. As in Kafka, an operation then never answers a state that the
+    /// next leader of the partition can lose.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of `result`, or the error of
+    /// [`ShareCoordinator::await_committed`] when the records do not commit.
+    async fn answer<T>(
+        &self,
+        active: Active<'_>,
+        result: Result<T, ShareStateError>,
+    ) -> Result<T, ShareStateError> {
+        if matches!(result, Err(ShareStateError::Operation { .. })) {
+            return result;
+        }
+        let term = active.term;
+        let Some(last_written) = self.last_written(term) else {
+            return result;
+        };
+        drop(active);
+        self.await_committed(term, last_written)
+            .await
+            .map_err(|error| {
+                if matches!(error, AppendError::TimedOut) {
+                    warn!(partition = term.partition.get(), %error, "share state not committed");
+                } else {
+                    debug!(partition = term.partition.get(), %error, "share state not committed");
+                }
+                error.share_error()
+            })?;
+        result
     }
 
     /// The state cell of `(group, topic_id, partition)`, when the key has
@@ -437,7 +542,10 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// Returns `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the
-    /// state partition of the key is not active on this broker.
+    /// state partition of the key is not active on this broker,
+    /// `NOT_COORDINATOR` when the partition stops leading on this broker
+    /// before its records commit, and `COORDINATOR_NOT_AVAILABLE` when they
+    /// do not commit within the write timeout.
     pub(crate) async fn read_summary(
         &self,
         group: &str,
@@ -445,17 +553,29 @@ impl ShareCoordinator {
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, ShareErrorCode> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self.active(state_partition).await?;
-        let Some(handle) = self.entry(group, topic_id, partition) else {
-            return Ok(None);
-        };
+        let active = self.active(state_partition).await?;
+        let summary = self.summary(group, topic_id, partition).await;
+        self.answer(active, Ok(summary))
+            .await
+            .map_err(ShareStateError::code)
+    }
+
+    /// The summary of the stored state of the key, or `None` when the key
+    /// has no state.
+    async fn summary(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Option<ShareStateSummary> {
+        let handle = self.entry(group, topic_id, partition)?;
         let st = handle.lock().await;
-        Ok(Some((
+        Some((
             st.state_epoch,
             st.leader_epoch,
             st.start_offset,
             st.delivery_complete_count,
-        )))
+        ))
     }
 
     /// Serves a `ReadShareGroupStateSummary` partition, as Kafka's
@@ -468,7 +588,9 @@ impl ShareCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of the refused partition.
+    /// Returns the error of the refused partition, or
+    /// [`ShareStateError::Operation`] when the records of the partition do
+    /// not commit.
     pub(crate) async fn read_summary_checked(
         &self,
         image: &MetadataImage,
@@ -477,24 +599,19 @@ impl ShareCoordinator {
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self
+        let active = self
             .active(state_partition)
             .await
             .map_err(ShareStateError::inactive)?;
-        if partition < 0 {
-            return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
-        }
-        check_topic_partition(image, topic_id, partition)?;
-        let Some(handle) = self.entry(group, topic_id, partition) else {
-            return Ok(None);
+        let result = if partition < 0 {
+            Err(invalid_request(message::NEGATIVE_PARTITION_ID))
+        } else {
+            match check_topic_partition(image, topic_id, partition) {
+                Ok(()) => Ok(self.summary(group, topic_id, partition).await),
+                Err(error) => Err(error),
+            }
         };
-        let st = handle.lock().await;
-        Ok(Some((
-            st.state_epoch,
-            st.leader_epoch,
-            st.start_offset,
-            st.delivery_complete_count,
-        )))
+        self.answer(active, result).await
     }
 
     /// Serves a `DeleteShareGroupState` partition, as Kafka's
@@ -517,10 +634,26 @@ impl ShareCoordinator {
         partition: i32,
     ) -> Result<(), ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self
+        let active = self
             .active(state_partition)
             .await
             .map_err(ShareStateError::inactive)?;
+        let result = self
+            .delete_in_term(active.term, image, group, topic_id, partition)
+            .await;
+        self.answer(active, result).await
+    }
+
+    /// The body of [`ShareCoordinator::delete`], under the read guard of
+    /// `term`.
+    async fn delete_in_term(
+        &self,
+        term: Term,
+        image: &MetadataImage,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<(), ShareStateError> {
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
@@ -529,26 +662,23 @@ impl ShareCoordinator {
             return Ok(());
         };
         let _st = entry.lock().await;
-        self.tombstone(state_partition, group, topic_id, partition)
-            .await
+        self.tombstone(term, group, topic_id, partition).await
     }
 
-    /// Appends the tombstone of a key and drops its in-memory entry. The
-    /// caller holds the key lock.
+    /// Appends the tombstone of a key in `term` and drops its in-memory
+    /// entry. The caller holds the key lock.
     pub(super) async fn tombstone(
         &self,
-        state_partition: krabka_ids::PartitionIndex,
+        term: Term,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<(), ShareStateError> {
         let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
-        self.persist_record(state_partition, key, None)
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "share delete persist failed");
-                e.share_error()
-            })?;
+        self.persist_record(term, key, None).await.map_err(|e| {
+            warn!(error = %e, "share delete persist failed");
+            e.share_error()
+        })?;
         self.state.remove(&(group.to_string(), topic_id, partition));
         Ok(())
     }

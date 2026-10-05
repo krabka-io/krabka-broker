@@ -328,6 +328,75 @@ pub(crate) fn peer() -> SocketAddr {
     "127.0.0.1:9092".parse().unwrap()
 }
 
+/// Make this broker the leader of each `__transaction_state` partition in
+/// `partitions`, as the controller does when it creates the topic, and wait
+/// until the transaction coordinator loads each one.
+///
+/// The image holds only these partitions of the topic, so this broker leads no
+/// other partition of it. The replica reconcile then materializes each
+/// partition and installs its leadership, and the coordinator loads it, as in
+/// production. A `__transaction_state` write then passes the leadership and
+/// ISR checks of its commit rule.
+pub(crate) async fn lead_transaction_state_partitions(
+    handle: &BrokerHandle,
+    partitions: &[krabka_ids::PartitionIndex],
+) {
+    let broker = handle.broker_arc_for_test();
+    let node = broker.config.node_id;
+    let topic = crate::txn::bootstrap::TOPIC;
+    // The controller translates a partition record against the topic that the
+    // image already holds, so the topic goes first.
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: topic.into(),
+                topic_id: uuid::Uuid::from_u128(0x7472_616e_7361_6374_696f_6e73),
+                partitions: 0,
+                replication_factor: 1,
+            },
+        )])
+        .await
+        .expect("create __transaction_state");
+    let led: BTreeSet<i32> = partitions.iter().map(|partition| partition.get()).collect();
+    broker
+        .controller
+        .submit_change(
+            led.iter()
+                .map(|&partition| {
+                    MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                        topic: topic.into(),
+                        partition,
+                        leader: node,
+                        replicas: vec![node],
+                        isr: vec![node],
+                        ..Default::default()
+                    })
+                })
+                .collect(),
+        )
+        .await
+        .expect("lead the __transaction_state partitions");
+    let loaded = tokio::time::timeout(Duration::from_secs(30), async {
+        for &partition in &led {
+            while broker
+                .txn_coordinator
+                .load_status(krabka_ids::PartitionIndex(partition))
+                .await
+                != Some(crate::txn::coordinator::leadership::LoadStatus::Loaded)
+            {
+                // intentional: a load has no awaiter that a test can reach.
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    })
+    .await;
+    assert2::assert!(
+        loaded.is_ok(),
+        "the transaction coordinator did not load {led:?}"
+    );
+}
+
 /// Register `node_id` as a remote broker in the controller's image.
 pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
     handle

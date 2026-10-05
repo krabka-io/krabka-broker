@@ -71,10 +71,13 @@ The parts that carry the design:
   in place.
 - The pod's ordinal is the node id and the broker id. The
   `apps.kubernetes.io/pod-index` label supplies it through the downward API.
+  The two have to agree: the format records the node id in
+  `meta.properties`, and the broker refuses to start on a volume that records
+  another id.
 - `terminationGracePeriodSeconds` is 60, which outlasts the 20s
   controlled-shutdown drain.
 - `fsGroup: 65532` gives the `nonroot` user the volume. Without it the format
-  step fails on `meta.properties.json`.
+  step fails on `meta.properties`.
 - The liveness probe polls `/healthz` and the readiness probe polls
   `/readyz`, both on the `health` port, 9405. See
   [Health checks](#health-checks).
@@ -102,13 +105,21 @@ need only the port of the listener they connect to: 9092 under
 ## Format the log directory
 
 A node refuses to boot on an unformatted log directory. `krabka-format`
-writes `meta.properties.json`, the bootstrap checkpoint and the KIP-853
+writes Kafka's `meta.properties`, the bootstrap checkpoint and the KIP-853
 voter record. The directory must be empty or absent; the tool creates it.
+`--node-id` is required, as Kafka's `node.id` is. Each `meta.properties`
+records it, and the broker refuses to start with a `--broker-id` other than
+the one its directories record. The Kafka tools read the file too:
+`kafka-metadata-quorum add-controller` takes the directory id of a new
+controller from the `meta.properties` in its metadata log directory.
 The cluster id and the directory ids are in Kafka's 22-character base64
 form, the form `kafka-storage random-uuid` prints; the hyphenated form is also
 accepted on the command line. A node with more than one disk names every
 directory in one run, `--log-dir` repeated or comma-separated, with the
-metadata log directory first. [Format divergences](../format-divergences.md)
+metadata log directory first. A node that keeps its metadata log on a disk of
+its own, Kafka's `metadata.log.dir`, names that directory with
+`--metadata-log-dir` in the same run, and the broker with `metadata_log_dir`
+or `--metadata-log-dir`. [Format divergences](../format-divergences.md)
 lists where `krabka-format` differs from `kafka-storage format`.
 
 A single node that is its own controller:
@@ -132,8 +143,8 @@ krabka-format --log-dir /var/lib/krabka --node-id 1 \
     --initial-controllers 1@broker-1.example:9093:Oh1vKwxOT3qbjV4sGn9NIQ,2@broker-2.example:9093:<dir-2>,3@broker-3.example:9093:<dir-3>
 ```
 
-A node that will join an existing quorum later formats with
-`--no-initial-controllers` and the existing `--cluster-id`. It boots with
+A node that will join an existing quorum later formats with its own
+`--node-id`, `--no-initial-controllers` and the existing `--cluster-id`. It boots with
 `--controller-bootstrap-servers` and, to become a voter,
 `--controller-auto-join`.
 
@@ -256,8 +267,10 @@ it. `kafka-metadata-quorum --bootstrap-server broker-1.example:9092 describe
 --status` shows the leader and each voter's lag.
 
 Extra data directories for KIP-113 JBOD go in `--extra-log-dirs` or
-`KRABKA_EXTRA_LOG_DIRS`, comma-separated. The metadata log always stays on
-`--log-dir`.
+`KRABKA_EXTRA_LOG_DIRS`, comma-separated. The metadata log stays on
+`--log-dir` unless `--metadata-log-dir` or `KRABKA_METADATA_LOG_DIR` names
+another directory. A metadata log directory that is not a data directory holds
+no partition, and the node stops when it fails, as a Kafka node does.
 
 ## Stop
 

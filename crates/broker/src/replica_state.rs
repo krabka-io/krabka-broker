@@ -306,6 +306,13 @@ impl ReplicaState {
         self.policy = policy;
     }
 
+    /// Whether the ISR is smaller than the effective `min.insync.replicas`,
+    /// Kafka's `partitionState.isr.size < effectiveMinIsr`. The high
+    /// watermark does not move while this holds.
+    pub(crate) fn under_min_isr(&self) -> bool {
+        self.isr_size() < self.policy.effective_min_isr
+    }
+
     /// Kafka's `Partition.isReplicaIsrEligible` facts for `replica`.
     pub(crate) fn eligibility(&self, replica: NodeId) -> IsrEligibilityFacts {
         let standing = self.policy.brokers.get(&replica);

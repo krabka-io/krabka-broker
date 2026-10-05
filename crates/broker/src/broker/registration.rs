@@ -27,7 +27,12 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
         })
         .collect();
     let log_dirs = config.all_log_dirs();
-    let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&log_dirs).ids_for(&log_dirs);
+    let log_dir_ids = crate::log_dir_id::LogDirIds::provision(
+        &log_dirs,
+        config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
+        config.node_id,
+    )
+    .ids_for(&log_dirs);
 
     // A new registration is fenced, as Kafka's `RegisterBrokerRecord`
     // defaults `Fenced` to true; the first caught-up heartbeat unfences it.
@@ -96,6 +101,10 @@ fn stretch_default_records(config: &BrokerConfig) -> Vec<krabka_metadata::Metada
         .collect()
 }
 
+/// This controller's `RegisterControllerRecord`. Its endpoint is the node's own
+/// `controller_quorum_voters` entry, or the listener address, with the host
+/// name for a wildcard address, as Kafka's `ControllerServer` registers its
+/// listeners after `ListenerInfo.withWildcardHostnamesResolved`.
 fn self_controller_registration_record(
     config: &BrokerConfig,
 ) -> krabka_metadata::ControllerRegistrationRecord {
@@ -106,7 +115,10 @@ fn self_controller_registration_record(
         .and_then(|(_, endpoint)| crate::host_port::parse_host_port(endpoint))
         .unwrap_or_else(|| {
             (
-                config.controller_listen_addr.ip().to_string(),
+                crate::host_port::advertised_host(
+                    config.controller_listen_addr.ip(),
+                    crate::host_port::local_host_name,
+                ),
                 config.controller_listen_addr.port(),
             )
         });

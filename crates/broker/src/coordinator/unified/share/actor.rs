@@ -51,6 +51,7 @@ use self::{
     records::{PendingShareRecords, chrono_now_ms, flush_pending, state_partition_metadata_from},
     seed::apply_seed,
     session::handle_session_tick,
+    share_state::apply_initialized,
 };
 use super::{config::ShareGroupConfig, state::ShareGroupState};
 use crate::{
@@ -83,6 +84,10 @@ pub enum ShareGroupActorMessage {
         reply: oneshot::Sender<Result<(), crate::coordinator::DeleteGroupError>>,
     },
     Seed(super::super::ShareGroupSeed),
+    /// The outcome of the share-state `Initialize` calls that a heartbeat
+    /// started: each share partition, and whether the persister initialized
+    /// it. The actor sends it to itself, from the task that ran the calls.
+    ShareStateInitialized(Vec<((krabka_protocol::primitives::uuid::Uuid, i32), bool)>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -125,6 +130,21 @@ fn effective_config<'a>(
     match coordinator.metadata_source() {
         Some(source) => config.for_group(source.current_image().group_config(group_id)),
         None => Cow::Borrowed(config),
+    }
+}
+
+/// The code of a heartbeat whose write failed.
+///
+/// A coordinator write that is not committed carries the answer of Kafka's
+/// `CoordinatorOperationExceptionHelper` for it: `NOT_COORDINATOR` after a
+/// lost leadership, so the client looks the coordinator up again, and
+/// `COORDINATOR_NOT_AVAILABLE` after a timeout. Any other failure answers
+/// `COORDINATOR_LOAD_IN_PROGRESS`: the client retries here, and a new actor
+/// serves the retry from the last committed state of the group.
+fn write_failure_code(error: &crate::error::BrokerError) -> i16 {
+    match error {
+        crate::error::BrokerError::CoordinatorWriteUncommitted { code, .. } => *code,
+        _ => codes::COORDINATOR_LOAD_IN_PROGRESS,
     }
 }
 
@@ -184,7 +204,7 @@ async fn actor_loop(
                                     "share-group actor exiting after log-write failure",
                                 );
                                 let _ = reply.send(ShareGroupHeartbeatResponse {
-                                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                                    error_code: write_failure_code(&e),
                                     ..Default::default()
                                 });
                                 break;
@@ -212,6 +232,16 @@ async fn actor_loop(
                     }
                     ShareGroupActorMessage::Seed(seed) => {
                         apply_seed(&mut state, seed);
+                    }
+                    ShareGroupActorMessage::ShareStateInitialized(outcomes) => {
+                        apply_initialized(
+                            &mut state,
+                            &outcomes,
+                            &*offsets_log,
+                            &coordinator,
+                            chrono_now_ms(),
+                        )
+                        .await;
                     }
                     ShareGroupActorMessage::Shutdown(reply) => {
                         let _ = reply.send(());

@@ -372,12 +372,13 @@ fn expected(case: Case, label: String, topic: (&str, WireUuid), batch: RecordBat
     let (from_start, from_log_end, high_watermark) = match case.expect {
         // Kafka reports the leader's high watermark to a follower, not its log
         // end. The first fetch reports node 2 at offset 0, which holds the
-        // high watermark at 0 while it reads both records; the second reports
-        // node 2 at the log end, which moves the high watermark there before
-        // the read reports it.
+        // high watermark at 0 while it reads both records. The second reports
+        // node 2 at the log end. `Partition.fetchRecords` reads before it
+        // records that position, so the second answer still carries 0, and
+        // only the partition's high watermark moves to the log end.
         Expect::FollowerRead => (
             read(0, RecordsPayload::V2(vec![batch])),
-            read(LOG_END, no_records()),
+            read(0, no_records()),
             Offset(LOG_END),
         ),
         Expect::Refused(error_code) => (refused(error_code), refused(error_code), Offset(0)),

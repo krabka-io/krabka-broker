@@ -236,7 +236,7 @@ fn leader_change_batch_encodes_control_record_payload() {
     };
 
     let voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
-    let batch = leader_change_batch(7, NodeId(2), &voters, 0);
+    let batch = leader_change_batch(7, NodeId(2), &voters);
 
     check!(
         (
@@ -894,4 +894,95 @@ async fn version_finalization_waits_for_the_unchanged_voters_record() {
     engine.advance_and_apply(Offset(base.0 + 2));
     assert!(engine.pending_reconfig.is_none());
     assert!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
+}
+
+/// The first leader of a dynamic quorum writes the voters of the bootstrap
+/// checkpoint into the log, after its `LeaderChange` marker, as Kafka's
+/// `LeaderState.appendStartOfEpochControlRecords` does. A replica that never
+/// read the checkpoint learns the voters from that batch. A static quorum's
+/// leader, and a leader whose epoch starts past offset 0, write the marker
+/// alone.
+#[test]
+fn the_first_leader_of_a_dynamic_quorum_writes_the_bootstrap_voters() {
+    use krabka_metadata::{KRaftVersionRecord, MetadataRecord, VotersRecord};
+
+    use crate::{
+        config::DEFAULT_METADATA_RAFT_FETCH_MAX, kraft::controller::control_batch_image_records,
+    };
+
+    /// The control batch at `at`: its record count, whether its `LeaderChange`
+    /// marker reads whole at version 0, the only version Kafka reads it at, and
+    /// the image records it carries.
+    fn batch_at(engine: &Engine, at: Offset) -> (usize, bool, Vec<MetadataRecord>) {
+        use krabka_protocol::{Decode, owned::leader_change_message::LeaderChangeMessage};
+
+        let batches = engine
+            .log
+            .read_decoded(at, DEFAULT_METADATA_RAFT_FETCH_MAX)
+            .expect("read the leader's batch");
+        let batch = batches.first().expect("a batch at the epoch start");
+        let mut marker: &[u8] = batch.records[0].value.as_ref().expect("a marker value");
+        let kafka_readable =
+            LeaderChangeMessage::decode(&mut marker, 0).is_ok() && marker.is_empty();
+        (
+            batch.records.len(),
+            kafka_readable,
+            control_batch_image_records(batch).expect("decode the control batch"),
+        )
+    }
+
+    let voters = voter_set(&[NodeId(1)]);
+    let dynamic = vec![
+        MetadataRecord::V1KRaftVersion(KRaftVersionRecord { kraft_version: 1 }),
+        MetadataRecord::V1Voters(VotersRecord {
+            voters: voters.clone(),
+        }),
+    ];
+    // (kraft.version, first epoch's batch, a later epoch's batch)
+    let cases = [
+        (0_u16, (1, true, vec![]), (1, true, vec![])),
+        (1, (3, true, dynamic), (1, true, vec![])),
+    ];
+    let mut written = Vec::new();
+    for &(kraft_version, ..) in &cases {
+        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        engine.controls.version_history.insert(-1, kraft_version);
+        engine.controls.committed_version = kraft_version;
+        engine.core.set_kraft_version(kraft_version);
+        elect_single_voter_engine(&mut engine);
+        let first = batch_at(&engine, Offset(0));
+        let later_start = engine.log.log_end_offset();
+        engine
+            .append_leader_change(engine.core.quorum_state().leader_epoch)
+            .expect("append a later epoch's marker");
+        written.push((kraft_version, first, batch_at(&engine, later_start)));
+        // The leader's own voter set is the one it wrote, so it is unchanged.
+        check!(engine.controls.latest_voters() == &voters);
+    }
+    assert!(written == cases);
+}
+
+/// A leader that has made no commit since its election still describes the
+/// observers that fetch from it: a new observer publishes the quorum snapshot
+/// that `DescribeQuorum` reads.
+#[test]
+fn a_new_observer_is_published_without_a_commit() {
+    let (mut leader, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut leader);
+    leader.clock_base = Instant::now() - Duration::from_millis(50);
+    let published = leader.quorum_tx.subscribe();
+    let key = ReplicaKey {
+        id: NodeId(7),
+        directory_id: uuid::Uuid::from_u128(7),
+    };
+
+    leader.record_observer_fetch(key, leader.log.log_end_offset().0);
+
+    let observers: Vec<(NodeId, uuid::Uuid)> = published
+        .borrow()
+        .observers
+        .iter()
+        .map(|observer| (observer.id, observer.directory_id))
+        .collect();
+    assert!(observers == vec![(key.id, key.directory_id)]);
 }

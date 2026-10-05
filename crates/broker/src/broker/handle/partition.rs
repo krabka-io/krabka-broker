@@ -101,6 +101,32 @@ impl BrokerHandle {
 
     // ── partition log helpers ──────────────────────────────────────────────────
 
+    /// Test-only: return the base offset of every batch in the local log of
+    /// `(topic, partition)`, in log order. Returns `None` if the partition is
+    /// not hosted on this broker, or if the read fails.
+    ///
+    /// The read budget is larger than any test log, so the read gives the whole
+    /// log. A replication test compares the result with the batches of the
+    /// leader. A follower that skipped batches still reaches the log end offset
+    /// of the leader, so the log end offset alone does not show the gap.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[must_use]
+    pub fn local_batch_base_offsets_for_test(
+        &self,
+        topic: &str,
+        partition: i32,
+    ) -> Option<Vec<i64>> {
+        let part = self
+            .broker
+            .partitions
+            .get(topic, PartitionIndex(partition))?;
+        let log = part.log.lock().ok()?;
+        let read = log
+            .read(log.log_start_offset(), krabka_units::gibibytes(4))
+            .ok()?;
+        Some(read.batches.iter().map(|batch| batch.base_offset).collect())
+    }
+
     /// Test-only: return the `log_start_offset` of `(topic, partition)` as
     /// reported by its underlying [`krabka_log::Log`]. Returns `None` if the
     /// partition is not hosted on this broker.

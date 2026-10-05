@@ -406,18 +406,28 @@ impl Engine {
     /// a fetch prunes only what neither one can see again: an observer that
     /// has been silent for the hour. Pruning at five minutes here would refuse
     /// a candidate that `AddRaftVoter` finds caught up.
+    ///
+    /// A fetch that adds an observer, or that prunes one, publishes the quorum
+    /// snapshot again, because `DescribeQuorum` reads its observers from that
+    /// snapshot. Without it, a leader with no commits to publish would go on
+    /// to describe the observers it had when it was elected.
     pub(super) fn record_observer_fetch(&mut self, key: ReplicaKey, fetch_offset: i64) {
         if !self.core.role().is_leader() {
             return;
         }
         let now = self.now();
         let leader_log_end = self.log.log_end_offset().0;
+        let joined = !self.observers.contains_key(&key);
         self.observers
             .entry(key)
             .or_default()
             .record_fetch(now, fetch_offset, leader_log_end);
+        let tracked = self.observers.len();
         self.observers
             .retain(|_, progress| progress.fetched_within_caught_up_window(now));
+        if joined || self.observers.len() != tracked {
+            self.publish_leader();
+        }
     }
 
     /// Track a broker-only observer's `MetadataFetch` (1004) as the Fetch it

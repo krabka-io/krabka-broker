@@ -92,6 +92,18 @@ impl JoinOutcome {
     }
 }
 
+/// Kafka's `JoinGroupRequest.requiresKnownMemberId` (KIP-394): `true` for a
+/// dynamic member that joins with no member id at v4 or later.
+///
+/// The coordinator answers such a join with `MEMBER_ID_REQUIRED` and the id
+/// that the member must join with again. A classic group and a consumer group
+/// that hosts classic members both apply this rule.
+pub(crate) fn requires_known_member_id(req: &JoinGroupRequest, version: i16) -> bool {
+    req.group_instance_id.is_none()
+        && req.member_id.is_empty()
+        && version >= FIRST_KNOWN_MEMBER_ID_VERSION
+}
+
 /// Kafka's `classicGroupJoinToClassicGroup`. On a new member id the request's
 /// `member_id` becomes the id the group gave it, so the actor parks the reply
 /// under that id.
@@ -193,7 +205,7 @@ fn join_new_member(
         req.member_id = new_member_id;
         return JoinOutcome::of(add_member_then_rebalance(state, req, ctx));
     }
-    if ctx.version >= FIRST_KNOWN_MEMBER_ID_VERSION {
+    if requires_known_member_id(req, ctx.version) {
         state.add_pending_member(new_member_id.clone(), ctx.now + session_timeout(req));
         return JoinOutcome::error(codes::MEMBER_ID_REQUIRED, new_member_id);
     }
@@ -739,6 +751,26 @@ mod tests {
             check!(outcome == want, "{}", row.name);
             check!(g.state == row.state_after, "{}", row.name);
             check!(g.generation_id == 1, "{}", row.name);
+        }
+    }
+
+    /// Kafka's `JoinGroupRequest.requiresKnownMemberId`: only a dynamic member
+    /// with no member id at v4 or later is sent back for an id.
+    #[test]
+    fn requires_known_member_id_follows_kafka() {
+        // (member id, group instance id, version, expected)
+        let rows = [
+            ("", None, 4, true),
+            ("", None, 9, true),
+            ("", None, 3, false),
+            ("", Some("instance-1"), 9, false),
+            ("m1", None, 9, false),
+        ];
+        for (member_id, instance_id, version, want) in rows {
+            check!(
+                requires_known_member_id(&join_req(member_id, instance_id), version) == want,
+                "{member_id:?} {instance_id:?} v{version}"
+            );
         }
     }
 

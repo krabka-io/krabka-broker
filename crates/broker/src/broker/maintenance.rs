@@ -21,15 +21,23 @@ pub(super) fn spawn_storage_security_maintenance(
     partitions: &Arc<PartitionRegistry>,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
-    inter_broker_listener_protocol: krabka_security::ListenerProtocol,
     metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
     tokio::spawn(crate::isr_maintenance::run(
         crate::isr_maintenance::Config {
-            outbound_client: Arc::clone(inter_broker_client),
-            listener_protocol: inter_broker_listener_protocol,
-            server_name: config.inter_broker_server_name.clone(),
+            // Kafka sends `AlterPartition` to the active controller on its
+            // CONTROLLER listener, as it sends `BrokerHeartbeat`. An isolated
+            // controller has no broker listener at all.
+            dialer: crate::controller_endpoint::ControllerDialer {
+                outbound_client: Arc::clone(inter_broker_client),
+                listener_protocol: config.controller_listener_protocol,
+                server_name: config
+                    .controller_server_name
+                    .clone()
+                    .unwrap_or_else(|| "localhost".to_owned()),
+                quorum_voters: config.controller_quorum_voters.clone(),
+            },
             node_id: config.node_id,
             partitions: Arc::clone(partitions),
             controller: Arc::clone(controller),

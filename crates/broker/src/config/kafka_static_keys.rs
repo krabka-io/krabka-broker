@@ -84,6 +84,8 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
         |c| ms(c.next_gen_consumer_group.max_heartbeat_interval);
     "group.consumer.max.size", Some("consumer_group_max_size"),
         |c| int(c.next_gen_consumer_group.max_size);
+    "group.consumer.migration.policy", None,
+        |c| c.next_gen_consumer_group.migration_policy.as_str().to_owned();
     "group.initial.rebalance.delay.ms", Some("classic_group_initial_rebalance_delay"),
         |c| time_ms(c.classic_group_initial_rebalance_delay);
     "group.min.session.timeout.ms", Some("classic_group_min_session_timeout"),
@@ -138,13 +140,13 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
         |c| ms(c.streams_group.assignment_interval);
     "group.streams.initial.rebalance.delay.ms", None,
         |c| ms(c.streams_group.initial_rebalance_delay);
-    "group.streams.min.session.timeout.ms", None,
+    "group.streams.min.session.timeout.ms", Some("streams_group_min_session_timeout"),
         |c| ms(c.streams_group.min_session_timeout);
-    "group.streams.max.session.timeout.ms", None,
+    "group.streams.max.session.timeout.ms", Some("streams_group_max_session_timeout"),
         |c| ms(c.streams_group.max_session_timeout);
-    "group.streams.min.heartbeat.interval.ms", None,
+    "group.streams.min.heartbeat.interval.ms", Some("streams_group_min_heartbeat_interval"),
         |c| ms(c.streams_group.min_heartbeat_interval);
-    "group.streams.max.heartbeat.interval.ms", None,
+    "group.streams.max.heartbeat.interval.ms", Some("streams_group_max_heartbeat_interval"),
         |c| ms(c.streams_group.max_heartbeat_interval);
     "group.streams.max.size", Some("streams_group_max_size"),
         |c| int(c.streams_group.max_size);
@@ -252,6 +254,16 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
         |c| size(c.metadata_max_bytes_between_snapshots);
     "metadata.log.max.snapshot.interval.ms", Some("metadata_max_snapshot_interval"),
         |c| time_ms(c.metadata_max_snapshot_interval);
+    "metadata.log.segment.bytes", Some("metadata_log_segment_bytes"),
+        |c| size(c.metadata_log.segment_size);
+    "metadata.log.segment.ms", Some("metadata_log_segment_roll_interval"),
+        |c| time_ms(c.metadata_log.segment_roll_interval);
+    "metadata.max.retention.bytes", Some("metadata_max_retention_bytes"),
+        |c| c.metadata_log.max_retention_size.map_or_else(|| "-1".to_owned(), size);
+    "metadata.max.retention.ms", Some("metadata_max_retention"),
+        |c| c.metadata_log.max_retention.map_or_else(|| "-1".to_owned(), time_ms);
+    "metadata.max.idle.interval.ms", Some("metadata_max_idle_interval"),
+        |c| time_ms(c.metadata_log.max_idle_interval);
     "broker.heartbeat.interval.ms", Some("heartbeat_interval"),
         |c| time_ms(c.heartbeat_interval);
     "broker.session.timeout.ms", Some("heartbeat_timeout"),
@@ -385,5 +397,84 @@ mod tests {
             .collect();
 
         check!(stated == expected);
+    }
+
+    /// The five `MetadataLogConfig` keys state the value the metadata log
+    /// runs with, once it leaves Kafka's default. A retention limit that is
+    /// not set states Kafka's `-1`, which is how Kafka writes "no limit".
+    #[test]
+    fn the_metadata_log_keys_state_what_the_metadata_log_runs_with() {
+        use krabka_units::{bytes, hours, mebibytes, millis};
+
+        const METADATA_LOG_KEYS: [&str; 5] = [
+            "metadata.log.segment.bytes",
+            "metadata.log.segment.ms",
+            "metadata.max.retention.bytes",
+            "metadata.max.retention.ms",
+            "metadata.max.idle.interval.ms",
+        ];
+        let stated = |metadata_log: krabka_raft::MetadataLogConfig| -> Vec<(&str, String)> {
+            let config = BrokerConfig {
+                metadata_log,
+                ..BrokerConfig::default()
+            };
+            KAFKA_STATIC_KEYS
+                .iter()
+                .filter(|key| METADATA_LOG_KEYS.contains(&key.name))
+                .filter_map(|key| key.static_value(&config).map(|value| (key.name, value)))
+                .collect()
+        };
+        let cases = [
+            (
+                "Kafka's defaults",
+                krabka_raft::MetadataLogConfig::default(),
+                vec![],
+            ),
+            (
+                "the no-op records off, as the test profile runs",
+                krabka_raft::MetadataLogConfig {
+                    max_idle_interval: millis(0),
+                    ..krabka_raft::MetadataLogConfig::default()
+                },
+                vec![("metadata.max.idle.interval.ms", "0")],
+            ),
+            (
+                "no retention limit",
+                krabka_raft::MetadataLogConfig {
+                    max_retention_size: None,
+                    max_retention: None,
+                    ..krabka_raft::MetadataLogConfig::default()
+                },
+                vec![
+                    ("metadata.max.retention.bytes", "-1"),
+                    ("metadata.max.retention.ms", "-1"),
+                ],
+            ),
+            (
+                "every key changed",
+                krabka_raft::MetadataLogConfig {
+                    segment_size: mebibytes(16),
+                    segment_roll_interval: hours(1),
+                    max_retention_size: Some(bytes(0)),
+                    max_retention: Some(millis(0)),
+                    max_idle_interval: millis(250),
+                },
+                vec![
+                    ("metadata.log.segment.bytes", "16777216"),
+                    ("metadata.log.segment.ms", "3600000"),
+                    ("metadata.max.retention.bytes", "0"),
+                    ("metadata.max.retention.ms", "0"),
+                    ("metadata.max.idle.interval.ms", "250"),
+                ],
+            ),
+        ];
+
+        for (label, metadata_log, expected) in cases {
+            let expected: Vec<(&str, String)> = expected
+                .into_iter()
+                .map(|(name, value)| (name, value.to_owned()))
+                .collect();
+            check!(stated(metadata_log) == expected, "{label}");
+        }
     }
 }

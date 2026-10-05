@@ -30,6 +30,7 @@ use krabka_client_core::Client;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_cluster_request::DescribeClusterRequest,
+    describe_log_dirs_request::DescribeLogDirsRequest,
     metadata_request::MetadataRequest,
 };
 use tempfile::TempDir;
@@ -44,9 +45,9 @@ struct RoleSeparated {
     /// The broker-only nodes' configs, index-aligned with `brokers`, so a test
     /// can stop one and start it again on the same ports and log dir.
     broker_configs: Vec<BrokerConfig>,
-    /// The controller-only node's log dir, where its `__cluster_metadata`
-    /// checkpoints land once it snapshots.
-    controller_log_dir: std::path::PathBuf,
+    /// The controller-only node's metadata log directory, where its
+    /// `__cluster_metadata-0` log and checkpoints live.
+    controller_metadata_dir: std::path::PathBuf,
     // Dropping these removes the log dirs the nodes still hold open.
     _dirs: Vec<TempDir>,
 }
@@ -102,7 +103,7 @@ async fn start_role_separated_with(
     );
     ctrl_cfg.roles = vec![NodeRole::Controller];
     customize(0, &mut ctrl_cfg);
-    let controller_log_dir = ctrl_cfg.log_dir.clone();
+    let controller_metadata_dir = ctrl_cfg.metadata_dir().to_path_buf();
     let controller = Broker::start_with_listeners(
         ctrl_cfg,
         Some(ctrl_ls.next().unwrap()),
@@ -149,7 +150,7 @@ async fn start_role_separated_with(
         controller,
         brokers: observers,
         broker_configs,
-        controller_log_dir,
+        controller_metadata_dir,
         _dirs: dirs,
     }
 }
@@ -290,13 +291,16 @@ async fn restart_broker_only(cfg: &BrokerConfig) -> (BrokerHandle, HealthState) 
 async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset() {
     support::init_tracing();
 
-    // Only the controller snapshots aggressively. The observer keeps the
-    // default checkpoint interval, so it writes none of its own over a handful
-    // of topics and restarts at the log start — which is the offset the
-    // controller has pruned away, and the case this test is about.
+    // Only the controller snapshots aggressively, and it keeps no log beyond
+    // its newest snapshot, so each cleaning moves its log start up. The
+    // observer keeps the default checkpoint interval, so it writes none of its
+    // own over a handful of topics and restarts at the log start — which is
+    // the offset the controller has pruned away, and the case this test is
+    // about.
     let cluster = start_role_separated_with(1, |index, cfg| {
         if index == 0 {
             cfg.metadata_snapshot_interval_records = 4;
+            cfg.metadata_log.max_retention_size = Some(krabka_units::bytes(0));
         }
     })
     .await;
@@ -338,10 +342,7 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
 
     // The controller really has taken a snapshot — the prune that strands a
     // restarting observer happens in the same step that writes this file.
-    let checkpoints = cluster
-        .controller_log_dir
-        .join("__cluster_metadata")
-        .join("@metadata-0");
+    let checkpoints = krabka_raft::metadata_partition_dir(&cluster.controller_metadata_dir);
     let snapshot_written = std::fs::read_dir(&checkpoints).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry
@@ -802,4 +803,172 @@ async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
         .await;
 
     cluster.shutdown().await;
+}
+
+/// The names of the entries directly in `dir`, sorted.
+fn entries(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Whether `dir` holds a KIP-630 snapshot, the file Kafka's system test looks
+/// for with `ls __cluster_metadata-0/*.checkpoint`.
+fn holds_a_checkpoint(dir: &std::path::Path) -> bool {
+    entries(dir).iter().any(|name| {
+        std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext == "checkpoint")
+    })
+}
+
+/// Kafka's `metadata.log.dir`, apart from the data directories, on every node.
+///
+/// This is what Kafka's `snapshot_test.py` checks. The controller keeps the
+/// `__cluster_metadata-0` log and its snapshots in its metadata directory. Its
+/// KIP-835 no-op records roll the log by `metadata.log.segment.ms`, and
+/// `metadata.max.retention.bytes` cleans it until the first segment file is
+/// gone. No partition lands in a metadata directory, and `DescribeLogDirs`
+/// reports the data directory only. A broker-only node whose directories are
+/// wiped then comes back and rebuilds its image from the controller's
+/// snapshot, because the records it would replay are gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node() {
+    support::init_tracing();
+
+    let cluster = start_role_separated_with(1, |index, cfg| {
+        let root = cfg.log_dir.clone();
+        cfg.log_dir = root.join("data");
+        cfg.metadata_log_dir = Some(root.join("metadata"));
+        if index == 0 {
+            // The snapshot test's settings, with a shorter roll interval and
+            // a faster idle interval so the test does not wait for minutes.
+            cfg.metadata_max_bytes_between_snapshots = krabka_units::bytes(2048);
+            cfg.metadata_log = krabka_raft::MetadataLogConfig {
+                segment_roll_interval: krabka_units::secs(1),
+                max_retention_size: Some(krabka_units::bytes(2048)),
+                max_idle_interval: krabka_units::millis(50),
+                ..krabka_raft::MetadataLogConfig::default()
+            };
+        }
+    })
+    .await;
+    let broker_cfg = cluster.broker_configs[0].clone();
+    let broker_data = broker_cfg.log_dir.clone();
+    let broker_metadata = broker_cfg.metadata_dir().to_path_buf();
+
+    let topics: Vec<String> = (0..3).map(|i| format!("metadata-dir-topic-{i}")).collect();
+    let client = Client::builder()
+        .bootstrap(cluster.brokers[0].listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    for topic in &topics {
+        let resp = client
+            .send(CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: topic.clone(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            resp.topics[0].error_code == 0,
+            "create {topic}: {:?}",
+            resp.topics[0]
+        );
+    }
+    for topic in &topics {
+        cluster.brokers[0]
+            .wait_until_local_log_end_offset(topic, 0, 0)
+            .await;
+    }
+
+    // The controller cleans its metadata log: the first segment goes and a
+    // snapshot stays, within the snapshot test's 100 seconds.
+    let partition_dir = krabka_raft::metadata_partition_dir(&cluster.controller_metadata_dir);
+    let deadline = Instant::now() + Duration::from_secs(100);
+    while partition_dir.join("00000000000000000000.log").exists()
+        || !holds_a_checkpoint(&partition_dir)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the first metadata segment was never cleaned: {:?}",
+            entries(&partition_dir)
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    // The partitions are in the data directory. The controller's metadata
+    // directory holds the metadata partition only, and the broker-only node's
+    // holds no partition: its observer keeps a checkpoint there only once it
+    // installs or writes one.
+    let mut want_data: Vec<String> = topics.iter().map(|topic| format!("{topic}-0")).collect();
+    want_data.sort();
+    let partitions_in = |dir: &std::path::Path| -> Vec<String> {
+        entries(dir)
+            .into_iter()
+            .filter(|name| name.starts_with("metadata-dir-topic-"))
+            .collect()
+    };
+    assert!(
+        (
+            partitions_in(&broker_data),
+            partitions_in(&broker_metadata),
+            entries(&cluster.controller_metadata_dir),
+            krabka_raft::metadata_partition_dir(&broker_data).exists(),
+        ) == (
+            want_data,
+            Vec::<String>::new(),
+            vec![krabka_raft::METADATA_PARTITION_DIR.to_owned()],
+            false,
+        )
+    );
+    let described = client
+        .send(DescribeLogDirsRequest {
+            topics: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        described
+            .results
+            .iter()
+            .map(|result| result.log_dir.clone())
+            .collect::<Vec<_>>()
+            == vec![broker_data.display().to_string()]
+    );
+
+    // Wipe the broker-only node and bring it back on the same ports. Its log
+    // starts empty, below the controller's log start, so it has to install
+    // the controller's snapshot.
+    let RoleSeparated {
+        controller,
+        mut brokers,
+        _dirs,
+        ..
+    } = cluster;
+    brokers.remove(0).shutdown().await;
+    std::fs::remove_dir_all(&broker_data).unwrap();
+    std::fs::remove_dir_all(&broker_metadata).unwrap();
+    let (restarted, _health) = restart_broker_only(&broker_cfg).await;
+    for topic in &topics {
+        restarted.wait_until_partition_present(topic, 0).await;
+    }
+
+    restarted.shutdown().await;
+    controller.shutdown().await;
 }

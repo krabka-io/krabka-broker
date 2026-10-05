@@ -17,16 +17,18 @@ use tokio::{
 use uuid::Uuid;
 
 use super::{
-    Engine, KraftConfig, KraftControlState, KraftController, PendingDowngradeSnapshot,
-    QUORUM_STATE_FILE,
+    Engine, KraftConfig, KraftControlState, KraftController, METADATA_LOG_CLEAN_INTERVAL,
+    PendingDowngradeSnapshot, QUORUM_STATE_FILE,
     checkpoint::{latest_checkpoint_id, load_latest_checkpoint},
-    checkpoint_dir,
     quorum_state_file::load_quorum_state,
     recovery::{control_state_at, replay_committed, replay_control_records},
     timing::initial_election_at,
 };
 use crate::{
-    config::{ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax},
+    config::{
+        ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftCommandQueueCapacity,
+        MetadataRaftFetchMax,
+    },
     error::RaftError,
     kraft::{
         core::QuorumStateMachine,
@@ -87,6 +89,7 @@ impl KraftController {
             max_bytes_between_snapshots,
             max_snapshot_interval,
             metadata_snapshot_fetch_max,
+            metadata_log,
         } = config;
 
         // Every record in a cleanly reopened log is committed. Recover the
@@ -147,6 +150,7 @@ impl KraftController {
             },
         };
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
+        let (storage_fault_tx, storage_fault_rx) = watch::channel(None);
         let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());
 
         let clock_base = Instant::now();
@@ -172,6 +176,7 @@ impl KraftController {
             leader_tx,
             quorum_tx,
             cmd_tx: cmd_tx.clone(),
+            storage_fault_tx,
             data_dir,
             clock_base,
             election_timeout,
@@ -182,6 +187,7 @@ impl KraftController {
             fetch_at: None,
             check_quorum_at: None,
             fetch_misses: 0,
+            discovery_attempts: 0,
             commit_waiters: Vec::new(),
             was_leader: initial_was_leader,
             held_epoch: initial_epoch,
@@ -190,6 +196,9 @@ impl KraftController {
             max_bytes_between_snapshots,
             max_snapshot_interval,
             metadata_snapshot_fetch_max,
+            metadata_log,
+            noop_at: None,
+            clean_at: clock_base + METADATA_LOG_CLEAN_INTERVAL,
             last_snapshot_end_offset,
             last_snapshot_timestamp_ms,
             last_snapshot_at_ms: 0,
@@ -220,6 +229,7 @@ impl KraftController {
         Ok(Self {
             cmd_tx,
             image_rx,
+            storage_fault_rx,
             leader_rx,
             quorum_rx,
             peers: engine_peers,
@@ -261,11 +271,12 @@ impl KraftController {
         max_bytes_between_snapshots: ByteSize,
         max_snapshot_interval: Time,
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
+        metadata_log: MetadataLogConfig,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let legacy_quorum_state = std::fs::metadata(data_dir.join(QUORUM_STATE_FILE))
             .is_ok_and(|metadata| metadata.len() == 54);
-        let mut log = KraftLog::open(&data_dir)?;
+        let mut log = KraftLog::open(&data_dir, &metadata_log)?;
         if legacy_quorum_state {
             // The predecessor format treated a cleanly reopened log as fully
             // committed. Capture that boundary once while migrating its
@@ -281,7 +292,7 @@ impl KraftController {
         let mut snapshot_control = None;
         let mut last_snapshot_end_offset = Offset(0);
         let mut last_snapshot_timestamp_ms = 0;
-        if let Some(bytes) = load_latest_checkpoint(&checkpoint_dir(&data_dir))? {
+        if let Some(bytes) = load_latest_checkpoint(&data_dir)? {
             let contents = crate::snapshot::SnapshotReader::read(&bytes)?;
             // The records this checkpoint contains are below its boundary and
             // gone from the log, so its header is the only place their
@@ -299,7 +310,7 @@ impl KraftController {
                 }));
                 snapshot_control = Some(control);
             }
-            if let Some((off, _ep)) = latest_checkpoint_id(&checkpoint_dir(&data_dir)) {
+            if let Some((off, _ep)) = latest_checkpoint_id(&data_dir) {
                 // Checkpoint filenames encode the raw offset (on-disk boundary).
                 last_snapshot_end_offset = Offset(off);
             }
@@ -370,6 +381,7 @@ impl KraftController {
                 max_bytes_between_snapshots,
                 max_snapshot_interval,
                 metadata_snapshot_fetch_max,
+                metadata_log,
             },
             log,
             data_dir,

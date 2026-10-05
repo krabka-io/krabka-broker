@@ -272,12 +272,15 @@ impl BrokerHandle {
         self.broker.should_shutdown.subscribe()
     }
 
-    /// The fatal fault that stopped this node's controller, or `None` when
-    /// there is none.
+    /// The fatal fault that stopped this node, or `None` when there is none:
+    /// a fault that stopped its controller, or the failure of its metadata
+    /// log directory (KIP-858).
     ///
     /// Kafka's `ProcessTerminatingFaultHandler` halts the process with exit
     /// status 1 on such a fault, for example when a controller replays a
-    /// `FeatureLevelRecord` above the range it supports. A library cannot halt
+    /// `FeatureLevelRecord` above the range it supports. Kafka's
+    /// `ReplicaManager.handleLogDirFailure` halts it too when the failed
+    /// directory is the metadata log directory. A library cannot halt
     /// its host, so [`Self::should_shutdown_rx`] flips and this holds the
     /// message to exit with. The flag is already latched, so a
     /// `controlled_shutdown` after it skips the leadership drain, which a dead
@@ -285,7 +288,12 @@ impl BrokerHandle {
     /// leaves no clean-shutdown proof, as a halted Kafka process leaves none.
     #[must_use]
     pub fn fatal_fault(&self) -> Option<String> {
-        self.broker.controller.watch_fatal().borrow().clone()
+        self.broker
+            .controller
+            .watch_fatal()
+            .borrow()
+            .clone()
+            .or_else(|| self.broker.log_dir_status.metadata_dir_fault())
     }
 
     /// A receiver of the fatal fault that stops this node's controller.
@@ -307,6 +315,11 @@ impl BrokerHandle {
     /// responds with `should_shut_down=true`. This call then invokes
     /// the regular [`shutdown`](Self::shutdown).
     ///
+    /// A node without the broker role leads no partition and runs no
+    /// heartbeat client, so no controller would ever answer the drain. It goes
+    /// straight to [`shutdown`](Self::shutdown) and returns `Ok(())`, as
+    /// Kafka's controller-only process stops without a controlled shutdown.
+    ///
     /// This method always stops the broker before it returns. A clean drain
     /// goes through the regular [`shutdown`](Self::shutdown). A `timeout` goes
     /// through a hard shutdown fallback that returns `Err(ShutdownTimeout)`, so
@@ -322,6 +335,10 @@ impl BrokerHandle {
         self,
         timeout: std::time::Duration,
     ) -> Result<(), BrokerError> {
+        if !self.broker.config.is_broker() {
+            self.shutdown().await;
+            return Ok(());
+        }
         let mut should_shutdown_rx = self.broker.should_shutdown.subscribe();
         // Latch the request flag. Idempotent — repeated sends to a
         // `watch::Sender` with the same value are harmless and the

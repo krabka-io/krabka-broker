@@ -19,11 +19,18 @@ use crate::{network::OutboundDialer, types::NodeId};
 
 mod kafka_release;
 mod limits;
+mod metadata_log;
 mod routing;
 
 pub use self::{
     kafka_release::{KAFKA_4_3_1_APIS, ReleasedApi, kafka_4_3_1_api, kafka_4_3_1_max},
     limits::{ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax},
+    metadata_log::{
+        DEFAULT_METADATA_LOG_SEGMENT_ROLL_INTERVAL, DEFAULT_METADATA_LOG_SEGMENT_SIZE,
+        DEFAULT_METADATA_MAX_IDLE_INTERVAL, DEFAULT_METADATA_MAX_RETENTION,
+        DEFAULT_METADATA_MAX_RETENTION_SIZE, METADATA_PARTITION_DIR, MIN_METADATA_LOG_SEGMENT_SIZE,
+        MetadataLogConfig, metadata_partition_dir,
+    },
     routing::{
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
         ControllerAdminRouter, ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION,
@@ -69,9 +76,10 @@ pub enum BootstrapMode {
     /// Cold-boot the first voter of a fresh cluster. `Controller::start`
     /// requires an empty metadata log and a non-empty
     /// [`ControllerConfig::initial_voters`], which becomes the seed voter set
-    /// that elects this broker on its first election timeout. A node that
-    /// configures no initial voters and sets [`ControllerConfig::auto_join`]
-    /// is started as `Join` instead.
+    /// that elects this broker on its first election timeout. A node with no
+    /// initial voters, neither configured nor in its bootstrap checkpoint,
+    /// that names [`ControllerConfig::bootstrap_servers`] or sets
+    /// [`ControllerConfig::auto_join`] is started as `Join` instead.
     Bootstrap,
 
     /// Cold-boot a subsequent voter with an empty start. `Controller::start`
@@ -142,6 +150,9 @@ pub struct ControllerConfig {
     /// Initial voter set for the bootstrapping node only; empty for joiners.
     pub initial_voters: krabka_metadata::VoterSet,
     pub controller_listen_addr: SocketAddr,
+    /// The metadata log directory, Kafka's `metadata.log.dir`. The controller
+    /// keeps the metadata partition in its
+    /// [`METADATA_PARTITION_DIR`] subdirectory.
     pub log_dir: PathBuf,
     pub election_timeout: Time,
     /// Explicit heartbeat cadence. `None` preserves the derived
@@ -192,11 +203,16 @@ pub struct ControllerConfig {
     /// `metadata.log.max.snapshot.interval.ms` (default 1 h; 0 = disabled).
     pub max_snapshot_interval: Time,
     /// Snapshot once committed offset advances this many records past the last
-    /// snapshot, then prune the log below it. `0` disables snapshotting.
+    /// snapshot. The cleaning by [`Self::metadata_log`]'s retention limits
+    /// then decides when the log below a snapshot goes. `0` disables this
+    /// trigger.
     pub snapshot_interval_records: u64,
     /// Maximum metadata snapshot size this follower will fetch. Deployments may
     /// lower the default 1 GiB security ceiling but cannot raise it.
     pub metadata_snapshot_fetch_max: ByteSize,
+    /// How the metadata log rolls, how long it keeps the prefix a snapshot
+    /// covers, and how often an idle leader appends to it.
+    pub metadata_log: MetadataLogConfig,
 }
 
 impl std::fmt::Debug for ControllerConfig {
@@ -259,6 +275,7 @@ impl std::fmt::Debug for ControllerConfig {
                 "metadata_snapshot_fetch_max",
                 &self.metadata_snapshot_fetch_max.human().to_string(),
             )
+            .field("metadata_log", &self.metadata_log)
             .finish()
     }
 }
@@ -310,6 +327,12 @@ impl ControllerConfig {
             max_snapshot_interval: DEFAULT_MAX_SNAPSHOT_INTERVAL,
             snapshot_interval_records: 0,
             metadata_snapshot_fetch_max: METADATA_SNAPSHOT_FETCH_HARD_MAX,
+            // A test counts the offsets its own writes land at, so the leader
+            // appends no KIP-835 `NoOpRecord` between them.
+            metadata_log: MetadataLogConfig {
+                max_idle_interval: secs(0),
+                ..MetadataLogConfig::default()
+            },
         }
     }
 }

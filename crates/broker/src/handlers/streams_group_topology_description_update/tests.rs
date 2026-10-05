@@ -127,3 +127,67 @@ async fn handle_answers_as_a_trunk_broker_without_a_plugin() {
         broker_handle.shutdown().await;
     }
 }
+
+/// With Kafka's in-memory plugin configured, a push gets past the plugin
+/// check, and the service's request checks and the group lookup refuse what
+/// trunk refuses, with trunk's messages. A push that reaches a group is the
+/// actor's to judge; `crates/broker/tests/streams_groups` drives that path
+/// over the wire.
+#[tokio::test]
+async fn handle_refuses_what_a_trunk_broker_with_a_plugin_refuses() {
+    use crate::coordinator::unified::streams::description::TopologyDescriptionPlugin;
+
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.streams_group.topology_description_plugin = TopologyDescriptionPlugin::InMemory;
+        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+            crate::test_support::GrantsInPrincipalName,
+        ));
+    })
+    .await;
+    broker_handle.wait_until_group_coordinator_ready().await;
+    let broker = broker_handle.broker_arc_for_test();
+    set_streams_version(&broker, 1).await;
+    let _classic = broker
+        .group_coordinator
+        .get_or_create_classic("classic-app");
+    let principal = crate::test_support::principal("Group:Read");
+    let peer = crate::test_support::peer();
+    let ctx = test_context(&principal, &peer);
+
+    let rows = [
+        (
+            "an empty member id",
+            StreamsGroupTopologyDescriptionUpdateRequest {
+                member_id: String::new(),
+                ..request("app")
+            },
+            response(codes::INVALID_REQUEST, Some("MemberId can't be empty.")),
+        ),
+        (
+            "an empty group id",
+            request(""),
+            response(codes::INVALID_REQUEST, Some("GroupId can't be empty.")),
+        ),
+        (
+            "a group that does not exist",
+            request("app"),
+            response(codes::GROUP_ID_NOT_FOUND, Some("Group app not found.")),
+        ),
+        (
+            "a classic group",
+            request("classic-app"),
+            response(
+                codes::GROUP_ID_NOT_FOUND,
+                Some("Group classic-app is not a streams group."),
+            ),
+        ),
+    ];
+    for (case, push, want) in rows {
+        let answer = handle(&broker, MAX_VERSION, 1, &encode_request(&push), &ctx)
+            .await
+            .expect("an answer");
+
+        assert!(decode_response(&answer) == want, "{case}");
+    }
+    broker_handle.shutdown().await;
+}

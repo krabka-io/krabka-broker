@@ -5,10 +5,11 @@
 //! `WriterMessage::Replicate` is the only path a control batch reaches on a
 //! follower: `replicator/response.rs` decodes every control batch (raw or
 //! `V2`) and sends it through `Partition::replicate_batch`, never through
-//! `ReplicateVerbatim`. Without mirroring on that arm, a follower promoted
-//! after replicating a transaction-version-2 marker would serve produces from
-//! an empty or pre-marker tracker: an old-epoch retry the marker fenced could
-//! be accepted, and an empty tracker accepts any first sequence, not only 0.
+//! `ReplicateVerbatim`. Without mirroring on that arm, the follower's tracker
+//! keeps an empty or pre-marker entry after a transaction-version-2 marker
+//! until a promotion copies the log's producer state: an old-epoch retry the
+//! marker fenced could be accepted, and an empty tracker accepts any first
+//! sequence, not only 0.
 
 use std::sync::Arc;
 

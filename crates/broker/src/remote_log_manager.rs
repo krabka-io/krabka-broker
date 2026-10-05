@@ -143,7 +143,7 @@ pub(crate) use self::{
     archive::ArchiveMode,
     copy::{CopyDelay, copy_eligible_delayed},
     delete::cascade_remote_partition_delete,
-    local_retention::local_retention_pass,
+    local_retention::{LocalRetentionBounds, local_retention_pass},
     remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
 };
 
@@ -521,6 +521,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
                 sealed: &local_exports,
                 size: local_log_size,
             },
+            high_watermark,
             is_leader,
             broker_id,
         },
@@ -566,6 +567,8 @@ struct RetentionPasses<'a> {
     deleted_below: Option<krabka_log::Offset>,
     earliest_epoch: Option<krabka_ids::LeaderEpoch>,
     local: LocalLogFootprint<'a>,
+    /// The high watermark the tick read before it snapshotted the log.
+    high_watermark: krabka_log::Offset,
     is_leader: bool,
     broker_id: i32,
 }
@@ -581,6 +584,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
         deleted_below,
         earliest_epoch,
         local,
+        high_watermark,
         is_leader,
         broker_id,
     } = pass;
@@ -593,7 +597,10 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
         exports,
         log_config,
         tier.rlmm,
-        now_ms(),
+        LocalRetentionBounds {
+            now_ms: now_ms(),
+            high_watermark,
+        },
         tier.unstable_api_versions,
     );
     if !is_leader {
@@ -796,6 +803,107 @@ mod tests {
                 .iter()
                 .all(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
         );
+    }
+
+    // What one sweep left of a partition: the offset ranges the remote tier
+    // finished copying, the sealed segments still on local disk, and the
+    // local log start, which is what `ListOffsets(EARLIEST_LOCAL)` answers.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Tiered {
+        remote: Vec<(i64, i64)>,
+        local_sealed: Vec<(Offset, Offset)>,
+        local_log_start: Offset,
+    }
+
+    // A tiered partition that stops taking writes is tiered through its
+    // active segment, as Kafka tiers it.
+    //
+    // Every record sits in the active segment, which neither `segment.bytes`
+    // nor `segment.ms` will roll and the copy never uploads. Kafka's
+    // retention check rolls it once it breaches `local.retention.ms`, the
+    // next copy uploads the sealed records, and the next check drops them
+    // from local disk. Kafka's `ShareConsumerDLQTieredStorageTest` waits on
+    // exactly that: `ListOffsets(EARLIEST_LOCAL)` reaching the last record of
+    // a partition nothing writes to any more.
+    #[tokio::test]
+    async fn two_sweeps_tier_an_idle_partition_through_its_active_segment() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        let part_dir = crate::log_dir::partition_dir(log_dir.path(), "orders", 0);
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let mut log = Log::open(
+            &part_dir,
+            LogConfig {
+                remote_storage_enable: true,
+                local_retention: Some(millis(1)),
+                retention: None,
+                retention_size: None,
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        for _ in 0..3 {
+            log.append(&mut test_support::batch(2)).unwrap();
+        }
+        let partition =
+            test_support::leading_partition_over(PartitionIndex(0), log_dir.path(), log);
+        let partitions = PartitionRegistry::new();
+        partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
+        let controller = fixed_source(image_with_orders_topic());
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+
+        for (sweep, expected) in [
+            (
+                "the first sweep rolls the breached active segment",
+                Tiered {
+                    remote: vec![],
+                    local_sealed: vec![(Offset(0), Offset(5))],
+                    local_log_start: Offset(0),
+                },
+            ),
+            (
+                "the second sweep copies it and drops it from local disk",
+                Tiered {
+                    remote: vec![(0, 5)],
+                    local_sealed: vec![],
+                    local_log_start: Offset(6),
+                },
+            ),
+        ] {
+            tick_all(
+                &partitions,
+                &controller,
+                &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+                NodeId(1),
+                1,
+                SweepConcurrency::default(),
+            )
+            .await;
+
+            // The next sweep copies what this one rolled once the rollover
+            // flush lands, so wait for it, as a sweep interval would.
+            let mut log = partition.log.lock().expect("partition log mutex poisoned");
+            log.sync().expect("flush rolled segments");
+            let observed = Tiered {
+                remote: rlmm
+                    .list_remote_log_segments(&tp())
+                    .unwrap()
+                    .iter()
+                    .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+                    .map(|md| (md.start_offset(), md.end_offset()))
+                    .collect(),
+                local_sealed: log
+                    .tierable_segments()
+                    .iter()
+                    .map(|export| (export.base_offset, export.last_offset))
+                    .collect(),
+                local_log_start: log.local_log_start_offset(),
+            };
+            check!(observed == expected, "{sweep}");
+        }
     }
 
     /// Sweep `partition` once and count the segments the remote tier holds
@@ -1169,12 +1277,12 @@ mod tests {
             .iter()
             .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
             .count();
-        let local_sealed_after = partition
-            .log
-            .lock()
-            .expect("partition log mutex poisoned")
-            .tierable_segments()
-            .len();
+        // A segment the sweep rolled counts once its rollover flush lands.
+        let local_sealed_after = {
+            let mut log = partition.log.lock().expect("partition log mutex poisoned");
+            log.sync().expect("flush rolled segments");
+            log.tierable_segments().len()
+        };
         FollowerSweep {
             sealed_before,
             remote_finished,
@@ -1211,8 +1319,11 @@ mod tests {
                 "{label}: segments in the remote tier after the sweep"
             );
             // ...but it does drop its own copy of what the leader finished.
+            // The zero budget covers its active segment too, so it rolls that
+            // segment, as Kafka's `deletableSegments` does on every replica,
+            // and the rolled segment is the one left.
             let want_local = if leader_already_copied {
-                0
+                1
             } else {
                 outcome.sealed_before
             };

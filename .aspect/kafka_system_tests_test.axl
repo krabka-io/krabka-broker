@@ -1,0 +1,223 @@
+"""Unit tests for `kafka_system_tests.axl`."""
+
+load(
+    "./kafka_system_tests.axl",
+    "ADAPTER_IMPORT",
+    "ducktape_argv",
+    "manifest_problems",
+    "outcomes",
+    "render_report",
+    "select",
+    "suite_yaml",
+    "test_coordinates",
+    "verdict",
+    "with_adapter_import",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_REVISION = "28093d8215b69aa629031673325752484a84b0f3"
+_REPLICATION = "kafkatest/tests/core/replication_test.py::ReplicationTest.test_replication_with_broker_failure"
+_TRUNCATION = "kafkatest/tests/client/truncation_test.py::TruncationTest.test_offset_truncate"
+
+def _entry(test, parameters = {}, known_failure = None):
+    entry = {"test": test, "parameters": parameters}
+    if known_failure != None:
+        entry["known_failure"] = known_failure
+    return entry
+
+def _result(module, cls, method, injected_args, status, summary = "", results_dir = ""):
+    return {
+        "module_name": module,
+        "cls_name": cls,
+        "function_name": method,
+        "injected_args": injected_args,
+        "test_status": status,
+        "summary": summary,
+        "relative_results_dir": results_dir,
+    }
+
+def _test_a_well_formed_manifest_has_no_problems(_ctx):
+    document = {"kafka_revision": _REVISION, "tests": [
+        _entry(_REPLICATION, {"failure_mode": "clean_bounce"}),
+        _entry(_REPLICATION, {"failure_mode": "hard_bounce"}, "under-replicated partitions do not clear"),
+        _entry(_TRUNCATION),
+    ]}
+    check_eq("problems", manifest_problems(document), [])
+
+def _test_manifest_problems_name_each_fault(_ctx):
+    cases = [
+        (
+            "an abbreviated revision",
+            {"kafka_revision": _REVISION[:12], "tests": [_entry(_TRUNCATION)]},
+            ["kafka_revision must be a full 40-character commit, got \"28093d8215b6\""],
+        ),
+        (
+            "an uppercase revision",
+            {"kafka_revision": _REVISION.upper(), "tests": [_entry(_TRUNCATION)]},
+            ["kafka_revision must be a full 40-character commit, got \"%s\"" % _REVISION.upper()],
+        ),
+        (
+            "no tests",
+            {"kafka_revision": _REVISION, "tests": []},
+            ["tests must be a non-empty list"],
+        ),
+        (
+            "a module path without a method",
+            {"kafka_revision": _REVISION, "tests": [_entry("kafkatest/tests/client/truncation_test.py")]},
+            ["tests[0] test must be kafkatest/<path>.py::<Class>.<method>, got \"kafkatest/tests/client/truncation_test.py\""],
+        ),
+        (
+            "a class without a method",
+            {"kafka_revision": _REVISION, "tests": [_entry("kafkatest/tests/client/truncation_test.py::TruncationTest")]},
+            ["tests[0] test must be kafkatest/<path>.py::<Class>.<method>, got \"kafkatest/tests/client/truncation_test.py::TruncationTest\""],
+        ),
+        (
+            "a misspelled key",
+            {"kafka_revision": _REVISION, "tests": [{"test": _TRUNCATION, "known_failures": "x"}]},
+            ["tests[0] has unknown key \"known_failures\""],
+        ),
+        (
+            "parameters that are not an object",
+            {"kafka_revision": _REVISION, "tests": [{"test": _TRUNCATION, "parameters": ["metadata_quorum"]}]},
+            ["tests[0] parameters must be an object"],
+        ),
+        (
+            "an empty known failure",
+            {"kafka_revision": _REVISION, "tests": [_entry(_TRUNCATION, {}, " ")]},
+            ["tests[0] known_failure must be a non-empty string"],
+        ),
+        (
+            # Key order is not identity: ducktape compares the parameters as
+            # a dict, so these two would run the same test twice.
+            "the same parametrization twice",
+            {"kafka_revision": _REVISION, "tests": [
+                _entry(_REPLICATION, {"failure_mode": "clean_bounce", "broker_type": "leader"}),
+                _entry(_REPLICATION, {"broker_type": "leader", "failure_mode": "clean_bounce"}),
+            ]},
+            ["tests[1] repeats tests[0]"],
+        ),
+    ]
+    for name, document, want in cases:
+        check_eq(name, manifest_problems(document), want)
+
+def _test_select_keeps_entries_under_any_prefix(_ctx):
+    entries = [_entry(_REPLICATION), _entry(_TRUNCATION)]
+    check_eq("no filter", select(entries, []), entries)
+    check_eq("one module", select(entries, ["kafkatest/tests/core/"]), [_entry(_REPLICATION)])
+    check_eq("two prefixes", select(entries, ["kafkatest/tests/client/", _REPLICATION]), entries)
+    check_eq("no match", select(entries, ["kafkatest/tests/streams/"]), [])
+
+def _test_suite_yaml_carries_each_parametrization(_ctx):
+    check_eq("suite", suite_yaml([
+        _entry(_REPLICATION, {"failure_mode": "clean_bounce", "enable_idempotence": True}),
+        _entry(_TRUNCATION),
+        _entry(_TRUNCATION, {"note": "it's"}),
+    ]), "\n".join([
+        "krabka:",
+        "  - '../%s@{\"failure_mode\":\"clean_bounce\",\"enable_idempotence\":true}'" % _REPLICATION,
+        # No `@{}`: ducktape would compare {} with the test's absent
+        # parameters and match nothing.
+        "  - '../%s'" % _TRUNCATION,
+        "  - '../%s@{\"note\":\"it''s\"}'" % _TRUNCATION,
+    ]) + "\n")
+
+def _test_the_adapter_import_is_added_once(_ctx):
+    init = "from .kafka import KafkaService\nfrom .util import TopicPartition\n"
+    patched = with_adapter_import(init)
+    check_eq("patched", patched, init + "\n# krabka: every KafkaService a test builds runs krabka-broker.\n" + ADAPTER_IMPORT + "\n")
+    check_eq("idempotent", with_adapter_import(patched), patched)
+
+def _test_test_coordinates_follow_ducktape_naming(_ctx):
+    check_eq(
+        "coordinates",
+        test_coordinates(_REPLICATION),
+        ("kafkatest.tests.core.replication_test", "ReplicationTest", "test_replication_with_broker_failure"),
+    )
+
+def _test_outcomes_match_results_by_test_and_parameters(_ctx):
+    entries = [
+        _entry(_REPLICATION, {"failure_mode": "clean_bounce", "broker_type": "leader"}),
+        _entry(_REPLICATION, {"failure_mode": "hard_bounce", "broker_type": "leader"}),
+        _entry(_TRUNCATION),
+    ]
+    module, cls, method = test_coordinates(_REPLICATION)
+    results = [
+        # report.json writes the injected parameters in the test's own order.
+        _result(module, cls, method, {"broker_type": "leader", "failure_mode": "clean_bounce"}, "PASS", "Test Passed", "ReplicationTest/1/"),
+        _result("kafkatest.tests.client.truncation_test", "TruncationTest", "test_offset_truncate", None, "FAIL", "TimeoutError('x')\nTraceback", "TruncationTest/1/"),
+    ]
+    check_eq("outcomes", outcomes(entries, results), [
+        struct(entry = entries[0], status = "PASS", summary = "Test Passed", results_dir = "ReplicationTest/1/"),
+        struct(entry = entries[1], status = "NOT RUN", summary = "", results_dir = ""),
+        struct(entry = entries[2], status = "FAIL", summary = "TimeoutError('x')\nTraceback", results_dir = "TruncationTest/1/"),
+    ])
+
+def _test_verdicts_compare_status_with_expectation(_ctx):
+    cases = [
+        ("PASS", None, "pass"),
+        ("FAIL", None, "regression"),
+        ("NOT RUN", None, "regression"),
+        ("FLAKY", None, "regression"),
+        ("FAIL", "times out", "known failure"),
+        ("NOT RUN", "times out", "known failure"),
+        ("PASS", "times out", "fixed"),
+    ]
+    for status, known_failure, want in cases:
+        outcome = struct(entry = _entry(_TRUNCATION, {}, known_failure), status = status, summary = "", results_dir = "")
+        check_eq("%s with known_failure %r" % (status, known_failure), verdict(outcome), want)
+
+def _test_render_report_counts_and_explains_each_row(_ctx):
+    results = [
+        struct(entry = _entry(_REPLICATION, {"failure_mode": "clean_bounce", "enable_idempotence": True}), status = "PASS", summary = "Test Passed", results_dir = ""),
+        struct(entry = _entry(_REPLICATION, {"failure_mode": "hard_bounce"}, "ISR | never re-expands"), status = "FAIL", summary = "TimeoutError", results_dir = ""),
+        struct(entry = _entry(_TRUNCATION), status = "FAIL", summary = "\nTimeoutError('No | progress')\nTraceback", results_dir = ""),
+        struct(entry = _entry(_TRUNCATION, {"metadata_quorum": "ISOLATED_KRAFT"}, "slow"), status = "PASS", summary = "", results_dir = ""),
+    ]
+    check_eq("report", render_report(_REVISION, results), "\n".join([
+        "# Apache Kafka system tests against krabka",
+        "",
+        "Kafka [`28093d8215b6`](https://github.com/apache/kafka/tree/%s/tests): 4 tests, 1 passed, 1 known failures, 1 regressions, 1 fixed." % _REVISION,
+        "",
+        "| Test | Parameters | Result | Verdict | Detail |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+        "| `tests/core/replication_test.py::ReplicationTest.test_replication_with_broker_failure` | `failure_mode=\"clean_bounce\"` `enable_idempotence=true` | PASS | pass |  |",
+        "| `tests/core/replication_test.py::ReplicationTest.test_replication_with_broker_failure` | `failure_mode=\"hard_bounce\"` | FAIL | known failure | ISR \\| never re-expands |",
+        "| `tests/client/truncation_test.py::TruncationTest.test_offset_truncate` |  | FAIL | regression | TimeoutError('No \\| progress') |",
+        "| `tests/client/truncation_test.py::TruncationTest.test_offset_truncate` | `metadata_quorum=\"ISOLATED_KRAFT\"` | PASS | fixed |  |",
+    ]) + "\n")
+
+def _test_ducktape_argv_runs_the_suite_in_the_driver(_ctx):
+    common = [
+        "docker",
+        "exec",
+        "--user",
+        "ducker",
+        "--workdir",
+        "/opt/kafka-dev",
+        "ducker01",
+        "ducktape",
+        "--cluster-file",
+        "/opt/kafka-dev/tests/docker/build/cluster.json",
+        "--results-root",
+        "/opt/kafka-dev/results/krabka-20261004-230000",
+        "--max-parallel",
+        "3",
+        "--compress",
+    ]
+    check_eq("every test", ducktape_argv("results/krabka-20261004-230000", 3, False), common + ["tests/krabka/suite.yml"])
+    check_eq("exit first", ducktape_argv("results/krabka-20261004-230000", 3, True), common + ["--exit-first", "tests/krabka/suite.yml"])
+
+kafka_system_tests_tests = suite("kafka-system-tests", [
+    _test_ducktape_argv_runs_the_suite_in_the_driver,
+    _test_a_well_formed_manifest_has_no_problems,
+    _test_manifest_problems_name_each_fault,
+    _test_select_keeps_entries_under_any_prefix,
+    _test_suite_yaml_carries_each_parametrization,
+    _test_the_adapter_import_is_added_once,
+    _test_test_coordinates_follow_ducktape_naming,
+    _test_outcomes_match_results_by_test_and_parameters,
+    _test_verdicts_compare_status_with_expectation,
+    _test_render_report_counts_and_explains_each_row,
+])
+
+test_kafka_system_tests = suite_task(kafka_system_tests_tests)

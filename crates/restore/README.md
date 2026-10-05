@@ -26,7 +26,7 @@ krabka restore \
   --archive-s3-region eu-west-1 \
   --archive-prefix prod/ \
   --rlmm-snapshot /var/lib/krabka/remote-log-metadata/snapshot \
-  --metadata-snapshot /var/lib/krabka/__cluster_metadata/@metadata-0/00000000000000123456-0000000042.checkpoint \
+  --metadata-snapshot /var/lib/krabka/__cluster_metadata-0/00000000000000123456-0000000042.checkpoint \
   --log-dir /var/lib/krabka-restored \
   --cluster-id 4c9e2f1a-1f7d-4a53-9a1e-7c0c8a2b6d31 \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
@@ -54,7 +54,7 @@ A batch that a predicate filters is re-encoded from the records that survive. It
 
 Without `--rlmm-snapshot` the restore has only the object keys to work from. A segment that the old cluster had marked for deletion is then indistinguishable from a live one, and the restore includes it. Supply the snapshot from a broker's `<log.dir>/remote-log-metadata/snapshot` when the archive holds segments that retention had already released.
 
-Without `--metadata-snapshot`, topic configuration, ACLs, client quotas, SCRAM credentials, and finalized feature levels cannot be recovered. The report warns and names every restored topic whose configuration is unavailable. Supply a controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/` to restore that state. With the flag, the restore seeds those records into the target's bootstrap stream, and the restored broker answers `DescribeConfigs` and `DescribeAcls` with them. A topic config is restored for a topic the archive also holds; ACLs, quotas, credentials and feature levels are restored whole. A snapshot whose topic id disagrees with the archive's stops the restore rather than applying a config to a different topic of the same name.
+Without `--metadata-snapshot`, topic configuration, ACLs, client quotas, SCRAM credentials, and finalized feature levels cannot be recovered. The report warns and names every restored topic whose configuration is unavailable. Supply a controller `<offset>-<epoch>.checkpoint` from `<metadata.log.dir>/__cluster_metadata-0/` to restore that state. The metadata log directory is the broker's first log directory unless its `metadata_log_dir` names another one. With the flag, the restore seeds those records into the target's bootstrap stream, and the restored broker answers `DescribeConfigs` and `DescribeAcls` with them. A topic config is restored for a topic the archive also holds; ACLs, quotas, credentials and feature levels are restored whole. A snapshot whose topic id disagrees with the archive's stops the restore rather than applying a config to a different topic of the same name.
 
 Committed consumer-group offsets come back through neither flag. `__consumer_offsets` is compacted and internal, so it is never tiered and no archive holds it, and a restored cluster has no committed offset for any group: each one starts from its own `auto.offset.reset`. Capture them from the live cluster with `krabka-backup capture` and commit them into the restored one with `krabka-backup restore-offsets`.
 

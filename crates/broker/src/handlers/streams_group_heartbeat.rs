@@ -884,8 +884,8 @@ mod tests {
     /// `StreamsGroupHeartbeat` v1 changes only the response. Trunk's
     /// `GroupMetadataManager` sets the int64 `AcceptableRecoveryLag` from the
     /// group config and leaves the v0 int32 legacy field at 0, and KIP-1331's
-    /// `TopologyDescriptionRequired` stays false while no topology-description
-    /// plugin is configured, which krabka never has. The same join at v0 and
+    /// `TopologyDescriptionRequired` stays false while no topology description
+    /// plugin is configured, as on this broker. The same join at v0 and
     /// at v1 therefore answers the same response apart from the lag, which v0
     /// does not carry. A refused v1 heartbeat answers the generated defaults,
     /// as Kafka's `getErrorResponse` does: -1 for the lag, false for the flag.
