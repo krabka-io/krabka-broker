@@ -289,12 +289,13 @@ fn joined(a: &str, b: &str) -> String {
 /// given, and only rejected when the two disagree.
 #[tokio::test]
 async fn an_explicit_directory_id_must_match_this_node_s_quorum_entry() {
-    const CONTROLLER: &str = "1@host-a:9093:00000000-0000-0000-0000-000000000001";
+    // Outside the 100 lowest ids, which `--directory-id` refuses.
+    const CONTROLLER: &str = "1@host-a:9093:00000000-0000-0001-0000-000000000001";
     // (what it is, --directory-id, expected exit)
     let cases: &[(&str, &str, i32)] = &[
         (
             "matching the quorum entry",
-            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0001-0000-000000000001",
             EXIT_OK,
         ),
         (

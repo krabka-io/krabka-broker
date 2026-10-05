@@ -189,7 +189,7 @@ impl BrokerProcess {
             "{}@{}:{}",
             self.node_id,
             self.advertised_controller(),
-            uuid::Uuid::from_u128(u128::from(self.node_id))
+            directory_uuid(self.node_id)
         )
     }
 
@@ -203,7 +203,7 @@ impl BrokerProcess {
         let node = format!("--node-id={}", self.node_id);
         let directory = format!(
             "--directory-id={}",
-            uuid::Uuid::from_u128(u128::from(self.node_id))
+            directory_uuid(self.node_id)
         );
         let mut args = vec!["run", "--rm", "--user", &user, "--volume", &mount];
         let primary_mount;
@@ -463,6 +463,13 @@ fn partitions_in(
                 .map(|partition| partition.partition_index)
         })
         .collect()
+}
+
+/// The metadata directory id that `node_id` is formatted with: fixed, so the
+/// voter set can name it, and outside the 100 lowest ids, which Kafka reserves
+/// and the broker refuses at startup.
+fn directory_uuid(node_id: u32) -> uuid::Uuid {
+    uuid::Uuid::from_u64_pair(1, u64::from(node_id))
 }
 
 fn directory_id(fs: &TinyFs) -> uuid::Uuid {

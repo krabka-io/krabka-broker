@@ -93,6 +93,11 @@ the `krabka-*` names to crates.io.
   node id 2 in ...`. The broker refuses a directory that has only
   `meta.properties.json` with `No readable meta.properties files found.`; run
   a fresh `krabka-format`. `docs/format-divergences.md` gives the format.
+- `krabka-format --directory-id` refuses the 100 lowest ids, which Kafka
+  reserves as directory-id sentinels. The broker refuses a reserved id at
+  startup with `Invalid reserved directory ID ... found in <dir>`, as Kafka's
+  `MetaPropertiesEnsemble.verify` does, so the format refuses it first and
+  writes nothing.
 - The metadata log is in `__cluster_metadata-0` under the metadata log
   directory, with its segments, its `<offset>-<epoch>.checkpoint` snapshots
   and its `quorum-state` file, as Kafka's is. It was in

@@ -96,7 +96,7 @@ pub struct FormatArgs {
     /// identity. Intended for orchestrators that verify the exact node
     /// incarnation before they declare it ready. Accepts Kafka's base64 form
     /// or the hyphenated form. The other directories get generated ids.
-    #[arg(long, value_parser = DirectoryId::parse_cli)]
+    #[arg(long, value_parser = parse_directory_id)]
     pub(super) directory_id: Option<DirectoryId>,
     /// Format this node as the sole initial controller voter.
     #[arg(
@@ -165,6 +165,27 @@ pub fn parse_node_id(s: &str) -> Result<krabka_metadata::NodeId, String> {
     let id = u64::try_from(id)
         .map_err(|_| "You must specify a valid non-negative node ID.".to_owned())?;
     Ok(krabka_metadata::NodeId(id))
+}
+
+/// Parses `--directory-id`: Kafka's base64 form or the hyphenated form, and
+/// never one of the 100 ids that Kafka reserves as directory-id sentinels.
+///
+/// The broker refuses a reserved id at startup, as Kafka's
+/// `MetaPropertiesEnsemble.verify` does, so the format refuses it first and
+/// writes nothing.
+///
+/// # Errors
+///
+/// Returns the message of [`DirectoryId::parse_cli`], or one for a reserved
+/// id.
+pub fn parse_directory_id(s: &str) -> Result<DirectoryId, String> {
+    let id = DirectoryId::parse_cli(s).map_err(|e| e.to_string())?;
+    if id.is_reserved() {
+        return Err(format!(
+            "Invalid reserved directory ID {id}: Kafka reserves the 100 lowest directory ids"
+        ));
+    }
+    Ok(id)
 }
 
 /// Parse `--controller-listener-name` into Kafka's normalised form: upper
@@ -290,6 +311,35 @@ mod tests {
                 parse_node_id(input).map(|n| n.0) == want.map_err(str::to_owned),
                 "{input:?}"
             );
+        }
+    }
+
+    /// `--directory-id` takes either id form and refuses the ids that Kafka
+    /// reserves, which the broker would refuse at startup.
+    #[test]
+    fn parse_directory_id_refuses_reserved_ids() {
+        let reserved = |n: u128| {
+            Err(format!(
+                "Invalid reserved directory ID {}: Kafka reserves the 100 lowest directory ids",
+                DirectoryId::from(uuid::Uuid::from_u128(n))
+            ))
+        };
+        let usable = uuid::Uuid::from_u64_pair(1, 1);
+        let cases: [(String, Result<DirectoryId, String>); 5] = [
+            (usable.to_string(), Ok(DirectoryId::from(usable))),
+            (
+                DirectoryId::from(usable).to_string(),
+                Ok(DirectoryId::from(usable)),
+            ),
+            (uuid::Uuid::from_u128(1).to_string(), reserved(1)),
+            (uuid::Uuid::from_u128(99).to_string(), reserved(99)),
+            (
+                uuid::Uuid::from_u128(100).to_string(),
+                Ok(DirectoryId::from(uuid::Uuid::from_u128(100))),
+            ),
+        ];
+        for (input, want) in cases {
+            check!(parse_directory_id(&input) == want, "{input:?}");
         }
     }
 
