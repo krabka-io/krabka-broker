@@ -303,8 +303,10 @@ impl Drop for SoakBroker {
 ///
 /// Fixed rather than random so the `--initial-controllers` list every node is
 /// given is the same string, built without a round of coordination.
+/// The metadata directory id of node `n`: outside the 100 lowest ids, which
+/// Kafka reserves and the broker refuses at startup.
 fn directory_id(n: u32) -> uuid::Uuid {
-    uuid::Uuid::from_u128(u128::from(n))
+    uuid::Uuid::from_u64_pair(1, u64::from(n))
 }
 
 /// Three brokers, formatted into one quorum and running.
