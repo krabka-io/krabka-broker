@@ -117,6 +117,7 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
         appended.push(batch);
     }
 
+    log.sync().unwrap();
     let exports = log.tierable_segments();
     assert!(
         exports.len() == spec.groups.len() - 1,

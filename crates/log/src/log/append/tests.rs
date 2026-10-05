@@ -402,6 +402,7 @@ fn post_roll_failure_restores_the_previous_active_segment() {
         dir.path(),
         LogConfig {
             segment_size: bytes(1),
+            flush_on_append: true,
             ..LogConfig::default()
         },
     )
@@ -420,7 +421,7 @@ fn post_roll_failure_restores_the_previous_active_segment() {
     let error = log.append(&mut sample_batch(1)).unwrap_err();
 
     assert!(matches!(error, LogError::Io(_)));
-    assert!(io.calls.load(std::sync::atomic::Ordering::Relaxed) == 3);
+    assert!(io.calls.load(std::sync::atomic::Ordering::Relaxed) == 4);
     assert!(log.log_end_offset() == Offset(1));
     assert!(log.lso() == Offset(1));
     assert!(log.segments.is_empty());

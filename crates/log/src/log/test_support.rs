@@ -293,6 +293,7 @@ pub fn rolled_log(dir: &std::path::Path, extra: &LogConfig) -> Log {
         let mut b = sample_batch(2);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     log
 }
 

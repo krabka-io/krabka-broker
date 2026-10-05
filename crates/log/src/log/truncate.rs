@@ -33,6 +33,7 @@ impl Log {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), LogError> {
+        self.rollover_flusher.finish()?;
         let log_end = self.log_end_offset();
         let empty_rolled_active_at_cut = offset == log_end
             && !self.segments.is_empty()
@@ -200,6 +201,7 @@ impl Log {
         err,
     )]
     pub fn trim_to_offset(&mut self, target: Offset) -> Result<Offset, LogError> {
+        self.rollover_flusher.finish()?;
         if target < 0 {
             return Err(LogError::InvalidArgument(
                 "trim_to_offset: target must be >= 0".into(),

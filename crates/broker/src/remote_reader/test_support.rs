@@ -389,6 +389,7 @@ pub fn populated_reader(
         let mut b = batch_of(2, 64);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     let exports = log.tierable_segments();
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
 
@@ -477,6 +478,7 @@ pub fn populated_reader_with_abort(
         let mut b = batch_of(2, 64);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     let exports = log.tierable_segments();
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
 

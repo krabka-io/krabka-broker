@@ -551,6 +551,7 @@ async fn local_retention_drive_deletes_copied_segments() {
         let mut b = batch(2);
         log.append(&mut b).unwrap();
     }
+    log.sync().expect("flush sealed segments before archiving");
     let exports = log.tierable_segments();
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
     let log_config = log.config_snapshot();
@@ -760,6 +761,7 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
             future_batch.max_timestamp = future;
             log.append(&mut future_batch).unwrap();
         }
+        log.sync().unwrap();
         let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
         let (exports, log_config) = {
             let log = partition.log.lock().expect("partition log mutex poisoned");

@@ -189,6 +189,7 @@ impl Log {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn reset_to(&mut self, new_base: Offset) -> Result<(), LogError> {
+        self.rollover_flusher.finish()?;
         if new_base < 0 {
             return Err(LogError::OffsetMismatch {
                 expected: Offset(0),
@@ -277,6 +278,7 @@ impl Log {
     pub fn take_producer_snapshot(&mut self) -> Result<(), LogError> {
         let log_end = self.log_end_offset();
         if log_end.0 > self.producer_reload_range(log_end).log_start {
+            self.sync()?;
             producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producer_state)?;
         }
         Ok(())

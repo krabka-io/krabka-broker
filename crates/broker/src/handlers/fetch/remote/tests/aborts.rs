@@ -63,6 +63,7 @@ async fn remote_fetch_reports_an_abort_in_a_later_segment_or_the_local_tail() {
         log.release_replicated_transactions(end);
         assert!(log.last_stable_offset(end) == end);
         assert!(log.aborted_in_range(Offset(0), Offset(1)).len() == 1);
+        log.sync().unwrap();
         let exports = log.tierable_segments();
         assert!(exports[0].transaction_index_path.is_none());
         assert!(

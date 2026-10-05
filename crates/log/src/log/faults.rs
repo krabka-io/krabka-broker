@@ -214,6 +214,7 @@ fn a_disk_full_producer_snapshot_fails_the_roll_and_the_log_reopens_without_it()
         // what publishes the boundary snapshot.
         let config = LogConfig {
             segment_size: bytes(1),
+            flush_on_append: true,
             ..LogConfig::default()
         };
         let mut log = Log::open(dir.path(), config.clone()).unwrap();

@@ -272,6 +272,7 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
         .expect("append producer batch");
     log.append(&mut ordinary_batch())
         .expect("roll producer segment");
+    log.sync().unwrap();
     let export = log
         .tierable_segments()
         .into_iter()

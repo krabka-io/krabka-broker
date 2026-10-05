@@ -605,6 +605,7 @@ mod tests {
             };
             log.append(&mut commit_records(&request, commit).unwrap().batch)
                 .unwrap();
+            log.sync().unwrap();
             check!(log.tierable_segments().len() == usize::from(elapsed_ms > roll_ms));
         }
     }
