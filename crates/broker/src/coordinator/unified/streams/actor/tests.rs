@@ -420,25 +420,59 @@ async fn fenced_epoch_is_rejected() {
     assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
 }
 
+/// A heartbeat whose write fails answers the code of the failure, and the
+/// failed write leaves no partial batch. A write that is not committed answers
+/// what Kafka's `CoordinatorOperationExceptionHelper` answers for it, so that
+/// a member whose join the coordinator never committed looks the coordinator
+/// up again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persistence_failure_returns_loading_and_writes_no_partial_batch() {
-    let (coord, log) = make_coordinator();
-    let handle = coord.get_or_create_streams("g");
-    log.fail_next.store(true, Ordering::SeqCst);
+async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
+    let uncommitted =
+        |code| Some(crate::error::BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
+    let cases = [
+        (
+            "the partition writer is gone",
+            None,
+            codes::COORDINATOR_LOAD_IN_PROGRESS,
+        ),
+        (
+            "the leadership moved before the write committed",
+            uncommitted(codes::NOT_COORDINATOR),
+            codes::NOT_COORDINATOR,
+        ),
+        (
+            "the write did not commit in time",
+            uncommitted(codes::COORDINATOR_NOT_AVAILABLE),
+            codes::COORDINATOR_NOT_AVAILABLE,
+        ),
+    ];
+    for (what, failure, expected) in cases {
+        let (coord, log) = make_coordinator();
+        let handle = coord.get_or_create_streams("g");
+        match failure {
+            Some(error) => {
+                *log.fail_next_with.lock().expect("not poisoned") = Some(error);
+            }
+            None => log.fail_next.store(true, Ordering::SeqCst),
+        }
 
-    let response = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            ..Default::default()
-        },
-    )
-    .await;
+        let response = heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                ..Default::default()
+            },
+        )
+        .await;
 
-    check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-    assert!(log.batches().await.is_empty());
+        check!(
+            response == super::response::error_resp(expected, None),
+            "{what}"
+        );
+        check!(log.batches().await.is_empty(), "{what}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -931,6 +965,141 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
         ..super::response::base_resp(codes::NONE, 2, &undelayed())
     };
     check!(result.response == expected);
+}
+
+/// The `__consumer_offsets` replay spawns the actor of a loaded group before
+/// the broker connects the coordinator's metadata source. The actor still
+/// reconciles against the metadata image once the source is there, as Kafka's
+/// coordinator gives every loaded group the image: a member that joins after a
+/// restart gets the task that the loaded member revokes, and the loaded member
+/// keeps the other one.
+///
+/// Each row is one heartbeat of the exchange after the restart and the whole
+/// response it gets. A group that never sees the source assigns nothing, so
+/// the loaded member revokes both of its tasks instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() {
+    use krabka_protocol::owned::common::{
+        streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
+        streams_group_heartbeat_response::task_ids::TaskIds,
+    };
+
+    use crate::test_support::FakeMetadataSource;
+
+    struct Row {
+        member_id: &'static str,
+        member_epoch: i32,
+        /// The active tasks that the heartbeat reports as owned.
+        owned: Vec<i32>,
+        epoch: i32,
+        /// The active tasks, when the response sends the task lists.
+        active: Option<Vec<i32>>,
+    }
+
+    let source = || {
+        Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 2)]))
+                .build(),
+        )
+    };
+    let request = |member_id: &str, member_epoch, owned: Vec<i32>| StreamsGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch,
+        process_id: Some(format!("process-{member_id}")),
+        rebalance_timeout_ms: 60_000,
+        topology: (member_epoch == 0).then(|| one_subtopology(false)),
+        active_tasks: Some(if owned.is_empty() {
+            vec![]
+        } else {
+            vec![OwnedTaskIds {
+                subtopology_id: "0".into(),
+                partitions: owned,
+                ..Default::default()
+            }]
+        }),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        ..Default::default()
+    };
+    let expected = |member_id: &str, epoch, active: Option<Vec<i32>>| {
+        let tasks = |partitions: Vec<i32>| {
+            if partitions.is_empty() {
+                vec![]
+            } else {
+                vec![TaskIds {
+                    subtopology_id: "0".into(),
+                    partitions,
+                    ..Default::default()
+                }]
+            }
+        };
+        StreamsGroupHeartbeatResponse {
+            member_id: member_id.into(),
+            status: Some(vec![]),
+            standby_tasks: active.as_ref().map(|_| vec![]),
+            warmup_tasks: active.as_ref().map(|_| vec![]),
+            active_tasks: active.map(tasks),
+            ..super::response::base_resp(codes::NONE, epoch, &undelayed())
+        }
+    };
+
+    let (before, _log) = make_coordinator();
+    before.set_metadata_source(source());
+    let joined = heartbeat(&before.get_or_create_streams("g"), request("m1", 0, vec![])).await;
+    check!(joined == expected("m1", 2, Some(vec![0, 1])));
+    let seed = before
+        .cached_streams_seed("g")
+        .expect("the join cached a seed");
+
+    // The order of `Broker::start`: the replay seeds the group and spawns its
+    // actor, and only then does the broker connect the metadata source.
+    let (after, _log) = make_coordinator();
+    after.streams_seeds.insert("g".into(), seed);
+    after.finalize_bootstrap();
+    after.set_metadata_source(source());
+    let handle = after
+        .find_streams("g")
+        .expect("the replay spawned the actor");
+
+    let rows = [
+        Row {
+            member_id: "m2",
+            member_epoch: 0,
+            owned: vec![],
+            epoch: 3,
+            active: Some(vec![]),
+        },
+        Row {
+            member_id: "m1",
+            member_epoch: 2,
+            owned: vec![0, 1],
+            epoch: 2,
+            active: Some(vec![0]),
+        },
+        Row {
+            member_id: "m1",
+            member_epoch: 2,
+            owned: vec![0],
+            epoch: 3,
+            active: None,
+        },
+        Row {
+            member_id: "m2",
+            member_epoch: 3,
+            owned: vec![],
+            epoch: 3,
+            active: Some(vec![1]),
+        },
+    ];
+    for (step, row) in rows.into_iter().enumerate() {
+        let resp = heartbeat(&handle, request(row.member_id, row.member_epoch, row.owned)).await;
+        check!(
+            resp == expected(row.member_id, row.epoch, row.active),
+            "step {step}"
+        );
+    }
 }
 
 /// Kafka sizes the internal topics with `InternalTopicManager`: a repartition

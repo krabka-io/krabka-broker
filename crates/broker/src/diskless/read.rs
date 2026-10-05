@@ -527,6 +527,7 @@ mod tests {
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
+            follower_position: None,
             partition: Some(part.clone()),
             out: PartitionData {
                 error_code: codes::OFFSET_OUT_OF_RANGE,

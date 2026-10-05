@@ -59,7 +59,7 @@ spec:
         runAsGroup: 65532
         # The volume arrives owned by root. Both the formatter and the broker
         # run as the image's `nonroot` user, so without fsGroup the format
-        # step fails on `meta.properties.json` before it writes a byte.
+        # step fails on `meta.properties` before it writes a byte.
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault

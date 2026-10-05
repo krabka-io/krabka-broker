@@ -106,7 +106,7 @@ fn two_bounds_on_one_partition_are_a_bad_argument() {
 fn a_non_empty_target_is_refused_before_the_archive_is_read() {
     let archive = tempfile::tempdir().expect("temp dir");
     let target = tempfile::tempdir().expect("temp dir");
-    std::fs::write(target.path().join("meta.properties.json"), b"{}").expect("write");
+    std::fs::write(target.path().join("meta.properties"), b"version=1\n").expect("write");
     let output = run(&[
         "--archive-local",
         &archive.path().display().to_string(),

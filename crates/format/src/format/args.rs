@@ -18,13 +18,13 @@ use crate::ids::{ClusterId, DirectoryId};
 
 #[derive(Args, Debug)]
 pub struct FormatArgs {
-    /// A log directory to format. Repeat the flag, or separate paths with
-    /// commas, to format every directory of the node in one run. The first
-    /// directory is the metadata log directory: only it gets the
-    /// `__cluster_metadata` checkpoint, and the broker's `--log-dir` must name
-    /// it. `kafka-storage format` reads the same set from `log.dirs` and
-    /// `metadata.log.dir` in its `--config` file; krabka takes no
-    /// `server.properties`, so there is no `--config`.
+    /// A log directory to format, an entry of Kafka's `log.dirs`. Repeat the
+    /// flag, or separate paths with commas, to format every directory of the
+    /// node in one run. Without `--metadata-log-dir`, the first directory is
+    /// also the metadata log directory, as Kafka's `metadata.log.dir` defaults
+    /// to the first entry of `log.dirs`. `kafka-storage format` reads the same
+    /// set from its `--config` file. Krabka takes no `server.properties`, so
+    /// there is no `--config`.
     #[arg(
         long = "log-dir",
         value_name = "DIR",
@@ -32,6 +32,14 @@ pub struct FormatArgs {
         required = true
     )]
     pub(super) log_dirs: Vec<PathBuf>,
+    /// The metadata log directory, Kafka's `metadata.log.dir`. The run formats
+    /// it together with every `--log-dir`, as `kafka-storage format` adds
+    /// `metadata.log.dir` to the `log.dirs` set. Only this directory gets the
+    /// bootstrap files and the `__cluster_metadata-0` checkpoint. It can also
+    /// be one of the `--log-dir` entries. Give the broker the same directory
+    /// as its `--metadata-log-dir`. Defaults to the first `--log-dir`.
+    #[arg(long, value_name = "DIR")]
+    pub(super) metadata_log_dir: Option<PathBuf>,
     /// Cluster id. Written and printed in Kafka's 22-character base64 form.
     /// Accepts that form or the hyphenated form. When omitted, the id of an
     /// already formatted directory in the set is kept, and otherwise a new id
@@ -77,10 +85,13 @@ pub struct FormatArgs {
     /// Pattern defaults to `Literal`.
     #[arg(long, value_parser = parse_acl_spec)]
     pub(super) add_acl: Vec<AclEntry>,
-    /// This node's raft id. Required with `--standalone` and
-    /// `--initial-controllers` so the local directory id can be persisted.
+    /// This node's id, Kafka's `node.id`: an integer from 0 to 2147483647.
+    /// Every `meta.properties` records it, and the broker refuses to start on
+    /// a directory that records another id. `kafka-storage format` reads it
+    /// from its `--config` file. Give the broker the same id as its
+    /// `--broker-id`.
     #[arg(long, value_parser = parse_node_id)]
-    pub(super) node_id: Option<krabka_metadata::NodeId>,
+    pub(super) node_id: krabka_metadata::NodeId,
     /// The metadata log directory's stable id: the node's KIP-853 voter
     /// identity. Intended for orchestrators that verify the exact node
     /// incarnation before they declare it ready. Accepts Kafka's base64 form
@@ -112,6 +123,13 @@ pub struct FormatArgs {
     /// `VotersRecord` when `--standalone`.
     #[arg(long)]
     pub(super) controller_listener: Option<String>,
+    /// The name of the controller listener: the first entry of Kafka's
+    /// `controller.listener.names`. Each voter endpoint that `--standalone` or
+    /// `--initial-controllers` writes carries it, as `kafka-storage format`
+    /// names them. A leader refuses an `AddRaftVoter` whose endpoints do not
+    /// include its own listener name.
+    #[arg(long, default_value = "CONTROLLER", value_parser = parse_listener_name)]
+    pub(super) controller_listener_name: String,
     /// Skip an already formatted directory, instead of refusing the run, and
     /// format the others. Matches `kafka-storage format --ignore-formatted`.
     ///
@@ -132,17 +150,45 @@ pub struct ScramSpec {
     pub(super) iterations: u32,
 }
 
-/// Parse a node id: a bare `u64` wrapped in the `NodeId` newtype.
-fn parse_node_id(s: &str) -> Result<krabka_metadata::NodeId, String> {
-    let id: u64 = s.trim().parse().map_err(|e| format!("node id: {e}"))?;
+/// Parses a node id as Kafka's `node.id`: an `int` that is not negative.
+///
+/// `meta.properties` holds the id as an `int`, which Kafka's tools read with
+/// `Integer.parseInt`, so a larger id would make a file they cannot read. The
+/// negative-id message is the one Kafka's `Formatter.run` throws.
+///
+/// # Errors
+///
+/// Returns a message for a value that is not an integer, is past the `int`
+/// range, or is negative.
+pub fn parse_node_id(s: &str) -> Result<krabka_metadata::NodeId, String> {
+    let id: i32 = s.trim().parse().map_err(|e| format!("node id: {e}"))?;
+    let id = u64::try_from(id)
+        .map_err(|_| "You must specify a valid non-negative node ID.".to_owned())?;
     Ok(krabka_metadata::NodeId(id))
+}
+
+/// Parse `--controller-listener-name` into Kafka's normalised form: upper
+/// case, as `ListenerName.normalised` makes it.
+///
+/// # Errors
+///
+/// Returns a message for an empty name, or one with leading or trailing white
+/// space, which Kafka's `RaftVoterEndpoint` refuses.
+pub fn parse_listener_name(s: &str) -> Result<String, String> {
+    if s.is_empty() || s.trim() != s {
+        return Err(format!(
+            "controller listener name {s:?} must be non-empty, without leading or trailing \
+             white space"
+        ));
+    }
+    Ok(s.to_ascii_uppercase())
 }
 
 #[cfg(test)]
 mod tests {
 
     use assert2::check;
-    use clap::Parser as _;
+    use clap::{Parser as _, error::ErrorKind};
 
     use super::*;
 
@@ -157,7 +203,9 @@ mod tests {
         ];
         for argv in cases {
             let cli = crate::Cli::try_parse_from(
-                std::iter::once("krabka-format").chain(argv.iter().copied()),
+                ["krabka-format", "--node-id", "1"]
+                    .into_iter()
+                    .chain(argv.iter().copied()),
             )
             .expect("parse");
             check!(
@@ -165,20 +213,98 @@ mod tests {
                 "{argv:?}"
             );
         }
-        check!(crate::Cli::try_parse_from(["krabka-format"]).is_err());
+        check!(crate::Cli::try_parse_from(["krabka-format", "--node-id", "1"]).is_err());
     }
 
-    /// A node id is a bare `u64`, and everything else is an error rather than
-    /// a silent zero.
+    /// `--metadata-log-dir` takes one path, comma and all, as Kafka's
+    /// `metadata.log.dir` is one path. It is optional, it does not replace the
+    /// required `--log-dir`, and clap refuses it twice.
     #[test]
-    fn parse_node_id_takes_an_integer_and_nothing_else() {
-        check!(parse_node_id("7").map(|n| n.0) == Ok(7));
-        check!(
-            parse_node_id("  7  ").map(|n| n.0) == Ok(7),
-            "surrounding space is trimmed"
-        );
-        for bad in ["", "-1", "1.0", "one", "0x7"] {
-            check!(parse_node_id(bad).is_err(), "{bad:?} should not parse");
+    fn metadata_log_dir_is_one_optional_path() {
+        type Parsed = Result<(Option<PathBuf>, Vec<PathBuf>), ErrorKind>;
+        let path = PathBuf::from;
+        // (argv after the program name, the metadata log dir and the log dirs)
+        let cases: [(&[&str], Parsed); 6] = [
+            (&["--log-dir", "/a"], Ok((None, vec![path("/a")]))),
+            (
+                &["--metadata-log-dir", "/m", "--log-dir", "/a,/b"],
+                Ok((Some(path("/m")), vec![path("/a"), path("/b")])),
+            ),
+            (
+                &["--log-dir=/a", "--metadata-log-dir=/a"],
+                Ok((Some(path("/a")), vec![path("/a")])),
+            ),
+            (
+                &["--metadata-log-dir", "/m,/n", "--log-dir", "/a"],
+                Ok((Some(path("/m,/n")), vec![path("/a")])),
+            ),
+            (
+                &["--metadata-log-dir", "/m"],
+                Err(ErrorKind::MissingRequiredArgument),
+            ),
+            (
+                &[
+                    "--metadata-log-dir",
+                    "/m",
+                    "--metadata-log-dir",
+                    "/n",
+                    "--log-dir",
+                    "/a",
+                ],
+                Err(ErrorKind::ArgumentConflict),
+            ),
+        ];
+        for (argv, want) in cases {
+            let got: Parsed = crate::Cli::try_parse_from(
+                ["krabka-format", "--node-id", "1"]
+                    .into_iter()
+                    .chain(argv.iter().copied()),
+            )
+            .map(|cli| (cli.args.metadata_log_dir, cli.args.log_dirs))
+            .map_err(|error| error.kind());
+            check!(got == want, "{argv:?}");
         }
+    }
+
+    /// A node id is Kafka's `int` without a sign: 0 through 2147483647.
+    /// Everything else is an error rather than a silent zero.
+    #[test]
+    fn parse_node_id_takes_kafkas_node_id_range() {
+        // (input, the id, or the message)
+        let cases: [(&str, Result<u64, &str>); 9] = [
+            ("7", Ok(7)),
+            ("  7  ", Ok(7)),
+            ("0", Ok(0)),
+            ("2147483647", Ok(2_147_483_647)),
+            (
+                "2147483648",
+                Err("node id: number too large to fit in target type"),
+            ),
+            ("-1", Err("You must specify a valid non-negative node ID.")),
+            ("", Err("node id: cannot parse integer from empty string")),
+            ("1.0", Err("node id: invalid digit found in string")),
+            ("0x7", Err("node id: invalid digit found in string")),
+        ];
+        for (input, want) in cases {
+            check!(
+                parse_node_id(input).map(|n| n.0) == want.map_err(str::to_owned),
+                "{input:?}"
+            );
+        }
+    }
+
+    /// `--node-id` is required, as Kafka's `node.id` is: every
+    /// `meta.properties` records it.
+    #[test]
+    fn node_id_is_required() {
+        let missing = crate::Cli::try_parse_from(["krabka-format", "--log-dir", "/a"])
+            .map(|cli| cli.args.node_id)
+            .map_err(|error| error.kind());
+        check!(missing == Err(ErrorKind::MissingRequiredArgument));
+        let given =
+            crate::Cli::try_parse_from(["krabka-format", "--log-dir", "/a", "--node-id", "3"])
+                .map(|cli| cli.args.node_id)
+                .map_err(|error| error.kind());
+        check!(given == Ok(krabka_metadata::NodeId(3)));
     }
 }

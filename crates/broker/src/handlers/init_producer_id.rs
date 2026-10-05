@@ -272,6 +272,17 @@ pub(crate) async fn handle(
             .await;
             match handled {
                 Ok(response) => response,
+                // A `__transaction_state` write that did not commit answers
+                // the coordinator error Kafka's `appendTransactionToLog`
+                // answers for it, which the client retries.
+                Err(BrokerError::TransactionStateWriteUncommitted { code, .. }) => {
+                    tracing::warn!(
+                        tid,
+                        error_code = code,
+                        "InitProducerId: the state write did not commit"
+                    );
+                    return encode_err(version, code);
+                }
                 // An append that ends in a newer coordinator term fails. Kafka
                 // answers the coordinator error in that case.
                 Err(error) => match coord.coordinator_error(tid).await {

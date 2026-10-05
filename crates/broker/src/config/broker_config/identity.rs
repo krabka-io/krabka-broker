@@ -24,19 +24,30 @@ macro_rules! identity_fields {
             /// advertised endpoint. Defaults to `listen_addr`'s string form.
             pub advertised_listener: String,
 
-            /// Primary log directory. It holds the `__cluster_metadata` raft log, and
-            /// the broker reads it to detect bootstrap mode. It is also a data
-            /// directory: when [`extra_log_dirs`][Self::extra_log_dirs] is empty,
-            /// partition data lives only here. The broker creates the directory on
-            /// startup if it is missing. Default: `./krabka-data`.
+            /// Primary log directory, the first entry of Kafka's `log.dirs`. It is a
+            /// data directory: when [`extra_log_dirs`][Self::extra_log_dirs] is
+            /// empty, partition data lives only here. It also holds the
+            /// `__cluster_metadata-0` raft log unless
+            /// [`metadata_log_dir`][Self::metadata_log_dir] names another
+            /// directory. The broker creates the directory on startup if it is
+            /// missing. Default: `./krabka-data`.
             pub log_dir: PathBuf,
 
             /// Extra JBOD data directories (KIP-113). When this list is non-empty,
             /// the broker spreads new partitions across `[log_dir] + extra_log_dirs`
-            /// by least-loaded placement. `__cluster_metadata` always stays on
-            /// [`log_dir`][Self::log_dir]. Maps to a Kafka `log.dirs` value with more
+            /// by least-loaded placement. Maps to a Kafka `log.dirs` value with more
             /// than one entry. Default: empty, which gives a single-directory broker.
             pub extra_log_dirs: Vec<PathBuf>,
+
+            /// Kafka's `metadata.log.dir`: the directory of the `__cluster_metadata-0`
+            /// raft log, its snapshots, the node's `meta.properties` and the
+            /// bootstrap records. `None` keeps the metadata log in
+            /// [`log_dir`][Self::log_dir], as Kafka keeps it in the first entry of
+            /// `log.dirs`. A directory that is none of the data directories holds
+            /// the metadata log only: no partition is placed there, and
+            /// `DescribeLogDirs` does not report it. Read it through
+            /// [`metadata_dir`][Self::metadata_dir].
+            pub metadata_log_dir: Option<PathBuf>,
 
             /// KIP-1066 static `cordoned.log.dirs`, as the operator wrote it: a
             /// comma-separated list of entries of the configured log directories,

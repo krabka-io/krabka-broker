@@ -435,6 +435,38 @@ fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
     );
 }
 
+/// A controller of a dynamic quorum has no `controller_quorum_voters` entry,
+/// so it registers its listener. A wildcard bind registers this machine's host
+/// name, as Kafka's does, and never the wildcard address, which no peer can
+/// dial.
+#[test]
+fn a_dynamic_controller_registers_its_listener_with_the_host_name_for_a_wildcard() {
+    let host_name = crate::host_port::local_host_name().unwrap_or_else(|| "127.0.0.1".into());
+    let cases = [
+        ("192.0.2.10:9592", "192.0.2.10".to_owned()),
+        ("0.0.0.0:9592", host_name.clone()),
+        ("[::]:9592", host_name),
+    ];
+    let registered: Vec<(String, u16)> = cases
+        .iter()
+        .map(|(bound, _)| {
+            let config = BrokerConfig {
+                controller_listen_addr: bound.parse().expect("listen address"),
+                controller_quorum_voters: vec![],
+                ..Default::default()
+            };
+            let endpoint = self_controller_registration_record(&config)
+                .endpoints
+                .into_iter()
+                .next()
+                .expect("one controller endpoint");
+            (endpoint.host, endpoint.port)
+        })
+        .collect();
+    let expected: Vec<(String, u16)> = cases.into_iter().map(|(_, host)| (host, 9592)).collect();
+    assert!(registered == expected);
+}
+
 #[test]
 fn controller_registration_starts_at_kip_919_floor_and_is_idempotent() {
     let config = BrokerConfig::default();

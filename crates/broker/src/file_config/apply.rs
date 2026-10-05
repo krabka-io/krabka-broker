@@ -21,6 +21,22 @@ use super::{
 };
 
 impl FileConfig {
+    /// The node id of a broker that holds `current` before this file applies.
+    ///
+    /// The file's `broker_id` replaces [`DEFAULT_BROKER_ID`], and any other id
+    /// stays, so a `--broker-id` flag wins over the file. The broker binary
+    /// resolves its id with this before it derives the raft node id and the
+    /// seeded self-voter from it, and [`Self::apply_to`] applies the same rule.
+    ///
+    /// [`DEFAULT_BROKER_ID`]: crate::config::DEFAULT_BROKER_ID
+    #[must_use]
+    pub fn resolved_broker_id(&self, current: i32) -> i32 {
+        match self.broker_id {
+            Some(id) if current == crate::config::DEFAULT_BROKER_ID => id,
+            _ => current,
+        }
+    }
+
     /// Apply this file-config to a `BrokerConfig`. Present `[runtime]` values
     /// replace current runtime values; other file sections retain their
     /// established fill-or-replace semantics.
@@ -74,14 +90,10 @@ impl FileConfig {
         validate_runtime: bool,
     ) -> Result<(), FileConfigError> {
         let defaults = crate::config::BrokerConfig::default();
+        cfg.broker_id = self.resolved_broker_id(cfg.broker_id);
         let has_runtime = self.runtime.is_some();
         if let Some(runtime) = self.runtime {
             runtime.apply_to(cfg)?;
-        }
-        if let Some(id) = self.broker_id
-            && cfg.broker_id == defaults.broker_id
-        {
-            cfg.broker_id = id;
         }
         if let Some(rack) = self.rack {
             cfg.rack = Some(rack);
@@ -135,6 +147,11 @@ impl FileConfig {
                 .into_iter()
                 .map(std::path::PathBuf::from)
                 .collect();
+        }
+        if let Some(dir) = self.metadata_log_dir
+            && cfg.metadata_log_dir.is_none()
+        {
+            cfg.metadata_log_dir = Some(std::path::PathBuf::from(dir));
         }
         apply_listener_settings(
             ListenerSettings {
@@ -286,6 +303,7 @@ protocol = "Plaintext"
             broker_id: Some(0),
             log_dir: Some("/var/lib/krabka/data".to_string()),
             extra_log_dirs: vec![],
+            metadata_log_dir: None,
             rack: None,
             replica_selector: None,
             stretch: None,
@@ -359,6 +377,65 @@ protocol = "Plaintext"
         file.apply_to(&mut existing_cfg).unwrap();
         assert!(existing_cfg.log_dir == std::path::PathBuf::from("/var/lib/krabka/cli"));
     }
+    /// `metadata_log_dir` is Kafka's `metadata.log.dir`: the file sets it
+    /// unless `--metadata-log-dir` already did, and unset it leaves the
+    /// metadata log in `log_dir`, the first entry of `log.dirs`. A separate
+    /// metadata directory is not a data directory.
+    #[test]
+    fn metadata_log_dir_resolves_like_kafkas_metadata_log_dir() {
+        use std::path::PathBuf;
+
+        use crate::config::BrokerConfig;
+
+        // (what, file, flag, metadata dir, data dirs)
+        let cases = [
+            (
+                "unset",
+                "log_dir = \"/data/a\"\nextra_log_dirs = [\"/data/b\"]",
+                None,
+                "/data/a",
+                vec!["/data/a", "/data/b"],
+            ),
+            (
+                "a separate directory",
+                "log_dir = \"/data/a\"\nmetadata_log_dir = \"/meta\"",
+                None,
+                "/meta",
+                vec!["/data/a"],
+            ),
+            (
+                "one of the data directories",
+                "log_dir = \"/data/a\"\nextra_log_dirs = [\"/data/b\"]\nmetadata_log_dir = \"/data/b\"",
+                None,
+                "/data/b",
+                vec!["/data/a", "/data/b"],
+            ),
+            (
+                "the flag wins over the file",
+                "log_dir = \"/data/a\"\nmetadata_log_dir = \"/meta\"",
+                Some("/flag"),
+                "/flag",
+                vec!["/data/a"],
+            ),
+        ];
+        for (what, toml, flag, metadata, data) in cases {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = BrokerConfig {
+                metadata_log_dir: flag.map(PathBuf::from),
+                ..BrokerConfig::default()
+            };
+            file.apply_to(&mut cfg).unwrap();
+            assert!(
+                (cfg.metadata_dir().to_path_buf(), cfg.all_log_dirs())
+                    == (
+                        PathBuf::from(metadata),
+                        data.into_iter().map(PathBuf::from).collect::<Vec<_>>()
+                    ),
+                "{what}"
+            );
+        }
+    }
+
     #[test]
     fn apply_to_extra_log_dirs_fills_empty_but_preserves_existing() {
         use crate::config::BrokerConfig;

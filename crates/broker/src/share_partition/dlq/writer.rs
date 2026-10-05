@@ -53,7 +53,7 @@ use super::{
     DlqError, DlqRequest, DlqSink,
     coalesce::{Admitted, Coalescer, Produce, ProduceTransport},
     record::{RangeContext, RoundBounds, build_round, destination_partition},
-    source::{Fetched, fetch},
+    source::{Fetched, SourceTier, fetch},
     validate::{ClusterSettings, GroupSettings, TopicState, validate},
 };
 use crate::{
@@ -380,6 +380,10 @@ pub struct DlqWriter {
     decompression: RecordDecompressionPolicy,
     /// Where the `DeadLetterQueue*` meters are counted.
     metrics: BrokerMetrics,
+    /// The remote tier, which a copy reads for a source offset that only the
+    /// tier holds (KIP-405). Empty on a broker with no tiered storage, and
+    /// until the broker has built its reader.
+    remote_reader: std::sync::OnceLock<Arc<crate::remote_reader::RemoteReader>>,
 }
 
 impl DlqWriter {
@@ -412,7 +416,17 @@ impl DlqWriter {
             base_log: config.log_config.clone(),
             decompression: config.record_decompression_policy().unwrap_or_default(),
             metrics,
+            remote_reader: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Lets a copy read the source records that only the remote tier holds.
+    ///
+    /// The broker builds its remote reader after its coordinators, so it hands
+    /// the reader to the writer here once the reader exists. A second call
+    /// changes nothing.
+    pub(crate) fn set_remote_reader(&self, reader: Arc<crate::remote_reader::RemoteReader>) {
+        let _ = self.remote_reader.set(reader);
     }
 
     /// The `max.message.bytes` of `topic`, as this node runs it.
@@ -553,6 +567,15 @@ impl DlqSink for DlqWriter {
         let source = self
             .partitions
             .get(&source_topic, PartitionIndex(request.source_partition));
+        let tier = self.remote_reader.get().map(|reader| SourceTier {
+            reader,
+            metrics: &self.metrics,
+            tp: krabka_remote_storage::TopicIdPartition::new(
+                request.topic_id,
+                source_topic.clone(),
+                request.source_partition,
+            ),
+        });
         let context = RangeContext {
             group: &request.group,
             source_topic: &source_topic,
@@ -568,7 +591,14 @@ impl DlqSink for DlqWriter {
                 .await?;
             let fetched = if settings.copy_record {
                 let budget = usize::try_from(target.max_message_bytes).unwrap_or(usize::MAX);
-                fetch(source.as_ref(), (next, last), budget, self.decompression).await
+                fetch(
+                    source.as_ref(),
+                    tier.as_ref(),
+                    (next, last),
+                    budget,
+                    self.decompression,
+                )
+                .await
             } else {
                 Fetched {
                     records: std::collections::BTreeMap::new(),

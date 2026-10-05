@@ -165,6 +165,7 @@ impl BrokerConfig {
             advertised_listener: "127.0.0.1:0".into(),
             log_dir,
             extra_log_dirs: Vec::new(),
+            metadata_log_dir: None,
             cordoned_log_dirs: None,
             log_config: LogConfig::default(),
             stamp_source: None,
@@ -199,6 +200,12 @@ impl BrokerConfig {
             metadata_max_snapshot_interval: DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
             metadata_snapshot_interval_records: DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
             metadata_snapshot_fetch_max: DEFAULT_METADATA_SNAPSHOT_FETCH_MAX,
+            // A test counts the metadata offsets its own writes land at, so the
+            // controller appends no KIP-835 `NoOpRecord` between them.
+            metadata_log: krabka_raft::MetadataLogConfig {
+                max_idle_interval: secs(0),
+                ..krabka_raft::MetadataLogConfig::default()
+            },
             bootstrap_mode: BootstrapMode::Bootstrap,
             cluster_id: None,
             rack: None,

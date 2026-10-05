@@ -5,10 +5,11 @@ use std::future::Future;
 
 use clap::Parser;
 use krabka_broker::{
-    Broker, BrokerError, BrokerHandle,
+    Broker, BrokerConfig, BrokerError, BrokerHandle,
+    file_config::FileConfig,
     telemetry::{OtlpProtocol, TelemetryGuard},
 };
-use krabka_units::convert::TimeExt as _;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::{
     bootstrap::detect_bootstrap_mode,
@@ -23,13 +24,17 @@ type ClientMetricsOtlp = (Option<String>, OtlpProtocol);
 
 #[tokio::main]
 pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let mut args = Args::parse();
 
     if args.print_config_schema {
         let schema = krabka_broker::file_config::config_schema();
         println!("{}", serde_json::to_string_pretty(&schema)?);
         return Ok(());
     }
+
+    // The file can name this node's id, and the telemetry resource below is
+    // the first thing that reports it.
+    let file_config = args.load_config_file()?;
 
     // Install the tracing subscriber — stdout `fmt` plus an
     // optional OTLP export layer. OTLP stays off unless the environment
@@ -54,7 +59,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         "krabka-broker",
     )?;
 
-    let outcome = Box::pin(run(args, client_metrics_otlp, &telemetry)).await;
+    let outcome = Box::pin(run(args, file_config, client_metrics_otlp, &telemetry)).await;
 
     if let Err(error) = &outcome
         && is_fatal_fault(error.as_ref())
@@ -84,29 +89,62 @@ fn is_fatal_fault(error: &(dyn std::error::Error + 'static)) -> bool {
     )
 }
 
-// binary entrypoint: linear startup wiring
-async fn run(
-    mut args: Args,
+/// The open-file limit to set in place of `limit`: the hard limit as the soft
+/// one, when the soft one is lower and the hard one is finite.
+///
+/// A broker holds the log and index files of every segment it hosts open, so
+/// the soft limit of 1024 that a login shell or a systemd unit usually starts
+/// it with runs out at a few hundred partitions. The JVM raises its own soft
+/// limit to the hard limit at start, with the `MaxFDLimit` option that is on
+/// by default, so a Kafka broker started the same way does not run out. Linux refuses an
+/// infinite soft limit on open files, so an unlimited hard limit is left
+/// alone.
+#[cfg(unix)]
+fn raised_open_file_limit(limit: rustix::process::Rlimit) -> Option<rustix::process::Rlimit> {
+    match (limit.current, limit.maximum) {
+        (Some(current), Some(maximum)) if current < maximum => Some(rustix::process::Rlimit {
+            current: Some(maximum),
+            maximum: Some(maximum),
+        }),
+        _ => None,
+    }
+}
+
+/// Raises this process's soft limit on open files to its hard limit, as
+/// [`raised_open_file_limit`] decides, and logs the change or its failure.
+#[cfg(unix)]
+fn raise_open_file_limit() {
+    use rustix::process::{Resource, getrlimit, setrlimit};
+    let limit = getrlimit(Resource::Nofile);
+    let Some(raised) = raised_open_file_limit(limit) else {
+        return;
+    };
+    match setrlimit(Resource::Nofile, raised) {
+        Ok(()) => tracing::info!(
+            from = limit.current,
+            to = raised.current,
+            "raised the open-file limit to the hard limit"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            limit = limit.current,
+            "could not raise the open-file limit to the hard limit"
+        ),
+    }
+}
+
+/// The `BrokerConfig` that the command line and the config file describe,
+/// and the drain timeout of a controlled shutdown.
+///
+/// The file applies over the flags, and the runtime flags and their
+/// environment variables apply over the file. `args` must already have adopted
+/// the file's `broker_id`, as [`Args::load_config_file`] does: the raft node
+/// id and the seeded self-voter come from it.
+fn broker_config(
+    args: &mut Args,
+    file_config: Option<FileConfig>,
     (client_metrics_otlp_endpoint, client_metrics_otlp_protocol): ClientMetricsOtlp,
-    telemetry: &TelemetryGuard,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // The handle behind the `BROKER_LOGGER` config resource. It drives the
-    // stdout layer that the telemetry setup installed, so `kafka-configs
-    // --entity-type broker-loggers --alter` retargets the filter of the
-    // running process.
-    let log_levels = telemetry.log_levels();
-    let file_config: Option<krabka_broker::file_config::FileConfig> =
-        match args.config_file.as_ref() {
-            Some(p) => {
-                let contents = std::fs::read_to_string(p)
-                    .map_err(|e| format!("failed to read {}: {e}", p.display()))?;
-                Some(
-                    toml::from_str(&contents)
-                        .map_err(|e| format!("failed to parse {}: {e}", p.display()))?,
-                )
-            }
-            None => None,
-        };
+) -> Result<(BrokerConfig, Time), Box<dyn std::error::Error>> {
     let file_shutdown_timeout = file_config
         .as_ref()
         .and_then(|file| file.runtime.as_ref())
@@ -116,12 +154,8 @@ async fn run(
         .take()
         .unwrap_or_else(|| args.listen_addr.to_string());
     let controller_addr = args.resolved_controller_listen_addr();
-    let node_id = u64::try_from(args.broker_id).unwrap_or_else(|_| {
-        eprintln!("broker_id must be non-negative");
-        std::process::exit(1);
-    });
+    let node_id = args.node_id()?;
     let metrics_listen_addr = parse_optional_listen_addr(&args.metrics_listen_addr)?;
-    let health_listen_addr = parse_optional_listen_addr(&args.health_listen_addr)?;
     let roles = if args.process_roles.is_empty() {
         None
     } else {
@@ -135,33 +169,85 @@ async fn run(
         client_metrics_otlp_endpoint,
         client_metrics_otlp_protocol,
     );
-    config.log_levels = log_levels;
     if let Some(roles) = roles {
         config.roles = roles;
     }
     if let Some(fc) = file_config {
         fc.apply_before_runtime_overlay(&mut config)?;
     }
+    seed_standalone_voter(&mut config)?;
     let controlled_shutdown_drain_timeout =
         args.apply_runtime_to(&mut config, file_shutdown_timeout)?;
-    // Detect against the *resolved* log_dir so a TOML override picks up
-    // its on-disk state rather than the CLI-default empty path. This is
-    // the difference between a fresh-pod Bootstrap and a rolled-pod
-    // Rejoin against an existing PVC.
-    config.bootstrap_mode = detect_bootstrap_mode(&config.log_dir);
-    // KIP-853: recover this replica's stable directory id, written by
-    // `krabka format`. Required for every formatted node; absence means the
-    // dir was never formatted, which is an operator error.
-    let meta = krabka_broker::bootstrap::read_and_validate_meta_properties(
-        &config.log_dir,
+    Ok((config, controlled_shutdown_drain_timeout))
+}
+
+/// Makes a controller with no voter set and no bootstrap servers the single
+/// voter of its own quorum, the standalone node a development run starts.
+///
+/// A node that names bootstrap servers runs a KIP-853 dynamic quorum: its
+/// voters come from the `VotersRecord` in the log, so it seeds nothing. A node
+/// without the controller role cannot be a voter, and with neither setting it
+/// has no controller to reach, which Kafka refuses at startup with the same
+/// message.
+fn seed_standalone_voter(config: &mut BrokerConfig) -> Result<(), String> {
+    if !config.controller_quorum_voters.is_empty() || !config.bootstrap_servers.is_empty() {
+        return Ok(());
+    }
+    if !config.is_controller() {
+        return Err(
+            "If using process.roles, either controller.quorum.bootstrap.servers must \
+                    contain the set of bootstrap controllers or controller.quorum.voters must \
+                    contain a parseable set of controllers."
+                .to_owned(),
+        );
+    }
+    config.controller_quorum_voters =
+        vec![(config.node_id, config.controller_listen_addr.to_string())];
+    Ok(())
+}
+
+// binary entrypoint: linear startup wiring
+async fn run(
+    mut args: Args,
+    file_config: Option<FileConfig>,
+    client_metrics_otlp: ClientMetricsOtlp,
+    telemetry: &TelemetryGuard,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    raise_open_file_limit();
+    let health_listen_addr = parse_optional_listen_addr(&args.health_listen_addr)?;
+    let (mut config, controlled_shutdown_drain_timeout) =
+        broker_config(&mut args, file_config, client_metrics_otlp)?;
+    // The handle behind the `BROKER_LOGGER` config resource. It drives the
+    // stdout layer that the telemetry setup installed, so `kafka-configs
+    // --entity-type broker-loggers --alter` retargets the filter of the
+    // running process.
+    config.log_levels = telemetry.log_levels();
+    // Everything below reads the metadata log directory, Kafka's
+    // `metadata.log.dir`: the first data directory unless `metadata_log_dir`
+    // names another. Resolve it after the file and the flags are applied, so
+    // a TOML override picks up its on-disk state rather than the CLI-default
+    // empty path. This is the difference between a fresh-pod Bootstrap and a
+    // rolled-pod Rejoin against an existing PVC.
+    let metadata_log_dir = config.metadata_dir().to_path_buf();
+    // Kafka's `KafkaRaftServer.initializeLogDirs`: every directory's
+    // `meta.properties` has to belong to this cluster and to this node, and
+    // the metadata log directory has to be formatted. KIP-853: the metadata
+    // log directory's id is this replica's stable voter identity.
+    let identity = krabka_broker::bootstrap::initialize_log_dirs(
+        &metadata_log_dir,
+        &config.all_log_dirs(),
+        config.node_id,
         config.cluster_id,
     )?;
-    config.cluster_id = Some(meta.cluster_id);
-    config.directory_id = meta.directory_id;
+    config.bootstrap_mode = detect_bootstrap_mode(&metadata_log_dir);
+    config.cluster_id = Some(identity.cluster_id);
+    config.directory_id = identity.directory_id;
     tracing::info!(
         bootstrap_mode = ?config.bootstrap_mode,
         directory_id = %config.directory_id,
         log_dir = %config.log_dir.display(),
+        metadata_log_dir = %metadata_log_dir.display(),
         "selected bootstrap mode"
     );
 
@@ -218,13 +304,12 @@ async fn serve(
                 if shutdown_rx.changed().await.is_err() { break; }
             }
         } => {
-            // Two things latch the flag: a fatal fault of the controller this
-            // node hosts, and every log dir going offline (KIP-112).
-            if handle.fatal_fault().is_some() {
-                tracing::error!(
-                    "self-shutdown triggered by a fatal fault of the metadata controller; \
-                     stopping broker"
-                );
+            // Two things latch the flag: a fatal fault, which is a fault of
+            // the controller this node hosts or the failure of its metadata
+            // log directory (KIP-858), and every log dir going offline
+            // (KIP-112).
+            if let Some(fault) = handle.fatal_fault() {
+                tracing::error!(%fault, "self-shutdown triggered by a fatal fault; stopping broker");
             } else {
                 tracing::error!("self-shutdown triggered (all log dirs offline); stopping broker");
             }
@@ -306,7 +391,6 @@ mod tests {
     use std::time::Duration;
 
     use assert2::assert;
-    use krabka_broker::BrokerConfig;
     use tempfile::tempdir;
 
     use super::*;
@@ -455,6 +539,227 @@ mod tests {
             assert!(is_fatal_fault(error.as_ref()) == halts, "{name}: {error}");
         }
     }
+    /// The `BrokerConfig` that startup builds from these flags and a
+    /// `--config-file` holding `toml`, by the calls `broker_main` and `run`
+    /// make.
+    fn configured(flags: &[&str], toml: &str) -> Result<BrokerConfig, String> {
+        let _guard = crate::test_support::env_guard();
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("broker.toml");
+        std::fs::write(&path, toml).expect("write broker.toml");
+        let config_file = format!("--config-file={}", path.display());
+        let mut args = Args::try_parse_from(
+            ["krabka-broker", config_file.as_str()]
+                .into_iter()
+                .chain(flags.iter().copied()),
+        )
+        .expect("flags parse");
+        let file = args.load_config_file()?;
+        broker_config(&mut args, file, (None, OtlpProtocol::Grpc))
+            .map(|(config, _)| config)
+            .map_err(|error| error.to_string())
+    }
+
+    // A Kafka cluster with a single controller: node 2 is a broker, and its
+    // id comes from the file alone. It used to run raft as node 1, the flag's
+    // default, and so refused to start as a non-controller in its own quorum.
+    #[test]
+    fn a_broker_only_node_takes_its_raft_id_from_the_file() {
+        let config = configured(
+            &[],
+            "broker_id = 2\n\
+             controller_quorum_voters = [\"1@controller-1:9592\"]\n\
+             [process]\n\
+             roles = [\"broker\"]\n",
+        )
+        .expect("the config assembles");
+
+        assert!(config.validate().is_ok());
+        assert!(
+            (
+                config.broker_id,
+                config.node_id,
+                config.controller_quorum_voters
+            ) == (
+                2,
+                krabka_broker::NodeId(2),
+                vec![(krabka_broker::NodeId(1), "controller-1:9592".to_owned())]
+            )
+        );
+    }
+
+    // With no voter set anywhere, the node is the single voter of its own
+    // quorum, under the id the file names.
+    #[test]
+    fn a_combined_node_without_voters_seeds_itself_under_the_file_id() {
+        let config = configured(&[], "broker_id = 42\n").expect("the config assembles");
+
+        assert!(config.validate().is_ok());
+        assert!(
+            (
+                config.broker_id,
+                config.node_id,
+                config.controller_quorum_voters
+            ) == (
+                42,
+                krabka_broker::NodeId(42),
+                vec![(krabka_broker::NodeId(42), "0.0.0.0:9093".to_owned())]
+            )
+        );
+    }
+
+    /// `--metadata-log-dir` names the metadata log directory over the file's
+    /// `metadata_log_dir`, and without either the metadata log is in the first
+    /// log directory, as Kafka's `metadata.log.dir` defaults to the first entry
+    /// of `log.dirs`. A separate directory is not a data directory.
+    #[test]
+    fn the_metadata_log_directory_comes_from_the_flag_then_the_file_then_log_dir() {
+        /// What the case is, the flags, the file, the metadata dir and the
+        /// data dirs.
+        type Case = (
+            &'static str,
+            &'static [&'static str],
+            &'static str,
+            &'static str,
+            &'static [&'static str],
+        );
+        let cases: [Case; 4] = [
+            ("neither", &[], "log_dir = \"/data\"\n", "/data", &["/data"]),
+            (
+                "the file",
+                &[],
+                "log_dir = \"/data\"\nmetadata_log_dir = \"/meta\"\n",
+                "/meta",
+                &["/data"],
+            ),
+            (
+                "the flag over the file",
+                &["--metadata-log-dir=/flag"],
+                "log_dir = \"/data\"\nmetadata_log_dir = \"/meta\"\n",
+                "/flag",
+                &["/data"],
+            ),
+            (
+                "one of the data directories",
+                &["--metadata-log-dir=/more"],
+                "log_dir = \"/data\"\nextra_log_dirs = [\"/more\"]\n",
+                "/more",
+                &["/data", "/more"],
+            ),
+        ];
+        for (what, flags, toml, metadata, data) in cases {
+            let config = configured(flags, toml).unwrap_or_else(|error| panic!("{what}: {error}"));
+            assert!(
+                (config.metadata_dir().to_path_buf(), config.all_log_dirs())
+                    == (
+                        std::path::PathBuf::from(metadata),
+                        data.iter()
+                            .map(std::path::PathBuf::from)
+                            .collect::<Vec<_>>()
+                    ),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_flag_wins_over_the_file_and_the_file_over_the_default() {
+        let cases: [(&str, &[&str], &str, i32); 4] = [
+            ("the file alone", &[], "broker_id = 2\n", 2),
+            (
+                "the flag over the file",
+                &["--broker-id=7"],
+                "broker_id = 2\n",
+                7,
+            ),
+            ("the flag alone", &["--broker-id=7"], "", 7),
+            ("neither", &[], "", krabka_broker::config::DEFAULT_BROKER_ID),
+        ];
+        for (name, flags, toml, id) in cases {
+            let config = configured(flags, toml).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let node_id = krabka_broker::NodeId(u64::try_from(id).expect("a positive id"));
+            assert!(
+                (config.broker_id, config.node_id) == (id, node_id),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_controller_without_voters_or_bootstrap_servers_seeds_itself() {
+        type Outcome = Result<Vec<(krabka_broker::NodeId, String)>, String>;
+        let refused = "If using process.roles, either controller.quorum.bootstrap.servers must \
+                       contain the set of bootstrap controllers or controller.quorum.voters must \
+                       contain a parseable set of controllers.";
+        let cases: [(&str, &str, Outcome); 5] = [
+            (
+                "a combined node alone",
+                "broker_id = 4\n",
+                Ok(vec![(krabka_broker::NodeId(4), "0.0.0.0:9093".to_owned())]),
+            ),
+            (
+                "a dynamic-quorum controller",
+                "broker_id = 3001\nbootstrap_servers = [\"ducker02:9592\"]\n\
+                 [process]\nroles = [\"controller\"]\n",
+                Ok(vec![]),
+            ),
+            (
+                "a dynamic-quorum broker",
+                "broker_id = 1\nbootstrap_servers = [\"ducker02:9592\"]\n\
+                 [process]\nroles = [\"broker\"]\n",
+                Ok(vec![]),
+            ),
+            (
+                "a static-quorum broker",
+                "broker_id = 1\ncontroller_quorum_voters = [\"3001@ducker02:9592\"]\n\
+                 [process]\nroles = [\"broker\"]\n",
+                Ok(vec![(
+                    krabka_broker::NodeId(3001),
+                    "ducker02:9592".to_owned(),
+                )]),
+            ),
+            (
+                "a broker with no controller to reach",
+                "broker_id = 1\n[process]\nroles = [\"broker\"]\n",
+                Err(refused.to_owned()),
+            ),
+        ];
+        for (name, toml, want) in cases {
+            let voters = configured(&[], toml).map(|config| config.controller_quorum_voters);
+            assert!(voters == want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_negative_file_id_is_refused() {
+        let error = configured(&[], "broker_id = -3\n").expect_err("a negative id is refused");
+        assert!(error == "broker_id must be non-negative, got -3");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_open_file_limit_rises_to_a_finite_hard_limit() {
+        use rustix::process::Rlimit;
+        let limit = |current, maximum| Rlimit { current, maximum };
+        let rows = [
+            (
+                "a login shell's limits",
+                limit(Some(1024), Some(524_288)),
+                Some(limit(Some(524_288), Some(524_288))),
+            ),
+            (
+                "already at the hard limit",
+                limit(Some(524_288), Some(524_288)),
+                None,
+            ),
+            ("an unlimited hard limit", limit(Some(1024), None), None),
+            ("no limit at all", limit(None, None), None),
+        ];
+        for (name, current, raised) in rows {
+            assert!(raised_open_file_limit(current) == raised, "{name}");
+        }
+    }
+
     // The controller can fault while `controlled_shutdown` drains leadership,
     // after `stop_broker` last looked, and the process must still halt on it.
     #[test]

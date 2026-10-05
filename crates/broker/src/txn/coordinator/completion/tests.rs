@@ -166,11 +166,11 @@ async fn coordinator(
         open_partition(dir.path(), bootstrap::TOPIC),
     );
     if with_data_partition {
-        partitions.insert(
-            DATA_TOPIC.into(),
-            PartitionIndex(0),
-            open_partition(dir.path(), DATA_TOPIC),
-        );
+        let data = open_partition(dir.path(), DATA_TOPIC);
+        // The metadata reconcile installs this broker, node 1, as the leader,
+        // so the partition takes markers.
+        data.install_leader_change(1, 0).await;
+        partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);
     }
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
@@ -306,11 +306,10 @@ async fn a_client_transaction_version_zero_completion_stays_classic() {
         PartitionIndex(0),
         open_partition(dir.path(), bootstrap::TOPIC),
     );
-    partitions.insert(
-        DATA_TOPIC.into(),
-        PartitionIndex(0),
-        open_partition(dir.path(), DATA_TOPIC),
-    );
+    let data = open_partition(dir.path(), DATA_TOPIC);
+    // The metadata reconcile installs this broker, node 1, as the leader.
+    data.install_leader_change(1, 0).await;
+    partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
         partitions,

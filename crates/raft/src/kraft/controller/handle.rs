@@ -55,6 +55,13 @@ impl KraftController {
         self.image_rx.clone()
     }
 
+    /// Watch the failure of the metadata log directory: `None` while every
+    /// write to it succeeds, and the I/O error of the first one that fails.
+    #[must_use]
+    pub fn watch_storage_fault(&self) -> watch::Receiver<Option<String>> {
+        self.storage_fault_rx.clone()
+    }
+
     /// Watch the current leader id.
     #[must_use]
     pub fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {

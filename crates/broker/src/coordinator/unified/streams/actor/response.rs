@@ -54,8 +54,9 @@ fn map_to_task_ids(map: &BTreeMap<String, Vec<i32>>) -> Vec<RespTaskIds> {
 /// Trunk also sets `TaskOffsetIntervalMs` from `streams.task.offset.interval.ms`,
 /// which 4.3.1 leaves at 0, so that field follows the config only while
 /// `unstable.api.versions.enable` is on.
-/// `TopologyDescriptionRequired` stays false: without a topology description
-/// plugin Kafka's `maybeSetTopologyDescriptionRequired` never asks for one.
+/// `TopologyDescriptionRequired` starts false: the actor sets it afterwards,
+/// in `description::maybe_request_description`, as Kafka's
+/// `maybeSetTopologyDescriptionRequired` decorates the committed heartbeat.
 pub(super) fn base_resp(
     error_code: i16,
     member_epoch: i32,
@@ -363,6 +364,7 @@ pub(super) fn build_describe(
         topology: topology.cloned(),
         configured_topology: configured_topology.cloned(),
         members,
+        topology_description: None,
     }
 }
 

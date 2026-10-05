@@ -143,7 +143,7 @@ if grep -Eqi 'format changed|on-disk format|fresh `krabka-format`' <<<"${changes
     echo "HEAD opened a directory despite the declared format break" >&2
     exit 1
   fi
-  grep -Eq 'unsupported meta.properties version|INCONSISTENT_CLUSTER_ID' "${head_log}"
+  grep -Eq 'No readable meta.properties files found|Unsupported meta.properties version|INCONSISTENT_CLUSTER_ID' "${head_log}"
 else
   docker run -d --name "${head_container}" --network "${network}" \
     --network-alias krabka-upgrade-head \

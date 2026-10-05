@@ -195,15 +195,25 @@ pub struct FileConfig {
     /// broker registers with the controller and reports in `Metadata`
     /// responses. Absent leaves the `BrokerConfig` default intact.
     pub broker_id: Option<i32>,
-    /// Primary log directory, the first entry of Kafka's `log.dirs`. It holds
-    /// the `__cluster_metadata` raft log, and it is the partition data
-    /// directory when [`extra_log_dirs`][Self::extra_log_dirs] is empty.
+    /// Primary log directory, the first entry of Kafka's `log.dirs`. It is
+    /// the partition data directory when
+    /// [`extra_log_dirs`][Self::extra_log_dirs] is empty, and it holds the
+    /// `__cluster_metadata-0` raft log unless
+    /// [`metadata_log_dir`][Self::metadata_log_dir] names another directory.
     /// Absent leaves the `BrokerConfig` default intact.
     pub log_dir: Option<String>,
     /// Additional JBOD data directories (KIP-113). Maps to
     /// [`crate::BrokerConfig::extra_log_dirs`].
     #[serde(default)]
     pub extra_log_dirs: Vec<String>,
+    /// The metadata log directory, Kafka's `metadata.log.dir`. It holds the
+    /// `__cluster_metadata-0` raft log, its snapshots, the node's
+    /// `meta.properties` and the bootstrap records. A directory that is
+    /// none of the data directories holds the metadata log only: no partition
+    /// is placed there, and `DescribeLogDirs` does not report it. Absent keeps
+    /// the metadata log in [`log_dir`][Self::log_dir], as Kafka keeps it in
+    /// the first entry of `log.dirs`. `--metadata-log-dir` wins over it.
+    pub metadata_log_dir: Option<String>,
     /// KIP-392: this broker's rack id. Maps to `BrokerConfig::rack`.
     pub rack: Option<String>,
 
@@ -316,9 +326,15 @@ pub struct FileConfig {
     /// reads under their Kafka names rather than a dedicated TOML key. The
     /// broker consults `transaction.two.phase.commit.enable`,
     /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`,
-    /// `default.replication.factor`, `delete.topic.enable`,
+    /// `default.replication.factor`, `log.roll.ms`, `delete.topic.enable`,
     /// `auto.create.topics.enable`, `transaction.partition.verification.enable`,
-    /// the KIP-1066 `cordoned.log.dirs`, and Kafka's two internal switches.
+    /// the KIP-1066 `cordoned.log.dirs`, the KIP-1331
+    /// `group.streams.topology.description.plugin.class`, and Kafka's two
+    /// internal switches. krabka cannot load a JVM class, so
+    /// `group.streams.topology.description.plugin.class` accepts only
+    /// `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`.
+    /// krabka builds in that plugin, which keeps the latest topology
+    /// description of each streams group in memory until the broker stops.
     /// `unstable.api.versions.enable`
     /// (default `false`) advertises and serves what krabka implements from
     /// Kafka trunk beyond 4.3.1: `ApiVersions` v5 (KIP-1242),

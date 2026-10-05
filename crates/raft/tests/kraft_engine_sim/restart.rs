@@ -10,7 +10,8 @@ use krabka_raft::{
 
 use crate::{
     harness::{
-        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, topic_record, voter_set,
+        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, metadata_log,
+        topic_record, voter_set,
     },
     sim_net::SimNet,
 };
@@ -84,6 +85,7 @@ async fn restart_recovers_image() {
         krabka_units::prelude::bytes(0),
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
+        metadata_log(),
     )
     .expect("reopen");
     // The recovered image must contain the committed topic.

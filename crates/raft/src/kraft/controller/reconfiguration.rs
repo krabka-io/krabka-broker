@@ -19,8 +19,8 @@ use tokio::sync::oneshot;
 use super::{
     Engine, PendingReconfig,
     control_state::{voter_set_to_wire, voter_supports_version},
-    offsets::{hwm_reaches_waiter, is_single_voter_majority, validate_append_result},
-    records::{decode_control_record, leader_change_batch, typed_control_batch},
+    offsets::{hwm_reaches_waiter, leader_alone_is_majority, validate_append_result},
+    records::{decode_control_record, start_of_epoch_batch, typed_control_batch},
 };
 use crate::{
     NodeId,
@@ -105,17 +105,48 @@ fn rejected_reconfiguration(
     }
 }
 
+/// The KIP-853 controls a leader writes after its `LeaderChange` marker: the
+/// `kraft.version` and the voter set when the quorum is at `kraft.version` 1
+/// or above and the epoch starts at offset 0, and none otherwise.
+///
+/// An empty log holds no `VotersRecord`. So when an epoch starts at offset 0,
+/// the leader's voters came from the bootstrap checkpoint that
+/// `krabka-format --standalone` or `--initial-controllers` wrote. Kafka's
+/// `LeaderState.appendStartOfEpochControlRecords` writes that set, the one at
+/// offset -1, into the leader's first batch. A replica that never read the
+/// checkpoint then learns the voters and their endpoints from the log. That
+/// replica is a broker-only observer, or a controller formatted with
+/// `--no-initial-controllers`. A later epoch starts past offset 0, on a log
+/// that already holds the set.
+fn bootstrap_controls(
+    kraft_version: u16,
+    epoch_start: Offset,
+    voters: &VoterSet,
+) -> Vec<ControlRecord> {
+    if kraft_version == 0 || epoch_start != Offset(0) {
+        return Vec::new();
+    }
+    vec![
+        ControlRecord::KRaftVersion(WireKRaftVersionRecord {
+            version: 0,
+            k_raft_version: i16::try_from(kraft_version).unwrap_or(i16::MAX),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        }),
+        ControlRecord::Voters(voter_set_to_wire(voters)),
+    ]
+}
+
 impl Engine {
-    /// Append the leader's `LeaderChange` control marker for `epoch`.
+    /// Append the batch the leader starts `epoch` with: the `LeaderChange`
+    /// control marker, and the bootstrap voter set that
+    /// [`bootstrap_controls`] names.
     #[tracing::instrument(level = "info", skip_all, fields(node = self.me.0, epoch), err)]
     pub fn append_leader_change(&mut self, epoch: Epoch) -> Result<Offset, RaftError> {
-        let mut batch = leader_change_batch(
-            epoch,
-            self.me,
-            &self.core.quorum_state().voters,
-            self.controls.latest_version(),
-        );
         let expected_base = self.log.log_end_offset();
+        let kraft_version = self.controls.latest_version();
+        let voters = self.core.quorum_state().voters.clone();
+        let controls = bootstrap_controls(kraft_version, expected_base, &voters);
+        let mut batch = start_of_epoch_batch(epoch, self.me, &voters, &controls)?;
         let base = self.log.append(&mut batch, Self::wall_clock_ms())?;
         validate_append_result(
             "leader-change",
@@ -123,6 +154,9 @@ impl Engine {
             base,
             self.log.log_end_offset(),
         )?;
+        if !controls.is_empty() {
+            self.apply_control_batch(&batch)?;
+        }
         Ok(base)
     }
 
@@ -370,7 +404,7 @@ impl Engine {
             removed_local_leader,
         });
 
-        if is_single_voter_majority(self.core.quorum_state().majority()) {
+        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
             self.advance_and_apply(self.log.log_end_offset());
         }
         self.publish_leader();

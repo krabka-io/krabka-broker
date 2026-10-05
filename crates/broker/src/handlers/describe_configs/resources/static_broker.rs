@@ -141,13 +141,16 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
 /// Kafka reports a key at `STATIC_BROKER_CONFIG` when `server.properties`
 /// names it, whatever the value is. Some keys are always named: `log.dirs`,
 /// `listeners`, `advertised.listeners` and `process.roles` are how a node is
-/// told where it lives, and krabka always holds them. The three log defaults
-/// `message.max.bytes`, `log.segment.bytes` and `min.insync.replicas` are
-/// named only when the operator supplied them, which
+/// told where it lives, and krabka always holds them. The four log defaults
+/// `message.max.bytes`, `log.segment.bytes`, `log.roll.ms` and
+/// `min.insync.replicas` are named only when the operator supplied them, which
 /// [`crate::config::StaticConfigOrigins`] records, so an inherited default
 /// stays at `DEFAULT_CONFIG`, and so do `sasl.server.max.receive.size` and
-/// `connection.failed.authentication.delay.ms`. `broker.rack` and
-/// `cordoned.log.dirs` are named when the node has a value.
+/// `connection.failed.authentication.delay.ms`. `broker.rack`,
+/// `metadata.log.dir` and `cordoned.log.dirs` are named when the node has a
+/// value. Kafka reports an unset `metadata.log.dir` as null at
+/// `DEFAULT_CONFIG`, and the metadata log is then in the first entry of
+/// `log.dirs`.
 ///
 /// The keys of [`crate::config::KAFKA_STATIC_KEYS`] -- the coordinators'
 /// `group.*` settings, the internal topics' geometry, the socket and queue
@@ -202,6 +205,9 @@ pub(crate) fn static_settings(
     if let Some(rack) = &config.rack {
         settings.insert("broker.rack", rack.clone());
     }
+    if let Some(dir) = &config.metadata_log_dir {
+        settings.insert("metadata.log.dir", dir.display().to_string());
+    }
     if let Some(cordoned) = &config.cordoned_log_dirs {
         settings.insert(
             crate::cordoned_log_dirs::CORDONED_LOG_DIRS,
@@ -219,6 +225,20 @@ pub(crate) fn static_settings(
         settings.insert(
             "log.segment.bytes",
             config.log_config.segment_size.bytes_u64().to_string(),
+        );
+    }
+    if config
+        .static_config_origins
+        .supplied_kafka_keys
+        .contains(config_keys::LOG_ROLL_MS)
+    {
+        settings.insert(
+            config_keys::LOG_ROLL_MS,
+            config
+                .log_config
+                .segment_roll_interval
+                .millis_i64()
+                .to_string(),
         );
     }
     if supplied.min_insync_replicas {

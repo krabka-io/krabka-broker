@@ -11,4 +11,5 @@
 mod offset;
 mod time;
 
+pub(crate) use self::{offset::OFFSET_ENTRY_SIZE, time::TIME_ENTRY_SIZE};
 pub use self::{offset::OffsetIndex, time::TimeIndex};

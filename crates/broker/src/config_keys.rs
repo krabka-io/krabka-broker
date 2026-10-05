@@ -8,7 +8,8 @@
 //! delete-horizon grace window (`delete.retention.ms`), and the batch-size cap
 //! (`max.message.bytes`) propagate live too, as do the roll interval
 //! (`segment.ms`), the sparse-index spacing (`index.interval.bytes`), the
-//! cleaner's three selection keys (`min.compaction.lag.ms`,
+//! sparse-index size cap (`segment.index.bytes`), the cleaner's three
+//! selection keys (`min.compaction.lag.ms`,
 //! `max.compaction.lag.ms`, `min.cleanable.dirty.ratio`) and
 //! `message.timestamp.type`.
 //!
@@ -16,9 +17,9 @@
 //! `compact,delete`, which both compacts the log and applies retention to it.
 //! Kafka Streams writes the pair on every windowed-store changelog topic.
 //!
-//! Nine keys are accepted and stored with no krabka behaviour behind them:
-//! `segment.index.bytes`, `segment.jitter.ms`, `file.delete.delay.ms`,
-//! `flush.messages`, `flush.ms`, `preallocate`, and the three codec levels
+//! Eight keys are accepted and stored with no krabka behaviour behind them:
+//! `segment.jitter.ms`, `file.delete.delay.ms`, `flush.messages`, `flush.ms`,
+//! `preallocate`, and the three codec levels
 //! `compression.gzip.level`, `compression.lz4.level` and
 //! `compression.zstd.level`.
 //! Kafka accepts them, so a topic manifest that carries one creates the topic
@@ -126,7 +127,7 @@ pub(crate) use self::{
     broker_defaults::{BrokerLogDefaults, dynamic_log_base},
     broker_scope::{
         AUTO_CREATE_TOPICS_ENABLE, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
-        DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
+        DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, LOG_ROLL_MS, NUM_PARTITIONS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
         STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
         TRANSACTIONAL_ID_EXPIRATION_MS, WITNESS_TRUE, is_controller_managed_broker_config,
@@ -178,7 +179,8 @@ pub(crate) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
 
 /// Kafka's `segment.ms`: the age at which the active segment rolls.
 pub(crate) const SEGMENT_MS: &str = "segment.ms";
-/// Kafka's `segment.index.bytes`: the size cap on a segment's offset index.
+/// Kafka's `segment.index.bytes`: the size cap on each of a segment's two
+/// sparse indexes. The active segment rolls once either one is full.
 pub(crate) const SEGMENT_INDEX_BYTES: &str = "segment.index.bytes";
 /// Kafka's `segment.jitter.ms`: random subtraction from the roll interval.
 pub(crate) const SEGMENT_JITTER_MS: &str = "segment.jitter.ms";

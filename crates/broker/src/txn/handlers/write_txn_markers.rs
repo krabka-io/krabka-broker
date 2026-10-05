@@ -14,8 +14,16 @@
 //!    - A partition this broker hosts but does not lead answers
 //!      `NOT_LEADER_OR_FOLLOWER`, and nothing is appended. Kafka appends with
 //!      `AppendOrigin.COORDINATOR`, and the leader append refuses a follower.
+//!    - A partition whose ISR is smaller than `min.insync.replicas` answers
+//!      `NOT_ENOUGH_REPLICAS`, and nothing is appended.
 //!    - Otherwise the handler appends the marker batch.
-//! 3. Return a nested per-producer → per-topic → per-partition response.
+//! 3. Wait until every appended marker commits, under one deadline of
+//!    Kafka's default `request.timeout.ms`. Kafka appends the markers with
+//!    `requiredAcks=-1` and answers a partition when its `DelayedProduce`
+//!    completes: `NONE` when the high watermark covers the marker,
+//!    `NOT_LEADER_OR_FOLLOWER` when the broker stops leading the partition
+//!    first, and `REQUEST_TIMED_OUT` at the deadline.
+//! 4. Return a nested per-producer → per-topic → per-partition response.
 //!    Kafka keys the results by producer id, so two marker entries for one
 //!    producer come back as one result.
 //!
@@ -36,6 +44,7 @@ use krabka_protocol::{
     },
 };
 
+mod leader;
 mod materialize;
 mod offsets;
 
@@ -43,7 +52,8 @@ mod offsets;
 pub(crate) mod test_support;
 
 pub(crate) use self::{
-    materialize::{MarkerAppend, append_marker_and_materialize},
+    leader::{MARKER_COMMIT_TIMEOUT, append_marker_as_leader},
+    materialize::MarkerAppend,
     offsets::CommittedOffsets,
 };
 use crate::{
@@ -127,8 +137,10 @@ fn serve(
     let log_dir_status = broker.log_dir_status.clone();
     let node_id = broker.config.node_id;
     Box::pin(async move {
-        let mut marker_results = MarkerResults::default();
-
+        // Kafka appends every marker of the request first and then waits for
+        // all of them under one `DelayedProduce`, so one timeout bounds the
+        // whole request. The rows keep the order of the request.
+        let mut rows = Vec::new();
         for marker_entry in &req.markers {
             let marker_type = if marker_entry.transaction_result {
                 MarkerType::Commit
@@ -149,16 +161,17 @@ fn serve(
 
             for topic in &marker_entry.topics {
                 for &p in &topic.partition_indexes {
-                    let error_code = match partitions.get(&topic.name, PartitionIndex(p)) {
+                    let row = match partitions.get(&topic.name, PartitionIndex(p)) {
                         Some(part) if !log_dir_status.is_offline(&part.log_dir.load()) => {
-                            append_to_led_partition(
+                            append_marker_as_leader(
                                 &part,
                                 node_id,
-                                &group_coordinator,
+                                Some(&group_coordinator),
                                 &topic.name,
                                 marker,
                             )
                             .await
+                            .map_err(|error| marker_error_code(&topic.name, p, &error))
                         }
                         _ => {
                             tracing::debug!(
@@ -166,12 +179,31 @@ fn serve(
                                 partition = p,
                                 "WriteTxnMarkers: partition not online here; returning UNKNOWN_TOPIC_OR_PARTITION"
                             );
-                            codes::UNKNOWN_TOPIC_OR_PARTITION
+                            Err(codes::UNKNOWN_TOPIC_OR_PARTITION)
                         }
                     };
-                    marker_results.record(pid.get(), &topic.name, p, error_code);
+                    rows.push((pid.get(), topic.name.clone(), p, row));
                 }
             }
+        }
+
+        let deadline = std::time::Instant::now() + MARKER_COMMIT_TIMEOUT;
+        let answered = futures_util::future::join_all(rows.into_iter().map(
+            |(producer_id, topic, partition, row)| async move {
+                let code = match row {
+                    Ok(pending) => match pending.committed(deadline).await {
+                        Ok(()) => codes::NONE,
+                        Err(error) => marker_error_code(&topic, partition, &error),
+                    },
+                    Err(code) => code,
+                };
+                (producer_id, topic, partition, code)
+            },
+        ))
+        .await;
+        let mut marker_results = MarkerResults::default();
+        for (producer_id, topic, partition, code) in answered {
+            marker_results.record(producer_id, &topic, partition, code);
         }
 
         WriteTxnMarkersResponse {
@@ -181,52 +213,18 @@ fn serve(
     })
 }
 
-/// Append one marker to a partition this broker hosts, and answer the code for
-/// its response row.
+/// The response code for a marker that failed or did not commit.
 ///
-/// The partition's replication-target read guard spans the leader check and
-/// the append, as it does for a Produce. A leadership change takes the write
-/// guard, so it cannot move the partition to a follower between the check and
-/// the append.
-async fn append_to_led_partition(
-    part: &crate::partition::Partition,
-    node_id: krabka_metadata::NodeId,
-    group_coordinator: &std::sync::Arc<crate::coordinator::GroupCoordinator>,
-    topic: &str,
-    marker: MarkerAppend,
-) -> i16 {
-    let transition = part.lock_produce_transition().await;
-    if transition.leader_node_id != node_id && !part.diskless {
-        tracing::debug!(
-            topic,
-            partition = part.index.get(),
-            leader = transition.leader_node_id.0,
-            "WriteTxnMarkers: partition not led here; returning NOT_LEADER_OR_FOLLOWER"
-        );
-        return codes::NOT_LEADER_OR_FOLLOWER;
+/// A refusal carries the code Kafka answers for it. A log failure is Kafka's
+/// `KafkaStorageException`, which the transaction coordinator retries
+/// (`TransactionMarkerRequestCompletionHandler`). Every other failure keeps
+/// its broker-wide code.
+fn marker_error_code(topic: &str, partition: i32, error: &BrokerError) -> i16 {
+    if let BrokerError::MarkerWriteRefused { code, .. } = error {
+        tracing::debug!(topic, partition, %error, "WriteTxnMarkers: marker refused");
+        return *code;
     }
-    let result = append_marker_and_materialize(part, Some(group_coordinator), topic, marker).await;
-    drop(transition);
-    match result {
-        Ok(()) => codes::NONE,
-        Err(error) => {
-            tracing::warn!(
-                topic,
-                partition = part.index.get(),
-                %error,
-                "WriteTxnMarkers: marker append failed"
-            );
-            marker_error_code(&error)
-        }
-    }
-}
-
-/// The response code for a marker append that failed.
-///
-/// A log failure is Kafka's `KafkaStorageException`, which the transaction
-/// coordinator retries (`TransactionMarkerRequestCompletionHandler`). Every
-/// other failure keeps its broker-wide code.
-fn marker_error_code(error: &BrokerError) -> i16 {
+    tracing::warn!(topic, partition, %error, "WriteTxnMarkers: marker append failed");
     match error {
         BrokerError::Log(_) | BrokerError::Io(_) => codes::KAFKA_STORAGE_ERROR,
         other => codes::from_broker_error(other),
@@ -440,6 +438,107 @@ mod tests {
             if let Some(part) = part {
                 assert!(part.log_end_offset().0 == expected_log_end, "{name}");
             }
+            broker_handle.shutdown().await;
+        }
+    }
+
+    /// Kafka's `handleWriteTxnMarkersRequest` appends with `requiredAcks=-1`
+    /// and answers a partition when its `DelayedProduce` completes: `NONE`
+    /// once the high watermark covers the marker, `NOT_LEADER_OR_FOLLOWER`
+    /// when the broker stops leading the partition first. The leader append
+    /// refuses a marker with `NOT_ENOUGH_REPLICAS` while the ISR is below
+    /// `min.insync.replicas`, and appends nothing.
+    #[tokio::test]
+    async fn a_marker_is_answered_only_once_committed() {
+        enum Change {
+            FollowerCatchesUp,
+            LeaderMoves,
+            UnderMinIsr,
+        }
+        let cases = [
+            (
+                "the follower catches up",
+                Change::FollowerCatchesUp,
+                codes::NONE,
+                1,
+            ),
+            (
+                "another broker takes the partition first",
+                Change::LeaderMoves,
+                codes::NOT_LEADER_OR_FOLLOWER,
+                1,
+            ),
+            (
+                "ISR below min.insync.replicas",
+                Change::UnderMinIsr,
+                codes::NOT_ENOUGH_REPLICAS,
+                0,
+            ),
+        ];
+        for (name, change, expected_code, expected_log_end) in cases {
+            let (broker_handle, dir) = start_broker().await;
+            let broker = broker_handle.broker_arc_for_test();
+            let node_id = broker.config.node_id;
+            let follower = krabka_metadata::NodeId(node_id.0 + 1);
+            let part = open_partition(&broker, &dir.path().join("markers"), "orders", 1);
+            part.install_replication_target(None, node_id.0, 3).await;
+            // The follower has not fetched, so it holds the high watermark at
+            // zero.
+            part.install_isr(&[node_id, follower], &[node_id, follower], node_id)
+                .await;
+            if matches!(change, Change::UnderMinIsr) {
+                part.install_isr(&[node_id], &[node_id, follower], node_id)
+                    .await;
+                part.replica_state
+                    .lock()
+                    .await
+                    .set_policy(crate::replica_state::LeaderPolicy {
+                        effective_min_isr: 2,
+                        replica_lag_time_max: std::time::Duration::from_secs(30),
+                        brokers: std::collections::HashMap::new(),
+                    });
+            }
+
+            let request = encode_request(&WriteTxnMarkersRequest {
+                markers: vec![marker(91, "orders", vec![1])],
+                ..Default::default()
+            });
+            let answer = tokio::spawn({
+                let broker = std::sync::Arc::clone(&broker);
+                async move { handle_allowed(&broker, VERSION, 123, &request).await }
+            });
+            if !matches!(change, Change::UnderMinIsr) {
+                loop {
+                    let appended = part.append_notify.notified();
+                    tokio::pin!(appended);
+                    appended.as_mut().enable();
+                    if part.log_end_offset().0 == 1 {
+                        break;
+                    }
+                    appended.await;
+                }
+                // intentional: the handler would answer within this time if
+                // it answered at the local append.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                assert!(!answer.is_finished(), "{name}: answered before the commit");
+                if matches!(change, Change::LeaderMoves) {
+                    part.install_replication_target(None, follower.0, 4).await;
+                } else {
+                    part.replica_state.lock().await.hw = krabka_log::Offset(1);
+                    part.hw_advance_notify.notify_waiters();
+                }
+            }
+            let bytes = answer.await.expect("the handler task").expect("handle");
+
+            assert!(
+                decode_response(&bytes)
+                    == WriteTxnMarkersResponse {
+                        markers: vec![result(91, "orders", &[(1, expected_code)])],
+                        unknown_tagged_fields: UnknownTaggedFields::default(),
+                    },
+                "{name}"
+            );
+            assert!(part.log_end_offset().0 == expected_log_end, "{name}");
             broker_handle.shutdown().await;
         }
     }

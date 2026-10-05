@@ -429,8 +429,10 @@ enum Broker {
 
 #[derive(Debug)]
 enum Step {
-    /// Apply an image where `leader` leads the state partition at `epoch`.
-    /// `wait` waits for the loads that the refresh started.
+    /// Install `leader` at `epoch` on the shared partition, as the metadata
+    /// reconcile of a broker does, and apply an image where `leader` leads
+    /// the state partition at `epoch`. `wait` waits for the loads that the
+    /// refresh started.
     Refresh {
         on: Broker,
         leader: u64,
@@ -579,6 +581,11 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
                 epoch,
                 wait,
             } => {
+                registry
+                    .get(bootstrap::TOPIC, state_partition)
+                    .expect("the state partition is open")
+                    .install_leader_change(leader, epoch)
+                    .await;
                 let loads = on(broker)
                     .refresh_leader_partitions(&state_partition_image(
                         state_partition.get(),

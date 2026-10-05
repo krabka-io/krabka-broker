@@ -633,6 +633,77 @@ fn an_idle_partition_never_rolls() {
     assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
 }
 
+// Kafka's `LogSegment.shouldRoll` rolls once `offsetIndex().isFull()` or
+// `timeIndex().isFull()`. `segment.index.bytes` caps both: the offset index
+// holds `size / 8` entries, and the time index is full one entry short of
+// `size / 12`. With `index.interval.bytes=1`, every batch but a segment's
+// first adds an offset-index entry, and a time-index entry when it carries the
+// segment's newest timestamp. Each case appends ten one-record batches and
+// compares the base offset of every segment.
+#[test]
+fn a_full_offset_or_time_index_rolls_the_segment() {
+    use krabka_units::prelude::mebibytes;
+
+    // `(label, segment.index.bytes, rising timestamps, segment bases)`.
+    let cases: [(&str, ByteSize, bool, Vec<i64>); 5] = [
+        (
+            "a time index too small for an entry rolls every batch",
+            bytes(12),
+            true,
+            (0..10).collect(),
+        ),
+        (
+            "two time-index slots fill after one entry",
+            bytes(24),
+            true,
+            vec![0, 2, 4, 6, 8],
+        ),
+        (
+            "three time-index slots fill after two entries",
+            bytes(36),
+            true,
+            vec![0, 3, 6, 9],
+        ),
+        (
+            "a flat clock leaves the four offset-index slots to fill",
+            bytes(36),
+            false,
+            vec![0, 5],
+        ),
+        (
+            "Kafka's default holds every entry",
+            mebibytes(10),
+            true,
+            vec![0],
+        ),
+    ];
+    for (label, segment_index_size, rising, expected) in cases {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(
+            dir.path(),
+            LogConfig {
+                index_interval: bytes(1),
+                segment_index_size,
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        for timestamp in 0..10 {
+            let mut batch = sample_batch(1);
+            batch.max_timestamp = if rising { 1_000 + timestamp } else { 1_000 };
+            log.append(&mut batch).unwrap();
+        }
+
+        let bases: Vec<i64> = log
+            .segments
+            .iter()
+            .chain(log.active.as_ref())
+            .map(|segment| segment.base_offset().0)
+            .collect();
+        check!(bases == expected, "{label}");
+    }
+}
+
 /// A roll to a new segment reopens the active `.stampindex` at the
 /// sidecar of the new segment. The entry for the post-roll batch lands in
 /// the new segment's file and does not leak back into the sealed

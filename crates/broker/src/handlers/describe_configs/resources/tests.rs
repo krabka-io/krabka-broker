@@ -2353,6 +2353,81 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
     );
 }
 
+/// A node started with `log.roll.ms` in its `server.properties` keys rolls
+/// every topic that sets no `segment.ms` at that interval, so the topic's
+/// `segment.ms` and the named broker's `log.roll.ms` both report it at
+/// `STATIC_BROKER_CONFIG`. A node that names neither key reports Kafka's
+/// seven days through the `log.roll.hours` default.
+#[test]
+fn a_topic_and_a_named_broker_report_the_log_roll_ms_the_node_runs() {
+    /// The value, the source and the synonyms of one entry.
+    type Chain = (Option<String>, i8, Vec<DescribeConfigsSynonym>);
+    let cases: [(&str, &str, Chain, Chain); 2] = [
+        (
+            "not named",
+            "broker_id = 1\n",
+            (
+                Some("604800000".to_owned()),
+                CONFIG_SOURCE_DEFAULT,
+                vec![synonym("log.roll.hours", "168", CONFIG_SOURCE_DEFAULT)],
+            ),
+            (None, CONFIG_SOURCE_DEFAULT, vec![]),
+        ),
+        (
+            "named",
+            "[server_properties]\n\"log.roll.ms\" = \"3000\"\n",
+            (
+                Some("3000".to_owned()),
+                CONFIG_SOURCE_STATIC_BROKER,
+                vec![
+                    synonym("log.roll.ms", "3000", CONFIG_SOURCE_STATIC_BROKER),
+                    synonym("log.roll.hours", "168", CONFIG_SOURCE_DEFAULT),
+                ],
+            ),
+            (
+                Some("3000".to_owned()),
+                CONFIG_SOURCE_STATIC_BROKER,
+                vec![synonym("log.roll.ms", "3000", CONFIG_SOURCE_STATIC_BROKER)],
+            ),
+        ),
+    ];
+    let image = MetadataImage::new(Uuid::nil());
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, src, topic_chain, broker_chain) in cases {
+        let file: crate::file_config::FileConfig = toml::from_str(src).expect("parse");
+        let mut config = crate::config::BrokerConfig::default();
+        file.apply_to(&mut config).expect("apply");
+        let settings = static_settings(&config);
+        let chain = |resource_type, name: &str, key: &str| {
+            let result = describe_with_static(
+                &with_topic(&image, resource_type, name),
+                resource_type,
+                name,
+                None,
+                EVERYTHING,
+                StaticBrokerConfigs {
+                    settings: &settings,
+                    ..untuned()
+                },
+            );
+            let entry = entry_named(&result, key);
+            (
+                entry.value.clone(),
+                entry.config_source,
+                entry.synonyms.clone(),
+            )
+        };
+        actual.push((
+            label,
+            chain(RESOURCE_TYPE_TOPIC, "orders", "segment.ms"),
+            chain(RESOURCE_TYPE_BROKER, "1", "log.roll.ms"),
+        ));
+        expected.push((label, topic_chain, broker_chain));
+    }
+    assert!(actual == expected);
+}
+
 /// A topic's `min.insync.replicas` resolves, for the node that computes it,
 /// as the topic override, then that node's own dynamic broker config, then
 /// the cluster-wide default (`KafkaConfigSchema.resolveEffectiveTopicConfig`).

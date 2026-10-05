@@ -67,6 +67,52 @@ pub(crate) fn leader_endpoint(
         })
 }
 
+/// The id that the `index`th bootstrap server stands under, counted down from
+/// `u64::MAX` as the raft transport numbers its own bootstrap address book.
+///
+/// Kafka gives bootstrap servers negative ids, below every node id. A
+/// [`krabka_raft::NodeId`] is unsigned, so these ids are above every node id.
+fn bootstrap_server_id(index: usize) -> krabka_raft::NodeId {
+    krabka_raft::NodeId(u64::MAX - u64::try_from(index).unwrap_or(u64::MAX))
+}
+
+/// Every controller a broker-only node can address, in the order it tries
+/// them: each voter of the KIP-853 voter set in the image, then each
+/// statically configured voter that set does not name, then each bootstrap
+/// server that no voter is already reached on, under [`bootstrap_server_id`].
+///
+/// A node of a dynamic quorum configures only bootstrap servers. They are all
+/// it has until it reads the voter set from the log. After that, the voters
+/// come first, because an answer names the leader by its node id. The
+/// bootstrap servers stay at the end of the list. So a node whose voters are
+/// all unreachable can still find the quorum, as Kafka's `RequestManager`
+/// falls back to them when it has no leader to ask.
+pub(crate) fn quorum_targets(
+    image: &krabka_metadata::MetadataImage,
+    static_voters: &[(krabka_raft::NodeId, String)],
+    bootstrap_servers: &[String],
+) -> Vec<(krabka_raft::NodeId, String)> {
+    let mut targets: Vec<(krabka_raft::NodeId, String)> = image
+        .voters()
+        .iter()
+        .filter_map(|voter| {
+            controller_endpoint(&voter.endpoints)
+                .map(|(host, port)| (voter.id, format!("{host}:{port}")))
+        })
+        .collect();
+    for (id, endpoint) in static_voters {
+        if targets.iter().all(|(known, _)| known != id) {
+            targets.push((*id, endpoint.clone()));
+        }
+    }
+    for (index, server) in bootstrap_servers.iter().enumerate() {
+        if targets.iter().all(|(_, endpoint)| endpoint != server) {
+            targets.push((bootstrap_server_id(index), server.clone()));
+        }
+    }
+    targets
+}
+
 /// Everything a broker needs to open an authenticated connection to the
 /// controller leader's controller listener.
 ///
@@ -185,5 +231,62 @@ mod tests {
         );
         // A leader nothing knows about yields nothing.
         assert!(leader_endpoint(&image, &static_voters, krabka_raft::NodeId(9)).is_none());
+    }
+
+    /// The voter set comes first, then the configured voters it does not name,
+    /// then the bootstrap servers that no voter is reached on. A dynamic quorum
+    /// configures only bootstrap servers, so before its node has read the voter
+    /// set they are the whole list.
+    #[test]
+    fn quorum_targets_put_voters_before_bootstrap_servers() {
+        let node = krabka_raft::NodeId;
+        let owned = |targets: &[(u64, &str)]| -> Vec<(krabka_raft::NodeId, String)> {
+            targets
+                .iter()
+                .map(|&(id, endpoint)| (node(id), endpoint.to_owned()))
+                .collect()
+        };
+        let empty = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let dynamic = image_with_voter(3001, "ducker12", 9_592);
+        let bootstrap = ["ducker12:9592".to_owned(), "ducker13:9592".to_owned()];
+        let static_voters = owned(&[(1, "static-one:9193"), (2, "static-two:9293")]);
+        // (what, image, static voters, bootstrap servers, targets)
+        let cases = [
+            ("nothing configured", &empty, vec![], &[][..], vec![]),
+            (
+                "bootstrap servers before the voter set is known",
+                &empty,
+                vec![],
+                &bootstrap[..],
+                owned(&[(u64::MAX, "ducker12:9592"), (u64::MAX - 1, "ducker13:9592")]),
+            ),
+            (
+                "the voter set takes over the bootstrap server it is reached on",
+                &dynamic,
+                vec![],
+                &bootstrap[..],
+                owned(&[(3001, "ducker12:9592"), (u64::MAX - 1, "ducker13:9592")]),
+            ),
+            (
+                "configured voters the voter set does not name",
+                &image_with_voter(1, "voter-one", 9_093),
+                static_voters.clone(),
+                &[][..],
+                owned(&[(1, "voter-one:9093"), (2, "static-two:9293")]),
+            ),
+            (
+                "a static quorum with no voter set",
+                &empty,
+                static_voters.clone(),
+                &[][..],
+                static_voters,
+            ),
+        ];
+        for (what, image, static_voters, bootstrap, expected) in cases {
+            assert!(
+                quorum_targets(image, &static_voters, bootstrap) == expected,
+                "{what}"
+            );
+        }
     }
 }

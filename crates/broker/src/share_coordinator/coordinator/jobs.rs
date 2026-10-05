@@ -25,7 +25,7 @@ use tokio::{sync::watch, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::{LoadStatus, ShareCoordinator, state_machine::StateRecord};
+use super::{LoadStatus, ShareCoordinator, Term, state_machine::StateRecord};
 
 impl ShareCoordinator {
     /// The state partitions that this broker leads and has loaded.
@@ -61,18 +61,50 @@ impl ShareCoordinator {
         keys
     }
 
+    /// Waits until the records that `appended` counts on the partition of
+    /// `term` are committed, and returns `appended`, or 0 when they do not
+    /// commit. `last_written` is the log end offset after them.
+    ///
+    /// Kafka's runtime completes a job's write operation only when its
+    /// records commit. A job runs over many keys under one read guard, so it
+    /// waits once per partition, after the guard is released.
+    async fn committed_count(
+        &self,
+        term: Term,
+        last_written: Option<krabka_log::Offset>,
+        appended: usize,
+        job: &str,
+    ) -> usize {
+        let Some(last_written) = last_written.filter(|_| appended > 0) else {
+            return 0;
+        };
+        match self.await_committed(term, last_written).await {
+            Ok(()) => appended,
+            Err(error) => {
+                warn!(
+                    partition = term.partition.get(),
+                    %error,
+                    job,
+                    "share-state job records not committed"
+                );
+                0
+            }
+        }
+    }
+
     /// Tombstones every key whose topic id is in `deleted`, on every active
     /// state partition, as Kafka's `maybeCleanupShareState` does. Returns the
-    /// number of tombstones written.
+    /// number of tombstones written and committed.
     pub(crate) async fn cleanup_deleted_topics(&self, deleted: &HashSet<uuid::Uuid>) -> usize {
         if deleted.is_empty() {
             return 0;
         }
         let mut written = 0;
         for state_partition in self.active_partitions().await {
-            let Ok(_led) = self.active(state_partition).await else {
+            let Ok(active) = self.active(state_partition).await else {
                 continue;
             };
+            let mut appended = 0;
             for (group, topic_id, partition) in
                 self.keys_of(state_partition, |topic_id| deleted.contains(topic_id))
             {
@@ -81,10 +113,10 @@ impl ShareCoordinator {
                 };
                 let _st = entry.lock().await;
                 match self
-                    .tombstone(state_partition, &group, topic_id, partition)
+                    .tombstone(active.term, &group, topic_id, partition)
                     .await
                 {
-                    Ok(()) => written += 1,
+                    Ok(()) => appended += 1,
                     Err(error) => warn!(
                         group,
                         %topic_id,
@@ -94,6 +126,11 @@ impl ShareCoordinator {
                     ),
                 }
             }
+            let (term, last_written) = (active.term, self.last_written(active.term));
+            drop(active);
+            written += self
+                .committed_count(term, last_written, appended, "deleted-topic cleanup")
+                .await;
         }
         if written > 0 {
             info!(
@@ -107,7 +144,7 @@ impl ShareCoordinator {
     /// Writes a new snapshot of each key whose latest snapshot is at least
     /// `cold_partition_snapshot_interval` old, on every active state
     /// partition, as Kafka's `snapshotColdPartitions` does. Returns the number
-    /// of snapshots written.
+    /// of snapshots written and committed.
     ///
     /// A state partition whose every key already has a cold snapshot (its
     /// write timestamp differs from its create timestamp) is skipped.
@@ -116,7 +153,7 @@ impl ShareCoordinator {
             .unwrap_or(i64::MAX);
         let mut written = 0;
         for state_partition in self.active_partitions().await {
-            let Ok(_led) = self.active(state_partition).await else {
+            let Ok(active) = self.active(state_partition).await else {
                 continue;
             };
             let keys = self.keys_of(state_partition, |_| true);
@@ -135,6 +172,7 @@ impl ShareCoordinator {
             if all_cold {
                 continue;
             }
+            let mut appended = 0;
             for ((group, topic_id, partition), entry) in cells {
                 let mut st = entry.lock().await;
                 let now = self.now_ms();
@@ -144,6 +182,7 @@ impl ShareCoordinator {
                 let snapshot = st.to_snapshot(st.snapshot_epoch.wrapping_add(1), now);
                 match self
                     .append_state_record(
+                        active.term,
                         &mut st,
                         &group,
                         topic_id,
@@ -152,7 +191,7 @@ impl ShareCoordinator {
                     )
                     .await
                 {
-                    Ok(()) => written += 1,
+                    Ok(()) => appended += 1,
                     Err(error) => warn!(
                         group,
                         %topic_id,
@@ -162,6 +201,11 @@ impl ShareCoordinator {
                     ),
                 }
             }
+            let (term, last_written) = (active.term, self.last_written(active.term));
+            drop(active);
+            written += self
+                .committed_count(term, last_written, appended, "cold-partition snapshot")
+                .await;
         }
         written
     }
@@ -170,9 +214,7 @@ impl ShareCoordinator {
     /// Kafka's `performRecordPruning` does.
     pub(crate) async fn prune_state_partitions(&self) {
         for state_partition in self.active_partitions().await {
-            if let Ok(_led) = self.active(state_partition).await {
-                self.maybe_prune(state_partition).await;
-            }
+            self.maybe_prune(state_partition).await;
         }
     }
 }

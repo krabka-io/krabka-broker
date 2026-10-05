@@ -95,9 +95,17 @@ impl ReplicatorSupervisor {
     /// A partition whose leader has not registered yet, or whose topic record
     /// has not arrived, is deferred rather than followed: the fetcher would
     /// have nowhere to dial and no `topic_id` to name it by.
+    ///
+    /// A local replica on an offline log directory is not followed. This is
+    /// Kafka's `ReplicaManager.handleLogDirFailure`, which removes the fetcher
+    /// of every partition in a failed directory and keeps the partition
+    /// offline until the broker restarts.
     fn desired_fetchers(&self, image: &MetadataImage) -> BTreeMap<FetcherKey, DesiredFetcher> {
         let mut desired: BTreeMap<FetcherKey, DesiredFetcher> = BTreeMap::new();
         for key in desired_follower_set(self.node_id, image) {
+            if self.replica_dir_offline(&key) {
+                continue;
+            }
             let Some(partition) = image.partition(&key.0, key.1) else {
                 continue;
             };
@@ -149,6 +157,13 @@ impl ReplicatorSupervisor {
             entry.partitions.insert(followed_key, config);
         }
         desired
+    }
+
+    /// True when this broker hosts `key` on a log directory that is offline.
+    fn replica_dir_offline(&self, key: &TopicPartition) -> bool {
+        self.partitions
+            .get(&key.0, PartitionIndex(key.1))
+            .is_some_and(|part| self.log_dir_status.is_offline(&part.log_dir.load()))
     }
 
     /// The configuration a running fetcher already holds for `key`, when it
@@ -319,6 +334,28 @@ mod tests {
         for task in &supervisor.tasks {
             task.shutdown.cancel();
         }
+    }
+
+    /// Kafka's `ReplicaManager.handleLogDirFailure`: a replica on a log
+    /// directory that went offline is no longer followed, and a fetcher with
+    /// nothing left to follow is retired.
+    #[tokio::test]
+    async fn a_replica_on_an_offline_log_directory_is_not_followed() {
+        let img = image_with(&[
+            topic_record("t", 1),
+            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
+            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
+        ]);
+        let (supervisor, _partitions, _reporter, dir) = supervisor_fixture(img.clone());
+        supervisor.reconcile(&img).await;
+        let followed_while_online = followed_keys(&supervisor, (NodeId(1), 0));
+
+        supervisor
+            .log_dir_status
+            .mark_offline(dir.path(), "test: EIO");
+        supervisor.reconcile(&img).await;
+
+        assert!((followed_while_online, supervisor.tasks.len()) == (vec![("t".to_string(), 0)], 0));
     }
 
     /// Two leaders are two connections, which is the shape Kafka has and the

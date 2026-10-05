@@ -133,6 +133,69 @@ fn apply_cordoned_log_dirs(
     }
 }
 
+/// Kafka's `log.roll.ms`, the static default of a topic's `segment.ms`. A
+/// topic that sets no `segment.ms` rolls its active segment when an append
+/// would make the segment span more record time than this. Kafka refuses a
+/// value under 1 at startup, and so does this.
+fn apply_log_roll_ms(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    use krabka_units::convert::TimeExt as _;
+
+    if let Some(value) = properties.get(crate::config_keys::LOG_ROLL_MS) {
+        let millis: i64 = parse_positive(crate::config_keys::LOG_ROLL_MS, value)?;
+        cfg.log_config.segment_roll_interval = Time::from_millis(millis);
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .insert(crate::config_keys::LOG_ROLL_MS);
+    }
+    Ok(())
+}
+
+/// Kafka's `group.consumer.migration.policy`: whether a consumer group may
+/// convert between the classic and the consumer protocol while it has
+/// members. Kafka reads the value without regard to case, and refuses a value
+/// outside its four policies at startup.
+fn apply_consumer_group_migration_policy(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    const KEY: &str = "group.consumer.migration.policy";
+    if let Some(value) = properties.get(KEY) {
+        cfg.next_gen_consumer_group.migration_policy =
+            value.trim().to_ascii_lowercase().parse().map_err(|_| {
+                FileConfigError::InvalidConfig(format!(
+                    "server_properties `{KEY}` must be one of `disabled`, `upgrade`, \
+                     `downgrade` or `bidirectional`, got `{value}`"
+                ))
+            })?;
+        cfg.static_config_origins.supplied_kafka_keys.insert(KEY);
+    }
+    Ok(())
+}
+
+/// Kafka trunk's `group.streams.topology.description.plugin.class`
+/// (KIP-1331). It names the JVM class that stores the topology descriptions
+/// Streams clients push. krabka builds in Kafka's in-memory plugin and runs it
+/// when the key names that class, and refuses any other class, as Kafka
+/// refuses to start on a class it cannot load.
+fn apply_topology_description_plugin(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    use crate::coordinator::unified::streams::description::{
+        PLUGIN_CLASS_CONFIG, TopologyDescriptionPlugin,
+    };
+
+    if let Some(value) = properties.get(PLUGIN_CLASS_CONFIG) {
+        cfg.streams_group.topology_description_plugin =
+            TopologyDescriptionPlugin::from_class_name(value)
+                .map_err(FileConfigError::InvalidConfig)?;
+    }
+    Ok(())
+}
+
 /// A positive integer `server_properties` value.
 fn parse_positive<T: std::str::FromStr + Default + PartialOrd>(
     name: &str,
@@ -229,6 +292,9 @@ pub(super) fn apply_listener_settings(
     apply_topic_creation_properties(&settings.server_properties, cfg)?;
     apply_boolean_properties(&settings.server_properties, cfg)?;
     apply_cordoned_log_dirs(&settings.server_properties, cfg);
+    apply_log_roll_ms(&settings.server_properties, cfg)?;
+    apply_consumer_group_migration_policy(&settings.server_properties, cfg)?;
+    apply_topology_description_plugin(&settings.server_properties, cfg)?;
     let num_val = settings
         .server_properties
         .get("quota.window.num")
@@ -534,6 +600,135 @@ connections_max_idle = "5s"
         assert!(actual == expected);
     }
 
+    /// Kafka's `log.roll.ms` sets the roll interval of every log whose topic
+    /// sets no `segment.ms`, and records that the operator named it. A value
+    /// under 1 refuses the configuration, as `KafkaConfig` refuses it. Kafka's
+    /// `LogDirFailureTest` sets it to make a broker write into a failed log
+    /// directory within seconds.
+    #[test]
+    fn log_roll_ms_is_read_from_server_properties() {
+        use krabka_units::convert::TimeExt as _;
+
+        /// The roll interval in milliseconds and the operator-supplied flag,
+        /// or the error.
+        type Outcome = Result<(i64, bool), String>;
+        let property =
+            |value: &str| format!("[server_properties]\n\"log.roll.ms\" = \"{value}\"\n");
+        let cases: [(&str, String, Outcome); 5] = [
+            (
+                "not named",
+                "broker_id = 0\n".to_owned(),
+                Ok((604_800_000, false)),
+            ),
+            ("named", property("3000"), Ok((3000, true))),
+            (
+                "named at the segment.ms default",
+                property("604800000"),
+                Ok((604_800_000, true)),
+            ),
+            (
+                "zero",
+                property("0"),
+                Err(
+                    "invalid config: server_properties `log.roll.ms` must be a positive integer, \
+                     got `0`"
+                        .to_owned(),
+                ),
+            ),
+            (
+                "a word",
+                property("soon"),
+                Err(
+                    "invalid config: server_properties `log.roll.ms` must be a positive integer, \
+                     got `soon`"
+                        .to_owned(),
+                ),
+            ),
+        ];
+        let mut actual = Vec::with_capacity(cases.len());
+        let mut expected = Vec::with_capacity(cases.len());
+        for (label, src, want) in cases {
+            let file: FileConfig = toml::from_str(&src).expect("parse");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file
+                .apply_to(&mut cfg)
+                .map(|()| {
+                    (
+                        cfg.log_config.segment_roll_interval.millis_i64(),
+                        cfg.static_config_origins
+                            .supplied_kafka_keys
+                            .contains("log.roll.ms"),
+                    )
+                })
+                .map_err(|error| error.to_string());
+            actual.push((label, result));
+            expected.push((label, want));
+        }
+        assert!(actual == expected);
+    }
+
+    #[test]
+    fn the_consumer_group_migration_policy_is_read_from_server_properties() {
+        use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy as Policy;
+
+        /// The policy and the operator-supplied flag, or the error.
+        type Outcome = Result<(Policy, bool), String>;
+        let property = |value: &str| {
+            format!("[server_properties]\n\"group.consumer.migration.policy\" = \"{value}\"\n")
+        };
+        let cases: [(&str, String, Outcome); 5] = [
+            (
+                "not named",
+                "broker_id = 0\n".to_owned(),
+                Ok((Policy::Bidirectional, false)),
+            ),
+            (
+                "disabled",
+                property("disabled"),
+                Ok((Policy::Disabled, true)),
+            ),
+            (
+                "upper case",
+                property("DOWNGRADE"),
+                Ok((Policy::Downgrade, true)),
+            ),
+            (
+                "mixed case",
+                property("Upgrade"),
+                Ok((Policy::Upgrade, true)),
+            ),
+            (
+                "not a policy",
+                property("sideways"),
+                Err(
+                    "invalid config: server_properties `group.consumer.migration.policy` must be \
+                     one of `disabled`, `upgrade`, `downgrade` or `bidirectional`, got `sideways`"
+                        .to_owned(),
+                ),
+            ),
+        ];
+        let mut actual = Vec::with_capacity(cases.len());
+        let mut expected = Vec::with_capacity(cases.len());
+        for (label, src, want) in cases {
+            let file: FileConfig = toml::from_str(&src).expect("parse");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file
+                .apply_to(&mut cfg)
+                .map(|()| {
+                    (
+                        cfg.next_gen_consumer_group.migration_policy,
+                        cfg.static_config_origins
+                            .supplied_kafka_keys
+                            .contains("group.consumer.migration.policy"),
+                    )
+                })
+                .map_err(|error| error.to_string());
+            actual.push((label, result));
+            expected.push((label, want));
+        }
+        assert!(actual == expected);
+    }
+
     /// `transaction.partition.verification.enable`, the static layer of a
     /// dynamic config, comes from the `[runtime]` table or from
     /// `server_properties`. The dedicated `[runtime]` key wins over the
@@ -703,6 +898,49 @@ connections_max_idle = "5s"
             let applied = file
                 .apply_to(&mut cfg)
                 .map(|()| cfg.features.unstable_feature_versions)
+                .map_err(|error| match error {
+                    crate::file_config::FileConfigError::InvalidConfig(message) => message,
+                    other => other.to_string(),
+                });
+            assert!(applied == expected, "{toml}");
+        }
+    }
+
+    /// KIP-1331's `group.streams.topology.description.plugin.class`: unset
+    /// by default, Kafka's in-memory plugin when it names that class, and
+    /// refused for any class krabka cannot load.
+    #[test]
+    fn apply_to_reads_the_topology_description_plugin_from_server_properties() {
+        use crate::{
+            config::BrokerConfig,
+            coordinator::unified::streams::description::TopologyDescriptionPlugin,
+        };
+
+        const KEY: &str = "group.streams.topology.description.plugin.class";
+        let property = |value: &str| format!("[server_properties]\n\"{KEY}\" = \"{value}\"\n");
+        for (toml, expected) in [
+            (
+                "broker_id = 0".to_owned(),
+                Ok(TopologyDescriptionPlugin::None),
+            ),
+            (
+                property("org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin"),
+                Ok(TopologyDescriptionPlugin::InMemory),
+            ),
+            (
+                property("com.example.JdbcTopologyStore"),
+                Err(format!(
+                    "server_properties `{KEY}` names `com.example.JdbcTopologyStore`, which krabka \
+                     cannot load: the only topology description plugin it builds in is \
+                     `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`"
+                )),
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(&toml).unwrap();
+            let mut cfg = BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| cfg.streams_group.topology_description_plugin)
                 .map_err(|error| match error {
                     crate::file_config::FileConfigError::InvalidConfig(message) => message,
                     other => other.to_string(),

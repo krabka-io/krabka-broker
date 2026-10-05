@@ -323,11 +323,18 @@ impl Log {
             batch.last_offset_delta,
             Offset(batch.base_offset),
         )?;
-        let (segment_size, segment_roll_interval, index_interval, flush_on_append) = {
+        let (
+            segment_size,
+            segment_roll_interval,
+            segment_index_size,
+            index_interval,
+            flush_on_append,
+        ) = {
             let cfg = self.config.read().unwrap();
             (
                 cfg.segment_size,
                 cfg.segment_roll_interval,
+                cfg.segment_index_size,
                 cfg.index_interval,
                 cfg.flush_on_append,
             )
@@ -341,6 +348,7 @@ impl Log {
             batch.max_timestamp,
             segment_size,
             segment_roll_interval,
+            segment_index_size,
         ) {
             self.roll_active_segment()?;
         }
@@ -436,12 +444,17 @@ impl Log {
     /// guard on `timeWaitedForRoll` -- there is no first record yet to
     /// measure the gap from, and nothing (not even the wall clock) rolls an
     /// idle partition.
+    ///
+    /// It is also true when the offset index or the time index already holds
+    /// as many entries as `segment_index_size` fits, Kafka's
+    /// `offsetIndex().isFull() || timeIndex().isFull()`.
     pub(super) fn should_roll_for_incoming(
         &mut self,
         incoming_size: ByteSize,
         incoming_max_timestamp: i64,
         segment_size: ByteSize,
         segment_roll_interval: Time,
+        segment_index_size: ByteSize,
     ) -> bool {
         let Some(seg) = self.active.as_mut() else {
             return false;
@@ -457,7 +470,12 @@ impl Log {
             && seg.first_record_timestamp().is_some_and(|first_timestamp| {
                 incoming_max_timestamp - first_timestamp > segment_roll_interval.millis_i64_trunc()
             });
-        size_roll || time_roll
+        // Below 24 bytes of `segment.index.bytes` the time index is full
+        // before it holds an entry. Kafka then rolls an empty segment, which
+        // deletes and recreates it at the same base offset. Skipping that
+        // roll leaves the same segment in place.
+        let index_roll = non_empty && seg.indexes_full(segment_index_size);
+        size_roll || time_roll || index_roll
     }
 
     #[instrument(

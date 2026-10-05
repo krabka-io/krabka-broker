@@ -9,7 +9,7 @@ use crate::kraft::controller::offsets::{
     append_result_is_consistent, assigned_record_offset, batch_base_in_apply_window,
     committed_records_since_snapshot, expected_hwm_after_advance, fetch_batch_committed_before_hwm,
     fetch_offset_has_records, hwm_advanced_as_expected, hwm_reaches_waiter,
-    is_single_voter_majority, metadata_fetch_offset_in_committed_window, snapshot_bytes_reached,
+    leader_alone_is_majority, metadata_fetch_offset_in_committed_window, snapshot_bytes_reached,
     snapshot_interval_reached, snapshot_time_reached, submit_waiter_need_offset,
     validate_append_result,
 };
@@ -47,15 +47,25 @@ fn append_result_must_match_previous_log_end_and_advance_log() {
     assert2::assert!(validate_append_result("test", Offset(4), Offset(-1), Offset(4)).is_err());
 }
 
+/// Only a leader that is itself the one voter commits its own append. A leader
+/// that its own uncommitted `VotersRecord` removed, leaving one other voter,
+/// waits for that voter's fetch.
 #[test]
-fn single_voter_majority_detection_is_exact() {
-    for (_case, majority, want) in [
-        ("single vote", 1, true),
-        ("no votes", 0, false),
-        ("multiple votes", 2, false),
-    ] {
-        assert2::assert!(is_single_voter_majority(majority) == want);
-    }
+fn only_a_sole_voter_leader_commits_alone() {
+    // (majority, leader is a voter, commits alone)
+    let cases = [
+        (1, true, true),
+        (1, false, false),
+        (0, true, false),
+        (2, true, false),
+        (2, false, false),
+    ];
+    let decided: Vec<bool> = cases
+        .iter()
+        .map(|&(majority, voter, _)| leader_alone_is_majority(majority, voter))
+        .collect();
+    let expected: Vec<bool> = cases.iter().map(|&(.., want)| want).collect();
+    assert!(decided == expected);
 }
 
 #[test]

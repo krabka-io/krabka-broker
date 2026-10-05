@@ -156,14 +156,16 @@ pub enum BrokerError {
     #[error("producer ID block unavailable: {0}")]
     ProducerIdBlockUnavailable(String),
 
-    /// A remote `WriteTxnMarkers` call answered one (topic, partition) with a
-    /// non-`NONE` per-partition error code. The transaction marker fan-out
+    /// The leader of one (topic, partition) refused a transaction marker, or
+    /// the marker did not commit there. A remote leader answers `code` in its
+    /// `WriteTxnMarkers` response, and this broker gives the same code for a
+    /// partition that it leads itself. The transaction marker fan-out
     /// classifies `code` as retriable or fatal (KIP-98's
     /// `TransactionMarkerRequestCompletionHandler`) rather than treating
     /// every non-`NONE` answer the same way.
     #[error("WriteTxnMarkers refused (code {code}): {message}")]
     MarkerWriteRefused {
-        /// The per-partition error code the remote leader answered.
+        /// The per-partition error code the leader answered.
         code: i16,
         /// A human-readable description naming the partition and code.
         message: String,
@@ -185,6 +187,40 @@ pub enum BrokerError {
         code: i16,
         /// What failed, for the log.
         message: String,
+    },
+
+    /// A group coordinator write to `__consumer_offsets` that this broker
+    /// cannot confirm as committed. `code` is the answer of Kafka's
+    /// `CoordinatorOperationExceptionHelper.handleOperationException` for it:
+    /// `NOT_COORDINATOR` when this broker does not lead the partition, or
+    /// stops leading it before the high watermark covers the write, and
+    /// `COORDINATOR_NOT_AVAILABLE` when the write times out.
+    #[error(
+        "group coordinator write to __consumer_offsets-{partition} is not committed (code {code})"
+    )]
+    CoordinatorWriteUncommitted {
+        /// The `__consumer_offsets` partition of the write.
+        partition: i32,
+        /// The coordinator error code that the client gets.
+        code: i16,
+    },
+
+    /// A transaction coordinator write to `__transaction_state` that did not
+    /// commit. `code` is the answer of Kafka's
+    /// `TransactionStateManager.appendTransactionToLog` for it, after its
+    /// mapping of the append error: `NOT_COORDINATOR` when this broker does
+    /// not lead the partition or stops leading it before the write commits,
+    /// `COORDINATOR_NOT_AVAILABLE` when the ISR is too small or the write
+    /// times out, and `COORDINATOR_LOAD_IN_PROGRESS` while the partition
+    /// loads.
+    #[error(
+        "transaction coordinator write to __transaction_state-{partition} is not committed (code {code})"
+    )]
+    TransactionStateWriteUncommitted {
+        /// The `__transaction_state` partition of the write.
+        partition: i32,
+        /// The coordinator error code that the client gets.
+        code: i16,
     },
 
     /// Two listeners share the same `bind_addr`.

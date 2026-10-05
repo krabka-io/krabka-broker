@@ -34,7 +34,7 @@ use super::*;
 use crate::{
     metrics::{BrokerMetrics, TopicLabel},
     remote_log_manager::{
-        RemoteTier, copy_eligible, local_retention_pass,
+        LocalRetentionBounds, RemoteTier, copy_eligible, local_retention_pass,
         test_support::rolled_tiered_partition_with_config,
     },
 };
@@ -376,7 +376,10 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
             &exports,
             &config,
             &rlmm,
-            now_ms() + 1_000_000,
+            LocalRetentionBounds {
+                now_ms: now_ms() + 1_000_000,
+                high_watermark: partition.high_watermark().await,
+            },
             crate::api_catalog::UnstableApiVersions::Disabled,
         );
 

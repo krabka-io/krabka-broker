@@ -19,6 +19,27 @@ use crate::error::RaftError;
 pub(crate) struct SnapshotReader;
 
 impl SnapshotReader {
+    /// The `last_contained_log_timestamp` of the `SnapshotHeaderRecord` that
+    /// opens a checkpoint, read from its first batch alone: Kafka's
+    /// `Snapshots.lastContainedLogTimestamp`.
+    pub(crate) fn last_contained_log_timestamp(bytes: &[u8]) -> Result<i64, RaftError> {
+        let mut cursor: &[u8] = bytes;
+        let batch = RecordBatch::decode(&mut cursor)?;
+        let header = batch
+            .attributes
+            .is_control_batch()
+            .then(|| batch.records.first())
+            .flatten()
+            .and_then(|record| record.key.as_ref().zip(record.value.as_ref()));
+        match header.map(|(key, value)| ControlRecord::decode(key, value)) {
+            Some(Ok(ControlRecord::SnapshotHeader(header))) => {
+                Ok(header.last_contained_log_timestamp)
+            }
+            Some(Err(error)) => Err(error.into()),
+            _ => Err(invalid_snapshot_order()),
+        }
+    }
+
     /// Decode a canonical checkpoint, separating KIP-853 control state from
     /// KIP-631 metadata records.
     pub(crate) fn read(bytes: &[u8]) -> Result<SnapshotContents, RaftError> {
@@ -168,6 +189,23 @@ mod tests {
                 port,
             }],
             kraft_version: KRaftVersionRange { min: 0, max: 1 },
+        }
+    }
+
+    /// The header timestamp reads from the first batch alone, and anything
+    /// that does not open with a snapshot header is refused.
+    #[test]
+    fn the_header_timestamp_reads_from_the_first_batch() {
+        let image = MetadataImage::new(Uuid::nil());
+        let snapshot = SnapshotWriter::serialize(&image, 1_700_000_123_456).unwrap();
+        assert2::check!(
+            SnapshotReader::last_contained_log_timestamp(&snapshot).ok() == Some(1_700_000_123_456)
+        );
+        for (what, bytes) in [("empty", &b""[..]), ("garbage", &b"\x00\x01\x02"[..])] {
+            assert2::check!(
+                SnapshotReader::last_contained_log_timestamp(bytes).is_err(),
+                "{what}"
+            );
         }
     }
 

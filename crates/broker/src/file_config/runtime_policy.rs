@@ -1,14 +1,16 @@
 //! The `[runtime]` applier for broker-wide operational policy.
 //!
-//! `apply_broker_policy` covers the metadata snapshot cadence, the controlled
-//! shutdown and TLS reload timers, the leader-imbalance thresholds, the
-//! connection ceilings, and the delegation-token lifetimes — the knobs that
-//! govern the broker as a whole rather than one subsystem.
+//! `apply_broker_policy` covers the metadata snapshot cadence, the metadata
+//! log's segments and retention, the controlled shutdown and TLS reload
+//! timers, the leader-imbalance thresholds, the connection ceilings, and the
+//! delegation-token lifetimes — the knobs that govern the broker as a whole
+//! rather than one subsystem.
 
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        disableable_millis_i32_time, metadata_snapshot_fetch_max, nonnegative_time, positive_time,
+        disableable_millis_i32_time, kafka_long_bytes, metadata_log_segment_bytes,
+        metadata_snapshot_fetch_max, nonnegative_millis_i64_time, nonnegative_time, positive_time,
         positive_u64, whole_bytes_u64, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
@@ -85,6 +87,7 @@ impl RuntimeFileConfig {
             cfg.metadata_snapshot_fetch_max,
             metadata_snapshot_fetch_max
         );
+        runtime.apply_metadata_log(&mut cfg.metadata_log)?;
         // Zero disables the reaper, so it bypasses the positive-only macro.
         if let Some(value) = runtime.txn_abort_cleanup_interval {
             cfg.txn_abort_cleanup_interval = nonnegative_time("txn_abort_cleanup_interval", value)?;
@@ -146,6 +149,52 @@ impl RuntimeFileConfig {
             remote_log_manager_interval,
             cfg.remote_log_manager_interval
         );
+        Ok(())
+    }
+
+    /// Applies the five keys of Kafka's `MetadataLogConfig` to `metadata_log`.
+    ///
+    /// Each domain is the one Kafka's `ConfigDef` gives the key.
+    /// `metadata.log.segment.bytes` is an `INT` with `atLeast(8388608)`, and
+    /// `metadata.max.idle.interval.ms` is an `INT` with `atLeast(0)`, where
+    /// zero stops the KIP-835 `NoOpRecord` appends. The other three are
+    /// `LONG` values. Krabka reads all five in whole milliseconds or whole
+    /// bytes, so a fractional value is refused here and does not round.
+    ///
+    /// Kafka gives the two retention keys a negative value to keep every
+    /// snapshot. A TOML quantity has no negative form, so an omitted key
+    /// keeps the built-in limit, and a supplied key always sets a limit.
+    fn apply_metadata_log(
+        &self,
+        metadata_log: &mut krabka_raft::MetadataLogConfig,
+    ) -> Result<(), FileConfigError> {
+        let runtime = self;
+        set_runtime_size_bytes!(
+            runtime,
+            metadata_log_segment_bytes,
+            metadata_log.segment_size,
+            metadata_log_segment_bytes
+        );
+        set_runtime_time_millis!(
+            runtime,
+            metadata_log_segment_roll_interval,
+            metadata_log.segment_roll_interval,
+            positive_i64
+        );
+        if let Some(value) = runtime.metadata_max_retention_bytes {
+            metadata_log.max_retention_size =
+                Some(kafka_long_bytes("metadata_max_retention_bytes", value)?);
+        }
+        if let Some(value) = runtime.metadata_max_retention {
+            metadata_log.max_retention = Some(nonnegative_millis_i64_time(
+                "metadata_max_retention",
+                value,
+            )?);
+        }
+        if let Some(value) = runtime.metadata_max_idle_interval {
+            metadata_log.max_idle_interval =
+                disableable_millis_i32_time("metadata_max_idle_interval", value)?;
+        }
         Ok(())
     }
 }

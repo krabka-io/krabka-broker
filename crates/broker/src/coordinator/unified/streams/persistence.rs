@@ -40,7 +40,9 @@ pub use self::{
         StreamsGroupCurrentMemberAssignmentValue, StreamsGroupTargetAssignmentMemberValue,
         StreamsMemberWireState,
     },
-    epochs::{StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMetadataValue},
+    epochs::{
+        DescriptionEpochs, StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMetadataValue,
+    },
     keys::{
         KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT, KEY_STREAMS_GROUP_METADATA,
         KEY_STREAMS_MEMBER_METADATA, KEY_STREAMS_PARTITION_METADATA,

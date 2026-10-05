@@ -6,13 +6,44 @@ use krabka_ids::Offset;
 use krabka_metadata::VoterSet;
 use krabka_protocol::{
     Decode, Encode,
-    records::{Record, RecordBatch, metadata::control::ControlRecord},
+    owned::no_op_record::NoOpRecord,
+    records::{
+        Record, RecordBatch,
+        metadata::{KraftMetadataRecord, control::ControlRecord, decode_value_header},
+    },
 };
 
 use crate::{
     error::RaftError,
     kraft::types::{Epoch, NodeId},
 };
+
+/// The api key of Kafka's `NoOpRecord`.
+const NO_OP_RECORD_API_KEY: u32 = 20;
+
+/// The value bytes of the empty KIP-835 `NoOpRecord` at apiVersion 0, which
+/// Kafka's `QuorumController` appends every `metadata.max.idle.interval.ms`.
+///
+/// # Errors
+/// Returns the [`RaftError`] of the record encoder.
+pub fn noop_record_value() -> Result<bytes::Bytes, RaftError> {
+    Ok(KraftMetadataRecord::NoOp(NoOpRecord::default()).encode_value(0)?)
+}
+
+/// Whether `value` is an empty KIP-835 `NoOpRecord`: a record that changes
+/// nothing, which every replay skips. A `NoOpRecord` that carries a private
+/// tagged field is a krabka record carrier, and it is not one.
+#[must_use]
+pub fn is_kip835_noop(value: &[u8]) -> bool {
+    let mut header = value;
+    if decode_value_header(&mut header).ok().map(|h| h.api_key) != Some(NO_OP_RECORD_API_KEY) {
+        return false;
+    }
+    matches!(
+        KraftMetadataRecord::decode_value(value),
+        Ok((KraftMetadataRecord::NoOp(record), _)) if record.unknown_tagged_fields.0.is_empty()
+    )
+}
 
 pub fn metadata_record_batch(
     leader_epoch: Epoch,
@@ -89,16 +120,16 @@ pub fn decode_control_record(record: &Record) -> Result<Option<ControlRecord>, R
 /// `LeaderChangeMessage` rather than zero records. Krabka readers skip it via
 /// `is_control_batch()`; it occupies exactly one log offset
 /// (`last_offset_delta = 0`), unchanged from the prior empty batch.
+///
+/// The message is always version 0, at every `kraft.version`. Kafka writes it
+/// at `ControlRecordUtils.LEADER_CHANGE_CURRENT_VERSION`, which is 0, and
+/// reads it at that version too, so a version 1 message, with its voter
+/// directory ids, is unreadable to `kafka-dump-log` and to a JVM replica.
 // cargo-mutants: the `version: 0` field equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so
 // deleting it yields byte-identical encoding; it is not the wire schema version
 // (that is the `0` passed to `msg.encode`). Equivalent mutant.
 #[cfg_attr(test, mutants::skip)]
-pub fn leader_change_batch(
-    epoch: Epoch,
-    leader_id: NodeId,
-    voter_set: &VoterSet,
-    kraft_version: u16,
-) -> RecordBatch {
+pub fn leader_change_batch(epoch: Epoch, leader_id: NodeId, voter_set: &VoterSet) -> RecordBatch {
     use krabka_protocol::{
         Encode,
         owned::{
@@ -110,19 +141,15 @@ pub fn leader_change_batch(
         },
     };
 
-    let message_version = i16::from(kraft_version >= 1);
     let voters: Vec<Voter> = voter_set
         .iter()
         .map(|voter| Voter {
             voter_id: i32::try_from(voter.id.0).unwrap_or(i32::MAX),
-            voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
-                *voter.directory_id.as_bytes(),
-            ),
             ..Default::default()
         })
         .collect();
     let msg = LeaderChangeMessage {
-        version: message_version,
+        version: 0,
         leader_id: i32::try_from(leader_id.0).unwrap_or(i32::MAX),
         voters: voters.clone(),
         granting_voters: voters,
@@ -130,7 +157,7 @@ pub fn leader_change_batch(
     };
     let mut value = bytes::BytesMut::new();
     // LeaderChangeMessage v0; encode is infallible for a well-formed message.
-    let _ = msg.encode(&mut value, message_version);
+    let _ = msg.encode(&mut value, 0);
     let key = control_record_key(ControlRecordType::LeaderChange);
     RecordBatch {
         partition_leader_epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
@@ -144,6 +171,31 @@ pub fn leader_change_batch(
         }],
         ..Default::default()
     }
+}
+
+/// Build the batch a leader starts `epoch` with: the [`leader_change_batch`]
+/// marker, then each of `controls` at the offsets that follow it.
+///
+/// # Errors
+/// Returns the [`RaftError`] of the control-record encoder.
+pub fn start_of_epoch_batch(
+    epoch: Epoch,
+    leader_id: NodeId,
+    voter_set: &VoterSet,
+    controls: &[ControlRecord],
+) -> Result<RecordBatch, RaftError> {
+    let mut batch = leader_change_batch(epoch, leader_id, voter_set);
+    for (offset_delta, control) in (1_i32..).zip(controls) {
+        let (key, value) = control.encode_key_value()?;
+        batch.records.push(Record {
+            offset_delta,
+            key: Some(key),
+            value: Some(value),
+            ..Default::default()
+        });
+        batch.last_offset_delta = offset_delta;
+    }
+    Ok(batch)
 }
 
 /// Encode a run of `RecordBatch`es into one contiguous `Bytes` blob (each batch

@@ -54,8 +54,10 @@ pub struct Cli {
 pub enum Command {
     /// Copy this node's restore inputs into the archive.
     Capture {
-        /// The broker's `log.dir`, mounted read-only. Without it the capture
-        /// takes group offsets only.
+        /// The broker's `log.dir`, mounted read-only. The capture reads the
+        /// metadata checkpoint from its `__cluster_metadata-0`, so it finds one
+        /// only when this is also the node's metadata log directory. Without
+        /// it the capture takes group offsets only.
         #[arg(long, value_name = "DIR")]
         log_dir: Option<std::path::PathBuf>,
 

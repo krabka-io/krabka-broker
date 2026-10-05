@@ -23,6 +23,12 @@ use tokio::sync::Mutex;
 
 mod support;
 
+// Cargo compiles this file as its own test binary, so `#[path]` re-bases the
+// part onto the sibling `replication/` directory, where it does not become a
+// test binary of its own.
+#[path = "replication/idempotent_failover.rs"]
+mod idempotent_failover;
+
 /// Test-binary-wide serialization. Each test in this file spins up a
 /// 3-broker cluster on loopback. Concurrent runs exhaust the
 /// loopback ephemeral ports and starve the openraft election timing.
@@ -229,6 +235,113 @@ async fn out_of_range_truncates_and_recovers() {
         .0
         .wait_until_local_log_end_offset("oor", 0, 50)
         .await;
+
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+}
+
+/// A follower that catches up across sealed segments copies every batch of the
+/// leader, in order, with no gap.
+///
+/// Each segment holds three batches of about 300 KB. A follower fetch of 1 MiB
+/// reads to the end of one segment, goes on into the next, and stops inside it
+/// with budget left. The leader once read on from that point into the segment
+/// after, and served the first batch of that segment. The follower then
+/// skipped every offset between the two. The throttled-reassignment system
+/// test found that gap: one new replica held 43 of the 666 big batches.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreatableTopicConfig};
+
+    const BATCHES: i64 = 12;
+    let _g = cluster_lock().lock().await;
+    let cluster = support::start_n_node_with_retry(3).await;
+    for (h, _, _) in &cluster {
+        h.wait_until_brokers_registered(3).await;
+    }
+
+    // Node 1 leads partition 0 and node 2 follows it. A segment of 1 MiB, the
+    // smallest Kafka accepts, rolls after three batches of 300 KB.
+    let leader_addr = cluster[0].1.listen_addr.to_string();
+    let admin = Client::builder()
+        .bootstrap(leader_addr.clone())
+        .build()
+        .await
+        .unwrap();
+    let resp = admin
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                configs: vec![CreatableTopicConfig {
+                    name: "segment.bytes".into(),
+                    value: Some("1048576".into()),
+                    ..Default::default()
+                }],
+                ..support::topic_on("seams", &[&[1, 2]])
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(resp.topics[0].error_code == 0);
+    let topic_id = resp.topics[0].topic_id;
+    for (h, _, _) in &cluster {
+        h.wait_until_partition_present("seams", 0).await;
+    }
+
+    let producer = Client::builder()
+        .bootstrap(leader_addr)
+        .build()
+        .await
+        .unwrap();
+    for _ in 0..BATCHES {
+        let batch = RecordBatch {
+            records: vec![Record {
+                value: Some(bytes::Bytes::from(vec![b'x'; 300_000])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let prod = producer
+            .send(ProduceRequest {
+                acks: -1,
+                timeout_ms: 5_000,
+                topic_data: vec![TopicProduceData {
+                    name: "seams".into(),
+                    topic_id,
+                    partition_data: vec![PartitionProduceData {
+                        index: 0,
+                        records: Some(batch.into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(prod.responses[0].partition_responses[0].error_code == 0);
+    }
+    let leader = &cluster[0].0;
+    let follower = &cluster[1].0;
+    follower
+        .wait_until_local_log_end_offset("seams", 0, BATCHES)
+        .await;
+
+    // Empty the follower, so that it copies the whole log again in fetches of
+    // 1 MiB, from sealed segments that are already complete.
+    follower
+        .test_truncate_local_log("seams", 0, 0)
+        .await
+        .expect("truncate the follower");
+    follower
+        .wait_until_local_log_end_offset("seams", 0, BATCHES)
+        .await;
+
+    let every_batch: Vec<i64> = (0..BATCHES).collect();
+    assert!(leader.local_batch_base_offsets_for_test("seams", 0) == Some(every_batch.clone()));
+    assert!(follower.local_batch_base_offsets_for_test("seams", 0) == Some(every_batch));
 
     for (h, _, _) in cluster {
         h.shutdown().await;

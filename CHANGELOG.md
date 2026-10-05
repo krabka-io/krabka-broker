@@ -18,6 +18,321 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+### Added
+
+- KIP-1331 topology descriptions are stored when
+  `group.streams.topology.description.plugin.class` in `[server_properties]`
+  names Kafka's `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`,
+  which krabka builds in. A version 1 `StreamsGroupHeartbeat` then asks one
+  member of the group for the description, `StreamsGroupTopologyDescriptionUpdate`
+  stores it in memory, and `StreamsGroupDescribe` v1 answers it. The group
+  metadata record keeps Kafka's `StoredDescriptionTopologyEpoch` and
+  `FailedDescriptionTopologyEpoch`. Any other class name stops the broker at
+  startup, as Kafka stops on a class it cannot load.
+- Kafka's `metadata.log.dir`: the `metadata_log_dir` key, the
+  `--metadata-log-dir` flag and `KRABKA_METADATA_LOG_DIR` name the directory
+  of the metadata log, `meta.properties` and the bootstrap records.
+  Unset, it is `log_dir`. A metadata log directory that is not a data
+  directory holds no partition and is not in `DescribeLogDirs`, and the node
+  stops when it fails (KIP-858). `krabka-format --metadata-log-dir` formats it
+  with the data directories, as `kafka-storage format` does.
+- The `[runtime]` keys `metadata_log_segment_bytes`,
+  `metadata_log_segment_roll_interval`, `metadata_max_retention_bytes`,
+  `metadata_max_retention` and `metadata_max_idle_interval` are Kafka's
+  `metadata.log.segment.bytes`, `metadata.log.segment.ms`,
+  `metadata.max.retention.bytes`, `metadata.max.retention.ms` and
+  `metadata.max.idle.interval.ms`. The leader appends a KIP-835 `NoOpRecord`
+  every `metadata.max.idle.interval.ms`.
+- `aspect kafka-system-tests` runs Apache Kafka's ducktape system tests
+  against krabka. The task checks out the Kafka trunk revision that the
+  manifest `tools/kafkatest/suite.json` pins, copies `krabka-broker` and
+  `krabka-format` into it, and runs the tests in ducker-ak containers. The
+  adapter `tools/kafkatest/krabka.py` replaces Kafka's `KafkaService`, so
+  every broker and isolated controller of a test is `krabka-broker`. The
+  adapter translates the `kafka.properties` of each node into a
+  `krabka.toml`. The clients, the tools and the checks of each test stay
+  Kafka's. The task gives each manifest entry one of four verdicts: pass,
+  regression, known failure or fixed. It writes the verdicts to
+  `target/kafka-system-tests/report.md`, and it exits with status 1 on a
+  regression. `docs/kafka-system-tests.md` tells how to run it and which
+  tests the manifest leaves out.
+- The `[runtime]` keys `streams_group_min_session_timeout`,
+  `streams_group_max_session_timeout`, `streams_group_min_heartbeat_interval`
+  and `streams_group_max_heartbeat_interval` are Kafka's
+  `group.streams.min.session.timeout.ms`,
+  `group.streams.max.session.timeout.ms`,
+  `group.streams.min.heartbeat.interval.ms` and
+  `group.streams.max.heartbeat.interval.ms`. Each key also has a flag and an
+  environment variable, for example `--streams-group-min-session-timeout` and
+  `KRABKA_STREAMS_GROUP_MIN_SESSION_TIMEOUT`. The session timeout and the
+  heartbeat interval of a streams group must stay inside these bounds, as
+  Kafka's `GroupCoordinatorConfig` requires. Kafka's `BaseStreamsTest` sets
+  `group.streams.min.session.timeout.ms` and
+  `group.streams.session.timeout.ms` to 10 seconds.
+
+- `krabka-format --controller-listener-name` names the voter endpoints of
+  `--standalone` and `--initial-controllers` after the first entry of Kafka's
+  `controller.listener.names`. The default is `CONTROLLER`. Thus
+  `kafka-metadata-quorum add-controller` finds the endpoint of the default
+  listener, and the leader accepts the new voter.
+
+### Changed
+
+- **Breaking, on-disk format.** `krabka-format` writes Kafka's
+  `meta.properties` into each directory it formats, in place of
+  `meta.properties.json`: the Java properties file of `kafka-storage format`,
+  with `cluster.id`, `directory.id`, `node.id` and `version=1`, written
+  through `meta.properties.tmp` and a rename. The Kafka tools now read a
+  krabka directory, so `kafka-metadata-quorum add-controller` finds the
+  directory id of a new krabka controller. `--node-id` is required, from 0 to
+  2147483647, as Kafka's `node.id` is. At a start the broker reads the
+  `meta.properties` of the metadata log directory and of every data
+  directory, and applies the checks of Kafka's
+  `KafkaRaftServer.initializeLogDirs` with Kafka's messages: a directory of
+  another node stops the broker with `Stored node id 1 doesn't match previous
+  node id 2 in ...`. The broker refuses a directory that has only
+  `meta.properties.json` with `No readable meta.properties files found.`; run
+  a fresh `krabka-format`. `docs/format-divergences.md` gives the format.
+- The metadata log is in `__cluster_metadata-0` under the metadata log
+  directory, with its segments, its `<offset>-<epoch>.checkpoint` snapshots
+  and its `quorum-state` file, as Kafka's is. It was in
+  `__cluster_metadata/@metadata-0`. Reformat a node that has the old layout.
+- A metadata snapshot no longer moves the log start by itself. The metadata
+  log keeps the prefix a snapshot covers until `metadata.max.retention.bytes`
+  or `metadata.max.retention.ms` lets the oldest snapshot go, as Kafka's
+  `KafkaRaftLog.maybeClean` does, and its segments roll, so the cleaning
+  deletes whole segment files.
+- `krabka-format` writes the bootstrap files only into the metadata log
+  directory. A data directory gets `meta.properties` only.
+- The raft node id is the broker id, as Kafka's `node.id` is both, and the
+  `broker_id` of `--config-file` now sets it. The seeded voter and the
+  telemetry resource take the same id. A `--broker-id` other than the
+  default 1 wins over the file's `broker_id`, and the file's `broker_id` wins
+  over the default. Before, the raft node id came from `--broker-id` alone,
+  so a node that set its id only in the file ran raft as node 1.
+- A node makes itself the single voter of its own quorum only when it has
+  the controller role and sets neither `controller_quorum_voters` nor
+  `bootstrap_servers`. A node that sets `bootstrap_servers` seeds no voter,
+  because its voters come from the KIP-853 `VotersRecord` in the log. A node
+  without the controller role that sets neither key stops at startup with
+  Kafka's message: `If using process.roles, either
+  controller.quorum.bootstrap.servers must contain the set of bootstrap
+  controllers or controller.quorum.voters must contain a parseable set of
+  controllers.` Before, every node without `controller_quorum_voters` seeded
+  itself as a voter, whatever its roles and its `bootstrap_servers`.
+- At startup on Unix, the broker raises its soft limit on open files to the
+  hard limit, as the JVM's default `-XX:+MaxFDLimit` does for a Kafka broker.
+  A broker keeps the log and index files of each segment open. The soft
+  limit of 1024 that a shell or a systemd unit often sets runs out at a few
+  hundred partitions. The broker changes nothing when the soft limit is
+  already at the hard limit, or when the hard limit is unlimited, because
+  Linux refuses an unlimited soft limit on open files. It logs a warning when
+  the change fails.
+
+### Fixed
+
+- A broker that becomes the leader of a partition decides idempotent and
+  transactional produces from the producer state of its log, up to the log
+  end. Thus it answers a retry of a batch that it replicated as a follower as
+  a duplicate, with the offset of the first append, and it takes the next
+  sequence after that batch. This is Kafka's behavior:
+  `UnifiedLog.appendAsFollower` updates the producer state for each replicated
+  batch, and the new leader's `ProducerStateEntry.findDuplicateBatch` finds
+  the retry among the last five batches of the producer. A partition that the
+  broker opens also takes the producer state of its log. Before, a follower
+  did not keep the data batches that it replicated in the producer state of
+  the produce path, and a promotion did not copy them from the log. In
+  Kafka's `ReplicationTest`, with a clean bounce of the leader and an
+  idempotent producer, the new leader appended a retry of a replicated batch
+  a second time, and the consumer read six duplicates. A broker that led the
+  partition again answered the next batch with `OUT_OF_ORDER_SEQUENCE_NUMBER`,
+  because it still held the sequence of its previous term.
+- A KIP-853 dynamic quorum grown from a `--standalone` controller works as
+  Kafka's does. A broker-only node that names the quorum only through
+  `controller.quorum.bootstrap.servers` finds the leader through those servers
+  and reaches it on the endpoint of the voter set. A controller bound to a
+  wildcard address advertises its host name in voter updates and in its
+  `RegisterControllerRecord`, as Kafka's
+  `ListenerInfo.withWildcardHostnamesResolved` does. Before, it committed
+  `127.0.0.1` into the voter set, and brokers on other hosts stayed fenced and
+  never finished starting. The first leader writes the voter set of the
+  bootstrap checkpoint into the log, as Kafka's
+  `LeaderState.appendStartOfEpochControlRecords` does, and writes
+  `LeaderChange` at version 0, the only version Kafka reads. A controller
+  formatted with `--no-initial-controllers` starts as an observer without
+  auto-join, and its discovery takes the bootstrap servers in turn. A leader
+  that removes itself waits for a remaining voter to commit the removal, and
+  then observes its successor. `DescribeQuorum` lists a new observer of a
+  leader that has made no commit since its election.
+- The broker reads Kafka's `log.roll.ms` from `[server_properties]` as the
+  roll interval of a topic that sets no `segment.ms`, and `DescribeConfigs`
+  reports it at `STATIC_BROKER_CONFIG`. Before, the broker ignored the key and
+  rolled every 7 days. Kafka's `LogDirFailureTest` sets it so that a broker
+  writes into a failed log directory within seconds.
+- A follower stops following a partition when an append to it fails on a log
+  directory that is now offline, as Kafka's `ReplicaManager.handleLogDirFailure`
+  does. Before, the follower fetched and failed the same records in a loop.
+- A promotion whose leader-epoch checkpoint write fails takes the log
+  directory offline, so the heartbeat reports it and the controller moves the
+  leadership. Before, the partition kept that broker as its leader, and the
+  broker answered `UNKNOWN_LEADER_EPOCH` to its followers.
+- A read of the log goes on into the next segment only after it reads the
+  segment before it to the end, and only its first batch can be larger than
+  the fetch budget. Before, a fetch that its `partition_max_bytes` stopped
+  inside a sealed segment went on into the next segment, served the first
+  batch there, and skipped every offset between the two. A follower that
+  caught up across segments lost those records, which is why a throttled
+  reassignment in Kafka's `ThrottlingTest` finished in 7 seconds and not in
+  131. A consumer fetch had the same gap.
+- The transaction coordinator answers a request, and changes its state, only
+  once the `__transaction_state` record of the request is committed: the
+  record carries the leader epoch, the ISR holds `min.insync.replicas`
+  members, and the high watermark covers the record while the coordinator
+  still leads the partition. A write that does not commit answers
+  `NOT_COORDINATOR` or `COORDINATOR_NOT_AVAILABLE`, as Kafka's
+  `appendTransactionToLog` does. `TxnOffsetCommit` and `OffsetDelete` wait the
+  same way for their `__consumer_offsets` records. Before, the coordinators
+  answered at the local append, so a broker bounce could lose an `EndTxn`
+  decision or a transaction's offsets that the client was told were written.
+- A transaction completes only once each of its `COMMIT` or `ABORT` markers
+  is committed on its partition. `WriteTxnMarkers` appends a marker as the
+  partition leader with `acks=-1`, and answers the partition once the high
+  watermark covers the marker. Otherwise it answers `NOT_LEADER_OR_FOLLOWER`,
+  `NOT_ENOUGH_REPLICAS`, `NOT_ENOUGH_REPLICAS_AFTER_APPEND` or
+  `REQUEST_TIMED_OUT`, as Kafka does, and the coordinator sends the marker
+  again to the partition's leader. The coordinator's own marker appends wait
+  the same way. Before, a marker counted at the local append, so a leader that
+  died before a follower fetched the marker left the transaction open on the
+  next leader permanently. Its last stable offset stopped there, and a
+  `read_committed` consumer read nothing after it.
+- A streams group that the broker loads from `__consumer_offsets` at startup
+  assigns its tasks again. Before, the replay started the group before the
+  broker connected the metadata image, and the group never read the image.
+  Every target assignment after a restart was empty, so the members revoked
+  all of their tasks, and in Kafka's `StreamsBrokerDownResilience` tests no
+  instance processed a record after the broker came back. A streams group
+  write that does not commit now answers `NOT_COORDINATOR` or
+  `COORDINATOR_NOT_AVAILABLE`, as Kafka's `CoordinatorOperationExceptionHelper`
+  does, and not `COORDINATOR_LOAD_IN_PROGRESS`.
+- A classic consumer that joins a consumer group with live members (KIP-848
+  online migration) joins as a follower, as Kafka's
+  `classicGroupJoinToConsumerGroup` serves it. A dynamic member with no member
+  id at `JoinGroup` v4 or later gets `MEMBER_ID_REQUIRED` and a new id. The
+  response names no leader and lists no members, and its generation is the
+  member epoch that the offset-commit fence checks. Before, the broker added a
+  member with an empty id and named the member the leader of a list with no
+  subscription metadata. The Java client failed to parse that list and
+  stopped, so Kafka's `ConsumerProtocolMigrationTest.test_consumer_rolling_downgrade`
+  timed out. A classic member that joined an upgraded group again got the
+  same response.
+- A tiered partition that stops taking writes moves its last records to the
+  remote tier and off local disk. When the active segment breaches
+  `local.retention.ms` or `local.retention.bytes`, and every sealed segment
+  before it is copied and breached too, local retention rolls it, as Kafka's
+  `UnifiedLog.deletableSegments` does. The next copy uploads the records, and
+  the next pass deletes them from local disk. Before, the active segment stayed
+  local until `segment.bytes` or `segment.ms` rolled it, so
+  `ListOffsets(EARLIEST_LOCAL)` stayed at its base offset. Kafka's
+  `ShareConsumerDLQTieredStorageTest` waits for that offset to reach the last
+  record, and it timed out.
+- A share group reads the records that only the remote tier holds. When the
+  share-partition start offset is below the local log start of a tiered
+  partition, `ShareFetch` reads the batches from the remote tier and acquires
+  inside them, as Kafka's `DelayedShareFetch` does through
+  `RemoteLogManager.asyncRead`. The control batches, the aborted transactional
+  data under `read_committed` and the KFC-1 batches that are not due in that
+  read stay out of the acquisition, as they do for a local read. A
+  dead-letter copy (`errors.deadletterqueue.copy.record.enable`) reads its
+  source record from the remote tier too, as Kafka's
+  `ShareGroupDLQRecordFetcher` does. Before, the share fetch answered
+  `UNKNOWN_SERVER_ERROR` for every tiered offset, so the consumer never got
+  the records, and a copy of a tiered record carried headers alone.
+- The active segment rolls when its offset index or its time index is full
+  under `segment.index.bytes`, as Kafka's `LogSegment.shouldRoll` does. Before,
+  krabka stored the key and did nothing with it, so a topic that sets
+  `segment.index.bytes=12` and `index.interval.bytes=1` to put each batch in
+  its own segment kept all of its batches in one segment.
+- A controlled shutdown of a controller-only node stops the node at once, as
+  Kafka stops a controller-only process. The node leads no partition and
+  runs no heartbeat client, so no controller ever answers its drain. Before,
+  the node waited for the whole drain timeout, and then stopped through the
+  hard shutdown with `ShutdownTimeout`. So every stop of an isolated
+  controller took the full drain timeout.
+- The broker reads Kafka's `group.consumer.migration.policy` from
+  `[server_properties]`, without regard to case, as Kafka does. A value other
+  than `disabled`, `upgrade`, `downgrade` or `bidirectional` stops the broker
+  at startup. `DescribeConfigs` reports the key at `STATIC_BROKER_CONFIG`.
+  Before, the broker ignored the key and always ran the `bidirectional`
+  policy. Kafka's `ConsumerProtocolMigrationTest` sets the key in each of its
+  tests, for example to `disabled` in `test_consumer_offline_migration`.
+- The share coordinator answers a share-state request only after its
+  `__share_group_state` records commit, as Kafka's `CoordinatorRuntime` does.
+  It appends a record only while it leads the partition at the leader epoch
+  of its load, and it stamps that epoch on the batch. It then waits until the
+  high watermark covers the last record that it wrote in that term. A read
+  waits too. If the partition gets a new leader or a new leader epoch first,
+  the coordinator answers `NOT_COORDINATOR`. If the wait takes longer than
+  `share.coordinator.write.timeout.ms`, it answers
+  `COORDINATOR_NOT_AVAILABLE`. The prune of the state log waits for the
+  commit too. Before, the coordinator acknowledged a write when the record
+  reached its local log, so a failover could lose acknowledged state.
+- A follower `Fetch` that the leader answers from its first read reports the
+  high watermark from before the leader recorded the follower's fetch
+  offset, as Kafka's `Partition.fetchRecords` does. The leader records that
+  position only after a successful read. A read that fails, or that finds a
+  diverging epoch, records no position, as in Kafka. A follower fetch that
+  parks reads again on a wake or at expiry, and then reports the high
+  watermark that its fetch moved. Before, the leader recorded the position
+  before the read, also for a read that then failed. So a follower learned a
+  high watermark in the same fetch that moved it.
+- The group coordinator answers a request only once its `__consumer_offsets`
+  records are committed, as Kafka's `CoordinatorRuntime` does. This holds for
+  `OffsetCommit`, `JoinGroup`, `SyncGroup`, `ConsumerGroupHeartbeat`,
+  `ShareGroupHeartbeat` and every other group write. The coordinator appends
+  only while it leads the partition, and it stamps the leader epoch on the
+  batch. It then waits until the high watermark covers the batch while it
+  still leads at that epoch. The wait lasts at most 5 seconds, the default
+  of Kafka's `offsets.commit.timeout.ms`. When a write does not commit,
+  `OffsetCommit` and `ShareGroupHeartbeat` answer `NOT_COORDINATOR` after a
+  leader change, and `COORDINATOR_NOT_AVAILABLE` after the timeout. Before,
+  the coordinator answered at the local append. In Kafka's
+  `ShareConsumerTest.test_broker_failure`, a coordinator gave three members
+  epochs that only its own log held, and then stopped. The next coordinator
+  did not know the members, and it answered each heartbeat with
+  `GROUP_ID_NOT_FOUND`, which a share consumer cannot recover from.
+- In a cluster with isolated controllers, the first broker-only node to
+  start creates the `__krabka_audit` topic, with one partition on each
+  registered broker. The node submits the records itself, and its metadata
+  source forwards them to the quorum leader. It then waits for the topic to
+  reach its own metadata image, for at most the time that the `[runtime]`
+  key `audit_partition_wait_timeout` sets. A controller-only node never
+  places an audit partition on itself, and with no registered broker it
+  creates nothing, as Kafka places replicas on registered brokers only.
+  Before, only the quorum leader created the topic. A controller-only leader
+  saw no registered broker at its start, and put the only partition on
+  itself. No broker served that partition, so no broker wrote audit events.
+- A partition leader sends `AlterPartition` to the CONTROLLER listener of
+  the active controller, as Kafka's `AlterPartitionManager` does. It finds
+  the endpoint in the KIP-853 voter set or in `controller_quorum_voters`, and
+  it connects with the TLS and SASL settings of that listener. Before, the
+  leader looked for the controller among the registered brokers, and sent
+  the request to their broker listeners. A controller-only node has no
+  broker registration, so with an isolated controller the request never
+  reached it. The controller committed no ISR change, and a follower that
+  restarted and caught up never rejoined the ISR.
+- `CreateTopics` and `CreatePartitions` place a replica on a broker that a
+  controlled shutdown stopped, as a fenced last resort, as Kafka does. Its
+  registration keeps `InControlledShutdown` until it registers again, but
+  Kafka's `BrokerHeartbeatManager.touch` takes a fenced broker out of
+  controlled shutdown. The ISR leaves the stopped broker out. A broker that
+  is in controlled shutdown and not fenced stays out of the placement.
+  Before, the placement left out every broker whose registration had
+  `InControlledShutdown`. After a clean stop of one of three brokers, a topic
+  at replication factor 3 failed with `INVALID_REPLICATION_FACTOR`. In
+  Kafka's `ShareConsumerTest.test_broker_failure`, the broker could not
+  create `__share_group_state`, so the share group never initialized its
+  partitions.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added

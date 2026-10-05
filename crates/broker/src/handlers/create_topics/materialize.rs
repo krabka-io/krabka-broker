@@ -86,6 +86,7 @@ pub(super) async fn materialize_topic(
         if let Err(error) = leadership
             .install(
                 &partition,
+                context.producer_state,
                 context.topic_id,
                 context.node_id,
                 replicas,
@@ -112,7 +113,8 @@ impl super::InitialLeadership {
     /// waiting for the supervisor's next reconcile to record the epoch. A
     /// diskless partition's promotion belongs to the supervisor, which
     /// prepares its log from the WAL, so it and a follower replica only
-    /// install the leader.
+    /// install the leader. The disk-backed leader also takes the producer
+    /// state of its new log into `producer_state`, as every promotion does.
     ///
     /// `CreatePartitions` materializes its new partitions through this too.
     ///
@@ -124,6 +126,7 @@ impl super::InitialLeadership {
     pub(crate) async fn install(
         &self,
         partition: &crate::partition::Partition,
+        producer_state: &crate::producer_state::ProducerState,
         topic_id: uuid::Uuid,
         node_id: krabka_raft::NodeId,
         replicas: &[krabka_raft::NodeId],
@@ -142,7 +145,7 @@ impl super::InitialLeadership {
                 .await;
         } else {
             partition
-                .install_local_leadership(Some(topic_id), leader.0, leader_epoch)
+                .install_local_leadership(producer_state, Some(topic_id), leader.0, leader_epoch)
                 .await?;
         }
         partition.install_isr(&self.isr, replicas, leader).await;
@@ -302,6 +305,7 @@ mod tests {
             let result = leadership(leader)
                 .install(
                     &partition,
+                    &crate::producer_state::ProducerState::new(),
                     uuid::Uuid::from_u128(7),
                     LOCAL,
                     &[NodeId(1), NodeId(2)],

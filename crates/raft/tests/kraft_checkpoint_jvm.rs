@@ -36,7 +36,8 @@ const APPEND_TIMESTAMP_MS: i64 = 1_700_000_000_123;
 /// [`APPEND_TIMESTAMP_MS`], and the timestamp the engine reads back out of it
 /// for a snapshot header taken at the high watermark.
 fn committed_log_timestamp(dir: &std::path::Path) -> i64 {
-    let mut log = KraftLog::open(dir).expect("open the metadata log");
+    let mut log = KraftLog::open(dir, &krabka_raft::MetadataLogConfig::default())
+        .expect("open the metadata log");
     let mut batch = RecordBatch {
         partition_leader_epoch: 1,
         records: vec![Record {

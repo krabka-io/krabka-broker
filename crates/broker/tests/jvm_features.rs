@@ -136,10 +136,8 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
 /// `add-controller` command promotes this exact live identity.
 async fn start_host_observer() -> (krabka_raft::ControllerHandle, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut config = krabka_raft::ControllerConfig::for_tests(
-        krabka_raft::NodeId(2),
-        dir.path().join("__cluster_metadata"),
-    );
+    let mut config =
+        krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(2), dir.path().to_path_buf());
     config.directory_id = JOINER_DIRECTORY_ID;
     config.controller_listen_addr = joiner_controller()
         .replace("host.docker.internal", "0.0.0.0")

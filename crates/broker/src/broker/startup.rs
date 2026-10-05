@@ -301,6 +301,7 @@ impl Broker {
             share_coordinator,
             share_partition_leaders,
             share_persister,
+            dead_letters,
         } = start_coordinators(
             &config,
             CoordinatorInputs {
@@ -330,6 +331,13 @@ impl Broker {
             (&diskless_runtime, metrics, Some(health.clone())),
         )
         .await?;
+
+        // KIP-405: a dead-letter copy of a share-group record that only the
+        // remote tier holds reads it there, through the reader the runtime
+        // just built.
+        if let Some(reader) = runtime.remote_reader.as_ref() {
+            dead_letters.set_remote_reader(Arc::clone(reader));
+        }
 
         // The controller listener is already accepting connections, but the
         // audit log only exists now. Publish it so controller SASL logins

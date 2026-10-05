@@ -6,10 +6,14 @@
 
 use std::sync::Arc;
 
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
-use krabka_raft::RaftError;
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_raft::{NodeId, RaftError};
+use krabka_units::convert::TimeExt as _;
 
-use crate::{config::BrokerConfig, error::BrokerError};
+use crate::{config::BrokerConfig, error::BrokerError, metadata_source::MetadataSource};
+
+#[cfg(test)]
+mod tests;
 
 /// Create `__krabka_audit` with one partition per registered broker at RF=1.
 ///
@@ -18,78 +22,145 @@ use crate::{config::BrokerConfig, error::BrokerError};
 /// it locally.
 ///
 /// The function is idempotent. It treats a `TopicExists` error from the
-/// controller as a success, because another broker or a restart already
-/// created the topic.
+/// controller as a success, because another node or a restart already created
+/// the topic.
 ///
-/// Only the quorum leader submits the metadata records. This matches the
-/// `__consumer_offsets` bootstrap path and prevents TOCTOU duplicate-id races.
-/// Followers submit nothing. The leader's records replicate into their image
-/// through the normal raft log.
+/// A node with the controller role submits the records only when it is the
+/// quorum leader. A broker-only node never leads the quorum, so it submits its
+/// own batch, which its metadata source forwards to the leader. Without that
+/// path, a cluster with isolated controllers has no node that can place the
+/// topic on a broker. The leader counts a topic that a pending batch creates
+/// as an existing topic, so two racing submits create the topic once.
+///
+/// Only a registered broker gets a replica. Before any registration reaches
+/// the image, the local node stands in for the broker list, but only when the
+/// local node is a broker. A controller-only node hosts no replica. With no
+/// registered broker, it submits nothing, and the first broker-only node to
+/// start creates the topic.
+///
+/// After a submit, the function waits up to `audit_partition_wait_timeout` for
+/// the topic to reach the local image. The audit pipeline reads that image
+/// once, right after startup calls this function, to find the partition that
+/// this broker leads.
 ///
 /// The function returns `Ok(())` at once when `config.audit_enabled` is
 /// `false`.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Startup`] when the controller refuses the batch for
+/// a reason other than an existing topic.
 pub async fn bootstrap_audit_topic(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
 ) -> Result<(), BrokerError> {
     if !config.audit_enabled {
         return Ok(());
     }
 
-    // Only the quorum leader submits; copy out the leader id before any `.await`
-    // so we don't hold the `Ref` across an await point.
+    // Copy out the leader id before any `.await` so we don't hold the `Ref`
+    // across an await point.
     let am_leader = *controller.watch_leader().borrow() == Some(config.node_id);
-    if !am_leader {
+    if config.is_controller() && !am_leader {
         return Ok(());
     }
 
-    // Already created (idempotent restart or another leader beat us).
-    if controller
-        .current_image()
-        .topic(&config.audit_topic)
-        .is_some()
-    {
+    let replicas = {
+        let image = controller.current_image();
+        // Already created (idempotent restart or another node beat us).
+        if image.topic(&config.audit_topic).is_some() {
+            return Ok(());
+        }
+        audit_replicas(&image, config.is_broker().then_some(config.node_id))
+    };
+    if replicas.is_empty() {
+        tracing::info!(
+            topic = %config.audit_topic,
+            "no broker is registered, so this controller-only node does not create the audit topic"
+        );
         return Ok(());
     }
 
-    let image = controller.current_image();
-    let mut brokers: Vec<krabka_raft::NodeId> = image.brokers().map(|b| b.node_id).collect();
-    drop(image);
+    let records = audit_topic_records(&config.audit_topic, krabka_format::random_uuid(), &replicas);
+    match controller.submit_change(records).await {
+        // Idempotent: another node or a restart already created it.
+        Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {}
+        Err(e) => return Err(BrokerError::Startup(e.to_string())),
+    }
+    wait_for_audit_topic(config, &**controller).await;
+    Ok(())
+}
+
+/// The replica of each audit partition, in partition order: every registered
+/// broker, in ascending node-id order.
+///
+/// `local_broker` is this node when this node is a broker, and `None` on a
+/// node whose `process.roles` exclude `broker`. It stands in for the list
+/// while the image holds no broker registration. Kafka never places a replica
+/// on a node that is not a registered broker. A controller-only node that
+/// named itself here would lead a partition that no broker serves, and every
+/// `AssignReplicasToDirs` for it would fail with `BROKER_ID_NOT_REGISTERED`.
+fn audit_replicas(image: &MetadataImage, local_broker: Option<NodeId>) -> Vec<NodeId> {
+    let mut brokers: Vec<NodeId> = image.brokers().map(|broker| broker.node_id).collect();
     if brokers.is_empty() {
-        brokers.push(config.node_id);
+        brokers.extend(local_broker);
     }
     brokers.sort_unstable();
+    brokers
+}
 
-    let num_partitions = i32::try_from(brokers.len()).unwrap_or(1);
-    // RF=1: partition i has broker i as its sole replica and leader.
-    let assignments: Vec<Vec<krabka_raft::NodeId>> =
-        brokers.iter().map(|broker| vec![*broker]).collect();
-
-    let mut records = Vec::with_capacity(1 + usize::try_from(num_partitions).unwrap_or(0));
-    records.push(MetadataRecord::V1Topic(TopicRecord {
-        name: config.audit_topic.clone(),
-        topic_id: krabka_format::random_uuid(),
-        partitions: num_partitions,
+/// The batch that creates `topic` at RF=1 with partition `i` on `replicas[i]`.
+fn audit_topic_records(
+    topic: &str,
+    topic_id: uuid::Uuid,
+    replicas: &[NodeId],
+) -> Vec<MetadataRecord> {
+    let topic_record = MetadataRecord::V1Topic(TopicRecord {
+        name: topic.to_owned(),
+        topic_id,
+        partitions: i32::try_from(replicas.len()).expect("audit partition count overflows i32"),
         replication_factor: 1,
-    }));
-    for (p, replicas) in assignments.iter().enumerate() {
-        records.push(MetadataRecord::V1Partition(PartitionRecord {
-            topic: config.audit_topic.clone(),
-            partition: i32::try_from(p).expect("audit partition index overflows i32"),
-            leader: replicas[0],
-            replicas: replicas.clone(),
-            isr: replicas.clone(),
+    });
+    let partition_records = (0_i32..).zip(replicas).map(|(partition, &replica)| {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: topic.to_owned(),
+            partition,
+            leader: replica,
+            replicas: vec![replica],
+            isr: vec![replica],
             leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
             partition_epoch: 0,
-        }));
-    }
+        })
+    });
+    std::iter::once(topic_record)
+        .chain(partition_records)
+        .collect()
+}
 
-    match controller.submit_change(records).await {
-        // Idempotent: another broker / a restart already created it.
-        Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
-        Err(e) => Err(BrokerError::Startup(e.to_string())),
+/// Wait until the local image carries the audit topic, for at most
+/// `audit_partition_wait_timeout`.
+///
+/// A submit returns when the leader applies the batch. A broker-only node
+/// sees the batch only after its next metadata fetch, so its image can trail
+/// the reply. If the wait runs out, the broker still starts, and the audit
+/// pipeline reports that this broker leads no audit partition.
+async fn wait_for_audit_topic(config: &BrokerConfig, controller: &dyn MetadataSource) {
+    let timeout = config.audit_partition_wait_timeout.to_std();
+    let mut images = controller.watch_image();
+    let published = tokio::time::timeout(
+        timeout,
+        images.wait_for(|image| image.topic(&config.audit_topic).is_some()),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok());
+    if !published {
+        tracing::warn!(
+            topic = %config.audit_topic,
+            ?timeout,
+            "the audit topic did not reach the local metadata image in time"
+        );
     }
 }

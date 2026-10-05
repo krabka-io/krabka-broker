@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn a_target_that_holds_anything_is_refused() {
         let target = tempfile::tempdir().expect("temp dir");
-        std::fs::write(target.path().join("meta.properties.json"), b"{}").expect("write");
+        std::fs::write(target.path().join("meta.properties"), b"version=1\n").expect("write");
         let refused = ensure_empty_log_dir(target.path());
         check!(matches!(refused, Err(RestoreError::LogDirNotEmpty(_))));
         check!(refused.expect_err("refused").exit_code() == EXIT_DIRTY_LOG_DIR);

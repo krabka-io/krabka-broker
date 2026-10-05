@@ -33,7 +33,7 @@ async fn run_from_args_restores_the_archive_and_returns_exit_ok() {
     .await;
 
     check!(code == EXIT_OK);
-    check!(log_dir.join("meta.properties.json").exists());
+    check!(log_dir.join(krabka_format::META_PROPERTIES).exists());
 }
 
 /// 4. `--dry-run` reports success but writes no partition data.

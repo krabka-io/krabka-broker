@@ -5,21 +5,30 @@
 
 use std::sync::Arc;
 
-use krabka_metadata::MetadataRecord;
+use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_raft::{DelegationTokenMutation, NodeId, OutboundDialer, RaftError, SubmitChangeResult};
 use tokio::sync::watch;
 
 use super::MetadataWriter;
+use crate::controller_endpoint::quorum_targets;
 
 /// Forwards metadata writes from a broker-only node to the controller
 /// quorum. Tries the leader hint first (from the observer), then walks the
-/// voter list. Mirrors the `API_KEY_SUBMIT_CHANGE` request the controller
-/// already serves.
+/// voters of the image's voter set, the static voters, and the bootstrap
+/// servers, in that order. Mirrors the `API_KEY_SUBMIT_CHANGE` request the
+/// controller already serves.
 pub struct QuorumForwarder {
-    /// Voter map `(id, "<host>:<port>")`. The map carries the host verbatim.
-    /// The dialer re-resolves it on each connect, so it reaches a rejoining
-    /// peer's new pod IP.
+    /// Static voter map `(id, "<host>:<port>")`, from
+    /// `controller_quorum_voters`. The map carries the host verbatim. The
+    /// dialer re-resolves it on each connect, so it reaches a rejoining peer's
+    /// new pod IP.
     pub(crate) voters: Vec<(NodeId, String)>,
+    /// `controller.quorum.bootstrap.servers`, which a node in a KIP-853
+    /// dynamic quorum configures in place of `voters`.
+    pub(crate) bootstrap_servers: Vec<String>,
+    /// The observer's image, whose KIP-853 voter set names the endpoint of
+    /// each voter, and so of the leader, in a dynamic quorum.
+    pub(crate) image: watch::Receiver<Arc<MetadataImage>>,
     pub(crate) dialer: Arc<dyn OutboundDialer>,
     pub(crate) client_id: String,
     pub(crate) client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
@@ -28,6 +37,12 @@ pub struct QuorumForwarder {
 }
 
 impl QuorumForwarder {
+    /// The controllers this node can address now: the voter set of the latest
+    /// image, the static voters, and the bootstrap servers.
+    fn targets(&self) -> Vec<(NodeId, String)> {
+        quorum_targets(&self.image.borrow(), &self.voters, &self.bootstrap_servers)
+    }
+
     async fn try_submit(
         &self,
         target: NodeId,
@@ -95,7 +110,7 @@ impl MetadataWriter for QuorumForwarder {
         req.encode_v0(&mut body).map_err(RaftError::Protocol)?;
 
         let hint = *self.leader.borrow();
-        let order = build_forward_order(&self.voters, hint);
+        let order = build_forward_order(&self.targets(), hint);
 
         let mut last_err = RaftError::NotLeader {
             current_leader: hint,
@@ -152,7 +167,7 @@ impl MetadataWriter for QuorumForwarder {
         body: bytes::Bytes,
     ) -> Result<bytes::Bytes, RaftError> {
         let hint = *self.leader.borrow();
-        let order = build_forward_order(&self.voters, hint);
+        let order = build_forward_order(&self.targets(), hint);
         let mut last_err = RaftError::NotLeader {
             current_leader: hint,
         };
@@ -202,7 +217,7 @@ impl MetadataWriter for QuorumForwarder {
         let mut last_error = RaftError::NotLeader {
             current_leader: hint,
         };
-        for (target, addr) in build_forward_order(&self.voters, hint) {
+        for (target, addr) in build_forward_order(&self.targets(), hint) {
             match self
                 .try_submit(
                     target,
@@ -328,15 +343,55 @@ mod tests {
         leader_hint: Option<NodeId>,
     ) -> QuorumForwarder {
         let (_leader_tx, leader_rx) = watch::channel(leader_hint);
+        let (_image_tx, image_rx) = watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
         QuorumForwarder {
             client_dispatch_queue_capacity:
                 krabka_client_core::ConnectionDispatchQueueCapacity::default(),
             client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters: vec![(NodeId(1), addr.to_string())],
+            bootstrap_servers: vec![],
+            image: image_rx,
             dialer: Arc::new(RecordingDialer { client_ids }),
             client_id: "forwarder-client".into(),
             leader: leader_rx,
         }
+    }
+
+    /// A node in a dynamic quorum configures bootstrap servers and no voters,
+    /// and its writes reach the quorum through them before it has read the
+    /// voter set.
+    #[tokio::test]
+    async fn quorum_forwarder_reaches_the_quorum_through_a_bootstrap_server() {
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
+                    return Some(submit_change_response_body(0, -1));
+                }
+                None
+            })
+            .await;
+        let forwarder = QuorumForwarder {
+            voters: vec![],
+            bootstrap_servers: vec![mock.addr.to_string()],
+            ..forwarder(
+                mock.addr,
+                Arc::new(Mutex::new(Vec::new())),
+                Some(NodeId(3001)),
+            )
+        };
+
+        let outcome = forwarder
+            .submit_change(vec![topic_record("bootstrapped")])
+            .await;
+
+        assert2::assert!(
+            matches!(&outcome, Ok(result) if *result == SubmitChangeResult::default()),
+            "{outcome:?}"
+        );
+        mock.stop();
     }
 
     #[test]

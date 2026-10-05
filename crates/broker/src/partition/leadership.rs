@@ -7,7 +7,10 @@ use std::sync::{Arc, atomic::Ordering};
 
 use krabka_log::Log;
 
-use crate::{error::BrokerError, partition::Partition};
+use crate::{error::BrokerError, partition::Partition, producer_state::ProducerState};
+
+#[cfg(test)]
+mod promotion_producer_state;
 
 /// `Partition.makeLeader`'s `leaderLog.assignEpochStartOffset(leaderEpoch,
 /// leaderLog.logEndOffset)`.
@@ -149,12 +152,27 @@ impl Partition {
     /// restart, whose materialization already installed this target. That is
     /// where Kafka's fresh `Partition` object sees a new leader epoch too.
     ///
+    /// A changed target also replaces this partition's entries in
+    /// `producer_state` with the producer state of the log, before the role is
+    /// published. Kafka keeps one producer state per log, and
+    /// `UnifiedLog.appendAsFollower` updates it for each batch that a follower
+    /// replicates. A new leader's `ProducerStateEntry.findDuplicateBatch` thus
+    /// sees the last five batches of each producer up to the log end, and
+    /// answers a retry of a replicated batch as a duplicate. The produce path
+    /// reads only `producer_state`, and a follower does not add its replicated
+    /// data batches there. The log does keep them, as Kafka's producer state
+    /// does, so the promotion copies them from the log. Without the copy, a new
+    /// leader would append a retry a second time, and a broker that leads again
+    /// would refuse the next sequence as out of order against its previous
+    /// term.
+    ///
     /// # Errors
     /// Returns the checkpoint's error when the epoch cannot be recorded. A
     /// changed target is then not published, as a failed diskless promotion
     /// is not.
     pub(crate) async fn install_local_leadership(
         &self,
+        producer_state: &ProducerState,
         topic_id: Option<uuid::Uuid>,
         local_node: u64,
         epoch: i32,
@@ -180,14 +198,19 @@ impl Partition {
             // installed and recorded, and recording this one would rewind it.
             return Ok(());
         }
+        // The write guard keeps every follower append and every produce out
+        // of the log, so the producer state read here is the state at the log
+        // end where the new epoch starts.
         let prepared = {
             let mut log = self
                 .log
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            assign_leader_epoch_start(&mut log, epoch)
+            assign_leader_epoch_start(&mut log, epoch).map(|()| log.recovered_producers())
         };
-        prepared?;
+        producer_state
+            .rebuild_from_snapshot(&self.topic, self.index, prepared?)
+            .await;
         self.publish_replication_target(target, topic_id, local_node, epoch)
             .await;
         Ok(())
@@ -522,7 +545,7 @@ mod tests {
                     Write(epoch) => append_at_epoch(&partition, epoch),
                     Lead(epoch) => {
                         partition
-                            .install_local_leadership(None, 1, epoch)
+                            .install_local_leadership(&ProducerState::new(), None, 1, epoch)
                             .await
                             .expect("promote");
                         led = Some(epoch);
@@ -554,7 +577,7 @@ mod tests {
         assert!(epoch_history(&partition) == [(0, 0)]);
 
         partition
-            .install_local_leadership(topic_id, 1, 6)
+            .install_local_leadership(&ProducerState::new(), topic_id, 1, 6)
             .await
             .expect("record epoch");
 
@@ -567,12 +590,12 @@ mod tests {
         let topic_id = Some(uuid::Uuid::new_v4());
         append_at_epoch(&partition, 0);
         partition
-            .install_local_leadership(topic_id, 1, 7)
+            .install_local_leadership(&ProducerState::new(), topic_id, 1, 7)
             .await
             .expect("promote to 7");
 
         partition
-            .install_local_leadership(topic_id, 1, 6)
+            .install_local_leadership(&ProducerState::new(), topic_id, 1, 6)
             .await
             .expect("a stale reconcile is a no-op");
 
@@ -610,7 +633,9 @@ mod tests {
             .expect("log mutex")
             .test_set_io(Arc::new(EpochCheckpointFull));
 
-        let result = partition.install_local_leadership(None, 1, 5).await;
+        let result = partition
+            .install_local_leadership(&ProducerState::new(), None, 1, 5)
+            .await;
 
         assert!(let Err(BrokerError::Log(_)) = result);
         assert!(epoch_history(&partition).is_empty());

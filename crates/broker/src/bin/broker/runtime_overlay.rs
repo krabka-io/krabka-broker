@@ -200,6 +200,10 @@ impl RuntimeArgs {
             share_group_max_record_lock_duration,
             streams_group_session_timeout,
             streams_group_heartbeat_interval,
+            streams_group_min_session_timeout,
+            streams_group_max_session_timeout,
+            streams_group_min_heartbeat_interval,
+            streams_group_max_heartbeat_interval,
             streams_group_task_offset_interval,
         );
         copy_refined_runtime!(self, runtime, share_group_max_size, streams_group_max_size);
@@ -256,6 +260,11 @@ impl Args {
             metadata_max_snapshot_interval,
             metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max,
+            metadata_log_segment_bytes,
+            metadata_log_segment_roll_interval,
+            metadata_max_retention_bytes,
+            metadata_max_retention,
+            metadata_max_idle_interval,
             txn_abort_cleanup_interval,
             txn_id_expiration,
             txn_id_expiration_cleanup_interval,

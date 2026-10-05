@@ -65,7 +65,7 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_clie
     // quorum-state), NOT bare directory presence.  The segment dir is created
     // before the first raft commit, so dir-existence would re-bootstrap a node
     // killed mid-election instead of letting it rejoin correctly.
-    let metadata_dir = dir.join("__cluster_metadata");
+    let metadata_dir = krabka_raft::metadata_partition_dir(dir);
     if krabka_raft::metadata_log_nonempty(&metadata_dir) {
         config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     }

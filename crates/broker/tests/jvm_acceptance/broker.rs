@@ -104,7 +104,7 @@ async fn start_host_broker_in_with(
 /// latter, and asking for `Bootstrap` on top of a non-empty metadata log is
 /// rejected at controller start.
 fn bootstrap_mode(dir: &Path) -> BootstrapMode {
-    if krabka_raft::metadata_log_nonempty(&dir.join("__cluster_metadata")) {
+    if krabka_raft::metadata_log_nonempty(&krabka_raft::metadata_partition_dir(dir)) {
         BootstrapMode::Rejoin
     } else {
         BootstrapMode::Bootstrap

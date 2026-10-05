@@ -34,8 +34,13 @@ pub(super) async fn recover_storage_and_groups(
     diskless_runtime: &DisklessRuntime,
 ) -> Result<StorageStartup, BrokerError> {
     let log_dirs = config.all_log_dirs();
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&log_dirs);
-    let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&log_dirs);
+    let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&log_dirs)
+        .with_metadata_dir(config.metadata_dir());
+    let log_dir_ids = crate::log_dir_id::LogDirIds::provision(
+        &log_dirs,
+        config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
+        config.node_id,
+    );
     let partitions = Arc::new(
         PartitionRegistry::with_stamp_source(config.stamp_source.as_ref().map(Arc::clone))
             .with_cordoned_log_dirs(crate::cordoned_log_dirs::CordonedLogDirs::new(
@@ -150,6 +155,7 @@ pub(super) async fn recover_storage_and_groups(
         crate::coordinator::unified::offsets_log::ProductionOffsetsLog::new(
             Arc::clone(&partitions),
             Arc::clone(controller),
+            config.node_id,
         ),
     );
     let mut consumer_group = config.next_gen_consumer_group.as_ref().clone();

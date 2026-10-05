@@ -244,11 +244,18 @@ impl Log {
             batch.last_offset_delta,
             base_offset,
         )?;
-        let (segment_size, segment_roll_interval, index_interval, flush_on_append) = {
+        let (
+            segment_size,
+            segment_roll_interval,
+            segment_index_size,
+            index_interval,
+            flush_on_append,
+        ) = {
             let cfg = self.config.read().unwrap();
             (
                 cfg.segment_size,
                 cfg.segment_roll_interval,
+                cfg.segment_index_size,
                 cfg.index_interval,
                 cfg.flush_on_append,
             )
@@ -264,6 +271,7 @@ impl Log {
             batch.max_timestamp,
             segment_size,
             segment_roll_interval,
+            segment_index_size,
         ) {
             self.roll_active_segment()?;
         }

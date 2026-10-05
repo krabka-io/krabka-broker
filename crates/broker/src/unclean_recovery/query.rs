@@ -48,9 +48,7 @@ pub(super) struct ReplicaQuery {
 /// Only when [`krabka_client_core::Connection::advertised_api_range`] returns
 /// `None` does it fall back to
 /// [`krabka_client_core::Connection::raw_request`] at `MIN_VERSION`, the
-/// floor every krabka build has dispatched and ever will -- see
-/// `isr_maintenance::alter_partition::send_alter_partition_to`, which follows
-/// the same pattern.
+/// floor every krabka build has dispatched and ever will.
 pub(super) async fn query_replica(
     client: &InterBrokerClient,
     query: ReplicaQuery,

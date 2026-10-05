@@ -4,10 +4,12 @@
 //! Both the inter-broker `WriteTxnMarkers` handler and `EndTxn`'s direct local
 //! path go through this module rather than calling the partition themselves,
 //! so that the durable marker and the in-memory publication can never drift
-//! apart.
+//! apart. Both reach it through [`super::leader`], which checks the leadership
+//! of the partition first and waits for the marker to commit after.
 
 use std::{collections::HashMap, sync::Arc};
 
+use krabka_log::Offset;
 use krabka_verified::transaction::{
     TransactionMarkerMaterializationDecision as Decision, TransactionMarkerPartitionState,
     TransactionMarkerRequest,
@@ -38,12 +40,22 @@ use crate::{
 /// the transaction made durable. An abort publishes nothing, so a caller with
 /// no coordinator — and therefore no group actors holding pending marks — has
 /// nothing to resolve.
-pub(crate) async fn append_marker_and_materialize(
+///
+/// The function does not wait for the marker to commit. It returns the offset
+/// that the high watermark has to reach for that: the offset after the marker
+/// it appended. An exact retry of a marker that the log already holds appends
+/// nothing, and returns the log end offset, which is past that marker. The
+/// marker can still be uncommitted, so the retry waits for it as the first
+/// write did.
+///
+/// The caller holds the transition read guard of the partition, so the leader
+/// epoch that the marker carries is the epoch the caller admitted it under.
+pub(super) async fn append_marker_and_materialize(
     partition: &crate::partition::Partition,
     group_coordinator: Option<&Arc<GroupCoordinator>>,
     topic: &str,
     marker: MarkerAppend,
-) -> Result<(), BrokerError> {
+) -> Result<Offset, BrokerError> {
     let MarkerAppend {
         producer_id,
         producer_epoch,
@@ -127,7 +139,7 @@ pub(crate) async fn append_marker_and_materialize(
                 requested: coordinator_epoch,
             });
         }
-        Decision::Retry => return Ok(()),
+        Decision::Retry => return Ok(partition.log_end_offset()),
         Decision::AppendAndPublishOffsets | Decision::AppendWithoutOffsetPublication => {}
     }
     let pending_offsets = if topic == OFFSETS_TOPIC {
@@ -211,7 +223,7 @@ pub(crate) async fn append_marker_and_materialize(
         .await?;
         materialization.remove(&producer_id);
     }
-    Ok(())
+    Ok(marker_offset + 1)
 }
 
 /// The offset of the control batch of `producer_id` at `producer_epoch` that
@@ -504,7 +516,7 @@ mod tests {
             .await;
             let answered = result.map_or_else(
                 |error| crate::codes::from_broker_error(&error),
-                |()| crate::codes::NONE,
+                |_| crate::codes::NONE,
             );
             actual.push((label, answered, part.log_end_offset() != before));
             expected.push((label, code, appended));

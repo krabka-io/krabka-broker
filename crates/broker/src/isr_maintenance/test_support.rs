@@ -18,6 +18,12 @@ use krabka_raft::NodeId;
 use crate::{partition::Partition, test_support::FakeMetadataSource};
 
 pub(super) fn reg(id: NodeId) -> MetadataRecord {
+    reg_at(id, &format!("b{id}"), 9092)
+}
+
+/// The registration of broker `id`, with epoch `id`, that advertises
+/// `host:port`.
+pub(super) fn reg_at(id: NodeId, host: &str, port: u16) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
         fenced: false,
         in_controlled_shutdown: false,
@@ -25,8 +31,8 @@ pub(super) fn reg(id: NodeId) -> MetadataRecord {
         node_id: id,
         broker_epoch: i64::try_from(id.0).unwrap(),
         incarnation_id: uuid::Uuid::nil(),
-        host: format!("b{id}"),
-        port: 9092,
+        host: host.to_string(),
+        port,
         rack: None,
         log_dirs: vec![],
         endpoints: vec![],

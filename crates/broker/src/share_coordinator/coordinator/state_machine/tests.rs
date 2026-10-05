@@ -616,3 +616,118 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
     check!(state.state_batches == vec![batch(12, 39)]);
     check!(state.updates_since_snapshot == 1);
 }
+
+/// One share-state operation on the key `("g", TOPIC, 0)`.
+#[derive(Debug, Clone, Copy)]
+enum Op {
+    Initialize,
+    Write,
+    /// A read with a newer leader epoch, which writes that epoch.
+    Read,
+    Delete,
+}
+
+/// What happens to the state partition of the key around an operation.
+#[derive(Debug, Clone, Copy)]
+enum Fault {
+    /// A follower in the ISR does not fetch, so no record commits.
+    NoCommit,
+    /// The partition moves to broker 2 while the operation waits.
+    MovesAway,
+    /// The partition leads on this broker at a newer epoch before the
+    /// operation starts: the term of the coordinator has ended.
+    NewerEpoch,
+}
+
+/// An operation answers only when its record commits under the term of the
+/// coordinator, as Kafka's `CoordinatorRuntime` completes a write. A record
+/// that does not commit in `share.coordinator.write.timeout.ms` answers
+/// `COORDINATOR_NOT_AVAILABLE`. A term that ends first answers
+/// `NOT_COORDINATOR`, and a coordinator whose term has ended appends nothing.
+#[tokio::test]
+async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
+    let timed_out = ShareStateError::Operation {
+        code: codes::COORDINATOR_NOT_AVAILABLE,
+        message: message::REQUEST_TIMED_OUT,
+    };
+    let not_coordinator = ShareStateError::Operation {
+        code: codes::NOT_COORDINATOR,
+        message: message::NOT_COORDINATOR,
+    };
+    // (fault, the answer of every operation, records in the log afterwards)
+    let faults = [
+        (Fault::NoCommit, timed_out, 2),
+        (Fault::MovesAway, not_coordinator, 2),
+        (Fault::NewerEpoch, not_coordinator, 1),
+    ];
+    for (fault, expected, logged) in faults {
+        for op in [Op::Initialize, Op::Write, Op::Read, Op::Delete] {
+            let dir = tempdir().unwrap();
+            let timeout = match fault {
+                Fault::NoCommit => std::time::Duration::from_millis(100),
+                Fault::MovesAway | Fault::NewerEpoch => std::time::Duration::from_secs(30),
+            };
+            let config = ShareCoordinatorConfig {
+                write_timeout: timeout,
+                ..ShareCoordinatorConfig::default()
+            };
+            let (coord, reg, _clock) = configured_coordinator(dir.path(), config);
+            lead_all(&coord).await;
+            let image = image_with_topic(TOPIC, 1);
+            coord
+                .initialize(&image, "g", TOPIC, 0, 1, Offset(0))
+                .await
+                .unwrap();
+            let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+            let part = reg
+                .get(crate::share_coordinator::bootstrap::TOPIC, state_partition)
+                .expect("the state partition is open");
+            let both = [krabka_raft::NodeId(1), krabka_raft::NodeId(2)];
+            match fault {
+                Fault::NoCommit | Fault::MovesAway => {
+                    part.replica_state.lock().await.install_isr(
+                        &both,
+                        &both,
+                        krabka_raft::NodeId(1),
+                        std::time::Instant::now(),
+                    );
+                }
+                Fault::NewerEpoch => part.install_leader_change(1, 1).await,
+            }
+            let mover = matches!(fault, Fault::MovesAway).then(|| {
+                let part = std::sync::Arc::clone(&part);
+                tokio::spawn(async move {
+                    // intentional: the operation has to wait before the move.
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    part.install_leader_change(2, 1).await;
+                })
+            });
+
+            let answer = match op {
+                Op::Initialize => coord.initialize(&image, "g", TOPIC, 0, 2, Offset(5)).await,
+                Op::Write => {
+                    coord
+                        .write(
+                            &image,
+                            "g",
+                            TOPIC,
+                            0,
+                            share_write((1, 0), (0, 0), vec![batch(0, 9)]),
+                        )
+                        .await
+                }
+                Op::Read => coord.read(&image, "g", TOPIC, 0, 1).await.map(|_| ()),
+                Op::Delete => coord.delete(&image, "g", TOPIC, 0).await,
+            };
+            if let Some(mover) = mover {
+                mover.await.expect("the partition moves");
+            }
+
+            check!(answer == Err(expected), "{op:?} under {fault:?}");
+            check!(
+                logged_records(&coord, state_partition).len() == logged,
+                "{op:?} under {fault:?}"
+            );
+        }
+    }
+}

@@ -265,10 +265,17 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         topic: TOPIC.into(),
         partition: data_partition,
     };
+    // `get` does not create the series: only a sample of an initialized
+    // partition does. The group coordinator records the partition as
+    // initialized only when its write to `__consumer_offsets` commits, after
+    // the share state commits. The follower stays up until that point.
     cluster[coordinator_index]
         .0
         .wait_for_metrics("initial RF=3 backlog sample", |metrics| {
-            metrics.share_group_backlog.get_or_create(&label).get() == 0
+            metrics
+                .share_group_backlog
+                .get(&label)
+                .is_some_and(|backlog| backlog.get() == 0)
         })
         .await;
 

@@ -168,6 +168,12 @@ impl QuorumStateMachine {
 
     /// Complete removal of the local leader after the reduced voter set has
     /// committed. Fetch serving continues until the engine invokes this edge.
+    ///
+    /// The removed leader becomes a discovering observer and arms its fetch
+    /// timer. No later leader announces itself to a node outside the voter
+    /// set, so the Fetch that the timer sends is how this node finds the new
+    /// leader. Kafka's removed leader also goes on as an observer of its
+    /// successor, and `DescribeQuorum` on that successor lists it.
     pub fn finish_local_leader_removal(&mut self, now: SimInstant) -> Vec<Action> {
         if self.is_voter() || !self.role.is_leader() {
             return Vec::new();
@@ -187,6 +193,10 @@ impl QuorumStateMachine {
             },
             Action::PersistQuorumState,
             Action::TransitionedTo(self.role.name()),
+            Action::ResetTimer {
+                kind: TimerKind::Fetch,
+                deadline: fetch_deadline,
+            },
         ]
     }
 }
@@ -277,18 +287,34 @@ mod tests {
         check!(!m.is_voter());
         check!(m.role().is_leader());
 
-        // Now finish_local_leader_removal succeeds: transitions to Observer, sends EndQuorumEpoch
+        // Now finish_local_leader_removal succeeds: it hands the epoch to the
+        // remaining voters and becomes a discovering observer whose fetch
+        // timer is armed, so its next Fetch finds the new leader.
+        let epoch = m.quorum_state().leader_epoch;
+        let preferred_successors = m.preferred_successors();
         let actions = m.finish_local_leader_removal(SimInstant(50));
-        check!(matches!(m.role(), Role::Observer { .. }));
+        let fetch_deadline = SimInstant(50).saturating_add_ms(m.election_timeout_ms);
         check!(
-            actions
-                .iter()
-                .any(|a| matches!(a, Action::SendEndQuorumEpoch { .. }))
-        );
-        check!(
-            actions
-                .iter()
-                .any(|a| matches!(a, Action::PersistQuorumState))
+            (m.role().clone(), m.quorum_state().leader_id, actions)
+                == (
+                    Role::Observer {
+                        leader_id: None,
+                        fetch_deadline,
+                    },
+                    None,
+                    vec![
+                        Action::SendEndQuorumEpoch {
+                            epoch,
+                            preferred_successors,
+                        },
+                        Action::PersistQuorumState,
+                        Action::TransitionedTo("Observer"),
+                        Action::ResetTimer {
+                            kind: TimerKind::Fetch,
+                            deadline: fetch_deadline,
+                        },
+                    ]
+                )
         );
     }
 

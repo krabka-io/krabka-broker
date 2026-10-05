@@ -290,7 +290,8 @@ mod tests {
     }
 
     /// Trunk's v3 (KIP-1331) gives each group result a nullable
-    /// `ErrorMessage`. krabka has no topology description plugin, so it never
+    /// `ErrorMessage`. The only topology description plugin krabka runs is
+    /// Kafka's in-memory one, which cannot fail a delete, so krabka never
     /// answers `GROUP_DELETION_FAILED` and the message is always null: the
     /// v3 answer is the v2 answer with one null string per result.
     #[tokio::test]

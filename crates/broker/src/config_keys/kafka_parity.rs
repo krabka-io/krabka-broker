@@ -475,7 +475,6 @@ fn an_inert_key_says_so_where_an_operator_reads_it() {
         "compression.gzip.level",
         "compression.lz4.level",
         "compression.zstd.level",
-        "segment.index.bytes",
         "segment.jitter.ms",
         "file.delete.delay.ms",
         "flush.messages",

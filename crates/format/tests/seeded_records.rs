@@ -62,7 +62,8 @@ fn restored_topic(name: &str, topic_id: u128, partitions: i32) -> Vec<MetadataRe
     records
 }
 
-/// Formats `log_dir` with a pinned cluster id, `flags`, and `extra` seeded.
+/// Formats `log_dir` as node 1 with a pinned cluster id, `flags`, and `extra`
+/// seeded.
 async fn format(log_dir: &Path, flags: &[&str], extra: Vec<MetadataRecord>) {
     let mut argv = vec![
         "krabka-format".to_string(),
@@ -70,6 +71,8 @@ async fn format(log_dir: &Path, flags: &[&str], extra: Vec<MetadataRecord>) {
         log_dir.display().to_string(),
         "--cluster-id".to_string(),
         CLUSTER_ID.to_string(),
+        "--node-id".to_string(),
+        "1".to_string(),
     ];
     argv.extend(flags.iter().map(|flag| (*flag).to_string()));
     let code = krabka_format::run_from_args_with_records(argv, extra).await;
@@ -82,8 +85,7 @@ fn bootstrap_records(log_dir: &Path) -> Vec<MetadataRecord> {
 
 fn offset_zero_checkpoint(log_dir: &Path) -> PathBuf {
     log_dir
-        .join("__cluster_metadata")
-        .join("@metadata-0")
+        .join("__cluster_metadata-0")
         .join("00000000000000000000-0000000000.checkpoint")
 }
 
@@ -211,7 +213,8 @@ async fn a_dynamic_format_seeds_the_offset_zero_checkpoint() {
 
 /// `run` seeds nothing, so it has to write what `run_with_records` writes for an
 /// empty seed list. Every generated identity is pinned here, which leaves the
-/// two outputs comparable byte for byte.
+/// two outputs comparable byte for byte, except for the time that
+/// `meta.properties` records: that file is compared by its ids.
 #[tokio::test]
 async fn run_writes_what_run_with_records_writes_for_no_extras() {
     let parent = tempfile::tempdir().unwrap();
@@ -226,6 +229,8 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
             CLUSTER_ID.to_string(),
             "--directory-id".to_string(),
             DIRECTORY_ID.to_string(),
+            "--node-id".to_string(),
+            "1".to_string(),
             "--no-initial-controllers".to_string(),
         ]
     };
@@ -239,11 +244,12 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
 
     check!(run_code == 0);
     check!(seam_code == 0);
-    for name in [
-        "meta.properties.json",
-        "bootstrap.json",
-        "bootstrap.records.bin",
-    ] {
+    let meta_from_run = krabka_format::MetaProperties::read(&via_run).expect("run output");
+    let meta_from_seam =
+        krabka_format::MetaProperties::read(&via_seam).expect("run_with_records output");
+    check!(meta_from_run.is_some());
+    check!(meta_from_run == meta_from_seam);
+    for name in ["bootstrap.json", "bootstrap.records.bin"] {
         let from_run = std::fs::read(via_run.join(name)).expect("run output");
         let from_seam = std::fs::read(via_seam.join(name)).expect("run_with_records output");
         check!(from_run == from_seam, "{name} differs");

@@ -51,7 +51,7 @@ pub use self::{
     compaction::CompactionContext,
     control::BARRIER_CONTROL_TYPE,
     read::{RawRead, ReadOutput},
-    tiering::SegmentExport,
+    tiering::{ActiveSegmentExport, SegmentExport},
     verbatim::VerbatimBatch,
     verification::{TransactionAppendRefusal, TransactionalBatch, VerificationGuard},
 };

@@ -6,8 +6,9 @@
 //!
 //! 1. Verify coordinator-ness, pid, epoch.
 //! 2. `Ongoing` → `PrepareCommit` (or `PrepareAbort`); persist.
-//! 3. Fan out `WriteTxnMarkers` to every involved partition's leader:
-//!    - **local** leader  → `Partition::produce_batch`.
+//! 3. Fan out `WriteTxnMarkers` to every involved partition's leader, and
+//!    wait until each marker is committed on its partition:
+//!    - **local** leader  → an append as the partition's leader.
 //!    - **remote** leader → `WriteTxnMarkersRequest` over the shared
 //!      `InterBrokerClient` (runs inter-broker TLS / SASL as the listener demands).
 //! 4. `PrepareCommit` → `CompleteCommit` (or `PrepareAbort` → `CompleteAbort`); persist.
@@ -54,7 +55,7 @@ pub(crate) use self::producer_identity::{
     prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
 };
 pub(crate) use self::{
-    markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
+    markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers, write_local_markers},
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
         next_recovery_producer_identity, prepare_server_abort_identities,

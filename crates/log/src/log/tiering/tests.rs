@@ -501,3 +501,108 @@ fn a_delete_records_floor_under_the_local_segments_survives_a_reopen() {
         "the band between the two is the archive's to serve"
     );
 }
+
+// What a log holds after `Log::roll`: whether it rolled, the sealed
+// segments as `(base, last)` offset ranges, the active segment's base and
+// size, and the log end.
+#[derive(Debug, PartialEq)]
+struct AfterRoll {
+    rolled: bool,
+    sealed: Vec<(Offset, Offset)>,
+    active: Option<(Offset, ByteSize)>,
+    log_end: Offset,
+}
+
+fn roll_and_describe(log: &mut Log) -> AfterRoll {
+    let rolled = log.roll().unwrap();
+    AfterRoll {
+        rolled,
+        sealed: log
+            .tierable_segments()
+            .iter()
+            .map(|export| (export.base_offset, export.last_offset))
+            .collect(),
+        active: log
+            .active_segment_export()
+            .map(|active| (active.base_offset, active.size)),
+        log_end: log.log_end_offset(),
+    }
+}
+
+// Kafka's `UnifiedLog.roll()` as tiered local retention calls it: a roll
+// seals the active segment's records and opens an empty segment at the log
+// end, and a second roll over that empty segment does nothing, because there
+// is nothing in it to copy and the new segment would open at the same base.
+#[test]
+fn roll_seals_the_active_records_and_never_rolls_an_empty_segment() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+    check!(
+        roll_and_describe(&mut log)
+            == AfterRoll {
+                rolled: false,
+                sealed: vec![],
+                active: Some((Offset(0), ByteSize::ZERO)),
+                log_end: Offset(0),
+            },
+        "an empty log has nothing to roll"
+    );
+
+    log.append(&mut sample_batch(3)).unwrap();
+    check!(
+        roll_and_describe(&mut log)
+            == AfterRoll {
+                rolled: true,
+                sealed: vec![(Offset(0), Offset(2))],
+                active: Some((Offset(3), ByteSize::ZERO)),
+                log_end: Offset(3),
+            },
+        "the three records move into a sealed segment"
+    );
+
+    check!(
+        roll_and_describe(&mut log)
+            == AfterRoll {
+                rolled: false,
+                sealed: vec![(Offset(0), Offset(2))],
+                active: Some((Offset(3), ByteSize::ZERO)),
+                log_end: Offset(3),
+            },
+        "the fresh segment is empty, so a second roll does nothing"
+    );
+}
+
+// The active segment's export carries Kafka's `largestTimestamp()`: the
+// newest record timestamp, or the `.log` file's modification time when no
+// record carries one.
+#[test]
+fn active_segment_export_ages_the_segment_the_way_retention_does() {
+    for (name, max_timestamp, ages_by_file) in [
+        ("a stamped record", 5_000, false),
+        ("no record timestamp", -1, true),
+    ] {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut batch = sample_batch(2);
+        batch.max_timestamp = max_timestamp;
+        log.append(&mut batch).unwrap();
+        let size = log.size();
+        let last_modified_ms = last_modified_ms(&name::log_path(dir.path(), 0));
+
+        check!(
+            log.active_segment_export()
+                == Some(ActiveSegmentExport {
+                    base_offset: Offset(0),
+                    max_timestamp: if ages_by_file {
+                        last_modified_ms
+                    } else {
+                        max_timestamp
+                    },
+                    last_modified_ms,
+                    size,
+                }),
+            "{name}"
+        );
+    }
+}

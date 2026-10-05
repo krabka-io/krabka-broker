@@ -52,6 +52,22 @@ pub(super) enum RowAction {
     /// Keep following the partition, but hold the whole round back first, so a
     /// persistent error does not hot-spin the fetch loop.
     Backoff(Time),
+    /// Stop following the partition, because an append to it failed on a log
+    /// directory that is now offline. The supervisor does not follow it again,
+    /// as Kafka's `ReplicaManager.handleLogDirFailure` removes the fetcher of
+    /// every partition in a failed directory.
+    Offline,
+}
+
+/// The action for a partition whose append just failed: [`RowAction::Offline`]
+/// when the failure took its log directory offline, and `None` otherwise.
+fn offline_after_failed_append(
+    part: &crate::partition::Partition,
+    cfg: &Config,
+) -> Option<RowAction> {
+    cfg.log_dir_status
+        .is_offline(&part.log_dir.load())
+        .then_some(RowAction::Offline)
 }
 
 /// Raise this follower's log start offset to the leader's, as Kafka's
@@ -215,8 +231,9 @@ pub(super) async fn handle_partition_response(
             };
             match part_resp.records.take() {
                 Some(RecordsPayload::Raw(bytes)) => {
-                    if replicate_raw_batches(&part, cfg, bytes).await == RowAction::Drop {
-                        return RowAction::Drop;
+                    let action = replicate_raw_batches(&part, cfg, bytes).await;
+                    if action != RowAction::Continue {
+                        return action;
                     }
                 }
                 Some(RecordsPayload::V2(batches)) => {
@@ -249,6 +266,9 @@ pub(super) async fn handle_partition_response(
                         if let Err(e) = part.replicate_batch(batch).await {
                             warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
                             "replicator: replicate_batch failed");
+                            if let Some(offline) = offline_after_failed_append(&part, cfg) {
+                                return offline;
+                            }
                             break;
                         }
                         record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
@@ -389,6 +409,9 @@ async fn replicate_raw_batches(
         if let Err(error) = result {
             warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
                 "replicator: append failed");
+            if let Some(offline) = offline_after_failed_append(part, cfg) {
+                return offline;
+            }
             break;
         }
         record_replicated(cfg, u64::try_from(batch_len).unwrap_or(0));
@@ -922,6 +945,80 @@ mod tests {
         let retry = respond(1);
         assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         assert!(part.log_end_offset() == Offset(2));
+    }
+
+    /// A disk that refuses every write to a segment's `.log` file.
+    #[derive(Debug)]
+    struct LogWritesFail;
+
+    impl krabka_log::LogIo for LogWritesFail {
+        fn write(&self, _file: &std::fs::File, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
+
+        fn write_vectored(
+            &self,
+            _file: &std::fs::File,
+            _bufs: &[std::io::IoSlice<'_>],
+        ) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
+    }
+
+    /// Kafka's `ReplicaManager.handleLogDirFailure`: an append that fails on
+    /// the partition's log directory takes the directory offline, and the
+    /// fetcher stops following the partition. It does not fetch the records
+    /// again only to fail on them again. Decoded and raw records take the
+    /// same path.
+    #[tokio::test]
+    async fn an_append_that_fails_on_its_log_directory_stops_following_the_partition() {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for raw in [false, true] {
+            let (cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
+            ensure_local_partition(&cfg).unwrap();
+            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            part.log
+                .lock()
+                .unwrap()
+                .test_set_io(Arc::new(LogWritesFail));
+            let mut batch = one_record_batch(0);
+            batch.partition_leader_epoch = cfg.leader_epoch.0;
+            let records = if raw {
+                let mut encoded = BytesMut::new();
+                batch.encode(&mut encoded).unwrap();
+                RecordsPayload::Raw(encoded.freeze())
+            } else {
+                RecordsPayload::V2(vec![batch])
+            };
+            let response = fetch_response(
+                TOPIC,
+                WIRE_TOPIC_ID,
+                PartitionData {
+                    partition_index: PARTITION,
+                    error_code: codes::NONE,
+                    records: Some(records),
+                    ..PartitionData::default()
+                },
+            );
+
+            let action = handle_response(response, &cfg, cfg.leader_epoch.0).await;
+
+            let offline: Vec<std::path::PathBuf> = cfg
+                .log_dir_status
+                .offline()
+                .into_iter()
+                .map(|(dir, _reason)| dir)
+                .collect();
+            actual.push((raw, action, offline, part.log_end_offset()));
+            expected.push((
+                raw,
+                RowAction::Offline,
+                vec![log_dir.path().to_path_buf()],
+                Offset(0),
+            ));
+        }
+        assert!(actual == expected);
     }
 
     /// A compacted leader's log has holes, so the batch after one starts past

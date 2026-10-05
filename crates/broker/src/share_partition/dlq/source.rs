@@ -2,9 +2,11 @@
 //! Kafka's `ShareGroupDLQRecordFetcher`.
 //!
 //! The share partition sits on the leader of the source partition, so the read
-//! is a local one. It is best effort. A record that cannot be read, or that
-//! cannot fit in the dead-letter topic, is not copied, and its dead-letter
-//! record has headers alone; the write is never held back for it.
+//! is a local one, or a read of the remote tier for an offset that only the
+//! tier holds (KIP-405), as Kafka's `LogReader.readAsync` reads it. It is best
+//! effort. A record that cannot be read, or that cannot fit in the dead-letter
+//! topic, is not copied, and its dead-letter record has headers alone; the
+//! write is never held back for it.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -12,10 +14,11 @@ use bytes::Buf as _;
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_log::Offset;
 use krabka_protocol::records::RecordBatch;
-use krabka_units::{ByteSize, mebibytes};
+use krabka_remote_storage::TopicIdPartition;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes};
 
 use super::record::SourceRecord;
-use crate::partition::Partition;
+use crate::{metrics::BrokerMetrics, partition::Partition, remote_reader::RemoteReader};
 
 /// The most bytes of one log read. Most dead-letter ranges are one record, so
 /// a larger read would be wasted. Kafka's `DLQ_MAX_FETCH_BYTES`.
@@ -113,9 +116,38 @@ impl Collector {
     }
 }
 
+/// The remote tier of a source partition, which serves the offsets below its
+/// local log start (KIP-405).
+pub(super) struct SourceTier<'a> {
+    pub(super) reader: &'a RemoteReader,
+    pub(super) metrics: &'a BrokerMetrics,
+    pub(super) tp: TopicIdPartition,
+}
+
 /// Reads the raw batches of `[first, last]` from the log of `partition`, off
-/// the reactor thread.
-async fn read_raw(partition: &Arc<Partition>, first: i64, last: i64) -> Option<bytes::Bytes> {
+/// the reactor thread, or from the remote tier when only the tier holds
+/// `first`. A remote read can return batches past `last`, and the collector
+/// leaves them out.
+async fn read_raw(
+    partition: &Arc<Partition>,
+    tier: Option<&SourceTier<'_>>,
+    first: i64,
+    last: i64,
+) -> Option<bytes::Bytes> {
+    if let Some(tier) = tier.filter(|_| RemoteReader::serves(partition, Offset(first))) {
+        let max_bytes = usize::try_from(MAX_FETCH.bytes_u64()).unwrap_or(usize::MAX);
+        return match tier
+            .reader
+            .read_partition(partition, &tier.tp, Offset(first), max_bytes, tier.metrics)
+            .await
+        {
+            Ok(read) => read,
+            Err(error) => {
+                tracing::warn!(%error, first, last, "dead-letter source remote read failed");
+                None
+            }
+        };
+    }
     let log = partition.log.clone();
     let read = crate::blocking::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
@@ -136,14 +168,16 @@ async fn read_raw(partition: &Arc<Partition>, first: i64, last: i64) -> Option<b
     }
 }
 
-/// Reads the records of `[first, last]` from the local `partition`, at most
-/// `budget` bytes of them, decompressing under `policy`.
+/// Reads the records of `[first, last]` from the local `partition`, or from
+/// its remote `tier` where only the tier holds them, at most `budget` bytes of
+/// them, decompressing under `policy`.
 ///
 /// It reads on until the range is covered, the budget is used, or a read finds
 /// nothing new. A partition that this broker does not hold, a failed read and
 /// a batch that does not decode all give up on the rest of the range.
 pub(super) async fn fetch(
     partition: Option<&Arc<Partition>>,
+    tier: Option<&SourceTier<'_>>,
     (first, last): (i64, i64),
     budget: usize,
     policy: RecordDecompressionPolicy,
@@ -154,7 +188,7 @@ pub(super) async fn fetch(
     };
     while !collector.stopped() {
         let before = collector.last_resolved;
-        let Some(mut raw) = read_raw(partition, before + 1, last).await else {
+        let Some(mut raw) = read_raw(partition, tier, before + 1, last).await else {
             return collector.give_up();
         };
         while raw.has_remaining() && !collector.stopped() {
@@ -227,6 +261,7 @@ mod tests {
 
         let fetched = fetch(
             Some(&part),
+            None,
             (1, 3),
             1 << 20,
             RecordDecompressionPolicy::default(),
@@ -263,6 +298,7 @@ mod tests {
         // Room for two records: the third is left for the next round.
         let two = fetch(
             Some(&part),
+            None,
             (0, 4),
             one * 2 + 1,
             RecordDecompressionPolicy::default(),
@@ -271,6 +307,7 @@ mod tests {
         // Room for none: each record is too big on its own.
         let none = fetch(
             Some(&part),
+            None,
             (0, 4),
             one - 1,
             RecordDecompressionPolicy::default(),
@@ -298,9 +335,17 @@ mod tests {
     async fn an_unreadable_range_gives_up_on_the_remainder() {
         let (_dir, part) = partition().await;
 
-        let missing = fetch(None, (0, 2), 1 << 20, RecordDecompressionPolicy::default()).await;
+        let missing = fetch(
+            None,
+            None,
+            (0, 2),
+            1 << 20,
+            RecordDecompressionPolicy::default(),
+        )
+        .await;
         let past_the_end = fetch(
             Some(&part),
+            None,
             (9, 10),
             1 << 20,
             RecordDecompressionPolicy::default(),

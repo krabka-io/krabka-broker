@@ -22,6 +22,7 @@ use super::{
         AcquireMode, AcquireRequest, acquire_read_records, merge_batches,
         pending_activation_ranges, read_budget, unreadable_batch_ranges,
     },
+    tiered::TieredSource,
 };
 use crate::{
     broker::Broker,
@@ -183,14 +184,21 @@ async fn grow_readable_window(
     max_record_locks: i32,
     read_committed: bool,
 ) -> Result<(), BrokerError> {
-    // The scan floor must never sit below the log's own start offset: an
-    // `Acquired` batch below a moved log start keeps `state.start_offset`
-    // (the SPSO) pinned there until its lock expires (see
-    // `AcquisitionState::advance_past_log_start`), but the log itself no
+    // The scan floor must never sit below the first offset the local log
+    // holds. An `Acquired` batch below a moved log start keeps
+    // `state.start_offset` (the SPSO) pinned there until its lock expires
+    // (see `AcquisitionState::advance_past_log_start`), but the log itself no
     // longer has that range to read. Without this clamp, every pass would
     // re-scan the now-deleted prefix and hit `LogError::OffsetTooLow` again,
-    // even though `Available` offsets exist at or above the log start.
-    let log_start = partition.log_start_offset();
+    // even though `Available` offsets exist at or above the log start. On a
+    // tiered partition (KIP-405) the offsets below the local log start are in
+    // the remote tier, and the acquire step classifies them from the batches
+    // it reads there.
+    let log_start = partition
+        .log
+        .lock()
+        .expect("log mutex poisoned")
+        .local_log_start_offset();
     let mut scan_from = state.start_offset.max(log_start);
     loop {
         let end_before = state.end_offset;
@@ -226,6 +234,7 @@ struct GrowAndAcquireArgs<'a> {
     remaining_records: i32,
     mode: AcquireMode,
     now: Instant,
+    tier: Option<TieredSource<'a>>,
 }
 
 /// Grows the readable window, promotes due deferrals, and acquires records
@@ -251,6 +260,7 @@ async fn grow_and_acquire(
         remaining_records,
         mode,
         now,
+        tier,
     } = args;
     grow_readable_window(
         st,
@@ -284,6 +294,7 @@ async fn grow_and_acquire(
         lock_duration: settings.record_lock_duration,
         max_attempts: settings.delivery_count_limit,
         mode,
+        tier,
     };
     acquire_read_records(out, part, st, &request).await
 }
@@ -455,6 +466,20 @@ async fn acquire_pass(
         let read_max_bytes = read_budget(p.partition_max_bytes, share)
             .min(i32::try_from(response_left).unwrap_or(i32::MAX));
         let min_one_batch = total.bytes == 0;
+        let tier = broker
+            .remote_reader
+            .as_deref()
+            .zip(p.topic_name.as_ref())
+            .map(|(reader, topic)| TieredSource {
+                reader,
+                metrics: &broker.metrics,
+                tp: krabka_remote_storage::TopicIdPartition::new(
+                    p.topic_id,
+                    topic.clone(),
+                    p.partition_index,
+                ),
+                read_committed,
+            });
         let grow_and_acquire_args = || GrowAndAcquireArgs {
             part: &part,
             upper,
@@ -465,6 +490,7 @@ async fn acquire_pass(
             remaining_records,
             mode,
             now,
+            tier: tier.clone(),
         };
         // This pass's records land in `fresh`, then join what earlier passes
         // put in the row.

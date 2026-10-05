@@ -345,7 +345,7 @@ pub(crate) async fn handle(
             == crate::api_catalog::UnstableApiVersions::Enabled;
     let appended = match append_txn_batch(
         &req,
-        &partitions,
+        (&partitions, &*broker.controller, broker.config.node_id),
         offsets_partition,
         now_ms,
         (&denied_topics, &unknown_rows),
@@ -355,7 +355,7 @@ pub(crate) async fn handle(
     {
         Ok(appended) => appended,
         Err(code) => {
-            // Nothing is durable, so the reservation goes. An actor that
+            // Nothing reached the log, so the reservation goes. An actor that
             // stopped meanwhile took it with it.
             let _ = reserve_offsets(&handle, req.producer_id, reserved, false).await;
             return respond(code);
@@ -365,23 +365,42 @@ pub(crate) async fn handle(
     // 4. KIP-447: mark those offsets pending on the group actor, so that an
     //    `OffsetFetch` with `require_stable = true` answers
     //    UNSTABLE_OFFSET_COMMIT for them until the transaction's marker
-    //    resolves. Marking after the durable append is what guarantees the
-    //    marker path can rediscover the same keys in the log and clear them;
-    //    a mark placed before a failed append would never be cleared. The
-    //    append's log position travels with the mark, because the marker for
-    //    this very transaction can be resolved on the actor in between, and
-    //    the log order is what tells the actor that it was.
-    if let Some(appended) = appended
-        && let Err(code) =
-            mark_offsets_pending(&handle, req.producer_id, appended, &req.group_id).await
+    //    resolves. Marking after the append is what guarantees the marker
+    //    path can rediscover the same keys in the log and clear them; a mark
+    //    placed before a failed append would never be cleared. The append's
+    //    log position travels with the mark, because the marker for this very
+    //    transaction can be resolved on the actor in between, and the log
+    //    order is what tells the actor that it was. Kafka's runtime applies a
+    //    write to the shard when it appends it, before the write commits, so
+    //    the mark goes on here too.
+    let Some((appended, write)) = appended else {
+        // 5. Every row was denied or unknown: those rows keep their codes.
+        return respond(codes::NONE);
+    };
+    if let Err(code) = mark_offsets_pending(&handle, req.producer_id, appended, &req.group_id).await
     {
         return respond(code);
     }
 
-    // 5. Success — per-(topic, partition) error_code = NONE for allowed,
-    //    TOPIC_AUTHORIZATION_FAILED for denied,
-    //    UNKNOWN_TOPIC_OR_PARTITION for a row the existence check flagged.
-    respond(codes::NONE)
+    // 5. Kafka's `CoordinatorRuntime` completes the write, and so the request,
+    //    once the high watermark covers the batch. An answer at the local
+    //    append would acknowledge offsets that the next leader of the
+    //    partition may never get, and the transaction would then commit
+    //    without them. Per-(topic, partition) error_code = NONE for allowed,
+    //    TOPIC_AUTHORIZATION_FAILED for denied, UNKNOWN_TOPIC_OR_PARTITION for
+    //    a row the existence check flagged.
+    match write.committed().await {
+        Ok(()) => respond(codes::NONE),
+        Err(error) => {
+            tracing::warn!(
+                group = %req.group_id,
+                tid = %req.transactional_id,
+                %error,
+                "TxnOffsetCommit: the offsets append did not commit"
+            );
+            respond(batch::append_error_code(&error))
+        }
+    }
 }
 
 /// The first `TxnOffsetCommit` version that names each topic by `TopicId`

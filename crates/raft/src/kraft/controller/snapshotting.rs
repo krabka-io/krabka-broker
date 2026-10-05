@@ -1,6 +1,10 @@
-//! Snapshot writing on this node: the KIP-630 interval-driven checkpoint and
-//! prune, the explicit trigger, and the mandatory KIP-1155 downgrade
-//! checkpoint that is retried until it succeeds.
+//! Snapshot writing on this node: the KIP-630 interval-driven checkpoint, the
+//! explicit trigger, and the mandatory KIP-1155 downgrade checkpoint that is
+//! retried until it succeeds and prunes the log below it.
+//!
+//! An interval-driven checkpoint does not prune by itself. The metadata log
+//! keeps the prefix a snapshot covers until its retention limits let the
+//! oldest snapshot go, which the `cleaning` module decides.
 
 use std::sync::Arc;
 
@@ -11,7 +15,6 @@ use krabka_units::prelude::{ByteSizeExt as _, TimeExt as _};
 use super::{
     Engine,
     checkpoint::{latest_checkpoint_id, retain_recent_checkpoints, write_checkpoint},
-    checkpoint_dir,
     offsets::{
         committed_records_since_snapshot, snapshot_bytes_reached, snapshot_interval_reached,
         snapshot_time_reached,
@@ -25,7 +28,7 @@ impl Engine {
     /// last snapshot by `snapshot_interval_records` records, by
     /// `max_bytes_between_snapshots` bytes, or `max_snapshot_interval` has
     /// elapsed since the last checkpoint, serialize the current image to a
-    /// checkpoint and prune the log below the snapshot boundary.
+    /// checkpoint, then clean the log by its retention limits.
     ///
     /// This runs on every voter, not only the leader: a follower's HWM
     /// advances on every applied Fetch response just like a leader's, and
@@ -36,7 +39,7 @@ impl Engine {
         skip_all,
         fields(node = self.me.0, epoch = self.core.quorum_state().leader_epoch, hwm = tracing::field::Empty)
     )]
-    pub fn maybe_snapshot_and_prune(&mut self) {
+    pub fn maybe_snapshot(&mut self) {
         if self.downgrade_snapshot_pending.is_some() {
             return;
         }
@@ -55,9 +58,27 @@ impl Engine {
             return;
         }
         tracing::Span::current().record("hwm", hwm.0);
-        if let Err(error) = self.write_snapshot_and_prune() {
-            tracing::error!(?error, "kraft: snapshot/prune failed");
+        if let Err(error) = self.write_snapshot_and_clean() {
+            tracing::error!(?error, "kraft: snapshot/clean failed");
         }
+    }
+
+    /// Write a checkpoint of the committed image at the high watermark, then
+    /// clean the log by its retention limits, as Kafka's snapshot generator
+    /// and log cleaner together do.
+    ///
+    /// # Errors
+    /// Returns the [`RaftError`] of the checkpoint write or of the cleaning.
+    pub fn write_snapshot_and_clean(&mut self) -> Result<(), RaftError> {
+        let last_contained_ts = self.last_contained_ts(self.log.hwm());
+        let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, last_contained_ts)?;
+        let end_offset = self.write_snapshot_checkpoint(&bytes)?;
+        self.last_snapshot_timestamp_ms = last_contained_ts;
+        self.last_snapshot_end_offset = end_offset;
+        self.last_snapshot_at_ms = self.now().0;
+        self.bytes_since_snapshot = 0;
+        self.maybe_clean()?;
+        Ok(())
     }
 
     /// (KIP-630) `SnapshotHeaderRecord.last_contained_log_timestamp` for a
@@ -118,12 +139,7 @@ impl Engine {
                 voters: control.voters.clone(),
             }));
         }
-        write_checkpoint(
-            &checkpoint_dir(&self.data_dir),
-            pending.end_offset.0,
-            pending.epoch,
-            &bytes,
-        )?;
+        write_checkpoint(&self.data_dir, pending.end_offset.0, pending.epoch, &bytes)?;
         self.last_snapshot_timestamp_ms = last_contained_ts;
 
         // Rebuild the committed suffix before pruning. This preserves records
@@ -168,7 +184,7 @@ impl Engine {
     pub fn write_snapshot_checkpoint(&self, bytes: &[u8]) -> Result<Offset, RaftError> {
         let end_offset = self.log.hwm();
         let epoch = i32::try_from(self.core.quorum_state().leader_epoch).unwrap_or(i32::MAX);
-        write_checkpoint(&checkpoint_dir(&self.data_dir), end_offset.0, epoch, bytes)?;
+        write_checkpoint(&self.data_dir, end_offset.0, epoch, bytes)?;
         Ok(end_offset)
     }
 
@@ -182,14 +198,14 @@ impl Engine {
         self.last_snapshot_end_offset = end_offset;
         self.last_snapshot_at_ms = self.now().0;
         self.bytes_since_snapshot = 0;
-        retain_recent_checkpoints(&checkpoint_dir(&self.data_dir));
+        retain_recent_checkpoints(&self.data_dir);
         Ok(())
     }
 
     /// The latest local snapshot id `(end_offset, epoch)`, if any (leader's
     /// `FetchSnapshot` hint).
     pub fn latest_snapshot_id(&self) -> Option<(i64, i32)> {
-        latest_checkpoint_id(&checkpoint_dir(&self.data_dir))
+        latest_checkpoint_id(&self.data_dir)
     }
 
     /// Serialize the current image into a KIP-630 checkpoint under the data dir.
@@ -210,7 +226,7 @@ impl Engine {
         let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, last_contained_ts)?;
         let epoch = i32::try_from(self.core.quorum_state().leader_epoch).unwrap_or(i32::MAX);
         // Checkpoint filenames encode the raw offset (on-disk boundary).
-        write_checkpoint(&checkpoint_dir(&self.data_dir), end_offset.0, epoch, &bytes)?;
+        write_checkpoint(&self.data_dir, end_offset.0, epoch, &bytes)?;
         self.last_snapshot_timestamp_ms = last_contained_ts;
         Ok(())
     }

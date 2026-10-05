@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, join_all};
 use krabka_metadata::MetadataImage;
 use krabka_protocol::{
     Encode,
@@ -87,33 +87,37 @@ async fn delete_state(
     {
         return DeleteShareGroupStateResponse::default();
     }
-    let group_id = req.group_id;
+    let group_id = req.group_id.as_str();
 
-    let mut results: Vec<DeleteStateResult> = Vec::with_capacity(req.topics.len());
-    for topic in req.topics {
-        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
-        for pd in topic.partitions {
-            let result = coordinator
-                .delete(image, &group_id, topic_id, pd.partition)
-                .await;
-            let (error_code, error_message) = match result {
-                Ok(()) => (codes::NONE, None),
-                Err(error) => (error.code(), Some(error.row_message("delete"))),
-            };
-            partitions.push(PartitionResult {
-                partition: pd.partition,
-                error_code,
-                error_message,
+    // Kafka's `ShareCoordinatorService` schedules one operation for each
+    // partition and answers when every one of them completes. Each operation
+    // waits until its records commit, so the partitions run together.
+    let results: Vec<DeleteStateResult> =
+        join_all(req.topics.into_iter().map(|topic| async move {
+            let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+            let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
+                let result = coordinator
+                    .delete(image, group_id, topic_id, pd.partition)
+                    .await;
+                let (error_code, error_message) = match result {
+                    Ok(()) => (codes::NONE, None),
+                    Err(error) => (error.code(), Some(error.row_message("delete"))),
+                };
+                PartitionResult {
+                    partition: pd.partition,
+                    error_code,
+                    error_message,
+                    ..Default::default()
+                }
+            }))
+            .await;
+            DeleteStateResult {
+                topic_id: topic.topic_id,
+                partitions,
                 ..Default::default()
-            });
-        }
-        results.push(DeleteStateResult {
-            topic_id: topic.topic_id,
-            partitions,
-            ..Default::default()
-        });
-    }
+            }
+        }))
+        .await;
 
     DeleteShareGroupStateResponse {
         results,

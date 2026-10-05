@@ -38,6 +38,8 @@ mod throttle;
 
 #[cfg(test)]
 mod follower_authorization_tests;
+#[cfg(test)]
+mod follower_watermark_tests;
 
 #[cfg(test)]
 mod leader_read_tests;

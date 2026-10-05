@@ -44,7 +44,7 @@ pub fn load_latest_checkpoint(dir: &std::path::Path) -> Result<Option<Vec<u8>>, 
     Ok(Some(bytes))
 }
 
-fn checkpoint_name(end_offset: i64, epoch: i32) -> String {
+pub(crate) fn checkpoint_name(end_offset: i64, epoch: i32) -> String {
     format!("{end_offset:020}-{epoch:010}.checkpoint")
 }
 
@@ -69,7 +69,7 @@ pub fn latest_checkpoint_id(dir: &std::path::Path) -> Option<(i64, i32)> {
 
 /// Every parseable `(end_offset, epoch)` id in `dir`, in directory order. An
 /// absent directory and one holding no checkpoint are both empty.
-fn checkpoint_ids(dir: &std::path::Path) -> Vec<(i64, i32)> {
+pub(crate) fn checkpoint_ids(dir: &std::path::Path) -> Vec<(i64, i32)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };

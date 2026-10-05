@@ -167,7 +167,11 @@ async fn tick_all_evicts_no_local_segment_for_a_frozen_partition() {
             outcome.remote_finished == outcome.sealed_before,
             "{label}: the copy runs whatever the freeze says"
         );
-        let want_local = if frozen { outcome.sealed_before } else { 0 };
+        // The control drops every copied segment. The zero budget covers the
+        // active segment too, so the control also rolls it for the next
+        // copy, as Kafka's `deletableSegments` does, and that one segment
+        // stays.
+        let want_local = if frozen { outcome.sealed_before } else { 1 };
         check!(
             outcome.local_sealed_after == want_local,
             "{label}: local sealed segments after the sweep"

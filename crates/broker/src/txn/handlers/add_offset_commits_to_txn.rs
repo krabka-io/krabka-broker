@@ -224,7 +224,7 @@ async fn add_offsets_partition(
                 %error,
                 "AddOffsetsToTxn: failed to persist TxnEntry"
             );
-            coord.append_error_code(transactional_id).await
+            coord.append_error_code(transactional_id, &error).await
         }
     }
 }

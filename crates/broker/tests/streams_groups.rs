@@ -5,8 +5,10 @@
 //! The typed client works because `ApiVersions` advertises `api_keys` 88/89.
 //! `StreamsGroupHeartbeatRequest` and `StreamsGroupDescribeRequest` implement
 //! `ProtocolRequest`, so `client.send(req)` returns the typed response and
-//! exercises the real wire path. Both streams RPCs are MIN=MAX=0, so the client
-//! negotiates v0.
+//! exercises the real wire path. By default the broker serves Kafka 4.3.1's
+//! version 0 of both RPCs, so the client negotiates v0. The
+//! `streams_topology_description` scenarios turn on trunk's versions, as the
+//! Apache Kafka system tests do, and negotiate v1.
 //!
 //! Unlike share groups, the streams heartbeat handler gates on BOTH the
 //! finalized `streams.version >= 1` feature (KIP-1071 early access) AND the
@@ -26,3 +28,7 @@ mod streams_harness;
 mod streams_internal_topics;
 #[path = "streams_groups/streams_membership.rs"]
 mod streams_membership;
+#[path = "streams_groups/streams_restart.rs"]
+mod streams_restart;
+#[path = "streams_groups/streams_topology_description.rs"]
+mod streams_topology_description;

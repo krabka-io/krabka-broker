@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 use super::{
     CommitWaiter, Engine,
     offsets::{
-        assigned_record_offset, hwm_reaches_waiter, is_single_voter_majority,
+        assigned_record_offset, hwm_reaches_waiter, leader_alone_is_majority,
         submit_waiter_need_offset, validate_append_result,
     },
     records::{metadata_record_batch, next_batch_offset},
@@ -682,7 +682,7 @@ impl Engine {
         });
         // Drive a self-fetch so the core recomputes the HWM (single voter
         // commits immediately; multi-voter commits when followers fetch).
-        if is_single_voter_majority(self.core.quorum_state().majority()) {
+        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
             self.advance_and_apply(self.log.log_end_offset());
         }
         self.try_resolve_waiters();

@@ -213,7 +213,145 @@ fn log_read_raw_desc_multi_segment_regions_equal_read_raw() {
     assert2::assert!(assembled == raw.bytes[..]);
     drop(dir);
 }
+
+/// The descriptor twin of `a_read_never_skips_past_a_segment_its_budget_clipped`:
+/// the zero-copy path a plaintext follower fetch takes.
+#[test]
+fn a_descriptor_read_never_skips_past_a_segment_its_budget_clipped() {
+    use std::os::unix::fs::FileExt;
+    let (_dir, log, small) = seam_log();
+    let end = log.log_end_offset();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (label, offset, budget, bases) in seam_cases(small) {
+        let mut wire = Vec::new();
+        for region in log.read_raw_desc(offset, end, budget).unwrap().regions {
+            let mut bytes = vec![0u8; region.len];
+            region.file.read_exact_at(&mut bytes, region.offset).unwrap();
+            wire.extend_from_slice(&bytes);
+        }
+        actual.push((label, batch_bases(&wire)));
+        expected.push((label, bases));
+    }
+    check!(actual == expected);
+}
 } // sendfile_cfg!
+
+/// A log of three segments whose batches are not all one size, so a budget
+/// can stop a read inside one segment while the first batch of the next would
+/// still fit what is left of it.
+///
+/// | segment | batches, as (base offset, records) |
+/// |---------|------------------------------------|
+/// | sealed  | (0, 1) (1, 8)                      |
+/// | sealed  | (9, 1) (10, 1)                     |
+/// | active  | (11, 8)                            |
+///
+/// Returns the log with the encoded size of a one-record batch.
+fn seam_log() -> (tempfile::TempDir, Log, usize) {
+    let small = sample_batch(1).encoded_len();
+    let big = sample_batch(8).encoded_len();
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        // A segment rolls when the next batch would take it past this, so
+        // the first holds one small and one big batch.
+        segment_size: size_from_len(small + big),
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), config).unwrap();
+    for records in [1, 8, 1, 1, 8] {
+        log.append(&mut sample_batch(records)).unwrap();
+    }
+    let bases: Vec<Offset> = log
+        .segments
+        .iter()
+        .chain(log.active.as_ref())
+        .map(crate::segment::Segment::base_offset)
+        .collect();
+    assert2::assert!(bases == vec![Offset(0), Offset(9), Offset(11)]);
+    (dir, log, small)
+}
+
+/// The rows of [`seam_log`] each read path is asked for: a label, the fetch
+/// offset, the byte budget in one-record batches, and the base offsets of the
+/// batches the read must serve.
+///
+/// A read leaves a segment only after it reads that segment to the end, as
+/// Kafka's `LocalLog.read` never leaves the segment that it found data in. Only
+/// the first batch of a read can be larger than the budget, which is KIP-74. A
+/// read that went on into the next segment from a run that its budget clipped
+/// served the first batch of that segment and skipped every offset between
+/// them. A follower that caught up through a throttled reassignment lost most
+/// of each 64 MiB segment that way.
+fn seam_cases(small: usize) -> Vec<(&'static str, Offset, ByteSize, Vec<i64>)> {
+    let budget = |halves: usize| size_from_len(small * halves / 2);
+    vec![
+        (
+            "a read its budget clips inside a sealed segment ends there",
+            Offset(0),
+            budget(4),
+            vec![0],
+        ),
+        (
+            "a read its budget clips inside the last sealed segment never reaches the active one",
+            Offset(9),
+            budget(3),
+            vec![9],
+        ),
+        (
+            "past the first batch, one larger than what is left waits for the next read",
+            Offset(9),
+            budget(6),
+            vec![9, 10],
+        ),
+        (
+            "a read that empties a segment goes on into the next",
+            Offset(9),
+            NO_LIMIT,
+            vec![9, 10, 11],
+        ),
+        (
+            "a read from inside a batch starts at that batch and goes on to the end",
+            Offset(8),
+            NO_LIMIT,
+            vec![1, 9, 10, 11],
+        ),
+        (
+            "a whole-log read serves every batch",
+            Offset(0),
+            NO_LIMIT,
+            vec![0, 1, 9, 10, 11],
+        ),
+    ]
+}
+
+/// The base offset of every batch in `wire`, which holds whole v2 batches.
+fn batch_bases(mut wire: &[u8]) -> Vec<i64> {
+    let mut bases = Vec::new();
+    while !wire.is_empty() {
+        bases.push(RecordBatch::decode(&mut wire).unwrap().base_offset);
+    }
+    bases
+}
+
+#[test]
+fn a_read_never_skips_past_a_segment_its_budget_clipped() {
+    let (_dir, log, small) = seam_log();
+    let end = log.log_end_offset();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (label, offset, budget, bases) in seam_cases(small) {
+        let decoded = log.read(offset, budget).unwrap().batches;
+        let raw = log.read_raw(offset, end, budget).unwrap().bytes;
+        actual.push((
+            label,
+            decoded.iter().map(|batch| batch.base_offset).collect(),
+            batch_bases(&raw),
+        ));
+        expected.push((label, bases.clone(), bases));
+    }
+    check!(actual == expected);
+}
 
 #[test]
 fn append_then_read_back_in_order() {

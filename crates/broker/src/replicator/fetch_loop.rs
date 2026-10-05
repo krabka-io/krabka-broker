@@ -235,6 +235,15 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                         _ => delay,
                     });
                 }
+                RowAction::Offline => {
+                    // The next round sees the smaller membership, re-opens the
+                    // session without the partition, and the supervisor does
+                    // not hand it back while its log directory is offline.
+                    dirty.remove(&key);
+                    warn!(topic = %key.0, partition = key.1.get(),
+                        "replicator: log directory offline; no longer following the partition");
+                    drop_partition(fetcher, &key);
+                }
             }
         }
         if session.is_full() {

@@ -12,7 +12,11 @@ use krabka_protocol::{
 };
 
 use super::request::{EffectivePartition, EffectiveTopic, FetchAuthorization};
-use crate::{broker::Broker, codes, partition::Partition};
+use crate::{
+    broker::Broker,
+    codes,
+    partition::{Partition, ReplicationTarget},
+};
 
 /// Resolved read for a single requested (topic, partition) tuple.
 ///
@@ -33,14 +37,18 @@ pub(crate) struct PendingRead {
     pub(crate) read_committed: bool,
     /// `true` when `replica_id >= 0`, that is, when the request comes from a
     /// follower replicator and not from a consumer. Follower fetches see all
-    /// records up to LEO and report LEO as HW and LSO. The handler clamps
-    /// consumer fetches at HW.
+    /// records up to LEO and report the leader's HW and LSO, as consumer
+    /// fetches do. The handler clamps consumer fetches at HW.
     pub(crate) is_follower_fetch: bool,
     /// `true` when only the partition leader may serve this fetch. Kafka's
     /// `FetchParams.fetchOnlyLeader` is true for a follower fetch, and for a
     /// consumer fetch that carries no client metadata, which is every
     /// consumer fetch below v11. A long-poll wake checks leadership again.
     pub(crate) fetch_only_leader: bool,
+    /// What the leader records of the follower once the first read of this
+    /// row succeeds. `None` on a consumer fetch, and on a row that is never
+    /// read. See [`record_follower_position`].
+    pub(crate) follower_position: Option<FollowerPosition>,
     /// `None` for an unknown topic or partition, or for an out-of-range
     /// offset. The final response is already complete, and the handler does
     /// not read it again on a wake.
@@ -77,6 +85,7 @@ impl PendingRead {
             read_committed: mode.0,
             is_follower_fetch: mode.1,
             fetch_only_leader: mode.1,
+            follower_position: None,
             partition: resolved,
             out,
             cpu_micros: 0,
@@ -84,33 +93,77 @@ impl PendingRead {
     }
 }
 
-async fn update_follower_progress(
+/// The follower state that a follower fetch reports for one partition, kept
+/// until the first read of that partition runs.
+///
+/// Kafka's `Partition.fetchRecords` reads the follower's records first and
+/// only then calls `updateFollowerFetchState`. So a follower fetch answered by
+/// that read carries the high watermark from before its own fetch offset
+/// counted toward it, and the follower learns the watermark its fetch moved
+/// from its next response. Only a fetch that parks reads again after the
+/// update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FollowerPosition {
+    pub(crate) follower_id: i32,
+    /// The broker epoch the follower's Fetch carried. KIP-841 compares it
+    /// with the broker's registered epoch before the follower may rejoin the
+    /// ISR.
+    pub(crate) broker_epoch: i64,
+    /// The follower's own log start offset, which a `DeleteRecords` waits for.
+    pub(crate) log_start_offset: i64,
+    /// The replication target that the leader checks of this fetch passed
+    /// under. The leader records the position only while this target is
+    /// still installed.
+    pub(crate) target: ReplicationTarget,
+}
+
+/// Kafka's `Partition.updateFollowerFetchState`: record that `position`'s
+/// follower holds every record below `fetch_offset`, and recompute the high
+/// watermark. `leader_log_end` is the leader's log end offset when the read
+/// started, as Kafka passes `LogReadInfo.logEndOffset`. Returns whether the
+/// high watermark advanced.
+///
+/// The caller runs this after the follower's read succeeded. Kafka records
+/// nothing for a read that failed or found a diverging epoch, because
+/// `fetchRecords` throws or returns before the update.
+///
+/// A leadership change between the leader checks and this update installs a
+/// new replication target and clears the follower state. Kafka's
+/// `maybeIncrementLeaderHW` runs under `leaderIsrUpdateLock` only while this
+/// broker still leads. This method also records nothing after the target
+/// changed.
+pub(crate) async fn record_follower_position(
     partition: &Partition,
-    follower_id: i32,
-    follower_broker_epoch: i64,
-    request: &EffectivePartition,
-) {
-    let leader_leo = partition.log_end_offset();
-    let follower = krabka_metadata::NodeId(u64::try_from(follower_id).unwrap_or(0));
+    position: FollowerPosition,
+    fetch_offset: i64,
+    leader_log_end: Offset,
+) -> bool {
+    let transition = partition.lock_produce_transition().await;
+    if *transition != position.target {
+        return false;
+    }
+    let follower = krabka_metadata::NodeId(u64::try_from(position.follower_id).unwrap_or(0));
     let advanced = {
         let mut state = partition.replica_state.lock().await;
         let previous = state.hw;
         // Kafka's `Replica.updateFetchStateOrThrow` records the follower's log
         // start offset with its fetch offset. A `DeleteRecords` waits for it.
-        state.record_follower_log_start(follower, Offset(request.log_start_offset));
+        state.record_follower_log_start(follower, Offset(position.log_start_offset));
         // KIP-841: the ISR-expansion eligibility check compares this with the
         // broker's registered epoch before `update_follower_leo` reads it.
-        state.record_follower_broker_epoch(follower, follower_broker_epoch);
+        state.record_follower_broker_epoch(follower, position.broker_epoch);
         state.update_follower_leo(
             follower,
-            Offset(request.fetch_offset),
-            leader_leo,
+            Offset(fetch_offset),
+            leader_log_end,
             std::time::Instant::now(),
         ) > previous
     };
+    drop(transition);
     if advanced {
         partition.hw_advance_notify.notify_waiters();
     }
+    advanced
 }
 
 /// Chooses a preferred read replica, or `-1` for "read from the leader".
@@ -527,7 +580,7 @@ pub(super) async fn plan_partition_read(
     // Kafka's `KafkaApis.handleFetchRequest` refuses every row of a follower
     // fetch without `ClusterAction` before it resolves any topic. So that
     // refusal comes first, and the fetch never reaches
-    // `update_follower_progress`.
+    // `record_follower_position`.
     if context.authorization.refuses_every_row() {
         return refused(codes::TOPIC_AUTHORIZATION_FAILED);
     }
@@ -587,13 +640,21 @@ pub(super) async fn plan_partition_read(
     let fetch_only_leader = context.mode.1 || context.version < FIRST_CLIENT_METADATA_VERSION;
     let node_id = context.broker.config.node_id;
     // A follower fetch holds the partition's replication-target read guard
-    // from the leader check through the follower progress update, as Kafka's
-    // `Partition.fetchRecords` holds `leaderIsrUpdateLock`. A leadership
-    // change takes the write guard, so it cannot land in between.
-    let _transition = match partition.as_ref() {
+    // through the leader checks, as Kafka's `Partition.fetchRecords` holds
+    // `leaderIsrUpdateLock`. A leadership change takes the write guard, so it
+    // cannot land in between. The read loop records the follower position
+    // after the read, and only while the target that the checks saw is still
+    // installed.
+    let transition = match partition.as_ref() {
         Some(partition) if context.mode.1 => Some(partition.lock_produce_transition().await),
         _ => None,
     };
+    let follower_position = transition.as_deref().map(|target| FollowerPosition {
+        follower_id: context.follower_id,
+        broker_epoch: context.follower_broker_epoch,
+        log_start_offset: request.log_start_offset,
+        target: *target,
+    });
     if let Some(partition) = partition.as_ref()
         && apply_epoch_checks(
             context.image,
@@ -647,17 +708,6 @@ pub(super) async fn plan_partition_read(
             ResponseSlot::Read,
             PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
         );
-    }
-    if context.mode.1
-        && let Some(partition) = partition.as_ref()
-    {
-        update_follower_progress(
-            partition,
-            context.follower_id,
-            context.follower_broker_epoch,
-            request,
-        )
-        .await;
     }
     if partition.is_none() || topic_name.is_empty() {
         // Kafka refuses a partition its metadata does not hold before the
@@ -745,6 +795,7 @@ pub(super) async fn plan_partition_read(
         ResponseSlot::Read,
         PendingRead {
             fetch_only_leader,
+            follower_position,
             ..PendingRead::planned(
                 topic_name,
                 topic_id,
@@ -1508,7 +1559,12 @@ mod tests {
             }
             if promoted {
                 partition
-                    .install_local_leadership(None, 1, 3)
+                    .install_local_leadership(
+                        &crate::producer_state::ProducerState::new(),
+                        None,
+                        1,
+                        3,
+                    )
                     .await
                     .expect("promote");
             }
@@ -1569,5 +1625,82 @@ mod tests {
         )
         .await;
         assert!(!final_, "defers to the caller's own offline check");
+    }
+
+    /// Kafka's `maybeIncrementLeaderHW` runs only while this broker still
+    /// leads. The leader records a follower position only while the
+    /// replication target that its leader checks passed under is installed.
+    /// A leadership change installs another target and clears the follower
+    /// state. A position from before that change belongs to the old
+    /// leadership, and the leader drops it.
+    #[tokio::test]
+    async fn a_follower_position_is_recorded_only_under_its_own_target() {
+        use krabka_raft::NodeId;
+
+        #[derive(Debug, PartialEq)]
+        struct Recorded {
+            advanced: bool,
+            high_watermark: super::Offset,
+            follower_log_end: super::Offset,
+        }
+
+        let cases = [
+            (
+                "the target is still installed",
+                false,
+                Recorded {
+                    advanced: true,
+                    high_watermark: super::Offset(2),
+                    follower_log_end: super::Offset(2),
+                },
+            ),
+            (
+                "a new leader epoch was installed after the checks",
+                true,
+                Recorded {
+                    advanced: false,
+                    high_watermark: super::Offset(0),
+                    follower_log_end: super::Offset(0),
+                },
+            ),
+        ];
+
+        for (name, epoch_moved, want) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let partition = epoch_checks_partition(dir.path());
+            partition.install_replication_target(None, 1, 0).await;
+            partition
+                .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
+                .await;
+            {
+                let mut log = partition.log.lock().expect("log mutex poisoned");
+                append_at_epoch(&mut log, 0);
+                append_at_epoch(&mut log, 0);
+            }
+            let position = super::FollowerPosition {
+                follower_id: 2,
+                broker_epoch: -1,
+                log_start_offset: 0,
+                target: *partition.replication_target.read().await,
+            };
+            if epoch_moved {
+                partition.install_replication_target(None, 1, 1).await;
+            }
+
+            let advanced =
+                super::record_follower_position(&partition, position, 2, super::Offset(2)).await;
+
+            let recorded = Recorded {
+                advanced,
+                high_watermark: partition.high_watermark().await,
+                follower_log_end: partition
+                    .replica_state
+                    .lock()
+                    .await
+                    .follower_progress(NodeId(2))
+                    .0,
+            };
+            assert!(recorded == want, "{name}");
+        }
     }
 }

@@ -11,8 +11,8 @@ use tokio::{
 };
 
 use super::{
-    Engine,
-    offsets::is_single_voter_majority,
+    Engine, METADATA_LOG_CLEAN_INTERVAL,
+    offsets::leader_alone_is_majority,
     timing::{
         election_timeout_ms, election_timer_starts_election, following_leader_for_role,
         heartbeat_period, instant_from_clock_base, should_fail_waiters_on_leadership_change,
@@ -42,10 +42,7 @@ impl Engine {
         // redirects us to the current leader and begins normal replication.
         // Without this kick, observers never arm either election or fetch
         // timers and therefore cannot reach the auto-join workflow.
-        if let Some(peer) = self.discovery_peer() {
-            self.send_fetch(peer);
-            self.arm_fetch_timer();
-        }
+        self.send_discovery_fetch();
 
         // Heartbeat ticks the whole time; the loop only acts on it while leader.
         let hb_period = heartbeat_period(self.election_timeout, self.heartbeat_interval);
@@ -58,10 +55,14 @@ impl Engine {
             let fetch_sleep = sleep_until_opt(self.fetch_at);
             let check_quorum_sleep = sleep_until_opt(self.check_quorum_at);
             let parked_fetch_sleep = sleep_until_opt(self.next_parked_fetch_deadline());
+            let noop_sleep = sleep_until_opt(self.noop_at);
+            let clean_sleep = tokio::time::sleep_until(self.clean_at);
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
             tokio::pin!(check_quorum_sleep);
             tokio::pin!(parked_fetch_sleep);
+            tokio::pin!(noop_sleep);
+            tokio::pin!(clean_sleep);
 
             tokio::select! {
                 cmd = cmd_rx.recv() => {
@@ -87,6 +88,22 @@ impl Engine {
                 }
                 // A parked fetch whose wait ran out is answered below.
                 () = &mut parked_fetch_sleep => {}
+                () = &mut noop_sleep => {
+                    self.on_noop_timer();
+                }
+                () = &mut clean_sleep => {
+                    self.clean_at = Instant::now() + METADATA_LOG_CLEAN_INTERVAL;
+                    if let Err(error) = self.maybe_clean() {
+                        tracing::error!(?error, "kraft: metadata log cleaning failed");
+                    }
+                }
+            }
+            // A write to the metadata log directory that failed this turn
+            // ends the controller (KIP-858). The engine stops taking part in
+            // the quorum at once, rather than serve from a log it can no
+            // longer extend.
+            if self.publish_storage_fault() {
+                break;
             }
             // Whatever this turn did may have grown the log, moved the high
             // watermark or ended the leadership a parked fetch waits on.
@@ -95,12 +112,32 @@ impl Engine {
             // A quiet log still needs to snapshot on the time cap: an apply
             // that advances the HWM already retriggers this check, but an
             // idle voter only ticks the loop on its timers.
-            self.maybe_snapshot_and_prune();
+            self.maybe_snapshot();
         }
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {
             let _ = w.reply.send(Err(RaftError::Shutdown));
         }
+    }
+
+    /// Publish the failure of the metadata log directory when a write to it
+    /// returned an I/O error. Returns `true` once it is published.
+    pub fn publish_storage_fault(&mut self) -> bool {
+        let Some(failure) = self.log.failure() else {
+            return false;
+        };
+        let fault = format!(
+            "the metadata log directory {} has failed: {failure}",
+            self.data_dir
+                .parent()
+                .unwrap_or(self.data_dir.as_path())
+                .display()
+        );
+        if self.storage_fault_tx.borrow().is_none() {
+            tracing::error!(%fault, "kraft: stopping the controller");
+            self.storage_fault_tx.send_replace(Some(fault));
+        }
+        true
     }
 
     /// Logical "now" for the core, derived from the monotonic clock base.
@@ -196,11 +233,10 @@ impl Engine {
                 } else if self.core.is_voter() {
                     // No leader to poll but the fetch watchdog fired: elect.
                     self.on_event(Event::FetchTimeout);
-                } else if let Some(peer) = self.discovery_peer() {
+                } else {
                     // An observer has no election timeout. Retry discovery
                     // until a bootstrap voter redirects it to the leader.
-                    self.send_fetch(peer);
-                    self.arm_fetch_timer();
+                    self.send_discovery_fetch();
                 }
             }
             TimerTick::CheckQuorum => {
@@ -226,18 +262,46 @@ impl Engine {
         following_leader_for_role(self.core.role())
     }
 
-    /// Pick a configured voter for observer leader discovery.
+    /// Pick the peer for the next observer leader discovery Fetch: the voters
+    /// other than this node, or the bootstrap servers when it knows no voter,
+    /// taken in turn by the count in `discovery_attempts`.
+    ///
+    /// A discovery Fetch to a peer that is down, or that knows no leader,
+    /// attaches to nothing, so the next one goes to the next peer. Kafka's
+    /// `RequestManager.findReadyBootstrapServer` moves on the same way. A
+    /// controller lists its own address in `controller.quorum.bootstrap.servers`
+    /// as every other node does, and a discovery Fetch can go to that address.
     pub fn discovery_peer(&self) -> Option<NodeId> {
         if self.core.is_voter() || self.following_leader().is_some() {
             return None;
         }
-        self.core
+        let voters: Vec<NodeId> = self
+            .core
             .quorum_state()
             .voters
             .ids()
             .into_iter()
-            .find(|id| *id != self.me)
-            .or_else(|| self.peers.discovery_peers().into_iter().next())
+            .filter(|id| *id != self.me)
+            .collect();
+        let peers = if voters.is_empty() {
+            self.peers.discovery_peers()
+        } else {
+            voters
+        };
+        peers
+            .get(self.discovery_attempts % peers.len().max(1))
+            .copied()
+    }
+
+    /// Send the next observer leader discovery Fetch, if this node is a
+    /// leaderless observer with a peer to ask, and arm the fetch timer that
+    /// retries it.
+    fn send_discovery_fetch(&mut self) {
+        if let Some(peer) = self.discovery_peer() {
+            self.discovery_attempts = self.discovery_attempts.wrapping_add(1);
+            self.send_fetch(peer);
+            self.arm_fetch_timer();
+        }
     }
 
     /// Execute a batch of [`Action`]s, dispatching peer sends fire-and-forget.
@@ -296,7 +360,10 @@ impl Engine {
             Action::AppendLeaderChange { epoch } => {
                 if let Err(e) = self.append_leader_change(epoch) {
                     tracing::error!(?e, "kraft: append leader-change failed");
-                } else if is_single_voter_majority(self.core.quorum_state().majority()) {
+                } else if leader_alone_is_majority(
+                    self.core.quorum_state().majority(),
+                    self.core.is_voter(),
+                ) {
                     // There is no follower Fetch acknowledgement to drive HWM
                     // recomputation in a one-voter quorum. The local append is
                     // already a majority, so commit the current-epoch barrier.
@@ -375,6 +442,7 @@ impl Engine {
                 self.check_quorum_at = None;
             }
         }
+        self.reconcile_noop_timer();
         self.fail_waiters_on_leadership_loss();
     }
 

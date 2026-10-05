@@ -53,6 +53,8 @@ async fn run_krabka_format(log_dir: &std::path::Path, add_scram: &str) {
         "krabka-format",
         "--log-dir",
         log_dir.to_str().unwrap(),
+        "--node-id",
+        "1",
         "--add-scram",
         add_scram,
     ])

@@ -172,8 +172,17 @@ fn apply_fetch_records(
         let next_offset = index
             .saturating_add(u64::try_from(batch.last_offset_delta.max(0)).unwrap_or(0))
             .saturating_add(1);
-        // The LeaderChange control batch carries no metadata records.
+        // A control batch carries no metadata records. Its KIP-853
+        // `KRaftVersionRecord` and `VotersRecord` set the quorum the image
+        // names, as they do on a controller once committed, and every record
+        // this fetch returns is committed. That voter set is how a node in a
+        // dynamic quorum, which knows only its bootstrap servers, learns the
+        // endpoint of each voter.
         if batch.attributes.is_control_batch() {
+            match krabka_raft::control_batch_image_records(&batch) {
+                Ok(controls) => controls.iter().for_each(|control| next.apply(control)),
+                Err(e) => warn!(error = %e, "observer failed to decode a control record"),
+            }
             new_offset = next_offset;
             continue;
         }
@@ -181,6 +190,11 @@ fn apply_fetch_records(
             let Some(value) = r.value.as_ref() else {
                 continue;
             };
+            // A KIP-835 no-op, which the controller leader appends while the
+            // cluster is idle, changes nothing.
+            if krabka_raft::is_kip835_noop(value) {
+                continue;
+            }
             match from_kraft_value(value, &next) {
                 Ok(rec) => {
                     if let Err(e) = next.validate(&rec) {
@@ -273,6 +287,86 @@ mod tests {
         let new_offset = apply_fetch_records(6, &records, &image_tx);
 
         assert!(new_offset == 7);
+    }
+
+    /// The batch a leader of a freshly formatted dynamic quorum starts with:
+    /// its `LeaderChange` marker, then the `kraft.version` and voter set of the
+    /// bootstrap checkpoint. The observer takes the voters, endpoints included,
+    /// into its image, which is how it reaches a leader it knows only by id.
+    #[test]
+    fn apply_fetch_records_takes_the_voter_set_of_a_control_batch_into_the_image() {
+        use krabka_protocol::{
+            owned::{
+                k_raft_version_record::KRaftVersionRecord as WireKRaftVersion,
+                voters_record::{
+                    Endpoint, KRaftVersionFeature, Voter as WireVoter, VotersRecord as WireVoters,
+                },
+            },
+            records::metadata::control::ControlRecord,
+        };
+
+        let cluster_id = Uuid::new_v4();
+        let directory_id = Uuid::from_u128(3001);
+        let controls = [
+            ControlRecord::KRaftVersion(WireKRaftVersion {
+                k_raft_version: 1,
+                ..Default::default()
+            }),
+            ControlRecord::Voters(WireVoters {
+                voters: vec![WireVoter {
+                    voter_id: 3001,
+                    voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
+                        *directory_id.as_bytes(),
+                    ),
+                    endpoints: vec![Endpoint {
+                        name: "CONTROLLER_PLAINTEXT".into(),
+                        host: "ducker12".into(),
+                        port: 9592,
+                        ..Default::default()
+                    }],
+                    k_raft_version_feature: KRaftVersionFeature {
+                        min_supported_version: 0,
+                        max_supported_version: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ];
+        let mut batch = control_batch(0);
+        for (offset_delta, control) in (1_i32..).zip(&controls) {
+            let (key, value) = control.encode_key_value().expect("encode control record");
+            batch.records.push(Record {
+                offset_delta,
+                key: Some(key),
+                value: Some(value),
+                ..Default::default()
+            });
+            batch.last_offset_delta = offset_delta;
+        }
+        let image_tx = image_channel(cluster_id);
+
+        let new_offset = apply_fetch_records(0, &encode_batches(&[batch]), &image_tx);
+
+        let mut expected = MetadataImage::new(cluster_id);
+        expected.apply(&MetadataRecord::V1KRaftVersion(
+            krabka_metadata::KRaftVersionRecord { kraft_version: 1 },
+        ));
+        expected.apply(&MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
+            voters: krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
+                id: NodeId(3001),
+                directory_id,
+                endpoints: vec![krabka_metadata::VoterEndpoint {
+                    name: "CONTROLLER_PLAINTEXT".into(),
+                    host: "ducker12".into(),
+                    port: 9592,
+                }],
+                kraft_version: krabka_metadata::KRaftVersionRange { min: 0, max: 1 },
+            }]),
+        }));
+        assert!(new_offset == 3);
+        assert!(**image_tx.borrow() == expected);
     }
 
     #[test]

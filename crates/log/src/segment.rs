@@ -29,7 +29,7 @@ mod test_support;
 mod timestamp_scan;
 
 use crate::{
-    index::{OffsetIndex, TimeIndex},
+    index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
     io::LogIo,
 };
 
@@ -206,6 +206,26 @@ impl Segment {
     #[must_use]
     pub fn size(&self) -> ByteSize {
         ByteSize::from_bytes(self.log_size)
+    }
+
+    /// Whether the offset index or the time index is full under a
+    /// `segment.index.bytes` of `segment_index_size`, Kafka's
+    /// `offsetIndex().isFull() || timeIndex().isFull()`.
+    ///
+    /// Kafka sizes each index file to `segment.index.bytes` rounded down to
+    /// whole entries, so the offset index holds `size / 8` entries and the
+    /// time index `size / 12`. Kafka's `TimeIndex.isFull` keeps the last
+    /// slot free for the entry that sealing the segment writes, so the time
+    /// index is full one entry early.
+    #[must_use]
+    pub(crate) fn indexes_full(&self, segment_index_size: ByteSize) -> bool {
+        let max_entries = |entry_size: usize| {
+            segment_index_size.bytes_u64() / u64::try_from(entry_size).unwrap_or(u64::MAX)
+        };
+        let entries = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+        entries(self.offset_index.entry_count()) >= max_entries(OFFSET_ENTRY_SIZE)
+            || entries(self.time_index.entry_count()).saturating_add(1)
+                >= max_entries(TIME_ENTRY_SIZE)
     }
 
     /// Highest timestamp observed across all batches in this segment.

@@ -162,17 +162,19 @@ pub(crate) async fn handle(
         let new_partition_indices: Vec<i32> = (existing..t.count).collect();
         let new_partition_count = new_partition_indices.len();
 
-        // The automatic placement leaves out a broker in controlled shutdown
-        // and one whose log directories are all cordoned (KIP-1066). It takes
-        // a fenced broker only as a last resort, as Kafka's placer does, and
-        // the ISR below leaves that broker out. A manual assignment may name
-        // any registered broker, because Kafka 4.3.1 checks only that the
-        // broker is registered, and the ISR again leaves out the inactive ones.
+        // The automatic placement leaves out a broker that is in controlled
+        // shutdown and not fenced, and one whose log directories are all
+        // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
+        // as Kafka's placer does. A broker that a controlled shutdown stopped
+        // is fenced, so it is such a last resort. The ISR below leaves that
+        // broker out. A manual assignment may name any registered broker,
+        // because Kafka 4.3.1 checks only that the broker is registered, and
+        // the ISR again leaves out the inactive ones.
         let unavailable =
             crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
         let inactive = inactive_brokers(&image, &unavailable);
         let no_exclusion = std::collections::HashSet::new();
-        let unusable = automatic_placement_exclusions(&image);
+        let unusable = automatic_placement_exclusions(&image, &unavailable);
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),

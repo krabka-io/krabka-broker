@@ -11,8 +11,11 @@ use krabka_units::convert::ByteSizeExt as _;
 use tokio::sync::Notify;
 
 use super::{
-    plan::{PendingRead, ReadRole, apply_epoch_checks, leader_refusal, required_leader},
-    read::{ReadRequest, do_read},
+    plan::{
+        PendingRead, ReadRole, apply_epoch_checks, leader_refusal, record_follower_position,
+        required_leader,
+    },
+    read::{LiveOffsets, ReadRequest, do_read},
     remote::try_remote_read,
     request::EffectivePartition,
     response::group_into_topic_responses,
@@ -156,13 +159,6 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
             continue;
         };
         waits.push(arm_wait(index, part.append_notify.clone()));
-        // A leadership change fires `hw_advance_notify`. A fetch that only the
-        // leader may serve wakes on it, so a parked follower fetch answers
-        // `NOT_LEADER_OR_FOLLOWER` at once, as Kafka's `DelayedFetch` completes
-        // on a leader change.
-        if read.is_follower_fetch && read.fetch_only_leader {
-            waits.push(arm_wait(index, part.hw_advance_notify.clone()));
-        }
         // KIP-392: a consumer reading from a follower becomes unblocked
         // when the follower's HW advances (via set_follower_hw), not only
         // on raw append. Follower (inter-broker) fetches don't need this.
@@ -179,6 +175,54 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
         }
     }
     waits
+}
+
+/// Arms the leadership waiter of every follower read, after the first pass
+/// records the follower positions.
+///
+/// A leadership change fires `hw_advance_notify`. A fetch that only the leader
+/// may serve wakes on it, so a parked follower fetch answers
+/// `NOT_LEADER_OR_FOLLOWER` at once, as Kafka's `DelayedFetch` completes on a
+/// leader change.
+///
+/// This function arms the waiter only after the first pass. The position that
+/// the pass records fires the same notifier when it moves the high watermark.
+/// A waiter armed before the pass would wake its own fetch once for each
+/// partition, and each wake revalidates every partition of the fetch. The
+/// revalidation at the start of the long poll catches a leadership change
+/// that lands before this arm.
+fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
+    pending
+        .iter()
+        .enumerate()
+        .filter(|(_, read)| read.is_follower_fetch && read.fetch_only_leader)
+        .filter_map(|(index, read)| {
+            let part = read.partition.as_ref()?;
+            Some(arm_wait(index, part.hw_advance_notify.clone()))
+        })
+        .collect()
+}
+
+/// Reports the live bounds on every follower row the first pass read
+/// locally, right before the fetch parks.
+///
+/// A follower row that the first pass answers carries the high watermark from
+/// before the leader recorded its fetch offset, as Kafka's first read does.
+/// The leader answers a fetch that parks later, and Kafka then reads every
+/// partition again, on a wake or on expiry. This function reads the bounds
+/// after [`arm_leadership_waits`] arms its waiters. So a later move of the
+/// high watermark wakes the fetch, and the fetch reads the row again.
+async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollState) {
+    for (index, read) in pending.iter_mut().enumerate() {
+        if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served[index]
+        {
+            continue;
+        }
+        let Some(part) = read.partition.clone() else {
+            continue;
+        };
+        LiveOffsets::of(&part).await.report(&mut read.out);
+    }
 }
 
 /// Read every planned partition once, then long-poll until the fetch reaches
@@ -250,6 +294,12 @@ pub(super) async fn execute_pending_reads(
         let budget = state.partition_read_budget(requested_max_bytes);
         let metadata_only = state.wants_metadata_only(budget);
         let started = std::time::Instant::now();
+        // Kafka's `Partition.readRecords` takes the log end offset with the
+        // high watermark before it reads. The follower update after the read
+        // compares the fetch offset with that log end offset.
+        let follower_update = read
+            .follower_position
+            .map(|position| (position, partition.log_end_offset()));
         state.bytes[index] = do_read(
             &partition,
             ReadRequest {
@@ -298,6 +348,14 @@ pub(super) async fn execute_pending_reads(
         state.cold_served[index] = cold > 0;
         state.bytes[index] += cold;
         state.charge(state.bytes[index]);
+        // Kafka's `Partition.fetchRecords` records the follower's position
+        // only after its read succeeded, so the row this read just filled
+        // reports the high watermark from before that position counted.
+        if let Some((position, leader_log_end)) = follower_update
+            && read.out.error_code == codes::NONE
+        {
+            record_follower_position(&partition, position, read.fetch_offset, leader_log_end).await;
+        }
     }
     // KIP-392: a partition that named a preferred read replica was never
     // read locally and never will be while it keeps naming one, so parking
@@ -309,6 +367,9 @@ pub(super) async fn execute_pending_reads(
         .iter()
         .any(|read| read.out.preferred_read_replica >= 0);
     if state.total() < state.min_bytes && max_wait_ms > 0 && !has_preferred_read_replica {
+        let mut waits = waits;
+        waits.extend(arm_leadership_waits(&pending));
+        refresh_follower_bounds(&mut pending, &state).await;
         long_poll_then_reread(broker, &mut pending, waits, &mut state, phases).await;
     }
     group_into_topic_responses(pending)
@@ -870,6 +931,7 @@ mod tests {
             read_committed,
             is_follower_fetch: false,
             fetch_only_leader: false,
+            follower_position: None,
             partition: Some(std::sync::Arc::clone(part)),
             out: super::PartitionData {
                 partition_index: 0,
@@ -1135,6 +1197,7 @@ mod tests {
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
+            follower_position: None,
             partition: None,
             out: super::PartitionData {
                 partition_index: 0,
@@ -1267,6 +1330,7 @@ mod tests {
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
+            follower_position: None,
             partition: Some(std::sync::Arc::clone(&part)),
             out: super::PartitionData {
                 error_code: crate::codes::OFFSET_OUT_OF_RANGE,
@@ -1486,7 +1550,10 @@ mod tests {
             },
         )];
 
-        let waits = super::arm_waits(&pending);
+        // What `execute_pending_reads` arms around its first pass: the append
+        // waiters before it, the leadership waiters after it.
+        let mut waits = super::arm_waits(&pending);
+        waits.extend(super::arm_leadership_waits(&pending));
         let phases = RequestPhases::default();
         let mut state = state_for(&pending, 4096, 30_000);
         let demoted = std::sync::Arc::clone(&part);
@@ -1595,7 +1662,7 @@ mod tests {
         }
         // Epoch 3 starts at offset 4, so epoch 2, which this log never saw,
         // ends there.
-        part.install_local_leadership(None, 1, 3)
+        part.install_local_leadership(&crate::producer_state::ProducerState::new(), None, 1, 3)
             .await
             .expect("promote");
         let mut pending = [super::PendingRead {

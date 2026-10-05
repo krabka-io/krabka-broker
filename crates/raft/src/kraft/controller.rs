@@ -63,7 +63,7 @@ use uuid::Uuid;
 use crate::{
     OffsetReservation, SubmitChangeResult,
     config::{
-        ControllerFetchMissLimit, DEFAULT_METADATA_RAFT_FETCH_MAX,
+        ControllerFetchMissLimit, DEFAULT_METADATA_RAFT_FETCH_MAX, MetadataLogConfig,
         MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
     },
     error::RaftError,
@@ -88,9 +88,11 @@ mod apply;
 /// snapshot in the same on-disk layout, and reads and writes it with these
 /// helpers rather than with a second file format of its own.
 pub mod checkpoint;
+mod cleaning;
 mod control_state;
 mod engine_loop;
 mod handle;
+mod idle;
 mod inbound;
 mod offsets;
 mod peer_rpc;
@@ -107,6 +109,7 @@ mod submit;
 mod timing;
 
 pub(crate) use self::checkpoint::parse_checkpoint_name;
+pub use self::{control_state::control_batch_image_records, records::is_kip835_noop};
 
 #[cfg(test)]
 mod test_support;
@@ -114,6 +117,8 @@ mod test_support;
 mod tests_apply;
 #[cfg(test)]
 mod tests_broker_registration;
+#[cfg(test)]
+mod tests_cleaning;
 #[cfg(test)]
 mod tests_control_records;
 #[cfg(test)]
@@ -142,16 +147,9 @@ mod tests_truncation;
 /// Filename of the node-local durable quorum-state file.
 const QUORUM_STATE_FILE: &str = "quorum-state";
 
-/// Subdirectory under the data dir holding KIP-630 `.checkpoint` artifacts for
-/// the single metadata partition. Matches the on-disk layout the broker's
-/// `FetchSnapshot` handler and broker-only observers expect.
-const METADATA_SUBDIR: &str = "@metadata-0";
-
-/// The checkpoint directory for a controller rooted at `data_dir`.
-#[must_use]
-pub fn checkpoint_dir(data_dir: &std::path::Path) -> PathBuf {
-    data_dir.join(METADATA_SUBDIR)
-}
+/// How often the engine cleans the metadata log by its retention limits:
+/// once a minute, the delay of Kafka's `RaftMetadataLogCleanerManager`.
+const METADATA_LOG_CLEAN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// All consensus state owned by the single engine task.
 struct Engine {
@@ -171,7 +169,12 @@ struct Engine {
     /// Clone of the command sender, handed to fire-and-forget send tasks so
     /// they can post the decoded `Receive*Response` event back to the loop.
     cmd_tx: mpsc::Sender<Command>,
-    /// Directory holding the metadata log + checkpoints + quorum-state file.
+    /// Publishes the failure of the metadata log directory, once a write to
+    /// it returned an I/O error. Kafka shuts the node down over it (KIP-858).
+    storage_fault_tx: watch::Sender<Option<String>>,
+    /// The metadata partition directory, `__cluster_metadata-0`: it holds the
+    /// log segments, the KIP-630 checkpoints and the quorum-state file, as
+    /// Kafka's does.
     data_dir: PathBuf,
     /// Monotonic clock base: `SimInstant(ms)` is `(now - base).as_millis()`.
     clock_base: Instant,
@@ -188,6 +191,10 @@ struct Engine {
     check_quorum_at: Option<Instant>,
     /// Consecutive fetch misses while still believing in a leader.
     fetch_misses: u32,
+    /// Discovery Fetches sent while no leader is known. The next one goes to
+    /// the discovery peer this count selects, so a dead peer, or this node's
+    /// own address in its bootstrap servers, cannot hold discovery for good.
+    discovery_attempts: usize,
     /// Outstanding `submit_change` waiters keyed by the end offset they need
     /// committed+applied. Resolved (Ok or per-record rejection) on apply.
     commit_waiters: Vec<CommitWaiter>,
@@ -203,8 +210,9 @@ struct Engine {
     /// committed image, so it waits while such a batch is uncommitted: see
     /// [`Engine::registration_change_must_wait`].
     registration_writes: BTreeMap<krabka_metadata::NodeId, (Epoch, Offset)>,
-    /// Snapshot every this many committed records past the last snapshot, then
-    /// prune the log below that point. `0` disables snapshotting (KIP-630).
+    /// Snapshot every this many committed records past the last snapshot
+    /// (KIP-630). The cleaning decides when the log below a snapshot goes.
+    /// `0` disables this trigger.
     snapshot_interval_records: u64,
     /// `metadata.log.max.record.bytes.between.snapshots` (KIP-630). `0`
     /// disables the byte-size cap.
@@ -213,6 +221,16 @@ struct Engine {
     /// time-based cap.
     max_snapshot_interval: Time,
     metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
+    /// Kafka's `MetadataLogConfig`: the retention limits the cleaning applies
+    /// and the KIP-835 idle interval.
+    metadata_log: MetadataLogConfig,
+    /// When the leader appends its next KIP-835 `NoOpRecord`. `None` while
+    /// this node does not lead, or when `metadata.max.idle.interval.ms` is
+    /// zero.
+    noop_at: Option<Instant>,
+    /// When the next periodic metadata log cleaning runs: Kafka's
+    /// `RaftMetadataLogCleanerManager`, which cleans once a minute.
+    clean_at: Instant,
     /// HWM at which the last checkpoint was written (and the log pruned to).
     /// Seeded from the recovered checkpoint on `open`.
     last_snapshot_end_offset: Offset,
@@ -328,6 +346,7 @@ struct CommitWaiter {
 pub struct KraftController {
     cmd_tx: mpsc::Sender<Command>,
     image_rx: watch::Receiver<Arc<MetadataImage>>,
+    storage_fault_rx: watch::Receiver<Option<String>>,
     leader_rx: watch::Receiver<Option<NodeId>>,
     quorum_rx: watch::Receiver<QuorumStateSnapshot>,
     peers: Arc<dyn PeerSender>,
@@ -348,7 +367,8 @@ pub struct KraftConfig {
     pub metadata_raft_fetch_max: MetadataRaftFetchMax,
     pub peers: Arc<dyn PeerSender>,
     /// Snapshot once committed offset advances this many records past the
-    /// last snapshot, then prune the log below it. `0` disables snapshotting.
+    /// last snapshot. The cleaning decides when the log below a snapshot goes.
+    /// `0` disables this trigger.
     pub snapshot_interval_records: u64,
     /// `metadata.log.max.record.bytes.between.snapshots` (KIP-630). `0`
     /// disables the byte-size cap.
@@ -358,4 +378,8 @@ pub struct KraftConfig {
     pub max_snapshot_interval: Time,
     /// Validated maximum metadata snapshot size this follower will fetch.
     pub metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
+    /// How the metadata log rolls, how long it keeps the prefix a snapshot
+    /// covers, and how often this node appends a KIP-835 `NoOpRecord` while
+    /// it leads.
+    pub metadata_log: MetadataLogConfig,
 }

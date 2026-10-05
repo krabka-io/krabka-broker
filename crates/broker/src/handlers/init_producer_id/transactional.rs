@@ -498,6 +498,8 @@ mod tests {
             false,
         );
         assert!(part.log_end_offset() == 0);
+        // The metadata reconcile installs this broker, node 1, as the leader.
+        part.install_leader_change(1, 0).await;
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&part));
 
         // Build a txn entry that names this partition.
@@ -673,6 +675,8 @@ mod tests {
             Arc::new(crate::producer_state::ProducerState::new()),
             false,
         );
+        // The metadata reconcile installs this broker, node 1, as the leader.
+        data.install_leader_change(1, 0).await;
         coordinator
             .partitions
             .insert("orders".into(), PartitionIndex(0), Arc::clone(&data));
@@ -1204,6 +1208,7 @@ mod tests {
                 Arc::new(crate::producer_state::ProducerState::new()),
                 false,
             );
+            ghost.install_leader_change(1, 0).await;
             coordinator
                 .partitions
                 .insert("ghost".into(), PartitionIndex(0), ghost);

@@ -100,15 +100,23 @@ impl ReplicatorSupervisor {
                 }
             } else if !part.diskless && part_record.leader == self.node_id {
                 // Kafka's `Partition.makeLeader`: the new leader epoch is
-                // recorded at the log end before the role is published.
+                // recorded at the log end before the role is published. A
+                // checkpoint write that fails takes the log directory offline,
+                // as `LeaderEpochFileCache` does through `LogDirFailureChannel`.
                 if let Err(error) = part
                     .install_local_leadership(
+                        &self.producer_state,
                         topic_id,
                         part_record.leader.0,
                         part_record.leader_epoch.0,
                     )
                     .await
                 {
+                    crate::partition_writer::flag_storage_failure(
+                        &error,
+                        &part.log_dir,
+                        &self.log_dir_status,
+                    );
                     warn!(
                         topic = %key.0,
                         partition = key.1,
@@ -292,6 +300,62 @@ mod tests {
                 "{pass}"
             );
         }
+    }
+
+    /// A disk that refuses every write to the leader-epoch checkpoint.
+    #[derive(Debug)]
+    struct EpochCheckpointFull;
+
+    impl krabka_log::LogIo for EpochCheckpointFull {
+        fn write_at(
+            &self,
+            target: krabka_log::IoTarget,
+            file: &std::fs::File,
+            buf: &[u8],
+        ) -> std::io::Result<usize> {
+            use std::io::Write as _;
+            if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
+                return Err(std::io::ErrorKind::PermissionDenied.into());
+            }
+            (&*file).write(buf)
+        }
+    }
+
+    /// Kafka's `LeaderEpochFileCache` reports a checkpoint write that fails to
+    /// `LogDirFailureChannel`, so a promotion that cannot record its epoch
+    /// takes the partition's log directory offline. The promotion is not
+    /// published, and the heartbeat reports the directory to the controller.
+    #[tokio::test]
+    async fn a_promotion_that_cannot_record_its_epoch_takes_the_log_directory_offline() {
+        let replicas = vec![NodeId(1), NodeId(2)];
+        let topic = topic_record("t", 1);
+        let as_follower = image_with(&[
+            topic.clone(),
+            partition_record("t", 0, NodeId(1), replicas.clone(), 3),
+        ]);
+        let as_leader = image_with(&[topic, partition_record("t", 0, NodeId(2), replicas, 7)]);
+        let (supervisor, partitions, _reporter, dir) = supervisor_fixture(as_follower.clone());
+        supervisor.reconcile(&as_follower).await;
+        let part = partitions
+            .get("t", PartitionIndex(0))
+            .expect("local follower materialized");
+        part.log
+            .lock()
+            .unwrap()
+            .test_set_io(Arc::new(EpochCheckpointFull));
+
+        supervisor.reconcile(&as_leader).await;
+
+        let offline: Vec<std::path::PathBuf> = supervisor
+            .log_dir_status
+            .offline()
+            .into_iter()
+            .map(|(log_dir, _reason)| log_dir)
+            .collect();
+        assert!(
+            (offline, part.current_leader.load(Ordering::Acquire))
+                == (vec![dir.path().to_path_buf()], 1)
+        );
     }
 
     #[tokio::test]

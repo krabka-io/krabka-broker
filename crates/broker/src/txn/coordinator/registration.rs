@@ -162,7 +162,7 @@ impl TxnCoordinator {
             }
             Err(error) => {
                 tracing::error!(tid, %error, "failed to persist registered transaction partitions");
-                self.append_error_code(tid).await
+                self.append_error_code(tid, &error).await
             }
         }
     }
@@ -537,6 +537,9 @@ mod tests {
         install_entry(&coordinator, entry).await;
         let requested = partition("orders", 9);
 
+        // The state partition has no local replica, which Kafka's append
+        // refuses with `NOT_LEADER_OR_FOLLOWER` and `appendTransactionToLog`
+        // answers `NOT_COORDINATOR`.
         for _ in 0..2 {
             check!(
                 coordinator
@@ -549,7 +552,7 @@ mod tests {
                         3,
                     )
                     .await
-                    == crate::codes::UNKNOWN_SERVER_ERROR
+                    == crate::codes::NOT_COORDINATOR
             );
         }
         // No partition, on the state-partition being unopened for this test,

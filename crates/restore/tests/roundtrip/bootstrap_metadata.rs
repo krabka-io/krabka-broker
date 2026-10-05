@@ -1,5 +1,5 @@
 //! The metadata a restore writes beside the partition data: the cluster id in
-//! `meta.properties.json`, and the topics and partitions the archive held in
+//! `meta.properties`, and the topics and partitions the archive held in
 //! `bootstrap.records.bin`.
 //!
 //! Reading those records back needs `wincode`, which this crate cannot name,
@@ -28,8 +28,8 @@ use crate::{
     fixture::{Fixture, build_fixture},
 };
 
-/// 3. Read back the restored metadata: `meta.properties.json` names the
-/// cluster id `format_target` chose, and `bootstrap.records.bin` carries the
+/// 3. Read back the restored metadata: `meta.properties` names the cluster id
+/// `format_target` chose and the target node, and `bootstrap.records.bin` carries the
 /// archive's topics and partitions -- with the SAME topic id the archive
 /// used, not a freshly generated one.
 #[tokio::test]
@@ -48,12 +48,19 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
     let report = restore(&args).await.expect("restore");
     check!(report.cluster_id == cluster_id);
 
-    let meta: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(log_dir.join("meta.properties.json")).expect("meta.properties.json"),
-    )
-    .expect("meta.properties.json is JSON");
+    let meta = krabka_format::MetaProperties::read(&log_dir)
+        .expect("meta.properties reads")
+        .expect("the restore formats the target");
+    check!(meta.directory_id.is_some());
     check!(
-        meta["cluster_id"] == serde_json::json!(krabka_format::ClusterId(cluster_id).to_string())
+        krabka_format::MetaProperties {
+            directory_id: None,
+            ..meta
+        } == krabka_format::MetaProperties {
+            cluster_id: krabka_format::ClusterId(cluster_id),
+            node_id: 1,
+            directory_id: None,
+        }
     );
 
     // `bootstrap.records.bin` is a length-prefixed stream of

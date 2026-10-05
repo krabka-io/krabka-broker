@@ -3,9 +3,10 @@
 //!
 //! A Streams client pushes its full topology description with this RPC after
 //! a heartbeat answers `TopologyDescriptionRequired`. Kafka stores it through
-//! the plugin `group.streams.topology.description.plugin.class` names, and a
-//! broker has no plugin by default. krabka has no plugin at all, so it answers
-//! every push exactly as a trunk broker without a plugin does:
+//! the plugin `group.streams.topology.description.plugin.class` names; krabka
+//! builds in Kafka's in-memory plugin and runs it when that key names it (see
+//! [`crate::coordinator::unified::streams::description`]). The answers, in
+//! Kafka's order:
 //!
 //! 1. `UNSUPPORTED_VERSION` (35) with no message while the streams protocol is
 //!    off, which is `KafkaApis.handleStreamsGroupTopologyDescriptionUpdate`.
@@ -15,13 +16,13 @@
 //! 3. `UNSUPPORTED_VERSION` (35) with the message of the
 //!    `UnsupportedVersionException` that
 //!    `GroupCoordinatorService.throwIfStreamsGroupTopologyDescriptionUpdateInvalid`
-//!    throws when `isPluginConfigured()` is false.
-//!
-//! The third answer comes before trunk's member and group validation, so no
-//! request reaches the coordinator. The heartbeat never asks for a push for
-//! the same reason (`StreamsGroupTopologyDescriptionManager.decorateHeartbeatResult`
-//! returns the heartbeat untouched without a plugin), and `StreamsGroupDescribe`
-//! v1 reports `NOT_STORED` for every described group.
+//!    throws when no plugin is configured, and `INVALID_REQUEST` (42) when
+//!    the member id or the group id is empty.
+//! 4. The coordinator errors of a group this broker does not coordinate.
+//! 5. `GROUP_ID_NOT_FOUND` (69) for a group that is not a streams group, and
+//!    then whatever the group's actor answers: `UNKNOWN_MEMBER_ID`,
+//!    `INVALID_REQUEST` for another topology epoch or a malformed
+//!    description, or success once the description is stored.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -31,10 +32,15 @@ use krabka_protocol::{
         streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
     },
 };
+use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
     codes,
+    coordinator::unified::{
+        GroupType,
+        streams::actor::{DescriptionPush, PushAnswer, StreamsGroupActorMessage},
+    },
     error::BrokerError,
     handlers::{RequestContext, group_read_denied},
 };
@@ -64,39 +70,98 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
     let req = StreamsGroupTopologyDescriptionUpdateRequest::decode(&mut cur, version)?;
-    let image = broker.controller.current_image();
-    let (error_code, error_message) = answer(broker, &image, &req, ctx);
+    let (error_code, error_message) = answer(broker, req, ctx).await;
     crate::handlers::encode_response(
         &StreamsGroupTopologyDescriptionUpdateResponse {
             error_code,
-            error_message: error_message.map(str::to_owned),
+            error_message,
             ..Default::default()
         },
         version,
     )
 }
 
-/// The error code and message trunk answers `req` with on a broker that has
-/// no topology description plugin.
-fn answer(
+/// The error code and message that trunk answers `req` with.
+async fn answer(
     broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    req: &StreamsGroupTopologyDescriptionUpdateRequest,
+    req: StreamsGroupTopologyDescriptionUpdateRequest,
     ctx: &RequestContext<'_>,
-) -> (i16, Option<&'static str>) {
-    let streams_enabled = broker.config.streams_group.enable
-        && crate::features::feature_enabled(
-            image,
-            crate::features::STREAMS_VERSION,
-            STREAMS_VERSION_MIN_LEVEL,
+) -> PushAnswer {
+    let invalid = |message: &str| (codes::INVALID_REQUEST, Some(message.to_owned()));
+    {
+        let image = broker.controller.current_image();
+        let streams_enabled = broker.config.streams_group.enable
+            && crate::features::feature_enabled(
+                &image,
+                crate::features::STREAMS_VERSION,
+                STREAMS_VERSION_MIN_LEVEL,
+            );
+        if !streams_enabled {
+            return (codes::UNSUPPORTED_VERSION, None);
+        }
+        if group_read_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            &req.group_id,
+        ) {
+            return (codes::GROUP_AUTHORIZATION_FAILED, None);
+        }
+    }
+    if !broker
+        .config
+        .streams_group
+        .topology_description_plugin
+        .is_configured()
+    {
+        return (
+            codes::UNSUPPORTED_VERSION,
+            Some(NO_PLUGIN_MESSAGE.to_owned()),
         );
-    if !streams_enabled {
-        return (codes::UNSUPPORTED_VERSION, None);
     }
-    if group_read_denied(broker.config.authorizer.as_ref(), image, ctx, &req.group_id) {
-        return (codes::GROUP_AUTHORIZATION_FAILED, None);
+    if req.member_id.is_empty() {
+        return invalid("MemberId can't be empty.");
     }
-    (codes::UNSUPPORTED_VERSION, Some(NO_PLUGIN_MESSAGE))
+    if req.group_id.is_empty() {
+        return invalid("GroupId can't be empty.");
+    }
+    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+        return (error_code, None);
+    }
+    let coordinator = &broker.group_coordinator;
+    let Some(handle) = coordinator.find_streams(&req.group_id) else {
+        // `GroupMetadataManager.streamsGroup`'s two messages.
+        let other_type = coordinator
+            .group_type(&req.group_id)
+            .is_some_and(|group_type| group_type != GroupType::Streams)
+            || coordinator.find(&req.group_id).is_some();
+        let message = if other_type {
+            format!("Group {} is not a streams group.", req.group_id)
+        } else {
+            format!("Group {} not found.", req.group_id)
+        };
+        return (codes::GROUP_ID_NOT_FOUND, Some(message));
+    };
+    let (reply, answered) = oneshot::channel();
+    let push = DescriptionPush {
+        member_id: req.member_id,
+        topology_epoch: req.topology_epoch,
+        description: req.topology_description,
+    };
+    if handle
+        .tx
+        .send(StreamsGroupActorMessage::PushDescription {
+            push: Box::new(push),
+            reply,
+        })
+        .await
+        .is_err()
+    {
+        return (codes::COORDINATOR_LOAD_IN_PROGRESS, None);
+    }
+    answered
+        .await
+        .unwrap_or((codes::UNKNOWN_SERVER_ERROR, None))
 }
 
 #[cfg(test)]

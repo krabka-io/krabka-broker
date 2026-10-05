@@ -18,7 +18,7 @@ use super::{
     MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
     MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE,
     REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
-    SEGMENT_BYTES, SEGMENT_MS,
+    SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_MS,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
     parse::{self, bool_value, int_value, long_value},
     validation::{parse_cleanup_policy, parse_compression_type},
@@ -89,6 +89,13 @@ pub(crate) fn apply_to_log_config(
                     && let Ok(b) = u64::try_from(b)
                 {
                     out.index_interval = ByteSize::from_bytes(b);
+                }
+            }
+            SEGMENT_INDEX_BYTES => {
+                if let Some(b) = int_value(v)
+                    && let Ok(b) = u64::try_from(b)
+                {
+                    out.segment_index_size = ByteSize::from_bytes(b);
                 }
             }
             MIN_COMPACTION_LAG_MS => {
@@ -341,6 +348,7 @@ mod tests {
         let overrides = maplit::btreemap! {
         SEGMENT_MS.to_string() => "60000".to_string(),
         INDEX_INTERVAL_BYTES.to_string() => "8192".to_string(),
+        SEGMENT_INDEX_BYTES.to_string() => "1048576".to_string(),
         MIN_COMPACTION_LAG_MS.to_string() => "30000".to_string(),
         MAX_COMPACTION_LAG_MS.to_string() => "120000".to_string(),
         MIN_CLEANABLE_DIRTY_RATIO.to_string() => "0.25".to_string(),
@@ -352,6 +360,7 @@ mod tests {
             out == LogConfig {
                 segment_roll_interval: minutes(1),
                 index_interval: bytes(8192),
+                segment_index_size: bytes(1_048_576),
                 min_compaction_lag: millis(30_000),
                 max_compaction_lag: Some(millis(120_000)),
                 min_cleanable_dirty_ratio: krabka_units::fraction(0.25),
@@ -380,7 +389,6 @@ mod tests {
     #[test]
     fn apply_ignores_the_keys_no_log_behaviour_reads() {
         let overrides = maplit::btreemap! {
-        super::super::SEGMENT_INDEX_BYTES.to_string() => "1048576".to_string(),
         super::super::SEGMENT_JITTER_MS.to_string() => "5000".to_string(),
         super::super::FILE_DELETE_DELAY_MS.to_string() => "1000".to_string(),
         super::super::FLUSH_MESSAGES.to_string() => "10".to_string(),

@@ -466,14 +466,11 @@ fn partitions_in(
 }
 
 fn directory_id(fs: &TinyFs) -> uuid::Uuid {
-    let raw = docker(&["exec", &fs.holder, "/bin/cat", "/fs/meta.properties.json"]);
-    let text = raw
-        .lines()
-        .find(|line| line.contains("directory_id"))
-        .and_then(|line| line.split('"').nth(3))
-        .expect("meta.properties.json directory_id");
-    text.parse::<krabka_format::DirectoryId>()
-        .expect("directory id in Kafka's base64 form")
+    let raw = docker(&["exec", &fs.holder, "/bin/cat", "/fs/meta.properties"]);
+    krabka_format::MetaProperties::parse(raw.as_bytes())
+        .expect("a Kafka meta.properties")
+        .directory_id
+        .expect("meta.properties directory.id")
         .into()
 }
 

@@ -20,8 +20,10 @@ use crate::log_dir_status::LogDirRegistry;
 ///
 /// This function inspects a `BrokerError` returned by a partition-writer
 /// mutation: `append`, `append_at`, `truncate_to`, `reset_to`, `compact`, or
-/// `trim_to_offset`. If the error is a `LogError::Io(_)`, the function marks
-/// the partition's owning log dir offline on the broker-wide registry.
+/// `trim_to_offset`. The supervisor also gives it the error of the
+/// leader-epoch checkpoint write that a promotion makes. If the error is a
+/// `LogError::Io(_)`, the function marks the partition's owning log dir
+/// offline on the broker-wide registry.
 ///
 /// The function is pessimistic. Any `io::Error` from the log layer is a
 /// credible disk-failure signal. A false positive, for example a transient
@@ -29,7 +31,7 @@ use crate::log_dir_status::LogDirRegistry;
 /// availability. KIP-113 fail-over elsewhere on the cluster keeps the topic
 /// live. A false negative silently corrupts produce acks, and this slice
 /// exists to prevent that failure mode.
-pub(super) fn flag_storage_failure(
+pub(crate) fn flag_storage_failure(
     err: &crate::error::BrokerError,
     log_dir: &ArcSwap<PathBuf>,
     log_dir_status: &LogDirRegistry,

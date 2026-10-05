@@ -36,7 +36,9 @@ pub struct StaticConfigOrigins {
     /// `group.consumer.session.timeout.ms`, and so on) and that a `[runtime]`
     /// field supplied. A key here reports at `STATIC_BROKER_CONFIG` even at
     /// Kafka's default value; a key that is not here does so only when the
-    /// node runs another value.
+    /// node runs another value. The keys the broker reads under their Kafka
+    /// names from `server_properties`, such as `log.roll.ms`, are here when
+    /// the operator named them.
     pub supplied_kafka_keys: std::collections::BTreeSet<&'static str>,
     /// `transactional.id.expiration.ms` was supplied.
     pub txn_id_expiration: bool,

@@ -159,7 +159,7 @@ fn write_node_files(log_dir: &std::path::Path, fixture: &Fixture) {
     std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
     std::fs::write(rlmm.join("snapshot"), rlmm_snapshot(fixture)).expect("write the rlmm snapshot");
 
-    let metadata = log_dir.join("__cluster_metadata/@metadata-0");
+    let metadata = krabka_raft::metadata_partition_dir(log_dir);
     std::fs::create_dir_all(&metadata).expect("create the metadata dir");
     std::fs::write(
         metadata.join("00000000000000000042-0000000001.checkpoint"),

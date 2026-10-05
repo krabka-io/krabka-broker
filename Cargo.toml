@@ -57,6 +57,10 @@ fancy-regex = "0.19"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
+# The local host name, which a controller bound to a wildcard address
+# advertises, as Kafka resolves a wildcard listener host to
+# `InetAddress.getLocalHost().getCanonicalHostName()`.
+hostname = "0.4"
 # KIP-664's ListTransactions filter accepts the full java.util.regex Pattern
 # grammar (including lookaround and backreferences).
 jsonpath-rust = "1.0"
@@ -129,7 +133,9 @@ refined_type = "0.6"
 # operator-readable subset.
 regex = "1"
 ring = "0.17"
-rustix = { version = "1", default-features = false, features = ["std", "fs"] }
+# `process` is for `getrlimit` and `setrlimit`: the broker binary raises its
+# open-file limit at start, as the JVM does for a Kafka broker.
+rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 # rustls-pemfile retired upstream (RUSTSEC-2025-0134, archived 2025-08).
 # Use the PEM parsers in `rustls-pki-types` (same code; pull explicitly).

@@ -42,6 +42,7 @@ pub(super) fn test_coordinator(
         crate::coordinator::unified::offsets_log::ProductionOffsetsLog::new(
             partitions.clone(),
             controller.clone(),
+            krabka_raft::NodeId(1),
         ),
     );
     Arc::new(GroupCoordinator::new(

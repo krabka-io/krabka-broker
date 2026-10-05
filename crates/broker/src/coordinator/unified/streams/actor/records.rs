@@ -53,6 +53,7 @@ pub(super) fn snapshot_pending_after_change(
         group_metadata: Some(StreamsGroupMetadataValue {
             epoch: state.group_epoch,
             metadata_hash: actor.metadata_hash,
+            description: actor.description_epochs,
         }),
         ..Default::default()
     };
@@ -167,6 +168,7 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
     StreamsGroupSeed {
         group_epoch: state.group_epoch,
         metadata_hash: actor.metadata_hash,
+        description_epochs: actor.description_epochs,
         assignment_epoch: state.target.epoch,
         topology: actor.topology.clone(),
         partition_metadata: actor.partition_metadata.clone(),
@@ -182,6 +184,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
     let state = &mut actor.state;
     state.group_epoch = seed.group_epoch;
     actor.metadata_hash = seed.metadata_hash;
+    actor.description_epochs = seed.description_epochs;
     state.target.epoch = seed.assignment_epoch;
     state.assignment_epoch = seed.assignment_epoch;
     if let Some(topology) = &seed.topology {
@@ -248,7 +251,7 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::streams::persistence::{
-        StreamsGroupTopologyValue, StreamsMemberWireState,
+        DescriptionEpochs, StreamsGroupTopologyValue, StreamsMemberWireState,
     };
 
     #[test]
@@ -299,6 +302,10 @@ mod tests {
         let seed = StreamsGroupSeed {
             group_epoch: 4,
             metadata_hash: 11,
+            description_epochs: DescriptionEpochs {
+                stored: 2,
+                failed: -1,
+            },
             assignment_epoch: 4,
             topology: Some(StreamsGroupTopologyValue {
                 epoch: 2,
@@ -313,6 +320,13 @@ mod tests {
 
         check!(actor.state.group_epoch == 4);
         check!(actor.metadata_hash == 11);
+        check!(
+            actor.description_epochs
+                == DescriptionEpochs {
+                    stored: 2,
+                    failed: -1,
+                }
+        );
         check!(actor.state.target.epoch == 4);
         check!(actor.state.topology_epoch == 2);
         let m = actor.state.members.get("m1").expect("member restored");

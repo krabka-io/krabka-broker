@@ -10,8 +10,8 @@ use crate::kraft::{
         checkpoint::{load_latest_checkpoint, write_checkpoint},
         recovery::replay_committed,
         test_support::{
-            TEST_ELECTION_TIMEOUT, build_engine_only, elect_single_voter_engine, topic_record,
-            voter_set,
+            TEST_ELECTION_TIMEOUT, build_engine_only, elect_single_voter_engine, test_metadata_log,
+            topic_record, voter_set,
         },
     },
     transport::NullPeerSender,
@@ -123,7 +123,7 @@ fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
     assert2::assert!(engine.latest_snapshot_id().is_some());
     assert2::assert!(engine.log.log_start_offset() == downgrade_end);
     assert2::assert!(engine.last_snapshot_end_offset == downgrade_end);
-    let checkpoint = load_latest_checkpoint(&checkpoint_dir(&engine.data_dir))
+    let checkpoint = load_latest_checkpoint(&engine.data_dir)
         .expect("read downgrade checkpoint")
         .expect("downgrade checkpoint exists");
     let contents =
@@ -184,6 +184,7 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
         krabka_units::prelude::bytes(0),
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
+        test_metadata_log(),
     )
     .expect("restart completes mandatory downgrade recovery");
 
@@ -195,9 +196,10 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
             .is_some()
     );
     drop(controller);
-    let recovered_log = KraftLog::open(dir.path()).expect("inspect recovered log");
+    let recovered_log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default())
+        .expect("inspect recovered log");
     assert2::assert!(recovered_log.log_start_offset() == downgrade_end);
-    let checkpoint = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+    let checkpoint = load_latest_checkpoint(dir.path())
         .expect("read checkpoint")
         .expect("checkpoint exists");
     let contents = crate::snapshot::SnapshotReader::read(&checkpoint).expect("decode checkpoint");
@@ -237,13 +239,8 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         .expect("downgrade remains pending");
     let bytes = crate::snapshot::SnapshotWriter::serialize(&pending.image, 0)
         .expect("serialize pending image");
-    write_checkpoint(
-        &checkpoint_dir(dir.path()),
-        pending.end_offset.0,
-        pending.epoch,
-        &bytes,
-    )
-    .expect("simulate checkpoint-before-prune crash");
+    write_checkpoint(dir.path(), pending.end_offset.0, pending.epoch, &bytes)
+        .expect("simulate checkpoint-before-prune crash");
     assert2::assert!(engine.log.log_start_offset() < pending.end_offset);
     drop(engine);
 
@@ -263,11 +260,13 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         krabka_units::prelude::bytes(0),
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
+        test_metadata_log(),
     )
     .expect("restart finishes checkpoint-before-prune recovery");
     assert2::assert!(controller.current_image().finalized_metadata_version() == Some(16));
     drop(controller);
-    let recovered_log = KraftLog::open(dir.path()).expect("inspect recovered log");
+    let recovered_log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default())
+        .expect("inspect recovered log");
     assert2::assert!(recovered_log.log_start_offset() == pending.end_offset);
 }
 
@@ -291,11 +290,20 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
     let (reply, mut rx) = oneshot::channel();
     engine.on_submit_change(&update(16), reply);
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    let pending = engine
+        .downgrade_snapshot_pending
+        .clone()
+        .expect("the downgrade checkpoint is still pending");
     drop(engine);
 
-    std::fs::remove_dir_all(checkpoint_dir(dir.path())).expect("remove checkpoint directory");
-    std::fs::write(checkpoint_dir(dir.path()), b"block checkpoint directory")
-        .expect("block checkpoint directory");
+    // The checkpoints share the metadata partition directory with the log,
+    // so the directory itself must stay. A directory where the checkpoint's
+    // temporary file goes makes every write of that one checkpoint fail.
+    std::fs::create_dir(data_dir.join(format!(
+        "{:020}-{:010}.tmp",
+        pending.end_offset.0, pending.epoch
+    )))
+    .expect("block the downgrade checkpoint");
     let result = KraftController::open(
         data_dir,
         NodeId(1),
@@ -312,6 +320,7 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
         krabka_units::prelude::bytes(0),
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
+        test_metadata_log(),
     );
     let Err(error) = result else {
         panic!("persistent mandatory-checkpoint failure must fail open");

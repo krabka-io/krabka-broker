@@ -2,8 +2,9 @@
 //!
 //! One path appends a `TxnEntry` to its `__transaction_state` partition as a
 //! byte-exact Kafka `TransactionLogKey` / `TransactionLogValue` record pair and
-//! then publishes it to the in-memory map. A second appends a null-valued
-//! record under that same key, which is how KIP-98 expires a transactional id.
+//! publishes it to the in-memory map once the record is committed. A second
+//! appends a null-valued record under that same key, which is how KIP-98
+//! expires a transactional id.
 //! The third replays one `__transaction_state` partition, tombstones
 //! included, for the load that follows an election.
 
@@ -16,10 +17,7 @@ use krabka_protocol::records::{Record, RecordBatch};
 use tokio::sync::Mutex;
 
 use super::{TxnCoordinator, pid_index::RecoveredTransactions};
-use crate::{
-    error::BrokerError,
-    txn::{bootstrap, state::TxnEntry},
-};
+use crate::{error::BrokerError, txn::state::TxnEntry};
 
 impl TxnCoordinator {
     pub(crate) async fn lock_state_partition_for(
@@ -34,8 +32,9 @@ impl TxnCoordinator {
 
     /// Persists `entry` to the matching `__transaction_state` partition log,
     /// then updates the in-memory map. The partition's writer task appends the
-    /// batch, in order with all other produce appends. Returns the entry as
-    /// persisted.
+    /// batch, in order with all other produce appends, and the map changes
+    /// only once the batch is committed (see [`super::commit`]). Returns the
+    /// entry as persisted.
     ///
     /// `format_txnv` is the finalized `transaction.version` that the caller
     /// resolved from the live metadata image. It selects the byte-exact Kafka
@@ -46,9 +45,11 @@ impl TxnCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Txn`] if the partition is not locally held
-    /// or the append fails, and [`BrokerError::Protocol`] if the transactional
-    /// id is longer than 32767 bytes, which the log key cannot carry.
+    /// Returns [`BrokerError::TransactionStateWriteUncommitted`] with the
+    /// coordinator error the client gets if the write does not commit in this
+    /// broker's loaded term of the partition, and [`BrokerError::Protocol`] if
+    /// the transactional id is longer than 32767 bytes, which the log key
+    /// cannot carry.
     #[tracing::instrument(
         name = "txn_coordinator_put",
         level = "debug",
@@ -83,9 +84,11 @@ impl TxnCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Txn`] if the partition is not locally held
-    /// or the append fails, and [`BrokerError::Protocol`] if the transactional
-    /// id is longer than 32767 bytes, which the log key cannot carry.
+    /// Returns [`BrokerError::TransactionStateWriteUncommitted`] with the
+    /// coordinator error the client gets if the write does not commit in this
+    /// broker's loaded term of the partition, and [`BrokerError::Protocol`] if
+    /// the transactional id is longer than 32767 bytes, which the log key
+    /// cannot carry.
     pub(crate) async fn put_under_state_partition_lock(
         &self,
         entry: TxnEntry,
@@ -93,11 +96,7 @@ impl TxnCoordinator {
     ) -> Result<TxnEntry, BrokerError> {
         let tid = entry.transactional_id.clone();
         let p = self.partition_for(&tid);
-        let generation = self.loaded_generation(p).await?;
-        let part = self
-            .partitions
-            .get(bootstrap::TOPIC, p)
-            .ok_or_else(|| BrokerError::Txn(format!("__transaction_state-{p} not local")))?;
+        let term = self.loaded_term(p).await?;
         self.validate_pid_install(&entry)?;
 
         // Byte-exact Kafka TransactionLogKey(v0) + TransactionLogValue(v0/v1).
@@ -117,13 +116,18 @@ impl TxnCoordinator {
         });
         batch.last_offset_delta = 0;
 
-        part.produce_batch(batch).await?;
+        self.append_committed(
+            term,
+            batch,
+            super::commit::transition_timeout(entry.txn_timeout_ms),
+        )
+        .await?;
 
         // Kafka's `appendTransactionToLog` callback: an append that ends in a
         // newer coordinator term does not change the cache. The load of that
         // term reads the record from the log.
         let leaders = self.leader_partitions.read().await;
-        Self::require_generation(&leaders, p, generation)?;
+        Self::require_generation(&leaders, p, term.generation)?;
         let _pid_install = self
             .pid_install
             .lock()
@@ -159,15 +163,17 @@ impl TxnCoordinator {
     /// revival can land between them and no reviving record can end up before
     /// this tombstone in the log.
     ///
-    /// A failed append leaves the coordinator exactly as it was, and the next
+    /// The id leaves the map only once the tombstone is committed, as Kafka's
+    /// `removeFromCacheCallback` removes it only on a complete append. A
+    /// failed append leaves the coordinator exactly as it was, and the next
     /// sweep retries.
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Txn`] if the partition is not locally held, the
-    /// append error if the append fails, and [`BrokerError::Protocol`] if the
-    /// transactional id is longer than 32767 bytes, which the log key cannot
-    /// carry.
+    /// Returns [`BrokerError::TransactionStateWriteUncommitted`] if the
+    /// tombstone does not commit in this broker's loaded term of the
+    /// partition, and [`BrokerError::Protocol`] if the transactional id is
+    /// longer than 32767 bytes, which the log key cannot carry.
     // cargo-mutants: append to a live partition log + live DashMap state
     #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(
@@ -180,11 +186,7 @@ impl TxnCoordinator {
     pub(crate) async fn tombstone(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
         let tid = entry.transactional_id.as_str();
         let p = self.partition_for(tid);
-        let generation = self.loaded_generation(p).await?;
-        let part = self
-            .partitions
-            .get(bootstrap::TOPIC, p)
-            .ok_or_else(|| BrokerError::Txn(format!("__transaction_state-{p} not local")))?;
+        let term = self.loaded_term(p).await?;
 
         let mut batch = RecordBatch::default();
         batch.records.push(Record {
@@ -195,10 +197,11 @@ impl TxnCoordinator {
         });
         batch.last_offset_delta = 0;
 
-        part.produce_batch(batch).await?;
+        self.append_committed(term, batch, super::commit::TOMBSTONE_TIMEOUT)
+            .await?;
 
         let leaders = self.leader_partitions.read().await;
-        Self::require_generation(&leaders, p, generation)?;
+        Self::require_generation(&leaders, p, term.generation)?;
         self.state.remove(tid);
         Self::evict_entry_pids(&self.pid_to_tid, entry);
         drop(leaders);
@@ -281,10 +284,13 @@ mod tests {
     use krabka_ids::PartitionIndex;
     use krabka_log::ProducerId;
 
-    use super::{Offset, bootstrap, recovery_next_offset};
+    use super::{Offset, recovery_next_offset};
     use crate::{
         error::BrokerError,
-        txn::{coordinator::test_support::live_coordinator, state::TxnEntry, version::TxnVersion},
+        txn::{
+            bootstrap, coordinator::test_support::live_coordinator, state::TxnEntry,
+            version::TxnVersion,
+        },
     };
 
     #[test]

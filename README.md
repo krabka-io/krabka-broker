@@ -65,7 +65,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-barrier` | Operator CLI for barrier groups: define a group, trigger and list cuts, verify a cut against the log. |
 | `krabka-guard` | Operator CLI for topic write freezes and break-glass proposals: freeze, thaw, propose, approve. |
 | `krabka-backup` | Operator CLI for restore inputs: capture the RLMM and metadata snapshots and group offsets, verify a capture, put offsets back. |
-| `krabka-format` | Formats a fresh log directory: `meta.properties.json`, bootstrap records, the singleton `VotersRecord`. |
+| `krabka-format` | Formats a fresh log directory: Kafka's `meta.properties`, bootstrap records, the singleton `VotersRecord`. |
 | `krabka-restore` | Offline point-in-time restore of a bootable log directory from a KIP-405 archive. |
 | `krabka-throttle` | Quota token buckets (Creusot-verified). |
 | `krabka-verified` | Formally verified pure kernels shared by consensus and log. |
@@ -322,7 +322,7 @@ The `chown` is not incidental. Both the formatter and the broker run as
 `nonroot`. The apko base does create `/var/lib/krabka` owned by 65532, but a
 bind mount replaces that directory with the host's, and a freshly created host
 directory belongs to root — so the format step fails with `Permission denied`
-before it writes `meta.properties.json`.
+before it writes `meta.properties`.
 
 `//packaging:image_binaries_test` asserts what those layers carry and that each
 binary answers `--help`; it needs no daemon and runs in `bazel test //...`.
@@ -448,8 +448,10 @@ unexplained survivor.
 ## Storage formatting
 
 A KRaft node must have its log directory formatted before the broker will boot —
-that step seeds `meta.properties.json` and the singleton `VotersRecord`, and the
-broker treats an unformatted directory as operator error.
+that step seeds Kafka's `meta.properties` and the singleton `VotersRecord`, and
+the broker treats an unformatted directory as operator error. `--node-id` is
+required: `meta.properties` records it, and the broker refuses to start with a
+`--broker-id` other than the one the directory records.
 
 ```
 bazel run //:format_bin -- --log-dir /var/lib/krabka --standalone \

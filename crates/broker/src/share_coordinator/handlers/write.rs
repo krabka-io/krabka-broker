@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, join_all};
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::{
@@ -95,13 +95,14 @@ async fn write_state(
     {
         return WriteShareGroupStateResponse::default();
     }
-    let group_id = req.group_id;
+    let group_id = req.group_id.as_str();
 
-    let mut results: Vec<WriteStateResult> = Vec::with_capacity(req.topics.len());
-    for topic in req.topics {
+    // Kafka's `ShareCoordinatorService` schedules one operation for each
+    // partition and answers when every one of them completes. Each operation
+    // waits until its records commit, so the partitions run together.
+    let results: Vec<WriteStateResult> = join_all(req.topics.into_iter().map(|topic| async move {
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
-        for pd in topic.partitions {
+        let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
             let request = ShareWrite {
                 state_epoch: pd.state_epoch,
                 leader_epoch: pd.leader_epoch,
@@ -119,9 +120,9 @@ async fn write_state(
                     .collect(),
             };
             let result = coordinator
-                .write(image, &group_id, topic_id, pd.partition, request)
+                .write(image, group_id, topic_id, pd.partition, request)
                 .await;
-            partitions.push(match result {
+            match result {
                 Ok(()) => PartitionResult {
                     partition: pd.partition,
                     error_code: codes::NONE,
@@ -134,14 +135,16 @@ async fn write_state(
                     error_message: Some(error.row_message("write")),
                     ..Default::default()
                 },
-            });
-        }
-        results.push(WriteStateResult {
+            }
+        }))
+        .await;
+        WriteStateResult {
             topic_id: topic.topic_id,
             partitions,
             ..Default::default()
-        });
-    }
+        }
+    }))
+    .await;
 
     WriteShareGroupStateResponse {
         results,

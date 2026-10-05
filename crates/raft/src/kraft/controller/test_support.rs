@@ -15,6 +15,18 @@ pub const TEST_RECV_TIMEOUT: Time = secs(1);
 /// Default election timeout for engines built by [`build`].
 pub const TEST_ELECTION_TIMEOUT: Time = secs(1);
 
+/// The metadata log configuration of an engine under test: Kafka's segment
+/// defaults, no KIP-835 no-op records, so a test sees only the offsets its own
+/// writes land at, and no size allowance, so every cleaning keeps only the
+/// newest snapshot and moves the log start up to it.
+pub fn test_metadata_log() -> MetadataLogConfig {
+    MetadataLogConfig {
+        max_retention_size: Some(krabka_units::prelude::bytes(0)),
+        max_idle_interval: krabka_units::prelude::millis(0),
+        ..MetadataLogConfig::default()
+    }
+}
+
 pub fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
     krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
         krabka_metadata::voters::Voter {
@@ -58,7 +70,7 @@ pub fn build_with_max_bytes_between_snapshots(
     max_bytes_between_snapshots: krabka_units::prelude::ByteSize,
 ) -> (KraftController, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path()).expect("open log");
+    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
     let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
     let ctrl = KraftController::spawn(
         KraftConfig {
@@ -76,6 +88,7 @@ pub fn build_with_max_bytes_between_snapshots(
             max_bytes_between_snapshots,
             max_snapshot_interval: krabka_units::prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
+            metadata_log: test_metadata_log(),
         },
         log,
         dir.path().to_path_buf(),
@@ -113,7 +126,7 @@ pub fn build_full_with_policy(
     metadata_raft_fetch_max: MetadataRaftFetchMax,
 ) -> (KraftController, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path()).expect("open log");
+    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
     let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
     let ctrl = KraftController::spawn(
         KraftConfig {
@@ -131,6 +144,7 @@ pub fn build_full_with_policy(
             max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
             max_snapshot_interval: krabka_units::prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
+            metadata_log: test_metadata_log(),
         },
         log,
         dir.path().to_path_buf(),
@@ -153,8 +167,26 @@ pub fn build_engine_only_with_policy(
     controller_fetch_miss_limit: ControllerFetchMissLimit,
     metadata_raft_fetch_max: MetadataRaftFetchMax,
 ) -> (Engine, tempfile::TempDir) {
+    build_engine_only_with_metadata_log(
+        me,
+        ids,
+        controller_fetch_miss_limit,
+        metadata_raft_fetch_max,
+        test_metadata_log(),
+    )
+}
+
+/// Like [`build_engine_only_with_policy`], with the metadata log rolled,
+/// cleaned and kept alive as `metadata_log` says.
+pub fn build_engine_only_with_metadata_log(
+    me: NodeId,
+    ids: &[NodeId],
+    controller_fetch_miss_limit: ControllerFetchMissLimit,
+    metadata_raft_fetch_max: MetadataRaftFetchMax,
+    metadata_log: MetadataLogConfig,
+) -> (Engine, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path()).expect("open log");
+    let log = KraftLog::open(dir.path(), &metadata_log).expect("open log");
     let core = QuorumStateMachine::new(
         me,
         QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids)),
@@ -205,6 +237,7 @@ pub fn build_engine_only_with_policy(
             leader_tx,
             quorum_tx,
             cmd_tx,
+            storage_fault_tx: watch::channel(None).0,
             data_dir: dir.path().to_path_buf(),
             clock_base,
             election_timeout: TEST_ELECTION_TIMEOUT,
@@ -215,6 +248,7 @@ pub fn build_engine_only_with_policy(
             fetch_at: None,
             check_quorum_at: None,
             fetch_misses: 0,
+            discovery_attempts: 0,
             commit_waiters: Vec::new(),
             was_leader,
             held_epoch,
@@ -223,6 +257,9 @@ pub fn build_engine_only_with_policy(
             max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
             max_snapshot_interval: krabka_units::prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
+            metadata_log,
+            noop_at: None,
+            clean_at: clock_base + METADATA_LOG_CLEAN_INTERVAL,
             last_snapshot_end_offset: Offset(0),
             last_snapshot_timestamp_ms: 0,
             last_snapshot_at_ms: 0,

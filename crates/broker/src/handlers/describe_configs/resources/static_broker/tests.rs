@@ -450,3 +450,69 @@ fn static_boolean_keys_report_their_provenance() {
     }
     assert!(actual == expected);
 }
+
+/// The static settings of a node name `metadata.log.dir` when the node has
+/// one, with the path as the value. Kafka reports an unset `metadata.log.dir`
+/// as null at `DEFAULT_CONFIG`, so the settings of a node without one do not
+/// name it. The five `MetadataLogConfig` keys that the `[runtime]` table named
+/// are there with the value the metadata log runs with, also at Kafka's own
+/// default value.
+#[test]
+fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
+    let base = static_settings(&crate::config::BrokerConfig::default());
+    let with = |extra: &[(&'static str, &str)]| {
+        let mut settings = base.clone();
+        settings.extend(extra.iter().map(|(key, value)| (*key, (*value).to_owned())));
+        settings
+    };
+    let cases = [
+        ("nothing named", None, "[runtime]\n", with(&[])),
+        (
+            "a metadata log directory",
+            Some("/var/lib/krabka/metadata"),
+            "[runtime]\n",
+            with(&[("metadata.log.dir", "/var/lib/krabka/metadata")]),
+        ),
+        (
+            "every metadata log key at Kafka's default",
+            None,
+            "[runtime]\n\
+             metadata_log_segment_bytes = \"1GiB\"\n\
+             metadata_log_segment_roll_interval = \"7d\"\n\
+             metadata_max_retention_bytes = \"100MiB\"\n\
+             metadata_max_retention = \"7d\"\n\
+             metadata_max_idle_interval = \"500ms\"\n",
+            with(&[
+                ("metadata.log.segment.bytes", "1073741824"),
+                ("metadata.log.segment.ms", "604800000"),
+                ("metadata.max.retention.bytes", "104857600"),
+                ("metadata.max.retention.ms", "604800000"),
+                ("metadata.max.idle.interval.ms", "500"),
+            ]),
+        ),
+        (
+            "a directory and two changed keys",
+            Some("/mnt/kafka/kafka-metadata-logs"),
+            "[runtime]\n\
+             metadata_log_segment_bytes = \"8MiB\"\n\
+             metadata_max_idle_interval = \"0ms\"\n",
+            with(&[
+                ("metadata.log.dir", "/mnt/kafka/kafka-metadata-logs"),
+                ("metadata.log.segment.bytes", "8388608"),
+                ("metadata.max.idle.interval.ms", "0"),
+            ]),
+        ),
+    ];
+
+    for (label, metadata_log_dir, source, expected) in cases {
+        let file: crate::file_config::FileConfig =
+            toml::from_str(source).expect("parse runtime config");
+        let mut config = crate::config::BrokerConfig {
+            metadata_log_dir: metadata_log_dir.map(std::path::PathBuf::from),
+            ..crate::config::BrokerConfig::default()
+        };
+        file.apply_to(&mut config).expect("apply runtime config");
+
+        check!(static_settings(&config) == expected, "{label}");
+    }
+}

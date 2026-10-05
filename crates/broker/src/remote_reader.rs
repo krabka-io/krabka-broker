@@ -22,6 +22,7 @@ use krabka_remote_storage::{
 mod aborted_txns;
 mod blocking;
 mod fetch;
+mod partition_read;
 mod pool;
 #[cfg(test)]
 mod test_support;

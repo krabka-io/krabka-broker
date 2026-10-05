@@ -11,6 +11,7 @@ use krabka_protocol::{Decode as _, records::RecordBatch};
 use krabka_units::prelude::ByteSize;
 
 use crate::{
+    config::MetadataLogConfig,
     error::RaftError,
     kraft::types::{Epoch, LogOffsetMetadata, LogView},
 };
@@ -21,6 +22,10 @@ pub struct KraftLog {
     /// not track it.
     hwm: Offset,
     hwm_path: PathBuf,
+    /// The first I/O error a write to the metadata log directory returned.
+    /// It stays set: Kafka treats a failed metadata log directory as fatal
+    /// (KIP-858), and the engine stops the controller over it.
+    failure: Option<String>,
 }
 
 /// Read budget [`KraftLog::timestamp_below`] starts from. It only ever needs
@@ -28,28 +33,76 @@ pub struct KraftLog {
 /// sized to make that the common case rather than to bound the result.
 const TIMESTAMP_READ_WINDOW: ByteSize = krabka_units::prelude::kibibytes(64);
 
-const HIGH_WATERMARK_FILE: &str = "high-watermark.checkpoint";
+/// The file the committed offset survives a restart in. Kafka keeps no such
+/// file, so the name is krabka's own. It sits beside the KIP-630 snapshots in
+/// the metadata partition directory, so it must not end in `.checkpoint`: a
+/// snapshot scan, krabka's or Kafka's, and a `*.checkpoint` glob must not take
+/// it for a snapshot.
+const HIGH_WATERMARK_FILE: &str = "high-watermark";
+
+/// The `krabka_log` configuration of the metadata log, as Kafka's
+/// `KafkaRaftLog.createLog` builds it: the segments roll at
+/// `metadata.log.segment.bytes` and `metadata.log.segment.ms`, and time and
+/// size retention are off. Only a snapshot moves the log start, so only the
+/// metadata log's own cleaning deletes a segment.
+fn metadata_log_config(config: &MetadataLogConfig) -> LogConfig {
+    LogConfig {
+        segment_size: config.segment_size,
+        segment_roll_interval: config.segment_roll_interval,
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    }
+}
 
 impl KraftLog {
-    /// Opens or creates the metadata log under `dir/@metadata-0`.
+    /// Opens or creates the metadata log in `dir`, the metadata partition
+    /// directory `__cluster_metadata-0`. The segments roll as `config` says.
     ///
     /// # Errors
     /// Returns [`RaftError`] if the log directory cannot be created or the
     /// underlying `krabka_log::Log` fails to open.
-    pub fn open(dir: impl AsRef<Path>) -> Result<Self, RaftError> {
-        let hwm_path = dir.as_ref().join(HIGH_WATERMARK_FILE);
-        let log_dir = dir.as_ref().join("@metadata-0");
-        std::fs::create_dir_all(&log_dir).map_err(krabka_log::LogError::Io)?;
+    pub fn open(dir: impl AsRef<Path>, config: &MetadataLogConfig) -> Result<Self, RaftError> {
+        let log_dir = dir.as_ref();
+        let hwm_path = log_dir.join(HIGH_WATERMARK_FILE);
+        std::fs::create_dir_all(log_dir).map_err(krabka_log::LogError::Io)?;
         // `krabka_log::Log` checkpoints its own log start, so a prune that
         // advanced inside the active segment is already restored here.
-        let log = Log::open(&log_dir, LogConfig::default())?;
+        let log = Log::open(log_dir, metadata_log_config(config))?;
         let hwm = std::fs::read_to_string(&hwm_path)
             .ok()
             .and_then(|value| value.trim().parse::<i64>().ok())
             .map_or_else(|| log.log_start_offset(), Offset)
             .max(log.log_start_offset())
             .min(log.log_end_offset());
-        Ok(Self { log, hwm, hwm_path })
+        Ok(Self {
+            log,
+            hwm,
+            hwm_path,
+            failure: None,
+        })
+    }
+
+    /// The first I/O error a write to the metadata log directory returned, or
+    /// `None` while every write has succeeded.
+    #[must_use]
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    /// Records the error of a failed write when it is an I/O error, and
+    /// passes `result` on.
+    fn checked<T>(&mut self, result: Result<T, krabka_log::LogError>) -> Result<T, RaftError> {
+        if let Err(krabka_log::LogError::Io(error)) = &result {
+            self.note_failure(error);
+        }
+        Ok(result?)
+    }
+
+    fn note_failure(&mut self, error: &std::io::Error) {
+        if self.failure.is_none() {
+            self.failure = Some(error.to_string());
+        }
     }
 
     #[must_use]
@@ -63,6 +116,13 @@ impl KraftLog {
     #[must_use]
     pub fn hwm(&self) -> Offset {
         self.hwm
+    }
+
+    /// The size of every segment's `.log` file together, Kafka's
+    /// `UnifiedLog.size`, which the metadata log's size retention weighs.
+    #[must_use]
+    pub fn size(&self) -> ByteSize {
+        self.log.size()
     }
 
     /// Leader path: appends a batch stamped with `append_timestamp_ms`.
@@ -88,7 +148,8 @@ impl KraftLog {
         batch.max_timestamp = append_timestamp_ms;
         // The metadata log is always `CreateTime`, so the log stamps nothing
         // and the second element of the append result is always `None`.
-        let (base_offset, _log_append_time_ms) = self.log.append(batch)?;
+        let appended = self.log.append(batch);
+        let (base_offset, _log_append_time_ms) = self.checked(appended)?;
         Ok(base_offset)
     }
 
@@ -98,7 +159,8 @@ impl KraftLog {
     /// Returns [`RaftError`] if the underlying append fails, for example when
     /// `offset` does not equal the current log end offset.
     pub fn append_at(&mut self, batch: &mut RecordBatch, offset: Offset) -> Result<(), RaftError> {
-        self.log.append_at(batch, offset)?;
+        let appended = self.log.append_at(batch, offset);
+        self.checked(appended)?;
         Ok(())
     }
 
@@ -201,7 +263,8 @@ impl KraftLog {
     /// # Errors
     /// Returns [`RaftError`] if the underlying truncation fails.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), RaftError> {
-        self.log.truncate_to(offset)?;
+        let truncated = self.log.truncate_to(offset);
+        self.checked(truncated)?;
         // A cut inside a batch can leave the physical end below the request.
         self.hwm = Offset(krabka_verified::truncation_frontier(
             self.hwm.0,
@@ -222,8 +285,12 @@ impl KraftLog {
         if end_offset <= self.log.log_start_offset() {
             return Ok(());
         }
-        self.log.set_log_start_offset(end_offset)?;
-        self.log.trim_to_offset(end_offset)?;
+        // `trim_to_offset` deletes every sealed segment wholly below the new
+        // start and then checkpoints the start itself. Setting the start
+        // first would make the trim see nothing left to do, and the segments
+        // would stay on disk.
+        let trimmed = self.log.trim_to_offset(end_offset);
+        self.checked(trimmed)?;
         Ok(())
     }
 
@@ -235,15 +302,17 @@ impl KraftLog {
     /// # Errors
     /// Returns [`RaftError`] if the underlying reset fails.
     pub fn install_snapshot(&mut self, end_offset: Offset) -> Result<(), RaftError> {
-        self.log.reset_to(end_offset)?;
+        let reset = self.log.reset_to(end_offset);
+        self.checked(reset)?;
         self.hwm = end_offset;
         self.persist_hwm();
         Ok(())
     }
 
-    fn persist_hwm(&self) {
+    fn persist_hwm(&mut self) {
         if let Err(error) = std::fs::write(&self.hwm_path, self.hwm.0.to_string()) {
             tracing::error!(?error, path = %self.hwm_path.display(), "kraft: persist high watermark failed");
+            self.note_failure(&error);
         }
     }
 }
@@ -319,7 +388,7 @@ mod tests {
 
     fn open_tmp() -> (KraftLog, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let log = KraftLog::open(dir.path()).expect("open");
+        let log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open");
         (log, dir)
     }
 
@@ -579,7 +648,7 @@ mod tests {
     fn prune_inside_the_active_segment_survives_a_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         {
-            let mut log = KraftLog::open(dir.path()).expect("open");
+            let mut log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open");
             for _ in 0..5 {
                 log.append(&mut batch(0, 1, b"x"), 0).unwrap();
             }
@@ -589,7 +658,7 @@ mod tests {
             log.prune_to(Offset(3)).unwrap();
         }
 
-        let log = KraftLog::open(dir.path()).expect("reopen");
+        let log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("reopen");
 
         check!((log.log_start_offset().0, log.log_end_offset().0) == (3, 5));
     }
@@ -642,7 +711,7 @@ mod tests {
             log.advance_hwm(Offset(2));
             assert2::assert!(log.hwm() == Offset(1));
             drop(log);
-            let reopened = KraftLog::open(dir.path()).unwrap();
+            let reopened = KraftLog::open(dir.path(), &MetadataLogConfig::default()).unwrap();
             assert2::assert!(reopened.log_end_offset() == Offset(1));
             assert2::assert!(reopened.hwm() == Offset(1));
         }
@@ -666,6 +735,97 @@ mod tests {
                 log.log_end_offset().0,
                 log.hwm().0
             ) == (1, 1, 0)
+        );
+    }
+
+    /// The `.log` files in `dir`, by name, oldest first.
+    fn segment_files(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("list the partition directory")
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The metadata log rolls as `metadata.log.segment.bytes` and
+    /// `metadata.log.segment.ms` say, on the append that would cross either
+    /// limit, as Kafka's `UnifiedLog.maybeRoll` does.
+    #[test]
+    fn segments_roll_by_the_metadata_log_limits() {
+        // (what, segment size, roll interval, append timestamps, segments)
+        let cases = [
+            (
+                "inside both limits",
+                mebibytes(1),
+                krabka_units::prelude::secs(10),
+                vec![0, 5_000, 10_000],
+                vec!["00000000000000000000.log"],
+            ),
+            (
+                "the size limit",
+                krabka_units::prelude::bytes(1),
+                krabka_units::prelude::secs(10),
+                vec![0, 1, 2],
+                vec![
+                    "00000000000000000000.log",
+                    "00000000000000000001.log",
+                    "00000000000000000002.log",
+                ],
+            ),
+            (
+                "the roll interval",
+                mebibytes(1),
+                krabka_units::prelude::secs(10),
+                vec![0, 10_000, 10_001],
+                vec!["00000000000000000000.log", "00000000000000000002.log"],
+            ),
+        ];
+        for (what, segment_size, segment_roll_interval, timestamps, segments) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let config = MetadataLogConfig {
+                segment_size,
+                segment_roll_interval,
+                ..MetadataLogConfig::default()
+            };
+            let mut log = KraftLog::open(dir.path(), &config).expect("open");
+            for timestamp in timestamps {
+                log.append(&mut batch(0, 1, b"x"), timestamp)
+                    .expect("append");
+            }
+            check!(segment_files(dir.path()) == segments, "{what}");
+        }
+    }
+
+    /// A prune deletes every segment wholly below the new log start, as
+    /// Kafka's `deleteBeforeSnapshot` does, and keeps the one the new start
+    /// falls in.
+    #[test]
+    fn a_prune_deletes_the_segments_wholly_below_the_new_log_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = MetadataLogConfig {
+            segment_size: krabka_units::prelude::bytes(1),
+            ..MetadataLogConfig::default()
+        };
+        let mut log = KraftLog::open(dir.path(), &config).expect("open");
+        for _ in 0..4 {
+            log.append(&mut batch(0, 1, b"x"), 0).expect("append");
+        }
+        log.advance_hwm(Offset(4));
+
+        log.prune_to(Offset(2)).expect("prune");
+
+        check!(
+            (log.log_start_offset(), segment_files(dir.path()))
+                == (
+                    Offset(2),
+                    vec![
+                        "00000000000000000002.log".to_owned(),
+                        "00000000000000000003.log".to_owned(),
+                    ]
+                )
         );
     }
 }

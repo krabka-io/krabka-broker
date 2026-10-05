@@ -79,10 +79,13 @@ mod wire;
 pub use config::{
     BootstrapMode, ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
     ControllerAdminRouter, ControllerApiVersion, ControllerConfig, ControllerFetchMissLimit,
-    KAFKA_4_3_1_APIS, LATEST_PRODUCTION_METADATA_VERSION, ListenerLimits,
+    DEFAULT_METADATA_LOG_SEGMENT_ROLL_INTERVAL, DEFAULT_METADATA_LOG_SEGMENT_SIZE,
+    DEFAULT_METADATA_MAX_IDLE_INTERVAL, DEFAULT_METADATA_MAX_RETENTION,
+    DEFAULT_METADATA_MAX_RETENTION_SIZE, KAFKA_4_3_1_APIS, LATEST_PRODUCTION_METADATA_VERSION,
+    ListenerLimits, METADATA_PARTITION_DIR, MIN_METADATA_LOG_SEGMENT_SIZE, MetadataLogConfig,
     MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter, ReleasedApi,
     ShardRouteFuture, UnstableApiVersions, UnstableFeatureVersions, kafka_4_3_1_api,
-    kafka_4_3_1_max, supported_feature_range, supported_feature_ranges,
+    kafka_4_3_1_max, metadata_partition_dir, supported_feature_range, supported_feature_ranges,
 };
 pub use connection_limiter::{ConnectionGuard, ConnectionLimit, ConnectionLimiter};
 pub use controller::{
@@ -94,7 +97,10 @@ pub use handshake::{
     AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
     RaftHandshakeError, RaftListenerHandshake,
 };
-pub use kraft::MetadataFetchSlice;
+pub use kraft::{
+    MetadataFetchSlice,
+    controller::{control_batch_image_records, is_kip835_noop},
+};
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
 pub use server::{
@@ -130,6 +136,33 @@ pub fn deserialize_metadata_snapshot(
     bytes: &[u8],
 ) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
     Ok(snapshot::SnapshotReader::read(bytes)?.metadata_records)
+}
+
+/// Decode the whole image a Kafka metadata snapshot holds: its KIP-853 quorum
+/// controls, as a `V1KRaftVersion` and a `V1Voters` record, ahead of its
+/// KIP-630 metadata records.
+///
+/// A broker-only observer installs a snapshot through this, so its image names
+/// the voters, and the endpoints that reach them, as a controller's image does.
+///
+/// # Errors
+/// Returns an error when the snapshot framing, ordering, a control record, or a
+/// metadata record is invalid.
+pub fn deserialize_metadata_snapshot_image(
+    bytes: &[u8],
+) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
+    let snapshot = snapshot::SnapshotReader::read(bytes)?;
+    let controls = snapshot.control_state.into_iter().flat_map(|controls| {
+        [
+            krabka_metadata::MetadataRecord::V1KRaftVersion(krabka_metadata::KRaftVersionRecord {
+                kraft_version: controls.kraft_version,
+            }),
+            krabka_metadata::MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
+                voters: controls.voters,
+            }),
+        ]
+    });
+    Ok(controls.chain(snapshot.metadata_records).collect())
 }
 pub use wire::{
     API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,

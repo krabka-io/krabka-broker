@@ -250,18 +250,29 @@ pub(crate) fn manual_leaderships(
 
 /// The brokers automatic placement leaves out, as Kafka's
 /// `BrokerHeartbeatManager.UsableBrokerIterator` skips them: the ones in
-/// controlled shutdown (`BrokerControlStates.shuttingDown`) and, as
+/// controlled shutdown (`BrokerHeartbeatState.shuttingDown`) and, as
 /// `ClusterControlManager.usableBrokers` filters on
 /// `BrokerRegistration.hasUncordonedDirs`, every broker whose log directories
 /// are all cordoned (KIP-1066).
 ///
 /// A fenced broker is not left out. Kafka hands it to the placer as a last
-/// resort, and [`site_broker_views`] marks it as fenced.
+/// resort, and [`site_broker_views`] marks it as fenced. This includes a
+/// broker that finished its controlled shutdown. Its registration keeps
+/// `InControlledShutdown`, because only a new registration clears that flag.
+/// But `BrokerHeartbeatManager.touch` takes a fenced broker out of controlled
+/// shutdown, so Kafka places replicas on the stopped broker as on any fenced
+/// broker. If the placement read the flag alone, a topic created after a
+/// clean stop would need one broker more than Kafka needs. `unavailable` is
+/// [`crate::handlers::offline_replicas::unavailable_brokers`]: the brokers
+/// that this node knows to be fenced or past their heartbeat deadline.
 pub(crate) fn automatic_placement_exclusions(
     image: &krabka_metadata::MetadataImage,
+    unavailable: &std::collections::HashSet<u64>,
 ) -> std::collections::HashSet<u64> {
     let mut excluded = crate::cordoned_log_dirs::fully_cordoned_brokers(image);
-    excluded.extend(controlled_shutdown_brokers(image));
+    excluded.extend(
+        controlled_shutdown_brokers(image).filter(|node_id| !unavailable.contains(node_id)),
+    );
     excluded
 }
 

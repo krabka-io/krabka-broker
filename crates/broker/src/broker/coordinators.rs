@@ -14,6 +14,9 @@ pub(super) struct CoordinatorStartup {
     pub(super) share_partition_leaders:
         Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
     pub(super) share_persister: Arc<crate::share_coordinator::persister_client::SharePersister>,
+    /// The share groups' dead-letter writer, which the broker hands its remote
+    /// reader once it has built one.
+    pub(super) dead_letters: Arc<crate::share_partition::dlq::DlqWriter>,
 }
 
 /// The shared components the coordinators are built on.
@@ -116,7 +119,7 @@ pub(super) async fn start_coordinators(
         Arc::clone(&share_persister),
         Arc::new((*config.share_group).clone()),
         config.share_session_cache_max_when_unlimited,
-        dead_letters,
+        dead_letters.clone(),
     );
     share_partition_leaders.spawn_lock_sweeper();
     share_partition_leaders.spawn_share_version_watcher();
@@ -172,5 +175,6 @@ pub(super) async fn start_coordinators(
         share_coordinator,
         share_partition_leaders,
         share_persister,
+        dead_letters,
     }
 }

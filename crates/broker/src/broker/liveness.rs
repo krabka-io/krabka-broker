@@ -105,20 +105,20 @@ fn spawn_leadership_watcher(
     });
 }
 
-/// Latches `should_shutdown` when the controller this node hosts stops itself
-/// over a fatal fault, such as a replay of a feature level that it does not
-/// support. Kafka's `ProcessTerminatingFaultHandler` halts the process on that
-/// fault; a library cannot, so this is the seam that hands the decision to the
-/// embedder, the same one the KIP-112 all-log-dirs-offline stop uses. The
-/// binary reads the reason back through `BrokerHandle::fatal_fault` and exits
-/// non-zero. A fault that fired before this task started is still seen, since a
-/// `watch` channel keeps its last value.
+/// Latches `should_shutdown` when `faults` publishes a fatal fault: the
+/// controller this node hosts stopping itself, such as over a replay of a
+/// feature level that it does not support, or the failure of the metadata log
+/// directory (KIP-858). Kafka halts the process on such a fault; a library
+/// cannot, so this is the seam that hands the decision to the embedder, the
+/// same one the KIP-112 all-log-dirs-offline stop uses. The binary reads the
+/// reason back through `BrokerHandle::fatal_fault` and exits non-zero. A
+/// fault that fired before this task started is still seen, since a `watch`
+/// channel keeps its last value.
 fn spawn_fatal_fault_watcher(
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    mut faults: tokio::sync::watch::Receiver<Option<String>>,
     should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
     shutdown: CancellationToken,
 ) {
-    let mut faults = controller.watch_fatal();
     tokio::spawn(async move {
         let fault = tokio::select! {
             () = shutdown.cancelled() => return,
@@ -134,10 +134,7 @@ fn spawn_fatal_fault_watcher(
         // stops in an orderly way, or as a source without a controller does at
         // once.
         let Some(fault) = fault else { return };
-        tracing::error!(
-            %fault,
-            "the metadata controller stopped over a fatal fault; shutting the broker down"
-        );
+        tracing::error!(%fault, "a fatal fault stopped this node; shutting the broker down");
         // `send_replace`, not `send`: nothing subscribes to the flag until the
         // embedder calls `BrokerHandle::should_shutdown_rx`, and `send` drops
         // the value when there is no receiver. A fault that landed before that
@@ -243,7 +240,12 @@ pub(super) fn start_liveness_services(
         shutdown.child_token(),
     );
     spawn_fatal_fault_watcher(
-        controller,
+        controller.watch_fatal(),
+        Arc::clone(&should_shutdown),
+        shutdown.child_token(),
+    );
+    spawn_fatal_fault_watcher(
+        log_dirs.0.watch_metadata_dir_fault(),
         Arc::clone(&should_shutdown),
         shutdown.child_token(),
     );
@@ -406,7 +408,11 @@ mod tests {
             if published_before_the_watcher {
                 mock.set_fatal("the controller faulted");
             }
-            spawn_fatal_fault_watcher(&controller, Arc::clone(&latch), shutdown.clone());
+            spawn_fatal_fault_watcher(
+                controller.watch_fatal(),
+                Arc::clone(&latch),
+                shutdown.clone(),
+            );
             if !published_before_the_watcher {
                 assert!(
                     !*latch.subscribe().borrow(),
