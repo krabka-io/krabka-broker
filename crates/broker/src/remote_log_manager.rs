@@ -1012,6 +1012,7 @@ mod tests {
             }
             log.append(&mut batch).unwrap();
         }
+        log.sync().unwrap();
         let first_unstable = log.last_stable_offset(Offset(i64::MAX));
         let sealed_ends: Vec<Offset> = log
             .tierable_segments()

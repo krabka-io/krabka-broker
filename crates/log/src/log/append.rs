@@ -474,12 +474,31 @@ impl Log {
         self.rollover_flusher.check()?;
         let new_base = self.log_end_offset();
         tracing::Span::current().record("new_base", new_base.0);
-        let snapshot = producer_snapshot::prepare(&self.dir, new_base, &self.producer_state)?;
         let buffered = !self.config.read().unwrap().flush_on_append && !cfg!(target_os = "wasi");
+        #[cfg(not(target_os = "wasi"))]
+        let flush = if buffered {
+            // Reserve both retained bytes and encoding scratch space before
+            // allocating the snapshot or cloning index descriptors.
+            let permit = self
+                .rollover_flusher
+                .reserve(producer_snapshot::allocation_size(
+                    self.producer_state.len(),
+                )?)?;
+            let snapshot = producer_snapshot::prepare(&self.dir, new_base, &self.producer_state)?;
+            let files = self.active.as_ref().unwrap().flush_handles()?;
+            Some(super::rollover_flush::Flush {
+                files,
+                io: self.io.clone(),
+                snapshot,
+                _permit: permit,
+            })
+        } else {
+            None
+        };
         if !buffered {
             self.rollover_flusher.finish()?;
             self.active_segment_flush()?;
-            snapshot.write(&*self.io)?;
+            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
         }
         // Sealing writes the segment's last time-index entry, which can fail,
         // so it runs before the segment leaves `self.active`.
@@ -487,7 +506,12 @@ impl Log {
             .as_mut()
             .expect("active segment must exist before rolling")
             .seal()?;
-        let files = self.active.as_ref().unwrap().flush_handles()?;
+        #[cfg(not(target_os = "wasi"))]
+        if let Some(flush) = flush {
+            // Once sealed, the boundary must be flushed even if any subsequent
+            // segment, transaction-index, or stamp-index setup fails.
+            self.rollover_flusher.submit(flush)?;
+        }
         let old = self
             .active
             .take()
@@ -503,16 +527,6 @@ impl Log {
         self.active = Some(new_seg);
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
-        // Own the sealed file descriptors and exact boundary state. The worker
-        // flushes the records before publishing the snapshot, without holding
-        // this log's append/read mutex. Explicit durability remains synchronous.
-        if buffered {
-            self.rollover_flusher.submit(super::rollover_flush::Flush {
-                files,
-                io: self.io.clone(),
-                snapshot,
-            })?;
-        }
         Ok(())
     }
 }

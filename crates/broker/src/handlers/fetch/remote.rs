@@ -526,6 +526,7 @@ mod tests {
             let mut batch = tiered_batch();
             log.append(&mut batch).expect("append");
         }
+        log.sync().expect("flush sealed segments before archiving");
         let exports = log.tierable_segments();
         assert!(exports.len() >= 2, "the test needs sealed segments to tier");
         let tiered_through = exports.last().expect("sealed segments").last_offset + 1;
