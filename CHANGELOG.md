@@ -412,6 +412,14 @@ the `krabka-*` names to crates.io.
   bootstrap checkpoint as Kafka's `Formatter.writeBoostrapSnapshot` does: the
   control state, then the bootstrap records in their order. Bootstrap records
   that do not finalize `metadata.version` stop the start.
+- A diskless Produce that arrives while the controller quorum elects a leader
+  answers `NOT_LEADER_OR_FOLLOWER`, as Kafka's produce path does when a broker
+  cannot append because leadership moves. The client refreshes its metadata
+  and sends the batch again. The quorum refuses the offset reservation before
+  it reserves an offset: it has no leader, or its new leader has not committed
+  its epoch. A new leader now refuses the reservation with the same
+  uncommitted-tail error that it gives a compare-and-set. Before, the broker
+  answered `KAFKA_STORAGE_ERROR`, which says that a disk failed.
 
 ## [0.7.0] - 2026-10-02
 

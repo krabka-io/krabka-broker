@@ -28,7 +28,7 @@ use std::{
 
 use assert2::assert;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
-use krabka_client_admin::{AdminClient, RaftVoterEndpoint};
+use krabka_client_admin::{AdminClient, AdminError, RaftVoterEndpoint};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
@@ -184,6 +184,17 @@ where
     }
 }
 
+/// The result of one voter change. A retry after an attempt whose response was
+/// lost answers `applied`, `DUPLICATE_VOTER` for an add or `VOTER_NOT_FOUND`
+/// for a remove, because the change is already in. That counts as done:
+/// `wait_for_quorum` then checks the whole voter set.
+fn voter_change(result: Result<(), AdminError>, applied: i16) -> Result<(), String> {
+    match result {
+        Err(AdminError::Broker { code, .. }) if code == applied => Ok(()),
+        other => other.map_err(|error| error.to_string()),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers() {
     support::init_tracing();
@@ -260,15 +271,15 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
         let mut admin = AdminClient::connect_controller(&[first_controller.to_string()])
             .await
             .map_err(|error| error.to_string())?;
-        admin
+        let added = admin
             .add_raft_voter(
                 None,
                 3002,
                 second_directory,
                 std::slice::from_ref(&endpoint),
             )
-            .await
-            .map_err(|error| error.to_string())
+            .await;
+        voter_change(added, krabka_broker::codes::DUPLICATE_VOTER)
     })
     .await;
     wait_for_quorum(through, 3001, &[3001, 3002], &[1, 2]).await;
@@ -281,10 +292,8 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
         ])
         .await
         .map_err(|error| error.to_string())?;
-        admin
-            .remove_raft_voter(None, 3001, first_directory)
-            .await
-            .map_err(|error| error.to_string())
+        let removed = admin.remove_raft_voter(None, 3001, first_directory).await;
+        voter_change(removed, krabka_broker::codes::VOTER_NOT_FOUND)
     })
     .await;
     wait_for_quorum(through, 3002, &[3002], &[1, 2, 3001]).await;

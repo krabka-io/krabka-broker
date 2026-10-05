@@ -44,6 +44,10 @@ pub enum RaftError {
     /// record from its own epoch. Kafka's controller is not active in the same
     /// window, and it answers `NOT_CONTROLLER`. The refusal clears when the
     /// tail commits, so a caller can retry.
+    ///
+    /// A diskless offset reservation gets the same refusal until the leader
+    /// has committed its own epoch. The leader reserves no offsets before
+    /// that.
     #[error("the controller leader has uncommitted metadata records")]
     UncommittedTail,
 

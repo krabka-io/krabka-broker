@@ -476,14 +476,17 @@ impl Engine {
             }
             _ => false,
         };
+        // A new leader reserves no offsets until its own epoch commits. The
+        // refusal is transient, as the refusal of a compare-and-set behind
+        // an uncommitted tail is, so it is the same error. A broker then
+        // tells the refusal apart from a failed reservation, and the forward
+        // path keeps it.
         if records
             .iter()
             .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
             && !epoch_ready
         {
-            let _ = reply.send(Err(RaftError::ChangeRejected(
-                "leader epoch must commit before reserving offsets".to_string(),
-            )));
+            let _ = reply.send(Err(RaftError::UncommittedTail));
             return;
         }
 
