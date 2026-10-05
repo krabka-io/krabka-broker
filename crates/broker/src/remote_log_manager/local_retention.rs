@@ -798,6 +798,7 @@ mod tests {
                 future_batch.max_timestamp = future;
                 log.append(&mut future_batch).unwrap();
             }
+            log.sync().unwrap();
             let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
             let (exports, log_config) = {
                 let log = partition.log.lock().expect("partition log mutex poisoned");

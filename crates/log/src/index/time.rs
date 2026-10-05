@@ -45,6 +45,10 @@ pub struct TimeIndex {
 }
 
 impl TimeIndex {
+    pub(crate) fn flush_handle(&self) -> std::io::Result<File> {
+        self.file.try_clone()
+    }
+
     #[instrument(
         level = "debug",
         skip_all,

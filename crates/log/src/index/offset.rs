@@ -42,6 +42,10 @@ pub struct OffsetIndex {
 }
 
 impl OffsetIndex {
+    pub(crate) fn flush_handle(&self) -> std::io::Result<File> {
+        self.file.try_clone()
+    }
+
     /// Open or create an offset-index file. If the file exists, this method
     /// loads its entries into memory. If it does not exist, this method
     /// creates an empty file.

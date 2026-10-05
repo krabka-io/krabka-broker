@@ -306,6 +306,7 @@ impl Log {
         transaction_stamp: Option<u64>,
         verbatim: Option<&[u8]>,
     ) -> Result<(), LogError> {
+        self.rollover_flusher.check()?;
         let base_offset = Offset(batch.base_offset);
         let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
             self.append_at_expected_offset().0,
@@ -370,6 +371,9 @@ impl Log {
                 matches!(control_kind, Some(ControlBatchKind::Transaction))
                     || (self.stamp_source.is_some() && control_kind.is_none() && !is_transactional);
             if flush_on_append || writes_durable_sidecar {
+                // Durable outcomes and stamps must not get ahead of records
+                // in an earlier, asynchronously flushed segment.
+                self.rollover_flusher.finish()?;
                 self.active_segment_flush()?;
             }
 
@@ -467,19 +471,23 @@ impl Log {
         err,
     )]
     pub(super) fn roll_active_segment(&mut self) -> Result<(), LogError> {
+        self.rollover_flusher.check()?;
         let new_base = self.log_end_offset();
         tracing::Span::current().record("new_base", new_base.0);
-        // The snapshot must never become durable ahead of the records it
-        // describes. Flush the segment first, then fsync and publish the
-        // boundary snapshot.
-        self.active_segment_flush()?;
-        producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
+        let snapshot = producer_snapshot::prepare(&self.dir, new_base, &self.producer_state)?;
+        let buffered = !self.config.read().unwrap().flush_on_append && !cfg!(target_os = "wasi");
+        if !buffered {
+            self.rollover_flusher.finish()?;
+            self.active_segment_flush()?;
+            snapshot.write(&*self.io)?;
+        }
         // Sealing writes the segment's last time-index entry, which can fail,
         // so it runs before the segment leaves `self.active`.
         self.active
             .as_mut()
             .expect("active segment must exist before rolling")
             .seal()?;
+        let files = self.active.as_ref().unwrap().flush_handles()?;
         let old = self
             .active
             .take()
@@ -495,6 +503,16 @@ impl Log {
         self.active = Some(new_seg);
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
+        // Own the sealed file descriptors and exact boundary state. The worker
+        // flushes the records before publishing the snapshot, without holding
+        // this log's append/read mutex. Explicit durability remains synchronous.
+        if buffered {
+            self.rollover_flusher.submit(super::rollover_flush::Flush {
+                files,
+                io: self.io.clone(),
+                snapshot,
+            })?;
+        }
         Ok(())
     }
 }

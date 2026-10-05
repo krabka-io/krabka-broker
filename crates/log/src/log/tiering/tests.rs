@@ -93,6 +93,7 @@ fn tierable_segments_excludes_active_and_reports_paths() {
         let mut b = sample_batch(2);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     let sealed_count = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -139,7 +140,9 @@ fn tierable_segments_last_offset_matches_next_base() {
         let mut b = sample_batch(2);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     let exports = log.tierable_segments();
+    assert2::assert!(!exports.is_empty());
     // Each sealed segment's last_offset is exactly one below the next
     // segment's base — contiguous coverage with no gaps.
     for pair in exports.windows(2) {
@@ -164,6 +167,7 @@ fn tierable_segments_carry_leader_epochs() {
         let mut b = sample_batch_with_epoch(2, 1);
         log.append(&mut b).unwrap();
     }
+    log.sync().unwrap();
     let exports = log.tierable_segments();
     assert2::assert!(!exports.is_empty());
     // Every export carries at least one epoch, and each recorded start
@@ -292,6 +296,7 @@ fn delete_local_segments_through_drops_sealed_below_target() {
 fn delete_local_segments_through_removes_the_evicted_bases_snapshots() {
     let dir = tempdir().unwrap();
     let mut log = rolled_log(dir.path(), &LogConfig::default());
+    log.sync().unwrap();
     let exports = log.tierable_segments();
     let snapshots = |dir: &std::path::Path| -> Vec<Offset> {
         producer_snapshot::list(dir)

@@ -201,19 +201,45 @@ pub(crate) fn write(
     offset: Offset,
     entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
 ) -> Result<PathBuf, LogError> {
-    let destination = path(dir, offset);
-    if destination.exists() {
-        return Ok(destination);
-    }
+    Ok(prepare(dir, offset, entries)?.write(io)?)
+}
 
-    let bytes = encode(entries)?;
-    let temporary = destination.with_extension("snapshot.tmp");
-    let file = File::create(&temporary)?;
-    crate::io::write_all(io, IoTarget::ProducerSnapshot, &file, &bytes)?;
-    io.sync_file(IoTarget::ProducerSnapshot, &file)?;
-    drop(file);
-    io.rename(IoTarget::ProducerSnapshot, &temporary, &destination)?;
-    Ok(destination)
+/// Captured at the roll boundary, before subsequent appends change the state.
+#[derive(Debug)]
+pub(crate) struct PreparedSnapshot {
+    dir: PathBuf,
+    offset: Offset,
+    bytes: Vec<u8>,
+}
+
+pub(crate) fn prepare(
+    dir: &Path,
+    offset: Offset,
+    entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
+) -> Result<PreparedSnapshot, LogError> {
+    Ok(PreparedSnapshot {
+        dir: dir.to_path_buf(),
+        offset,
+        bytes: encode(entries)?,
+    })
+}
+
+impl PreparedSnapshot {
+    pub(crate) fn write(&self, io: &dyn LogIo) -> std::io::Result<PathBuf> {
+        let destination = path(&self.dir, self.offset);
+        if destination.exists() {
+            return Ok(destination);
+        }
+
+        let temporary = destination.with_extension("snapshot.tmp");
+        let file = File::create(&temporary)?;
+        crate::io::write_all(io, IoTarget::ProducerSnapshot, &file, &self.bytes)?;
+        io.sync_file(IoTarget::ProducerSnapshot, &file)?;
+        drop(file);
+        io.rename(IoTarget::ProducerSnapshot, &temporary, &destination)?;
+        io.sync_dir(&self.dir)?;
+        Ok(destination)
+    }
 }
 
 fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8>, LogError> {

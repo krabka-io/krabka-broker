@@ -164,6 +164,7 @@ impl Log {
             segments,
             active: Some(active),
             dir_sync_needed,
+            rollover_flusher: super::rollover_flush::Flusher::default(),
             start_offset,
             // Derived from the files on disk, not deleted up to by anyone.
             // The checkpoint restore below is what may set it: see

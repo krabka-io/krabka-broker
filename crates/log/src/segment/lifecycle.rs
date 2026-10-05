@@ -21,6 +21,14 @@ pub(super) struct WriteSnapshot {
 }
 
 impl Segment {
+    pub(crate) fn flush_handles(&self) -> std::io::Result<[std::sync::Arc<std::fs::File>; 3]> {
+        Ok([
+            std::sync::Arc::clone(&self.log_file),
+            std::sync::Arc::new(self.offset_index.flush_handle()?),
+            std::sync::Arc::new(self.time_index.flush_handle()?),
+        ])
+    }
+
     /// Mark this segment as sealed. No more appends.
     ///
     /// Sealing first writes the segment's final time-index entry, Kafka's

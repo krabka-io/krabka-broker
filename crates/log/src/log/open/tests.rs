@@ -128,6 +128,7 @@ fn producer_snapshot_survives_local_segment_deletion_and_restart() {
     // The second append rolls the producer batch into a sealed segment and
     // writes the snapshot at the new segment's base offset.
     log.append(&mut sample_batch(1)).unwrap();
+    log.sync().unwrap();
     let export = log.tierable_segments().into_iter().next().unwrap();
     check!(export.producer_snapshot_path.exists());
     let local_start = export.last_offset + 1;
@@ -663,6 +664,7 @@ fn reopen_reloads_producer_state_against_the_trimmed_log_start() {
     ] {
         let dir = tempdir().unwrap();
         let mut log = three_producer_log(dir.path());
+        log.sync().unwrap();
         check!(snapshot_offsets(dir.path()) == vec![2, 4]);
 
         check!(log.trim_to_offset(Offset(log_start)).unwrap() == Offset(log_start));

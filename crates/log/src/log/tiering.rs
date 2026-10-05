@@ -180,6 +180,7 @@ impl Log {
         err,
     )]
     pub fn delete_local_segments_through(&mut self, target: Offset) -> Result<usize, LogError> {
+        self.rollover_flusher.finish()?;
         if target < 0 {
             return Err(LogError::InvalidArgument(
                 "delete_local_segments_through: target must be >= 0".into(),
@@ -238,8 +239,8 @@ impl Log {
 
     /// Describe every sealed segment for tiered-storage offload (KIP-405).
     ///
-    /// The result never includes the active segment. Only sealed segments are
-    /// immutable and safe to copy.
+    /// The result includes sealed segments after their rollover flush has
+    /// published the boundary snapshot. It never includes the active segment.
     ///
     /// `last_offset` comes from the next segment's `base_offset`. For the
     /// most-recent sealed segment it comes from the active segment's base.
@@ -268,6 +269,9 @@ impl Log {
         self.segments
             .iter()
             .zip(next_bases)
+            // A rollover's snapshot appears only after its records and indexes
+            // have flushed. Pending segments stay local until then.
+            .filter(|(_, next_base)| producer_snapshot::path(&self.dir, *next_base).exists())
             .map(|(seg, next_base)| {
                 let base = seg.base_offset();
                 let last = next_base - 1;
