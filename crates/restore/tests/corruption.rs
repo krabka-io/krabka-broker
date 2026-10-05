@@ -86,6 +86,7 @@ fn archive_segment(
     log.append(&mut long_batch())
         .expect("append second batch, rolling the first into a sealed segment");
 
+    log.sync().unwrap();
     let export = log
         .tierable_segments()
         .into_iter()

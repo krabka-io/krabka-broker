@@ -220,6 +220,7 @@ fn archive_partition(
         appended.push(batch);
     }
 
+    log.sync().unwrap();
     let exports = log.tierable_segments();
     assert!(
         exports.len() == groups.len() - 1,
