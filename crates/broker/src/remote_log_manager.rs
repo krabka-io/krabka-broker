@@ -883,7 +883,10 @@ mod tests {
             )
             .await;
 
-            let log = partition.log.lock().expect("partition log mutex poisoned");
+            // The next sweep copies what this one rolled once the rollover
+            // flush lands, so wait for it, as a sweep interval would.
+            let mut log = partition.log.lock().expect("partition log mutex poisoned");
+            log.sync().expect("flush rolled segments");
             let observed = Tiered {
                 remote: rlmm
                     .list_remote_log_segments(&tp())
@@ -1274,12 +1277,12 @@ mod tests {
             .iter()
             .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
             .count();
-        let local_sealed_after = partition
-            .log
-            .lock()
-            .expect("partition log mutex poisoned")
-            .tierable_segments()
-            .len();
+        // A segment the sweep rolled counts once its rollover flush lands.
+        let local_sealed_after = {
+            let mut log = partition.log.lock().expect("partition log mutex poisoned");
+            log.sync().expect("flush rolled segments");
+            log.tierable_segments().len()
+        };
         FollowerSweep {
             sealed_before,
             remote_finished,

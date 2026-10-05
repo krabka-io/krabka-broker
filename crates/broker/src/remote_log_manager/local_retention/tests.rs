@@ -19,7 +19,11 @@ use crate::remote_log_manager::{
 };
 
 // The sealed segments of `log` as `(base, last)` offset ranges.
-fn sealed_ranges(log: &Log) -> Vec<(Offset, Offset)> {
+/// The sealed segments a copy would see. A rolled segment is tierable once
+/// its rollover flush publishes the boundary snapshot, so this waits for the
+/// flush first.
+fn sealed_ranges(log: &mut Log) -> Vec<(Offset, Offset)> {
+    log.sync().expect("flush rolled segments");
     log.tierable_segments()
         .iter()
         .map(|export| (export.base_offset, export.last_offset))
@@ -644,12 +648,13 @@ async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
     );
 
     assert!(removed == exports.len());
-    let log = partition.log.lock().expect("partition log mutex poisoned");
+    let mut log = partition.log.lock().expect("partition log mutex poisoned");
     let active_base = exports.last().unwrap().last_offset + 1;
     assert!(log.local_log_start_offset() == active_base);
     // The active segment breached the window as well, so the pass rolled
     // it for the next copy.
-    assert!(sealed_ranges(&log) == vec![(active_base, log.log_end_offset() - 1)]);
+    let sealed = sealed_ranges(&mut log);
+    assert!(sealed == vec![(active_base, log.log_end_offset() - 1)]);
 }
 
 #[tokio::test]
@@ -699,10 +704,11 @@ async fn local_retention_still_evicts_under_a_write_once_archive() {
     );
 
     check!(removed == exports.len());
-    let log = partition.log.lock().expect("partition log mutex poisoned");
+    let mut log = partition.log.lock().expect("partition log mutex poisoned");
     let active_base = exports.last().unwrap().last_offset + 1;
     check!(log.local_log_start_offset() == active_base);
-    check!(sealed_ranges(&log) == vec![(active_base, log.log_end_offset() - 1)]);
+    let sealed = sealed_ranges(&mut log);
+    check!(sealed == vec![(active_base, log.log_end_offset() - 1)]);
 }
 
 /// A tiered topic whose producers stamp records far in the future keeps
@@ -837,10 +843,10 @@ async fn pass_over(
         },
         UnstableApiVersions::Disabled,
     );
-    let log = partition.log.lock().expect("partition log mutex poisoned");
+    let mut log = partition.log.lock().expect("partition log mutex poisoned");
     PassOutcome {
         removed,
-        sealed: sealed_ranges(&log),
+        sealed: sealed_ranges(&mut log),
         active_base: log.active_segment_export().map(|active| active.base_offset),
         local_log_start: log.local_log_start_offset(),
     }
@@ -889,11 +895,11 @@ async fn a_breached_active_segment_rolls_then_tiers_then_leaves_the_disk() {
         "the first pass rolls the active segment and deletes nothing"
     );
 
-    let exports = partition
-        .log
-        .lock()
-        .expect("partition log mutex poisoned")
-        .tierable_segments();
+    let exports = {
+        let mut log = partition.log.lock().expect("partition log mutex poisoned");
+        log.sync().expect("flush the rolled segment");
+        log.tierable_segments()
+    };
     let copied = copy_eligible(
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),

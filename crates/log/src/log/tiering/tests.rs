@@ -520,6 +520,9 @@ struct AfterRoll {
 
 fn roll_and_describe(log: &mut Log) -> AfterRoll {
     let rolled = log.roll().unwrap();
+    // A rolled segment is tierable once its rollover flush publishes the
+    // boundary snapshot. `sync` waits for that flush.
+    log.sync().unwrap();
     AfterRoll {
         rolled,
         sealed: log

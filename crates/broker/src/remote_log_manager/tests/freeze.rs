@@ -107,12 +107,12 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
         .iter()
         .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
         .count();
-    let local_sealed_after = partition
-        .log
-        .lock()
-        .expect("partition log mutex poisoned")
-        .tierable_segments()
-        .len();
+    // A segment the sweep rolled counts once its rollover flush lands.
+    let local_sealed_after = {
+        let mut log = partition.log.lock().expect("partition log mutex poisoned");
+        log.sync().expect("flush rolled segments");
+        log.tierable_segments().len()
+    };
     TickOutcome {
         sealed_before,
         remote_finished,

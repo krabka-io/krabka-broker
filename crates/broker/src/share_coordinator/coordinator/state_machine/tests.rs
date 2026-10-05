@@ -663,8 +663,10 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
     for (fault, expected, logged) in faults {
         for op in [Op::Initialize, Op::Write, Op::Read, Op::Delete] {
             let dir = tempdir().unwrap();
+            // The setup `initialize` below commits under the same timeout,
+            // so the no-commit case keeps enough of it for a loaded machine.
             let timeout = match fault {
-                Fault::NoCommit => std::time::Duration::from_millis(100),
+                Fault::NoCommit => std::time::Duration::from_secs(2),
                 Fault::MovesAway | Fault::NewerEpoch => std::time::Duration::from_secs(30),
             };
             let config = ShareCoordinatorConfig {
