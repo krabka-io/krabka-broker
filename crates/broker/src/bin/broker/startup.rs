@@ -267,8 +267,9 @@ async fn run(
     }
 
     let health_for_shutdown = health.clone();
+    let controller_role = config.is_controller();
     let handle = Broker::start_with_health(config, health).await?;
-    tracing::info!(addr = %handle.listen_addr(), "krabka-broker listening");
+    log_started(&handle, controller_role);
 
     serve(
         handle,
@@ -279,6 +280,25 @@ async fn run(
     )
     .await
     .map_err(Into::into)
+}
+
+/// Logs `krabka-broker started`, the line that says the start of this node is
+/// complete. Kafka's `KafkaRaftServer.startup` logs `Kafka Server started` for
+/// every `process.roles`, and the ducktape adapter waits for this line as
+/// Kafka's `KafkaService` waits for that one.
+///
+/// The line names the listeners that the node opened: `listen_addr` for the
+/// data-plane listener of a node with the broker role, and
+/// `controller_listen_addr` for the controller listener of a node with the
+/// controller role. A controller-only node opens no data-plane listener, so its
+/// line names the controller listener only.
+fn log_started(handle: &BrokerHandle, controller_role: bool) {
+    tracing::info!(
+        listen_addr = handle.data_plane_addr().map(tracing::field::display),
+        controller_listen_addr =
+            controller_role.then(|| tracing::field::display(handle.controller_addr())),
+        "krabka-broker started"
+    );
 }
 
 /// Runs the started broker until a termination signal or a self-shutdown, stops

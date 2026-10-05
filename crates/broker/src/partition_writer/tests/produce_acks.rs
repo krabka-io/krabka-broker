@@ -115,10 +115,7 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
             Arc::new(ProducerState::new()),
             Some(wal),
         ),
-        (
-            crate::config::BrokerConfig::default().producer_id_expiration,
-            MAX_GROUP,
-        ),
+        MAX_GROUP,
         Some(test_sequencer()),
     ));
 
@@ -163,10 +160,7 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
             Arc::new(ProducerState::new()),
             Some(wal),
         ),
-        (
-            crate::config::BrokerConfig::default().producer_id_expiration,
-            1,
-        ),
+        1,
         Some(test_sequencer()),
     ));
 

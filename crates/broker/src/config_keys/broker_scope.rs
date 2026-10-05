@@ -164,6 +164,17 @@ pub(crate) const AUTO_CREATE_TOPICS_ENABLE: &str = "auto.create.topics.enable";
 /// at `STATIC_BROKER_CONFIG` when the operator named it.
 pub(crate) const LOG_ROLL_MS: &str = "log.roll.ms";
 
+/// The listener that a broker sends inter-broker traffic on. Kafka's
+/// `ReplicationConfigs.INTER_BROKER_LISTENER_NAME_CONFIG`, a string with no
+/// default. When it is not set, Kafka uses the listener that
+/// `security.inter.broker.protocol` names.
+///
+/// A node reads it from the `inter_broker_listener_name` file key into
+/// [`crate::config::BrokerConfig::inter_broker_listener_name`].
+/// `DescribeConfigs` reports it at `STATIC_BROKER_CONFIG` when the operator
+/// named it, and as null at `DEFAULT_CONFIG` when they did not.
+pub(crate) const INTER_BROKER_LISTENER_NAME: &str = "inter.broker.listener.name";
+
 /// KIP-98: how long a transactional id may sit in a terminal or idle state
 /// before the transaction coordinator tombstones it out of
 /// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).

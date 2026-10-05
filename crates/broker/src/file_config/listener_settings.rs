@@ -249,6 +249,9 @@ pub(super) fn apply_listener_settings(
     }
     if let Some(name) = settings.inter_broker_listener_name {
         cfg.inter_broker_listener_name = name;
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .insert(crate::config_keys::INTER_BROKER_LISTENER_NAME);
     }
     if had_file_listeners
         && let Some(advertised) = cfg

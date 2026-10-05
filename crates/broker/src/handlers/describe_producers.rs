@@ -1,8 +1,8 @@
 //! `DescribeProducers` (`api_key=61`, KIP-664) shows the producer state of a
 //! set of partitions.
 //!
-//! This admin RPC returns the in-memory producer-state snapshot of the broker
-//! for a set of `(topic, partition)` pairs. JVM `Admin.describeProducers` and
+//! This admin RPC returns the producer state of the partition log for a set
+//! of `(topic, partition)` pairs. JVM `Admin.describeProducers` and
 //! `kafka-transactions --describe-producers` use it to debug stuck idempotent
 //! or transactional producers.
 //!
@@ -19,13 +19,26 @@
 //! unknown topic or an out-of-range partition gives a per-partition
 //! `UNKNOWN_TOPIC_OR_PARTITION (3)`.
 //!
+//! ## Replicas
+//!
+//! Kafka's `ReplicaManager.activeProducerState` answers on every replica that
+//! hosts the partition, the leader and each follower. A partition that the
+//! metadata holds and this broker does not host gives
+//! `NOT_LEADER_OR_FOLLOWER (6)`, and a partition in an offline log directory
+//! gives `KAFKA_STORAGE_ERROR (56)`.
+//!
 //! ## Field semantics
 //!
-//! `producer_id`, `producer_epoch`, `last_sequence`, and `last_timestamp`
-//! come from `crate::producer_state`. The partition log supplies the current
-//! transaction start offset and the last coordinator epoch recovered from a
-//! durable transaction marker. Their schema sentinel is `-1` when there is no
-//! open transaction or no marker has established a coordinator epoch yet.
+//! Every field comes from the producer state of the partition log,
+//! [`krabka_log::Log::active_producers`], which is Kafka's
+//! `UnifiedLog.activeProducers`. A leader updates that state for each batch
+//! that it appends, and a follower for each batch that it replicates, so a
+//! follower answers as its leader does at the same log end. The produce-path
+//! tracker in `crate::producer_state` does not hold the data batches that a
+//! follower replicates, so this handler does not read it.
+//! `coordinator_epoch` is `-1` before the first transaction marker of the
+//! producer, and `current_txn_start_offset` is `-1` when the producer has no
+//! open transaction.
 
 use bytes::Bytes;
 use krabka_log::topic_name::validate_topic_name;
@@ -157,55 +170,11 @@ pub(crate) async fn handle(
                 continue;
             }
 
-            let partition_index = krabka_ids::PartitionIndex(idx);
-            let Some(partition) = broker
-                .partitions
-                .get(topic_req.name.as_str(), partition_index)
-            else {
-                parts_out.push(PartitionResponse {
-                    partition_index: idx,
-                    error_code: codes::NOT_LEADER_OR_FOLLOWER,
-                    error_message: None,
-                    active_producers: Vec::new(),
-                    ..Default::default()
-                });
-                continue;
-            };
-
-            let snapshot = broker
-                .producer_state
-                .snapshot(topic_req.name.as_str(), partition_index)
-                .await;
-            let log = partition.log.lock().map_err(|_| {
-                BrokerError::Replication(format!(
-                    "DescribeProducers: log lock poisoned for {}-{idx}",
-                    topic_req.name
-                ))
-            })?;
-            let active_producers: Vec<ProducerState> = snapshot
-                .into_iter()
-                .map(|(producer_id, entry)| {
-                    let (coordinator_epoch, transaction_start) =
-                        log.producer_transaction_state(krabka_log::ProducerId(producer_id));
-                    ProducerState {
-                        producer_id,
-                        producer_epoch: i32::from(entry.epoch),
-                        last_sequence: entry.last_sequence,
-                        last_timestamp: entry.last_timestamp,
-                        coordinator_epoch,
-                        current_txn_start_offset: transaction_start.map_or(-1, |offset| offset.0),
-                        ..Default::default()
-                    }
-                })
-                .collect();
-
-            parts_out.push(PartitionResponse {
-                partition_index: idx,
-                error_code: codes::NONE,
-                error_message: None,
-                active_producers,
-                ..Default::default()
-            });
+            parts_out.push(hosted_partition_producers(
+                broker,
+                topic_req.name.as_str(),
+                idx,
+            )?);
         }
 
         topics_out.push(TopicResponse {
@@ -221,6 +190,72 @@ pub(crate) async fn handle(
         ..Default::default()
     };
     crate::handlers::encode_response(&resp, version)
+}
+
+/// The row of a partition that the metadata holds: Kafka's
+/// `ReplicaManager.activeProducerState`.
+///
+/// Kafka answers from the log of any replica that the broker hosts, leader or
+/// follower, through `Partition.activeProducerState`. A partition that the
+/// broker does not host is `NOT_LEADER_OR_FOLLOWER`, and a partition in an
+/// offline log directory is `KAFKA_STORAGE_ERROR`. Both rows carry only the
+/// code.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Replication`] when a panic poisoned the log lock of
+/// the partition.
+fn hosted_partition_producers(
+    broker: &Broker,
+    topic: &str,
+    partition_index: i32,
+) -> Result<PartitionResponse, BrokerError> {
+    let refused = |error_code| PartitionResponse {
+        partition_index,
+        error_code,
+        ..Default::default()
+    };
+    let Some(partition) = broker
+        .partitions
+        .get(topic, krabka_ids::PartitionIndex(partition_index))
+    else {
+        return Ok(refused(codes::NOT_LEADER_OR_FOLLOWER));
+    };
+    if broker.log_dir_status.is_offline(&partition.log_dir.load()) {
+        return Ok(refused(codes::KAFKA_STORAGE_ERROR));
+    }
+    let log = partition.log.lock().map_err(|_| {
+        BrokerError::Replication(format!(
+            "DescribeProducers: log lock poisoned for {topic}-{partition_index}"
+        ))
+    })?;
+    Ok(PartitionResponse {
+        partition_index,
+        error_code: codes::NONE,
+        active_producers: log
+            .active_producers()
+            .into_iter()
+            .map(producer_state)
+            .collect(),
+        ..Default::default()
+    })
+}
+
+/// The wire row of one producer: Kafka's `UnifiedLog.activeProducers`, which
+/// widens the epoch to an `int32` and puts `-1` in
+/// `current_txn_start_offset` when no transaction is open.
+fn producer_state(producer: krabka_log::ActiveProducer) -> ProducerState {
+    ProducerState {
+        producer_id: producer.producer_id.get(),
+        producer_epoch: i32::from(producer.producer_epoch),
+        last_sequence: producer.last_sequence,
+        last_timestamp: producer.last_timestamp,
+        coordinator_epoch: producer.coordinator_epoch,
+        current_txn_start_offset: producer
+            .current_txn_start_offset
+            .map_or(-1, |offset| offset.0),
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -466,6 +501,249 @@ mod tests {
             ..Default::default()
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// Put `topic` with one partition on `replicas`, led by `leader`, in the
+    /// metadata image. Return the partition once this broker hosts it in its
+    /// role, or `None` when this broker is not a replica.
+    async fn seed_partition(
+        broker: &Broker,
+        topic: &str,
+        leader: krabka_metadata::NodeId,
+        replicas: Vec<krabka_metadata::NodeId>,
+    ) -> Option<Arc<crate::partition::Partition>> {
+        let hosted = replicas.contains(&broker.config.node_id);
+        broker
+            .controller
+            .submit_change(vec![
+                krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                    name: topic.into(),
+                    topic_id: uuid::Uuid::new_v4(),
+                    partitions: 1,
+                    replication_factor: i16::try_from(replicas.len()).expect("replica count"),
+                }),
+                krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                    topic: topic.into(),
+                    partition: 0,
+                    leader,
+                    isr: replicas.clone(),
+                    replicas,
+                    ..Default::default()
+                }),
+            ])
+            .await
+            .expect("seed the topic");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let in_role = broker
+                    .partitions
+                    .get(topic, krabka_ids::PartitionIndex(0))
+                    .filter(|partition| {
+                        partition
+                            .current_leader
+                            .load(std::sync::atomic::Ordering::Acquire)
+                            == leader.0
+                    });
+                let image_holds = broker
+                    .controller
+                    .current_image()
+                    .partition(topic, 0)
+                    .is_some();
+                match (hosted, in_role) {
+                    (true, Some(partition)) => return Some(partition),
+                    (false, _) if image_holds => return None,
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("the broker applies the topic")
+    }
+
+    /// A data batch of `producer` (`(id, epoch)`) with `records` records from
+    /// sequence 0, at `base_offset`, whose max timestamp is `max_timestamp`.
+    fn data_batch(
+        (producer_id, producer_epoch): (i64, i16),
+        base_offset: i64,
+        records: i32,
+        max_timestamp: i64,
+        transactional: bool,
+    ) -> krabka_protocol::records::RecordBatch {
+        krabka_protocol::records::RecordBatch {
+            base_offset,
+            attributes: krabka_protocol::records::Attributes::default()
+                .with_transactional(transactional),
+            last_offset_delta: records - 1,
+            base_timestamp: max_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence: 0,
+            records: (0..records)
+                .map(|offset_delta| krabka_protocol::records::Record {
+                    offset_delta,
+                    value: Some(Bytes::from_static(b"v")),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn producer_row(
+        producer_id: i64,
+        producer_epoch: i32,
+        last_sequence: i32,
+        last_timestamp: i64,
+        (coordinator_epoch, current_txn_start_offset): (i32, i64),
+    ) -> ProducerState {
+        ProducerState {
+            producer_id,
+            producer_epoch,
+            last_sequence,
+            last_timestamp,
+            coordinator_epoch,
+            current_txn_start_offset,
+            ..Default::default()
+        }
+    }
+
+    fn partition_row(error_code: i16, active_producers: Vec<ProducerState>) -> PartitionResponse {
+        PartitionResponse {
+            partition_index: 0,
+            error_code,
+            error_message: None,
+            active_producers,
+            ..Default::default()
+        }
+    }
+
+    /// Kafka's `ReplicaManager.activeProducerState` answers from the log of
+    /// every replica that the broker hosts, leader or follower, and
+    /// `NOT_LEADER_OR_FOLLOWER` for a partition that the metadata holds and the
+    /// broker does not host. The batches here reach the logs only through the
+    /// leader's log and the follower's replication path. The produce-path
+    /// tracker holds none of them, so a handler that read it would answer no
+    /// producers. A partition in an offline log directory is
+    /// `KAFKA_STORAGE_ERROR`.
+    #[tokio::test]
+    async fn handle_answers_from_the_log_of_every_hosted_replica() {
+        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let local = broker.config.node_id;
+        let remote = krabka_metadata::NodeId(local.0 + 1);
+
+        let leads = seed_partition(&broker, "leads", local, vec![local])
+            .await
+            .expect("hosted leader");
+        let follows = seed_partition(&broker, "follows", remote, vec![remote, local])
+            .await
+            .expect("hosted follower");
+        assert!(
+            seed_partition(&broker, "moved", remote, vec![remote])
+                .await
+                .is_none()
+        );
+
+        leads
+            .log
+            .lock()
+            .expect("log lock")
+            .append(&mut data_batch((10, 0), 0, 3, 1_000, false))
+            .expect("append on the leader");
+        follows
+            .replicate_batch(data_batch((20, 3), 0, 2, 2_000, true))
+            .await
+            .expect("replicate a transactional batch");
+        let mut marker = crate::txn::marker::build_marker_batch(
+            krabka_log::ProducerId(20),
+            3,
+            krabka_log::Offset(2),
+            crate::txn::marker::MarkerType::Commit,
+            9,
+        );
+        marker.base_timestamp = 3_000;
+        marker.max_timestamp = 3_000;
+        follows
+            .replicate_batch(marker)
+            .await
+            .expect("replicate the commit marker");
+        follows
+            .replicate_batch(data_batch((21, 0), 3, 1, 4_000, true))
+            .await
+            .expect("replicate an open transaction");
+
+        let p = principal("alice");
+        let peer = peer();
+        let request = DescribeProducersRequest {
+            topics: ["leads", "follows", "moved"]
+                .into_iter()
+                .map(|name| TopicRequest {
+                    name: name.into(),
+                    partition_indexes: vec![0],
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let topic = |name: &str, row: PartitionResponse| TopicResponse {
+            name: name.into(),
+            partitions: vec![row],
+            ..Default::default()
+        };
+
+        let resp = drive(&broker, &request, &p, &peer).await;
+
+        let expected = DescribeProducersResponse {
+            throttle_time_ms: 0,
+            topics: vec![
+                topic(
+                    "leads",
+                    partition_row(codes::NONE, vec![producer_row(10, 0, 2, 1_000, (-1, -1))]),
+                ),
+                topic(
+                    "follows",
+                    partition_row(
+                        codes::NONE,
+                        vec![
+                            producer_row(20, 3, 1, 3_000, (9, -1)),
+                            producer_row(21, 0, 0, 4_000, (-1, 3)),
+                        ],
+                    ),
+                ),
+                topic(
+                    "moved",
+                    partition_row(codes::NOT_LEADER_OR_FOLLOWER, Vec::new()),
+                ),
+            ],
+            ..Default::default()
+        };
+        assert!(resp == expected);
+
+        // Every partition of this broker shares its one log directory.
+        broker
+            .log_dir_status
+            .mark_offline(&leads.log_dir.load(), "test: EIO");
+        let offline = drive(&broker, &request, &p, &peer).await;
+        let expected = DescribeProducersResponse {
+            topics: vec![
+                topic(
+                    "leads",
+                    partition_row(codes::KAFKA_STORAGE_ERROR, Vec::new()),
+                ),
+                topic(
+                    "follows",
+                    partition_row(codes::KAFKA_STORAGE_ERROR, Vec::new()),
+                ),
+                topic(
+                    "moved",
+                    partition_row(codes::NOT_LEADER_OR_FOLLOWER, Vec::new()),
+                ),
+            ],
+            ..Default::default()
+        };
+        assert!(offline == expected);
         broker_handle.shutdown().await;
     }
 }

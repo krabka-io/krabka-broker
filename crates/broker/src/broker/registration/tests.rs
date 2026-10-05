@@ -379,22 +379,60 @@ fn a_node_without_a_stretch_profile_publishes_no_cluster_default() {
     assert!(stretch_default_records(&config) == vec![]);
 }
 
+/// Only a controller that starts a new cluster publishes the stretch cluster
+/// default. A broker-only node, and a controller that restarts on its log,
+/// publish nothing, and no node publishes a bootstrap record.
 #[test]
-fn checkpoint_loaded_still_submits_the_stretch_cluster_default() {
-    let config = BrokerConfig {
+fn only_a_bootstrapping_controller_publishes_the_stretch_cluster_default() {
+    use crate::{BootstrapMode, config::NodeRole};
+
+    let combined = vec![NodeRole::Broker, NodeRole::Controller];
+    let stretch = BrokerConfig {
         stretch: Some(three_site_profile()),
         ..BrokerConfig::for_tests(std::path::PathBuf::new())
     };
-    let duplicate =
-        krabka_metadata::MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-            name: "metadata.version".into(),
-            level: 25,
-        });
-
-    assert!(
-        bootstrap_records_to_submit(&config, vec![duplicate], true)
-            == stretch_default_records(&config)
-    );
+    let default = stretch_default_records(&stretch);
+    // (roles, bootstrap mode, stretch profile, the records submitted)
+    let cases = [
+        (
+            combined.clone(),
+            BootstrapMode::Bootstrap,
+            true,
+            default.clone(),
+        ),
+        (
+            vec![NodeRole::Controller],
+            BootstrapMode::Bootstrap,
+            true,
+            default,
+        ),
+        (
+            vec![NodeRole::Broker],
+            BootstrapMode::Bootstrap,
+            true,
+            vec![],
+        ),
+        (combined.clone(), BootstrapMode::Rejoin, true, vec![]),
+        (combined, BootstrapMode::Bootstrap, false, vec![]),
+    ];
+    let mut submitted = Vec::new();
+    let mut expected = Vec::new();
+    for (roles, bootstrap_mode, has_stretch, records) in cases {
+        let config = BrokerConfig {
+            roles: roles.clone(),
+            bootstrap_mode,
+            stretch: has_stretch.then(three_site_profile),
+            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        };
+        submitted.push((
+            roles.clone(),
+            bootstrap_mode,
+            has_stretch,
+            stretch_defaults_to_submit(&config),
+        ));
+        expected.push((roles, bootstrap_mode, has_stretch, records));
+    }
+    assert!(submitted == expected);
 }
 
 #[test]

@@ -90,9 +90,14 @@ struct BootstrapManifest {
     records_b64: Vec<String>,
 }
 
-/// Write the authoritative KIP-630/KIP-853 offset-zero checkpoint for a
+/// Write the KIP-630/KIP-853 offset-zero bootstrap checkpoint for a
 /// dynamically formatted controller into
 /// `<metadata_log_dir>/__cluster_metadata-0/`, where Kafka writes it.
+///
+/// The checkpoint holds the control state of `control_records`, then
+/// `metadata_records` in their own order, as Kafka's
+/// `Formatter.writeBoostrapSnapshot` writes them. The active controller
+/// writes those records to the metadata log.
 pub(super) fn write_dynamic_checkpoint(
     metadata_log_dir: &Path,
     cluster_id: ClusterId,
@@ -100,12 +105,17 @@ pub(super) fn write_dynamic_checkpoint(
     metadata_records: &[MetadataRecord],
     fault: &Fault,
 ) -> Result<(), String> {
-    let mut image = krabka_metadata::MetadataImage::new(cluster_id.into());
-    for record in control_records.iter().chain(metadata_records) {
-        image.apply(record);
+    let mut controls = krabka_metadata::MetadataImage::new(cluster_id.into());
+    for record in control_records {
+        controls.apply(record);
     }
-    let bytes = krabka_raft::serialize_metadata_snapshot(&image, 0)
-        .map_err(|e| format!("serialize offset-zero checkpoint: {e}"))?;
+    let bytes = krabka_raft::serialize_bootstrap_snapshot(
+        controls.kraft_version(),
+        controls.voters(),
+        metadata_records,
+        0,
+    )
+    .map_err(|e| format!("serialize offset-zero checkpoint: {e}"))?;
     let checkpoint_dir = krabka_raft::metadata_partition_dir(metadata_log_dir);
     std::fs::create_dir_all(&checkpoint_dir)
         .map_err(|e| format!("create checkpoint directory: {e}"))?;

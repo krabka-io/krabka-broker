@@ -93,6 +93,11 @@ bootstrap snapshot,
 `__cluster_metadata-0/00000000000000000000-0000000000.checkpoint`. Each data
 directory gets `meta.properties` and nothing else.
 
+A controller reads the bootstrap records, from the bootstrap snapshot when
+there is one and from `bootstrap.records.bin` when there is not. The active
+controller writes them to the metadata log when it starts a new cluster, as
+Kafka's controller does. A broker never writes them.
+
 `--ignore-formatted` skips a directory that is already formatted and formats
 the rest, which is how a disk added later is formatted. Without it, one
 formatted directory refuses the whole run. A run that fails partway can be run

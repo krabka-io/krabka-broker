@@ -114,41 +114,67 @@ fn a_committed_value_survives_a_newer_aborted_write() {
 /// The pass after the one that dropped the aborted data finds no batch of the
 /// transaction left, so it stamps the abort marker and drops the transaction's
 /// `.txnindex` entry, and the pass after the delete horizon removes the marker.
+///
+/// That holds once the producers have expired. While producer 2000 is active,
+/// Kafka's cleaner keeps its last data batch as an empty batch
+/// (`isBatchLastRecordOfProducer` in `Cleaner.cleanInto`). Every pass then
+/// meets a batch of the aborted transaction, so the marker and the index entry
+/// stay.
 #[test]
 fn an_abort_marker_and_its_index_entry_age_out_once_the_aborted_data_is_gone() {
-    let dir = tempdir().unwrap();
-    let mut log = log_with_a_batch_per_segment(
-        dir.path(),
-        vec![
-            transactional_keyed(1000, 0, b"k", b"committed"),
-            commit_marker(1000, 0),
-            transactional_keyed(2000, 0, b"k", b"aborted"),
-            abort_marker(2000, 0),
-            keyed_batch(0, &[(0, b"after", b"a")]),
-        ],
-    );
-    let index_before = index_of_the_fixture(&log);
-    log.compact(&compaction_ctx()).unwrap();
-    assert2::assert!(marker_offsets(&log) == vec![1, 3]);
-    assert2::assert!(aborted_txns(&log) == index_before);
-
-    // The second pass reads the first pass's output, which holds no batch of
-    // producer 2000's transaction. The marker is stamped and the entry, which
-    // describes nothing the log still holds, is dropped.
-    log.compact(&compaction_ctx()).unwrap();
-    assert2::assert!(marker_offsets(&log) == vec![1, 3]);
-    assert2::assert!(aborted_txns(&log).is_empty());
-
-    // Once the delete horizon has passed, the marker goes.
+    /// Kafka's default `producer.id.expiration.ms`.
+    const EXPIRATION_MS: i64 = 86_400_000;
+    // (case, whether the producers expire before the first pass, then for
+    // each pass the marker offsets and whether the index entry stays)
+    let cases = [
+        (
+            "expired producers",
+            true,
+            [(vec![1, 3], true), (vec![1, 3], false), (vec![1], false)],
+        ),
+        (
+            "active producers",
+            false,
+            [(vec![1, 3], true), (vec![1, 3], true), (vec![1, 3], true)],
+        ),
+    ];
+    // The third pass runs after the delete horizon of the first two.
     let delete_retention_ms = LogConfig::default().delete_retention.millis_i64_trunc();
     let horizon_passed = CompactionContext {
         now: std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_millis(u64::try_from(delete_retention_ms).unwrap() + 1_000),
         ..compaction_ctx()
     };
-    log.compact(&horizon_passed).unwrap();
-    assert2::assert!(marker_offsets(&log) == vec![1]);
-    assert2::assert!(values_of(&log, b"k") == vec![Bytes::from_static(b"committed")]);
+    let passes = [compaction_ctx(), compaction_ctx(), horizon_passed];
+    for (name, expired, want) in cases {
+        let dir = tempdir().unwrap();
+        let mut log = log_with_a_batch_per_segment(
+            dir.path(),
+            vec![
+                transactional_keyed(1000, 0, b"k", b"committed"),
+                commit_marker(1000, 0),
+                transactional_keyed(2000, 0, b"k", b"aborted"),
+                abort_marker(2000, 0),
+                keyed_batch(0, &[(0, b"after", b"a")]),
+            ],
+        );
+        let index_before = index_of_the_fixture(&log);
+        if expired {
+            log.remove_expired_producers(EXPIRATION_MS, EXPIRATION_MS);
+        }
+
+        let mut seen = Vec::new();
+        for ctx in &passes {
+            log.compact(ctx).unwrap();
+            seen.push((marker_offsets(&log), aborted_txns(&log) == index_before));
+        }
+
+        assert2::assert!(seen == want.to_vec(), "{name}");
+        assert2::assert!(
+            values_of(&log, b"k") == vec![Bytes::from_static(b"committed")],
+            "{name}"
+        );
+    }
 }
 
 /// The pass can stop before a transaction's abort marker, when the last stable

@@ -337,6 +337,81 @@ the `krabka-*` names to crates.io.
   Kafka's `ShareConsumerTest.test_broker_failure`, the broker could not
   create `__share_group_state`, so the share group never initialized its
   partitions.
+- `DescribeProducers` answers from the producer state of the partition log on
+  the leader and on every follower, as Kafka's
+  `ReplicaManager.activeProducerState` does through
+  `UnifiedLog.activeProducers`. Before, it read the producer state of the
+  produce path. A follower does not add the data batches that it replicates to
+  that state, so a follower reported no idempotent producers and no open
+  transactions. The leader reported the timestamp of the last data batch after
+  a transaction marker, where Kafka reports the timestamp of the marker. A
+  partition in an offline log directory now answers `KAFKA_STORAGE_ERROR`, and
+  the producers come in producer id order. The broker removes a producer from
+  the log when `producer.id.expiration.ms` has passed since its last write and
+  it has no open transaction, as Kafka's
+  `ProducerStateManager.removeExpiredProducers` does.
+- A controller-only node (`[process] roles = ["controller"]`) opens no client
+  listener, as Kafka's `ControllerServer` opens only the listeners that
+  `controller.listener.names` names. Before, it also bound `--listen-addr`,
+  `127.0.0.1:9092` by default, so a client reached it there and two
+  controller-only nodes on one host competed for that port. The node binds
+  none of its `[[listeners]]`, with a warning, and closes a data-plane
+  listener passed to `Broker::start_with_listeners`. It starts no KIP-405
+  tiered storage, which Kafka runs on brokers only. Every node now logs
+  `krabka-broker started` when its start is complete, as Kafka logs
+  `Kafka Server started`. The line names `listen_addr` for the client
+  listener of a node with the broker role, and `controller_listen_addr` for
+  the controller listener of a node with the controller role. It replaces
+  `krabka-broker listening`, and the ducktape adapter waits for it.
+  `BrokerHandle::data_plane_addr` is `None` on a controller-only node, and
+  `BrokerHandle::listen_addr` gives the controller listener there.
+- `DescribeConfigs` for a broker reports the listener keys of the node's roles,
+  as Kafka does. On a controller-only node, `listeners` names only the
+  `CONTROLLER` listener and `advertised.listeners` is null at `DEFAULT_CONFIG`.
+  On a broker-only node, `listeners` names only the data-plane listeners. On a
+  combined node, it names both. `controller.listener.names` is `CONTROLLER` at
+  `STATIC_BROKER_CONFIG` on each role, `listener.security.protocol.map` names
+  the protocol of each listener and of the controller listener, and
+  `inter.broker.listener.name` is at `STATIC_BROKER_CONFIG` when the operator
+  named it. Before, a controller-only node reported data-plane listeners that
+  it does not open, through `kafka-configs --bootstrap-controller` too.
+- Log compaction on a follower keeps the last batch of each active producer,
+  as it does on the leader. The cleaner reads the active producers from the
+  producer state of the partition log, which a follower updates for each batch
+  that it replicates, as Kafka's `Cleaner.cleanSegments` reads
+  `UnifiedLog.lastRecordsOfActiveProducers` on every replica. It keeps the
+  last data batch of each active producer as an empty batch, or the marker
+  that started the producer's current epoch, as `Cleaner.cleanInto` does.
+  Before, the cleaner read the producer state of the produce path, which on a
+  follower holds only the transaction markers, so a follower that compacted
+  its log removed the last batch of an idempotent or transactional producer
+  when newer records replaced its keys. After a promotion, the log then held
+  no batch with that producer's last sequence. The cleaner now keeps a
+  producer until the periodic `producer.id.expiration.ms` check removes it,
+  as Kafka does.
+- The active controller writes the bootstrap records of a new cluster once,
+  and a broker never writes them, as in Kafka. A leader whose metadata log
+  holds no `metadata.version` writes the records directly after the
+  `LeaderChange` batch of its epoch, as `QuorumController` does with
+  `ActivationRecordsGenerator.recordsForEmptyLog`. When the records enable
+  `eligible.leader.replicas.version`, the same batch ends with the
+  cluster-level `min.insync.replicas` at the controller's static value, as in
+  Kafka, so `DescribeConfigs` and `CreateTopics` report it at
+  `DYNAMIC_DEFAULT_BROKER_CONFIG`. The controller takes the records from the
+  bootstrap checkpoint of a dynamic format, or else from
+  `bootstrap.records.bin`, and it does not apply the records of the bootstrap
+  checkpoint to its image, as Kafka's `handleLoadBootstrap` keeps them for the
+  activation. A controller that cannot write them stops with the fatal fault
+  `exception while completing controller activation`, and the process exits
+  with status 1, as Kafka's `fatalFaultHandler` halts it. A broker waits until
+  its image finalizes `metadata.version`, and then registers. Before, a
+  controller formatted with `--standalone` kept the records of its bootstrap
+  checkpoint in its image and out of the log, so broker-only nodes saw no
+  `metadata.version` and each one submitted its own copy, as Kafka's
+  `quorum_reconfiguration_test.py` showed. `krabka-format` writes the
+  bootstrap checkpoint as Kafka's `Formatter.writeBoostrapSnapshot` does: the
+  control state, then the bootstrap records in their order. Bootstrap records
+  that do not finalize `metadata.version` stop the start.
 
 ## [0.7.0] - 2026-10-02
 

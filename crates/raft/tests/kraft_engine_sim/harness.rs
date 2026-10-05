@@ -98,6 +98,7 @@ pub(crate) fn build_engine_with_snapshot_interval(
             max_snapshot_interval: millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             metadata_log: metadata_log(),
+            activation: krabka_raft::kraft::Activation::default(),
         },
         log,
         dir.path().to_path_buf(),

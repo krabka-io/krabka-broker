@@ -49,6 +49,7 @@ impl Engine {
         let mut heartbeat = tokio::time::interval(hb_period.to_std());
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        let mut faulted = false;
         loop {
             // Build the timer futures fresh each turn from the current deadlines.
             let election_sleep = sleep_until_opt(self.election_at);
@@ -99,10 +100,12 @@ impl Engine {
                 }
             }
             // A write to the metadata log directory that failed this turn
-            // ends the controller (KIP-858). The engine stops taking part in
-            // the quorum at once, rather than serve from a log it can no
-            // longer extend.
-            if self.publish_storage_fault() {
+            // ends the controller (KIP-858), and so does a failed controller
+            // activation. The engine stops taking part in the quorum at once,
+            // rather than serve from a log it can no longer extend or that it
+            // could not seed.
+            if self.publish_fault() {
+                faulted = true;
                 break;
             }
             // Whatever this turn did may have grown the log, moved the high
@@ -114,28 +117,47 @@ impl Engine {
             // idle voter only ticks the loop on its timers.
             self.maybe_snapshot();
         }
+        if faulted {
+            // The engine takes part in nothing more, but it keeps its watch
+            // channels open, and it answers no caller, until the controller
+            // shuts it down. The controller publishes the fault as fatal
+            // first. So a reader that sees the image close, or a submit fail,
+            // also sees the fatal fault and not a bare shutdown.
+            let mut held = Vec::new();
+            while let Some(command) = cmd_rx.recv().await {
+                if matches!(command, Command::Shutdown) {
+                    break;
+                }
+                held.push(command);
+            }
+        }
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {
             let _ = w.reply.send(Err(RaftError::Shutdown));
         }
     }
 
-    /// Publish the failure of the metadata log directory when a write to it
-    /// returned an I/O error. Returns `true` once it is published.
-    pub fn publish_storage_fault(&mut self) -> bool {
-        let Some(failure) = self.log.failure() else {
+    /// Publish the fault that stops the engine: the failure of the metadata
+    /// log directory when a write to it returned an I/O error, or else the
+    /// failure of a controller activation. Returns `true` once a fault is
+    /// published.
+    pub fn publish_fault(&mut self) -> bool {
+        let fault = if let Some(failure) = self.log.failure() {
+            format!(
+                "the metadata log directory {} has failed: {failure}",
+                self.data_dir
+                    .parent()
+                    .unwrap_or(self.data_dir.as_path())
+                    .display()
+            )
+        } else if let Some(fault) = &self.activation_fault {
+            fault.clone()
+        } else {
             return false;
         };
-        let fault = format!(
-            "the metadata log directory {} has failed: {failure}",
-            self.data_dir
-                .parent()
-                .unwrap_or(self.data_dir.as_path())
-                .display()
-        );
-        if self.storage_fault_tx.borrow().is_none() {
+        if self.fault_tx.borrow().is_none() {
             tracing::error!(%fault, "kraft: stopping the controller");
-            self.storage_fault_tx.send_replace(Some(fault));
+            self.fault_tx.send_replace(Some(fault));
         }
         true
     }
@@ -360,7 +382,12 @@ impl Engine {
             Action::AppendLeaderChange { epoch } => {
                 if let Err(e) = self.append_leader_change(epoch) {
                     tracing::error!(?e, "kraft: append leader-change failed");
-                } else if leader_alone_is_majority(
+                    return;
+                }
+                // Kafka's controller activation: the first write of the
+                // epoch seeds a log that holds no `metadata.version`.
+                self.complete_activation();
+                if leader_alone_is_majority(
                     self.core.quorum_state().majority(),
                     self.core.is_voter(),
                 ) {

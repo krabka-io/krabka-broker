@@ -137,7 +137,6 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_raft::NodeId;
-    use krabka_units::hours;
     use uuid::Uuid;
 
     use super::*;
@@ -257,7 +256,6 @@ mod tests {
             log_config: &LogConfig::default(),
             log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
             producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            producer_id_expiration: hours(24),
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             diskless_wal_local_replica_count: 3,

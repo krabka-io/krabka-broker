@@ -9,7 +9,6 @@ use std::sync::{
 };
 
 use krabka_ids::PartitionIndex;
-use krabka_units::Time;
 
 use crate::{
     config::BrokerConfig,
@@ -156,7 +155,6 @@ pub(crate) fn spawn_partition_with_replication_target(
             log,
             log_dir_status,
             producer_state,
-            producer_id_expiration: broker_config.producer_id_expiration,
             max_produce_group: broker_config.max_produce_group,
             partition_writer_queue_depth: broker_config.partition_writer_queue_depth,
             diskless_wal_local_replica_count,
@@ -178,7 +176,6 @@ pub(crate) struct PartitionSpawnConfig {
     pub log: krabka_log::Log,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
     pub producer_state: Arc<crate::producer_state::ProducerState>,
-    pub producer_id_expiration: Time,
     pub max_produce_group: usize,
     pub partition_writer_queue_depth: usize,
     pub diskless_wal_local_replica_count: usize,
@@ -212,7 +209,6 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         log,
         log_dir_status,
         producer_state,
-        producer_id_expiration,
         max_produce_group,
         partition_writer_queue_depth,
         diskless_wal_local_replica_count,
@@ -263,7 +259,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
             delivery.clone(),
         ),
         (log_dir_status, producer_state, wal),
-        (producer_id_expiration, max_produce_group),
+        max_produce_group,
         sequencer,
     );
     let writer = if let Some(engine) = wal_engine {

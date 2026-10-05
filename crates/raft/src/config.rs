@@ -163,6 +163,23 @@ pub struct ControllerConfig {
     pub metadata_raft_fetch_max: MetadataRaftFetchMax,
     pub client_id: String,
     pub bootstrap_mode: BootstrapMode,
+    /// The bootstrap metadata of a static quorum: Kafka's
+    /// `bootstrap.checkpoint`, which `krabka-format` writes as
+    /// `bootstrap.records.bin`.
+    ///
+    /// The active controller writes these records once, when it activates on
+    /// a metadata log that holds no `metadata.version`. A bootstrap checkpoint
+    /// at offset 0 and epoch 0 that holds metadata records replaces them, as
+    /// Kafka's `QuorumController.handleLoadBootstrap` does. An empty list
+    /// writes nothing.
+    pub bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
+    /// This node's static `min.insync.replicas`: Kafka's
+    /// `ConfigurationControlManager.getStaticallyConfiguredMinInsyncReplicas`.
+    /// When the bootstrap records finalize `eligible.leader.replicas.version`
+    /// above 0, the active controller writes it as the cluster-level
+    /// `min.insync.replicas` together with them, as Kafka's
+    /// `ActivationRecordsGenerator.recordsForEmptyLog` does. Default: `1`.
+    pub default_min_insync_replicas: i32,
     /// Cluster UUID applied to the `MetadataImage` on first construction.
     /// `None` falls back to `Uuid::nil()` (legacy single-node default).
     /// The operator sets this to the `KafkaCluster` UID so every broker
@@ -254,6 +271,11 @@ impl std::fmt::Debug for ControllerConfig {
             .field("metadata_raft_fetch_max", &self.metadata_raft_fetch_max)
             .field("client_id", &self.client_id)
             .field("bootstrap_mode", &self.bootstrap_mode)
+            .field("bootstrap_records", &self.bootstrap_records.len())
+            .field(
+                "default_min_insync_replicas",
+                &self.default_min_insync_replicas,
+            )
             .field("cluster_id", &self.cluster_id)
             .field("dialer", &self.dialer.is_some())
             .field("handshake", &self.handshake.is_some())
@@ -315,6 +337,10 @@ impl ControllerConfig {
             metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
             client_id: "krabka-controller-test".into(),
             bootstrap_mode: BootstrapMode::Bootstrap,
+            // A test counts the offsets its own writes land at, so the leader
+            // writes no bootstrap records ahead of them.
+            bootstrap_records: Vec::new(),
+            default_min_insync_replicas: 1,
             cluster_id: None,
             dialer: None,
             handshake: None,

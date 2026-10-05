@@ -4,6 +4,12 @@
 
 use crate::error::RaftError;
 
+/// Kafka's `Snapshots.BOOTSTRAP_SNAPSHOT_ID`: the id of the bootstrap
+/// checkpoint that a dynamic format writes. No replica replicates it, and no
+/// replica applies its metadata records to its image. The leader writes those
+/// records to the log instead.
+pub(crate) const BOOTSTRAP_SNAPSHOT_ID: (i64, i32) = (0, 0);
+
 /// Write a KIP-630 `.checkpoint` artifact (bytes only) directly with
 /// temp+rename atomicity.
 ///

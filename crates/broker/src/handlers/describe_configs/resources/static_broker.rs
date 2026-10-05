@@ -139,9 +139,10 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
 /// broker synonym.
 ///
 /// Kafka reports a key at `STATIC_BROKER_CONFIG` when `server.properties`
-/// names it, whatever the value is. Some keys are always named: `log.dirs`,
-/// `listeners`, `advertised.listeners` and `process.roles` are how a node is
-/// told where it lives, and krabka always holds them. The four log defaults
+/// names it, whatever the value is. Some keys are always named: `log.dirs` and
+/// `process.roles` are how a node is told where it lives, and krabka always
+/// holds them. The listener keys name the listeners of the node's roles, as
+/// [`listener_settings`] says. The four log defaults
 /// `message.max.bytes`, `log.segment.bytes`, `log.roll.ms` and
 /// `min.insync.replicas` are named only when the operator supplied them, which
 /// [`crate::config::StaticConfigOrigins`] records, so an inherited default
@@ -173,7 +174,6 @@ pub(crate) fn static_settings(
             .collect::<Vec<_>>()
             .join(",")
     };
-    let listeners = config.effective_listeners();
     let roles: Vec<&str> = config
         .roles
         .iter()
@@ -185,23 +185,8 @@ pub(crate) fn static_settings(
     let mut settings = std::collections::BTreeMap::from([
         ("log.dirs", join_paths(config.all_log_dirs())),
         ("process.roles", roles.join(",")),
-        (
-            "listeners",
-            listeners
-                .iter()
-                .map(|listener| format!("{}://{}", listener.name, listener.bind_addr))
-                .collect::<Vec<_>>()
-                .join(","),
-        ),
-        (
-            "advertised.listeners",
-            listeners
-                .iter()
-                .map(|listener| format!("{}://{}", listener.name, listener.advertised))
-                .collect::<Vec<_>>()
-                .join(","),
-        ),
     ]);
+    settings.extend(listener_settings(config));
     if let Some(rack) = &config.rack {
         settings.insert("broker.rack", rack.clone());
     }
@@ -269,6 +254,101 @@ pub(crate) fn static_settings(
             .filter_map(|key| key.static_value(config).map(|value| (key.name, value))),
     );
     settings
+}
+
+/// The listener keys of this node, as the `server.properties` of a Kafka node
+/// with the same `process.roles` names them.
+///
+/// - `listeners` names the listeners that the node opens: the data-plane
+///   listeners on a node with the broker role, then the controller listener on
+///   a node with the controller role. `KafkaConfig` refuses a controller-only
+///   node whose `listeners` name a listener that `controller.listener.names`
+///   does not name, and a broker-only node whose `listeners` name one that it
+///   does.
+/// - `advertised.listeners` names the advertised data-plane listeners, on a
+///   node with the broker role only. krabka takes the advertised endpoint of
+///   the controller listener from the voter set. Kafka's
+///   `effectiveAdvertisedControllerListeners` does the same when
+///   `advertised.listeners` does not name the controller listener. Thus a
+///   controller-only node names no advertised listener, and Kafka then reports
+///   the key as null at `DEFAULT_CONFIG`, with no synonym.
+/// - `listener.security.protocol.map` gives the protocol of each listener in
+///   `listeners`, and of the controller listener on a broker-only node too.
+///   That node connects to the controller listener, and `KafkaConfig` refuses
+///   a broker-only node whose map does not name it.
+/// - `controller.listener.names` is `CONTROLLER` on each role. `KafkaConfig`
+///   refuses a node that does not name it.
+/// - `inter.broker.listener.name` is the name that the operator gave. When the
+///   operator gave no name, Kafka uses the listener of
+///   `security.inter.broker.protocol` and reports the key as null at
+///   `DEFAULT_CONFIG`, so the key is not here.
+fn listener_settings(config: &crate::config::BrokerConfig) -> Vec<(&'static str, String)> {
+    use crate::controller_endpoint::CONTROLLER_LISTENER_NAME;
+
+    let data_plane = if config.is_broker() {
+        config.effective_listeners()
+    } else {
+        Vec::new()
+    };
+    let join = |entries: Vec<String>| entries.join(",");
+    let opened = data_plane
+        .iter()
+        .map(|listener| format!("{}://{}", listener.name, listener.bind_addr))
+        .chain(config.is_controller().then(|| {
+            format!(
+                "{CONTROLLER_LISTENER_NAME}://{}",
+                config.controller_listen_addr
+            )
+        }))
+        .collect();
+    let protocols = data_plane
+        .iter()
+        .map(|listener| (listener.name.as_str(), listener.protocol))
+        .chain([(
+            CONTROLLER_LISTENER_NAME,
+            config.controller_listener_protocol,
+        )])
+        .map(|(name, protocol)| format!("{name}:{}", security_protocol_name(protocol)))
+        .collect();
+    let mut settings = vec![
+        ("listeners", join(opened)),
+        ("listener.security.protocol.map", join(protocols)),
+        (
+            "controller.listener.names",
+            CONTROLLER_LISTENER_NAME.to_owned(),
+        ),
+    ];
+    if config.is_broker() {
+        let advertised = data_plane
+            .iter()
+            .map(|listener| format!("{}://{}", listener.name, listener.advertised))
+            .collect();
+        settings.push(("advertised.listeners", join(advertised)));
+    }
+    if config
+        .static_config_origins
+        .supplied_kafka_keys
+        .contains(config_keys::INTER_BROKER_LISTENER_NAME)
+    {
+        settings.push((
+            config_keys::INTER_BROKER_LISTENER_NAME,
+            config.inter_broker_listener_name.clone(),
+        ));
+    }
+    settings
+}
+
+/// Kafka's `SecurityProtocol` name of a listener protocol, which is how
+/// `listener.security.protocol.map` spells it.
+const fn security_protocol_name(protocol: krabka_security::ListenerProtocol) -> &'static str {
+    use krabka_security::ListenerProtocol::{Plaintext, SaslPlaintext, SaslSsl, Ssl};
+
+    match protocol {
+        Plaintext => "PLAINTEXT",
+        Ssl => "SSL",
+        SaslPlaintext => "SASL_PLAINTEXT",
+        SaslSsl => "SASL_SSL",
+    }
 }
 
 /// One static broker entry.

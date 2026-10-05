@@ -236,7 +236,6 @@ pub(crate) async fn handle(
                     log_config: &log_config,
                     log_dir_status: &log_dir_status,
                     producer_state: &broker.producer_state,
-                    producer_id_expiration: broker.config.producer_id_expiration,
                     max_produce_group: broker.config.max_produce_group,
                     partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
                     diskless_wal_local_replica_count: broker

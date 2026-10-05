@@ -55,11 +55,14 @@ impl KraftController {
         self.image_rx.clone()
     }
 
-    /// Watch the failure of the metadata log directory: `None` while every
-    /// write to it succeeds, and the I/O error of the first one that fails.
+    /// Watch the fault that stopped the engine: `None` while it runs, and
+    /// the reason once it stops over a fault Kafka halts the process over.
+    /// That is the I/O error of the first write to the metadata log
+    /// directory that fails (KIP-858), or a controller activation that
+    /// failed.
     #[must_use]
-    pub fn watch_storage_fault(&self) -> watch::Receiver<Option<String>> {
-        self.storage_fault_rx.clone()
+    pub fn watch_fault(&self) -> watch::Receiver<Option<String>> {
+        self.fault_rx.clone()
     }
 
     /// Watch the current leader id.

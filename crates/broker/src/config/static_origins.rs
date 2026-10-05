@@ -38,7 +38,8 @@ pub struct StaticConfigOrigins {
     /// Kafka's default value; a key that is not here does so only when the
     /// node runs another value. The keys the broker reads under their Kafka
     /// names from `server_properties`, such as `log.roll.ms`, are here when
-    /// the operator named them.
+    /// the operator named them. So is `inter.broker.listener.name`, when the
+    /// file names `inter_broker_listener_name`.
     pub supplied_kafka_keys: std::collections::BTreeSet<&'static str>,
     /// `transactional.id.expiration.ms` was supplied.
     pub txn_id_expiration: bool,

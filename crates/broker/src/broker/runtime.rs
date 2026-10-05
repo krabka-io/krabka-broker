@@ -19,7 +19,7 @@ use crate::{
         liveness::{LivenessStartup, start_liveness_services},
         maintenance::{spawn_cluster_data_maintenance, spawn_storage_security_maintenance},
         observability::{ObservabilityStartup, start_observability},
-        remote_storage::start_remote_storage,
+        remote_storage::{RemoteStorageStartup, start_remote_storage},
         replication::{ReplicatorStorage, spawn_replicator_supervisor},
         rlmm::{KafkaSwapKickoff, kafka_swap_kickoff},
     },
@@ -309,14 +309,24 @@ pub(super) async fn start_broker_runtime(
         &metrics,
         &supervisor_shutdown,
     );
-    let kafka_swap_kickoff = kafka_swap_kickoff(config);
-    let remote = start_remote_storage(
-        config,
-        storage.0,
-        controller,
-        &metrics,
-        &supervisor_shutdown,
-    )?;
+    // KIP-405 tiering is a broker component: Kafka builds its
+    // `RemoteLogManager` in `BrokerServer` only. A node without the broker role
+    // hosts no partition, and it opens no data-plane listener for the
+    // topic-backed metadata manager to bootstrap from.
+    let (kafka_swap_kickoff, remote) = if config.is_broker() {
+        (
+            kafka_swap_kickoff(config),
+            start_remote_storage(
+                config,
+                storage.0,
+                controller,
+                &metrics,
+                &supervisor_shutdown,
+            )?,
+        )
+    } else {
+        (None, RemoteStorageStartup::default())
+    };
     let caches = start_runtime_watchers(
         config,
         controller,
@@ -350,4 +360,50 @@ pub(super) async fn start_broker_runtime(
         kafka_swap_target: remote.swap_target,
         inter_listener_protocol,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use crate::{
+        Broker,
+        config::{
+            BrokerConfig,
+            NodeRole::{Broker as BrokerRole, Controller},
+            RemoteStorageBackend,
+        },
+    };
+
+    /// KIP-405 tiering runs on a node with the broker role only. A
+    /// controller-only node with a remote storage backend configured builds no
+    /// remote reader and starts no diskless index bootstrap, which would dial a
+    /// data-plane listener that the node does not open.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_a_node_with_the_broker_role_starts_remote_storage() {
+        // (roles, whether the node starts the remote storage runtime)
+        let cases = [
+            (vec![Controller], false),
+            (vec![Controller, BrokerRole], true),
+        ];
+        for (roles, starts) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let objects = tempfile::tempdir().expect("tempdir");
+            let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+            config.remote_storage_backend = Some(RemoteStorageBackend::Local {
+                dir: objects.path().to_path_buf(),
+            });
+            config.roles.clone_from(&roles);
+
+            let handle = Broker::start(config).await.expect("start");
+            let started = (
+                handle.broker.remote_reader.is_some(),
+                handle.broker.diskless_read.is_some(),
+                handle.diskless_task.is_some(),
+            );
+            handle.shutdown().await;
+
+            check!(started == (starts, starts, starts), "{roles:?}");
+        }
+    }
 }

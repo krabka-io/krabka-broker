@@ -56,10 +56,7 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
             Arc::new(ProducerState::new()),
             wal,
         ),
-        (
-            crate::config::BrokerConfig::default().producer_id_expiration,
-            crate::config::BrokerConfig::default().max_produce_group,
-        ),
+        crate::config::BrokerConfig::default().max_produce_group,
         Some(test_sequencer()),
     ));
 
@@ -138,10 +135,7 @@ async fn diskless_acked_record_survives_reopen() {
                 Arc::new(ProducerState::new()),
                 wal,
             ),
-            (
-                crate::config::BrokerConfig::default().producer_id_expiration,
-                crate::config::BrokerConfig::default().max_produce_group,
-            ),
+            crate::config::BrokerConfig::default().max_produce_group,
             Some(test_sequencer()),
         ));
 

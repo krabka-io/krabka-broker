@@ -1,0 +1,365 @@
+//! Writer-loop tests for the Compact arm: the batches that a compaction pass
+//! keeps for the producers of a partition, on a leader and on a follower.
+//!
+//! Kafka's cleaner reads the last record of each active producer from the
+//! producer state of the log: `Cleaner.cleanSegments` calls
+//! `UnifiedLog.lastRecordsOfActiveProducers`. A leader updates that state for
+//! each batch that it appends, and a follower for each batch that it
+//! replicates, so the two replicas keep the same batches.
+
+use assert2::check;
+use bytes::{Bytes, BytesMut};
+use krabka_log::{CleanupPolicy, LogConfig, Offset, ProducerId, VerbatimBatch};
+use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_units::{bytes, convert::TimeExt as _, gibibytes, millis};
+use tempfile::tempdir;
+use tokio::sync::oneshot;
+
+use super::*;
+use crate::{
+    partition::{ProduceData, ProduceJob},
+    replica_state::ReplicaState,
+    txn::marker::{MarkerType, build_marker_batch},
+};
+
+/// The idempotent producer: `(id, epoch)`.
+const IDEMPOTENT: (i64, i16) = (9_101, 0);
+
+/// The transactional producer. Its commit marker is at the next epoch, as a
+/// transaction-version-2 coordinator writes it.
+const TRANSACTIONAL: (i64, i16) = (9_102, 3);
+
+/// Compaction passes for each row. The third pass is the first that can drop
+/// a commit marker: the first pass still meets a batch of its transaction, the
+/// second stamps its delete horizon, and the third finds that horizon passed.
+const PASSES: usize = 3;
+
+/// How the batches of a row reach the partition log.
+#[derive(Clone, Copy, Debug)]
+enum Role {
+    /// A leader. The writer appends each batch at the next offset, and the
+    /// row then records a data batch in the tracker, as the produce handler
+    /// does after the append (`AppendCommit::record`).
+    Leader,
+    /// A follower. A data batch arrives verbatim and a control batch decoded,
+    /// at the offset of the leader, as `replicator/response.rs` sends them.
+    Follower,
+}
+
+/// One batch of the log after compaction. The compared fields are the ones
+/// that carry the state of a producer, and the records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Kept {
+    base_offset: i64,
+    last_offset: i64,
+    producer_id: i64,
+    producer_epoch: i16,
+    base_sequence: i32,
+    control: bool,
+    records: Vec<(Option<Bytes>, Option<Bytes>)>,
+}
+
+impl Kept {
+    fn of(batch: &RecordBatch) -> Self {
+        Self {
+            base_offset: batch.base_offset,
+            last_offset: batch.base_offset + i64::from(batch.last_offset_delta),
+            producer_id: batch.producer_id,
+            producer_epoch: batch.producer_epoch,
+            base_sequence: batch.base_sequence,
+            control: batch.attributes.is_control_batch(),
+            records: batch
+                .records
+                .iter()
+                .map(|record| (record.key.clone(), record.value.clone()))
+                .collect(),
+        }
+    }
+
+    /// The one-record `batch` at `offset` with no records: the bare header
+    /// that Kafka's `RETAIN_EMPTY` writes.
+    fn header(offset: i64, batch: &RecordBatch) -> Self {
+        Self {
+            records: Vec::new(),
+            ..Self::whole(offset, batch)
+        }
+    }
+
+    /// The one-record `batch` at `offset` with its record.
+    fn whole(offset: i64, batch: &RecordBatch) -> Self {
+        Self {
+            base_offset: offset,
+            last_offset: offset,
+            ..Self::of(batch)
+        }
+    }
+}
+
+/// A one-record data batch of `key` and `value`. `producer` is `(id, epoch,
+/// base_sequence)`, or `None` for a client with no idempotence.
+fn record(
+    producer: Option<(i64, i16, i32)>,
+    transactional: bool,
+    (key, value): (&str, &str),
+    timestamp: i64,
+) -> RecordBatch {
+    let (producer_id, producer_epoch, base_sequence) = producer.unwrap_or((-1, -1, -1));
+    RecordBatch {
+        attributes: Attributes::default().with_transactional(transactional),
+        base_timestamp: timestamp,
+        max_timestamp: timestamp,
+        producer_id,
+        producer_epoch,
+        base_sequence,
+        records: vec![Record {
+            key: Some(Bytes::copy_from_slice(key.as_bytes())),
+            value: Some(Bytes::copy_from_slice(value.as_bytes())),
+            ..Record::default()
+        }],
+        ..RecordBatch::default()
+    }
+}
+
+/// One history of a partition: its batches in log order, whether the
+/// producer-expiry sweep runs before compaction, and the batches that every
+/// replica keeps.
+struct History {
+    name: &'static str,
+    batches: Vec<RecordBatch>,
+    swept: bool,
+    want: Vec<Kept>,
+}
+
+/// Each history ends with a batch that stays in the active segment, which no
+/// pass rewrites.
+fn histories(now_ms: i64) -> Vec<History> {
+    let (idempotent_id, idempotent_epoch) = IDEMPOTENT;
+    let idempotent = |sequence| Some((idempotent_id, idempotent_epoch, sequence));
+    let superseded = vec![
+        record(idempotent(0), false, ("a", "p-a"), now_ms),
+        record(idempotent(1), false, ("b", "p-b"), now_ms),
+        record(None, false, ("a", "a-2"), now_ms),
+        record(None, false, ("b", "b-3"), now_ms),
+        record(None, false, ("c", "c-4"), now_ms),
+    ];
+    let (transactional_id, transactional_epoch) = TRANSACTIONAL;
+    let committed = vec![
+        record(
+            Some((transactional_id, transactional_epoch, 0)),
+            true,
+            ("a", "t-a"),
+            now_ms,
+        ),
+        build_marker_batch(
+            ProducerId(transactional_id),
+            transactional_epoch + 1,
+            Offset(1),
+            MarkerType::Commit,
+            17,
+        ),
+        record(None, false, ("a", "a-2"), now_ms),
+        record(None, false, ("c", "c-3"), now_ms),
+    ];
+    vec![
+        // Kafka keeps the batch that holds the last sequence of an active
+        // producer, as an empty batch when compaction removes its records.
+        History {
+            name: "the last batch of an active idempotent producer",
+            want: vec![
+                Kept::header(1, &superseded[1]),
+                Kept::whole(2, &superseded[2]),
+                Kept::whole(3, &superseded[3]),
+                Kept::whole(4, &superseded[4]),
+            ],
+            batches: superseded.clone(),
+            swept: false,
+        },
+        // `ProducerStateManager.removeExpiredProducers` removed the producer,
+        // so nothing keeps its batches.
+        History {
+            name: "the last batch of an expired idempotent producer",
+            want: vec![
+                Kept::whole(2, &superseded[2]),
+                Kept::whole(3, &superseded[3]),
+                Kept::whole(4, &superseded[4]),
+            ],
+            batches: superseded,
+            swept: true,
+        },
+        // A marker that moves the epoch removes the batches from the producer
+        // state, so the marker is the last record of the producer. Kafka keeps
+        // it, as an empty control batch once its delete horizon has passed,
+        // because it holds the epoch that fences the producer.
+        History {
+            name: "a commit marker at the next epoch",
+            want: vec![
+                Kept::header(1, &committed[1]),
+                Kept::whole(2, &committed[2]),
+                Kept::whole(3, &committed[3]),
+            ],
+            batches: committed,
+            swept: false,
+        },
+    ]
+}
+
+/// Append `batch` at `offset` the way `role` does.
+async fn append(
+    role: Role,
+    tx: &mpsc::Sender<WriterMessage>,
+    producer_state: &ProducerState,
+    mut batch: RecordBatch,
+    offset: i64,
+) {
+    batch.base_offset = offset;
+    let control = batch.attributes.is_control_batch();
+    match role {
+        Role::Leader => {
+            let (ack, ack_rx) = oneshot::channel();
+            let data = if control {
+                ProduceData::OwnedControl(batch.clone())
+            } else {
+                ProduceData::Owned(batch.clone())
+            };
+            tx.send(WriterMessage::Produce(ProduceJob {
+                data,
+                ack,
+                producer_check: None,
+            }))
+            .await
+            .expect("send produce");
+            let appended = ack_rx.await.expect("produce ack").expect("produce");
+            check!(appended.base_offset == offset);
+            if !control && batch.producer_id >= 0 {
+                producer_state
+                    .commit(
+                        "t",
+                        PartitionIndex(0),
+                        (batch.producer_id, batch.producer_epoch),
+                        (batch.base_sequence, batch.last_offset_delta),
+                        (
+                            offset,
+                            batch.max_timestamp,
+                            batch.attributes.is_transactional(),
+                        ),
+                    )
+                    .await;
+            }
+        }
+        Role::Follower if control => {
+            let (ack, ack_rx) = oneshot::channel();
+            tx.send(WriterMessage::Replicate { batch, ack })
+                .await
+                .expect("send replicate");
+            ack_rx.await.expect("replicate ack").expect("replicate");
+        }
+        Role::Follower => {
+            let mut wire = BytesMut::new();
+            batch.encode(&mut wire).expect("encode");
+            let verbatim = VerbatimBatch {
+                bytes: wire.freeze(),
+                last_offset_delta: batch.last_offset_delta,
+                max_timestamp: batch.max_timestamp,
+                leader_epoch: krabka_log::LeaderEpoch(batch.partition_leader_epoch),
+                producer_id: ProducerId(batch.producer_id),
+                producer_epoch: batch.producer_epoch,
+                base_sequence: batch.base_sequence,
+                is_transactional: batch.attributes.is_transactional(),
+            };
+            let (ack, ack_rx) = oneshot::channel();
+            tx.send(WriterMessage::ReplicateVerbatim {
+                batch: verbatim,
+                base_offset: Offset(offset),
+                ack,
+            })
+            .await
+            .expect("send replicate verbatim");
+            ack_rx
+                .await
+                .expect("replicate verbatim ack")
+                .expect("replicate verbatim");
+        }
+    }
+}
+
+/// The batches that `role` keeps of `history` after [`PASSES`] compaction
+/// passes with the high watermark at the log end.
+async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
+    let dir = tempdir().expect("tempdir");
+    // One batch for each segment, and no delete retention, so the passes can
+    // drop a marker.
+    let config = LogConfig {
+        cleanup_policy: CleanupPolicy::Compact,
+        segment_size: bytes(1),
+        delete_retention: millis(0),
+        ..LogConfig::default()
+    };
+    let log = Arc::new(Mutex::new(Log::open(dir.path(), config).expect("open log")));
+    let producer_state = Arc::new(ProducerState::new());
+    let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
+    let (tx, rx) = mpsc::channel(1);
+    let writer = tokio::spawn(run_writer!(
+        "t".to_string(),
+        PartitionIndex(0),
+        log.clone(),
+        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
+        rx,
+        Arc::new(Notify::new()),
+        replica_state.clone(),
+        Arc::new(Notify::new()),
+        crate::log_dir_status::LogDirRegistry::default(),
+        producer_state.clone(),
+        None,
+    ));
+
+    for (offset, batch) in (0..).zip(&history.batches) {
+        append(role, &tx, &producer_state, batch.clone(), offset).await;
+    }
+    let log_end = log.lock().expect("log lock").log_end_offset();
+    replica_state.lock().await.hw = log_end;
+    if history.swept {
+        // The maintenance loop sweeps the tracker and the log of every
+        // hosted partition (`spawn_producer_expiry`).
+        let expiration = crate::config::BrokerConfig::default().producer_id_expiration;
+        let later = now_ms + expiration.millis_i64();
+        producer_state.expire_older_than(later, expiration).await;
+        log.lock()
+            .expect("log lock")
+            .remove_expired_producers(later, expiration.millis_i64());
+    }
+    for _ in 0..PASSES {
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Compact { ack })
+            .await
+            .expect("send compact");
+        ack_rx.await.expect("compact ack").expect("compact");
+    }
+
+    let kept = log
+        .lock()
+        .expect("log lock")
+        .read(Offset(0), gibibytes(1))
+        .expect("read")
+        .batches
+        .iter()
+        .map(Kept::of)
+        .collect();
+    drop(tx);
+    writer.await.expect("writer join");
+    kept
+}
+
+/// Kafka's `Cleaner.cleanInto` keeps the last record of each producer in the
+/// producer state of the log (`isBatchLastRecordOfProducer`), and that state
+/// is the same on a leader and on a follower that has its log. A follower
+/// therefore keeps the same batches as its leader.
+#[tokio::test]
+async fn compaction_keeps_the_last_record_of_each_active_producer_on_every_replica() {
+    let now_ms = crate::time_util::now_ms();
+    for history in histories(now_ms) {
+        for role in [Role::Leader, Role::Follower] {
+            let kept = compacted(role, &history, now_ms).await;
+            check!(kept == history.want, "{}, {role:?}", history.name);
+        }
+    }
+}

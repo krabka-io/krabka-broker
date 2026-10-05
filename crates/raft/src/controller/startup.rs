@@ -144,6 +144,10 @@ impl Controller {
             config.max_snapshot_interval,
             metadata_snapshot_fetch_max,
             config.metadata_log,
+            crate::kraft::Activation {
+                bootstrap_records: config.bootstrap_records.clone(),
+                default_min_insync_replicas: config.default_min_insync_replicas,
+            },
         )?;
 
         // Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws
@@ -238,7 +242,7 @@ fn effective_bootstrap_mode(
 }
 
 /// Stops the controller over a fatal fault, as Kafka's fatal fault handler
-/// does. Two faults are fatal:
+/// does. Three faults are fatal:
 ///
 /// - The replay of a feature level that the controller does not support, as
 ///   Kafka's fatal fault on a `FeatureControlManager` replay exception. The
@@ -249,6 +253,10 @@ fn effective_bootstrap_mode(
 ///   an I/O error. Kafka shuts the node down when its metadata log directory
 ///   fails (KIP-858), and the engine has already stopped taking part in the
 ///   quorum.
+/// - A controller activation that failed: a new leader of an empty log that
+///   could not write the bootstrap records. Kafka's `QuorumController` gives
+///   that failure to its `fatalFaultHandler` as `exception while completing
+///   controller activation`, and the engine has already stopped.
 ///
 /// The fault goes out on `fatal` first, as [`ControllerHandle::watch_fatal`]
 /// documents, so that a process hosting the controller can halt over it, as
@@ -261,7 +269,7 @@ async fn stop_on_fatal_fault(
     unstable: UnstableFeatureVersions,
 ) {
     let mut images = engine.watch_image();
-    let mut storage_faults = engine.watch_storage_fault();
+    let mut faults = engine.watch_fault();
     loop {
         let (refusal, engine_stopped) = tokio::select! {
             () = shutdown.cancelled() => return,
@@ -272,15 +280,15 @@ async fn stop_on_fatal_fault(
                 ),
                 Err(_) => (None, true),
             },
-            changed = storage_faults.changed() => (None, changed.is_err()),
+            changed = faults.changed() => (None, changed.is_err()),
         };
         if let Some(refusal) = refusal {
             tracing::error!(%refusal, "controller stopping: it replayed an unsupported feature level");
             fatal.send_replace(Some(refusal));
-        } else if let Some(fault) = storage_faults.borrow().clone() {
-            // The engine publishes the failure and then stops, so the fault
-            // can arrive together with the end of the image channel.
-            tracing::error!(%fault, "controller stopping: its metadata log directory failed");
+        } else if let Some(fault) = faults.borrow().clone() {
+            // The engine publishes the fault and then stops, so the fault can
+            // arrive together with the end of the image channel.
+            tracing::error!(%fault, "controller stopping over a fault of its engine");
             fatal.send_replace(Some(fault));
         } else if engine_stopped {
             return;
@@ -444,6 +452,58 @@ mod tests {
             "the metadata log directory {} has failed: ",
             dir.path().display()
         ))));
+        ctrl.shutdown().await;
+    }
+
+    /// A controller whose activation records its own leader refuses stops
+    /// with a fatal fault, as Kafka's `QuorumController` halts the process
+    /// with `exception while completing controller activation`. A process
+    /// that hosts it reads the fault from `watch_fatal`.
+    #[tokio::test]
+    async fn a_refused_activation_stops_the_controller() {
+        let dir = TempDir::new().unwrap();
+        let ctrl = Controller::start(ControllerConfig {
+            bootstrap_records: vec![
+                krabka_metadata::MetadataRecord::V1FeatureLevel(
+                    krabka_metadata::FeatureLevelRecord {
+                        name: "metadata.version".into(),
+                        level: crate::LATEST_PRODUCTION_METADATA_VERSION,
+                    },
+                ),
+                // No record creates the topic, so the leader refuses this one.
+                krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                    topic: "missing".into(),
+                    partition: 0,
+                    leader: NodeId(1),
+                    replicas: vec![NodeId(1)],
+                    isr: vec![NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                }),
+            ],
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        })
+        .await
+        .expect("start");
+        let mut fatal = ctrl.watch_fatal();
+        let fault = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            fatal.wait_for(Option::is_some),
+        )
+        .await
+        .expect("the controller publishes a fatal fault")
+        .expect("the fault channel stays open until the fault")
+        .clone();
+
+        assert2::check!(
+            fault.as_deref()
+                == Some(
+                    "exception while completing controller activation: metadata: unknown topic 'missing'"
+                )
+        );
         ctrl.shutdown().await;
     }
 

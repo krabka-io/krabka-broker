@@ -1,7 +1,7 @@
 // Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
 
 //! KIP-664 `DescribeProducers` admin RPC (`api_key` 61). It reports the
-//! broker's in-memory producer-state snapshot.
+//! producer state of the partition log.
 //!
 //! Tests:
 //!   * an empty partition returns an empty `active_producers` list

@@ -143,6 +143,7 @@ async fn repeated_leader_restart_reelects() {
             krabka_units::prelude::millis(0),
             MetadataSnapshotFetchMax::default(),
             metadata_log(),
+            krabka_raft::kraft::Activation::default(),
         )
         .expect("reopen leader");
         net.register(leader, reopened);

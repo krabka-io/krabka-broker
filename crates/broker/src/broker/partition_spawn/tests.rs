@@ -1,5 +1,4 @@
 use assert2::assert;
-use krabka_units::millis;
 use tempfile::tempdir;
 
 use super::*;
@@ -15,7 +14,6 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
         log: krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).expect("open log"),
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         producer_state: Arc::new(crate::producer_state::ProducerState::new()),
-        producer_id_expiration: millis(1),
         max_produce_group: crate::config::BrokerConfig::default().max_produce_group,
         partition_writer_queue_depth: 2,
         diskless_wal_local_replica_count: 3,
@@ -144,7 +142,6 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         log,
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         producer_state: Arc::new(crate::producer_state::ProducerState::new()),
-        producer_id_expiration: millis(1),
         max_produce_group: 1_024,
         partition_writer_queue_depth: 64,
         diskless_wal_local_replica_count: 3,

@@ -13,7 +13,8 @@
 //! registered broker it does not hear from within `heartbeat_timeout`. It also
 //! covers what the metadata surface then advertises: `controller_id` has to
 //! name a broker the caller can resolve out of the same response, which the
-//! controller-only node's own id never is.
+//! controller-only node's own id never is. The controller-only node itself
+//! opens no client listener, so a client never reaches it at all.
 
 use std::{
     collections::BTreeSet,
@@ -41,6 +42,9 @@ mod support;
 /// voter, and `n` broker-only observers.
 struct RoleSeparated {
     controller: BrokerHandle,
+    /// The client address in the controller-only node's config. The harness
+    /// hands the node a listener bound on it, which the node closes.
+    controller_client_addr: std::net::SocketAddr,
     brokers: Vec<BrokerHandle>,
     /// The broker-only nodes' configs, index-aligned with `brokers`, so a test
     /// can stop one and start it again on the same ports and log dir.
@@ -104,6 +108,7 @@ async fn start_role_separated_with(
     ctrl_cfg.roles = vec![NodeRole::Controller];
     customize(0, &mut ctrl_cfg);
     let controller_metadata_dir = ctrl_cfg.metadata_dir().to_path_buf();
+    let controller_client_addr = ctrl_cfg.listen_addr;
     let controller = Broker::start_with_listeners(
         ctrl_cfg,
         Some(ctrl_ls.next().unwrap()),
@@ -148,6 +153,7 @@ async fn start_role_separated_with(
     controller.wait_until_brokers_registered(brokers).await;
     RoleSeparated {
         controller,
+        controller_client_addr,
         brokers: observers,
         broker_configs,
         controller_metadata_dir,
@@ -519,45 +525,35 @@ async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
     }
 }
 
-/// The controller-only node serves the client APIs on its own data listener
-/// too, and must not name itself there either: it is the quorum leader and
-/// still has no broker endpoint to offer.
+/// The controller-only node opens no client listener, as Kafka's
+/// `ControllerServer` opens only the listeners that `controller.listener.names`
+/// names. The harness hands it a listener bound on its client address, and the
+/// node closes it, so a connect there is refused. Its one listener is the
+/// controller listener.
 ///
-/// [`assert_metadata_names_a_reachable_controller`] asks the observers, which
-/// answer out of a replicated image. This asks the node that *is* the
-/// controller, where the leader's id is the one value most obviously to hand.
+/// [`assert_metadata_names_a_reachable_controller`] asks the observers which
+/// node is the controller. No client can ask the controller-only node.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_only_node_never_advertises_itself_as_controller() {
+async fn controller_only_node_opens_no_client_listener() {
     support::init_tracing();
 
-    let cluster = start_role_separated(2).await;
-    assert_settled_unfenced(&cluster).await;
-    let controller_node_id = i32::try_from(cluster.controller.node_id()).unwrap();
-
-    let client = Client::builder()
-        .bootstrap(cluster.controller.listen_addr().to_string())
-        .build()
+    let cluster = start_role_separated(1).await;
+    let connect = tokio::net::TcpStream::connect(cluster.controller_client_addr)
         .await
-        .unwrap();
-    let resp = client.send(MetadataRequest::default()).await.unwrap();
+        .map(drop)
+        .map_err(|error| error.kind());
 
-    let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
     assert!(
-        resp.controller_id != controller_node_id,
-        "a controller-only node has no broker endpoint and must not name itself; \
-         it advertised {controller_node_id} out of {listed:?}"
+        (
+            cluster.controller.data_plane_addr(),
+            cluster.controller.listen_addr(),
+            connect,
+        ) == (
+            None,
+            cluster.controller.controller_addr(),
+            Err(std::io::ErrorKind::ConnectionRefused),
+        )
     );
-    let named = resp
-        .brokers
-        .iter()
-        .find(|row| row.node_id == resp.controller_id);
-    assert!(
-        named.is_some(),
-        "the controller-only node advertised controller_id {}, which is absent from {listed:?}",
-        resp.controller_id
-    );
-    let endpoint = named.unwrap();
-    assert!(!endpoint.host.is_empty() && endpoint.port > 0);
 
     cluster.shutdown().await;
 }

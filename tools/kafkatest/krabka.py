@@ -468,12 +468,17 @@ class KrabkaService(KafkaService):
         return "%s 1>> %s 2>&1 &" % (cmd, self.STDOUT_STDERR_CAPTURE)
 
     def wait_for_start(self, node, monitor, timeout_sec=60):
+        # Every node logs `krabka-broker started` when its start is complete,
+        # whatever its roles, as Kafka logs `Kafka Server started`. The line
+        # names the listeners that the node opened. A controller-only node
+        # opens its controller listener only.
+        #
         # A broker that exits during startup never logs the line. Fail when
         # its process is gone, with the error it printed, and not at the end
         # of a timeout that can be ten minutes long.
-        def listening():
+        def started():
             try:
-                monitor.wait_until("krabka-broker listening", timeout_sec=1, backoff_sec=.25)
+                monitor.wait_until("krabka-broker started", timeout_sec=1, backoff_sec=.25)
                 return True
             except DucktapeTimeoutError:
                 if not self.pids(node):
@@ -481,7 +486,7 @@ class KrabkaService(KafkaService):
                         node.account.hostname, self.startup_error(node)))
                 return False
 
-        wait_until(listening, timeout_sec=timeout_sec, backoff_sec=0,
+        wait_until(started, timeout_sec=timeout_sec, backoff_sec=0,
                    err_msg="krabka-broker didn't finish startup in %d seconds" % timeout_sec)
         if not self.pids(node):
             raise Exception("No process ids recorded on node %s" % node.account.hostname)

@@ -14,7 +14,6 @@ use std::{
 use arc_swap::ArcSwap;
 use krabka_ids::PartitionIndex;
 use krabka_log::Log;
-use krabka_units::Time;
 use tokio::sync::{Notify, mpsc};
 
 use crate::{
@@ -85,10 +84,7 @@ pub async fn run(
         rx,
         signals,
         services,
-        (
-            crate::config::BrokerConfig::default().producer_id_expiration,
-            crate::config::BrokerConfig::default().max_produce_group,
-        ),
+        crate::config::BrokerConfig::default().max_produce_group,
         None,
     )
     .await;
@@ -109,14 +105,13 @@ pub async fn run_with_sequencer(
         Arc<ProducerState>,
         Option<crate::wal::SharedWal>,
     ),
-    limits: (Time, usize),
+    max_produce_group: usize,
     sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
 ) {
     let (topic, partition) = identity;
     let (log, log_dir) = storage;
     let (append_notify, replica_state, hw_advance_notify, delivery) = signals;
     let (log_dir_status, producer_state, wal) = services;
-    let (producer_id_expiration, max_produce_group) = limits;
     // `pending` holds a non-Produce message that was pulled off the channel
     // while group-draining Produce jobs (see the Produce arm). It is handled on
     // the next iteration so control messages are never reordered ahead of the
@@ -257,15 +252,7 @@ pub async fn run_with_sequencer(
                 handle_retention((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }
             WriterMessage::Compact { ack } => {
-                handle_compact(
-                    (&topic, partition),
-                    (&log, &log_dir, &log_dir_status),
-                    &producer_state,
-                    producer_id_expiration,
-                    &replica_state,
-                    ack,
-                )
-                .await;
+                handle_compact((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }
             #[cfg(any(test, feature = "test-helpers"))]
             WriterMessage::TestSetLogStart { new_start, ack } => {

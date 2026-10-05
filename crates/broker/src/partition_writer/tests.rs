@@ -3,6 +3,7 @@
 
 pub(super) use super::*;
 
+mod compaction;
 mod delivery_watermark;
 mod diskless;
 mod high_watermark;

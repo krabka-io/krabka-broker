@@ -124,6 +124,33 @@ pub fn serialize_metadata_snapshot(
     snapshot::SnapshotWriter::serialize(image, last_contained_log_timestamp)
 }
 
+/// Serialize the bootstrap checkpoint of a dynamic format, as Kafka's
+/// `Formatter.writeBoostrapSnapshot` writes it: the KIP-853 `kraft.version`
+/// and voter set, then the bootstrap records in their own order.
+///
+/// A controller does not apply these records to its image. The active
+/// controller writes them to an empty metadata log, and every replica applies
+/// them from there.
+///
+/// # Errors
+/// Returns an error if `kraft_version` exceeds `int16`, or if a voter or a
+/// bootstrap record cannot be encoded.
+pub fn serialize_bootstrap_snapshot(
+    kraft_version: u16,
+    voters: &krabka_metadata::VoterSet,
+    records: &[krabka_metadata::MetadataRecord],
+    last_contained_log_timestamp: i64,
+) -> Result<bytes::Bytes, RaftError> {
+    snapshot::SnapshotWriter::serialize_bootstrap(
+        &snapshot::SnapshotControlState {
+            kraft_version,
+            voters: voters.clone(),
+        },
+        records,
+        last_contained_log_timestamp,
+    )
+}
+
 /// Decode the KIP-630 metadata records from a Kafka metadata snapshot.
 ///
 /// KIP-853 quorum controls are intentionally omitted: a restore formats a new

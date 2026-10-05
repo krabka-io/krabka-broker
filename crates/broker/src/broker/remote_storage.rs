@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{config::BrokerConfig, error::BrokerError, partition_registry::PartitionRegistry};
 
+#[derive(Default)]
 pub(super) struct RemoteStorageStartup {
     pub(super) reader: Option<Arc<crate::remote_reader::RemoteReader>>,
     pub(super) swap_target: Option<Arc<krabka_remote_storage_topic::SwappableRlmm>>,
@@ -49,11 +50,7 @@ pub(super) fn start_remote_storage(
     shutdown: &CancellationToken,
 ) -> Result<RemoteStorageStartup, BrokerError> {
     let Some(backend) = config.remote_storage_backend.clone() else {
-        return Ok(RemoteStorageStartup {
-            reader: None,
-            swap_target: None,
-            diskless_read: None,
-        });
+        return Ok(RemoteStorageStartup::default());
     };
     let diskless_read = Some(build_diskless_read_handle(&backend)?);
     // WORM layers over whichever object store was selected; it is not a

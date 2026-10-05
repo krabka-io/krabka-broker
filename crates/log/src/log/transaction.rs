@@ -197,8 +197,8 @@ mod tests {
     use crate::{
         config::LogConfig,
         log::test_support::{
-            abort_marker, commit_marker, sample_batch, test_batch_at, transactional_batch,
-            verbatim_from,
+            abort_marker, commit_marker, sample_batch, test_batch_at, transaction_fields,
+            transactional_batch, verbatim_from,
         },
         name,
         txn_index::TxnIndex,
@@ -249,7 +249,7 @@ mod tests {
 
             let mut marker = commit_marker(-2, 0);
             log.append(&mut marker).unwrap();
-            assert2::assert!(log.producer_transaction_state(ProducerId(-2)) == (-1, None));
+            assert2::assert!(transaction_fields(&log, ProducerId(-2)) == (-1, None));
 
             let mut verbatim = test_batch_at(0);
             verbatim.producer_id = -3;
@@ -265,8 +265,8 @@ mod tests {
 
         let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
         assert2::assert!(reopened.lso() == reopened.log_end_offset());
-        assert2::assert!(reopened.producer_transaction_state(ProducerId(-2)) == (-1, None));
-        assert2::assert!(reopened.producer_transaction_state(ProducerId(-3)) == (-1, None));
+        assert2::assert!(transaction_fields(&reopened, ProducerId(-2)) == (-1, None));
+        assert2::assert!(transaction_fields(&reopened, ProducerId(-3)) == (-1, None));
         assert2::assert!(reopened.producer_state_snapshot().is_empty());
     }
 

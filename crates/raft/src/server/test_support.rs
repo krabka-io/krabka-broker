@@ -60,6 +60,7 @@ pub(super) fn test_engine_with_voters(
             max_idle_interval: millis(0),
             ..crate::MetadataLogConfig::default()
         },
+        crate::kraft::Activation::default(),
     )
     .expect("open engine");
     (ctrl, dir)

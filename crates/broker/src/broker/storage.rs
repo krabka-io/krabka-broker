@@ -134,7 +134,6 @@ pub(super) async fn recover_storage_and_groups(
                     log,
                     log_dir_status: log_dir_status.clone(),
                     producer_state: Arc::clone(&producer_state),
-                    producer_id_expiration: config.producer_id_expiration,
                     max_produce_group: config.max_produce_group,
                     partition_writer_queue_depth: config.partition_writer_queue_depth,
                     diskless_wal_local_replica_count: config.diskless_wal_local_replica_count,

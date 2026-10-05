@@ -58,7 +58,60 @@ impl SnapshotWriter {
         last_contained_log_timestamp: i64,
         control_state: &SnapshotControlState,
     ) -> Result<Bytes, RaftError> {
-        let records = image.to_records();
+        // Each `MetadataRecord` is translated against the very image being
+        // snapshotted (a whole-map V1TopicConfig diffs against its own image and
+        // so emits all-sets-no-tombstones — correct for a from-scratch snapshot).
+        let mut value_blobs: Vec<Bytes> = Vec::new();
+        for rec in &image.to_records() {
+            // `V1Voters` / `V1KRaftVersion` are encoded as KIP-853 control
+            // records, never as KIP-631 metadata values.
+            if matches!(
+                rec,
+                MetadataRecord::V1Voters(_)
+                    | MetadataRecord::V1KRaftVersion(_)
+                    | MetadataRecord::V1PartitionElr(_)
+                    | MetadataRecord::V1PartitionRecovery(_)
+            ) {
+                continue;
+            }
+            let mut blobs = to_kraft_values(rec, image)
+                .map_err(|e| RaftError::ChangeRejected(format!("snapshot encode: {e}")))?;
+            value_blobs.append(&mut blobs);
+        }
+        Self::write(last_contained_log_timestamp, control_state, value_blobs)
+    }
+
+    /// Produce the bootstrap checkpoint of a dynamic format: the KIP-853
+    /// control state, then `records` in their own order.
+    ///
+    /// Kafka's `Formatter.writeBoostrapSnapshot` appends the bootstrap records
+    /// to its snapshot writer as they are, and the active controller later
+    /// writes them to the log in that order. So each record is translated
+    /// against the image that the records before it produce, as the
+    /// controller translates them.
+    pub(crate) fn serialize_bootstrap(
+        control_state: &SnapshotControlState,
+        records: &[MetadataRecord],
+        last_contained_log_timestamp: i64,
+    ) -> Result<Bytes, RaftError> {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        let mut value_blobs: Vec<Bytes> = Vec::new();
+        for record in records {
+            let mut blobs = to_kraft_values(record, &image)
+                .map_err(|e| RaftError::ChangeRejected(format!("snapshot encode: {e}")))?;
+            value_blobs.append(&mut blobs);
+            image.apply(record);
+        }
+        Self::write(last_contained_log_timestamp, control_state, value_blobs)
+    }
+
+    /// The `.checkpoint` bytes for `control_state` and the KIP-631 value
+    /// blobs of the metadata records.
+    fn write(
+        last_contained_log_timestamp: i64,
+        control_state: &SnapshotControlState,
+        value_blobs: Vec<Bytes>,
+    ) -> Result<Bytes, RaftError> {
         let mut out = BytesMut::new();
 
         // (1) SnapshotHeader control batch at base_offset 0 — the real KIP-630
@@ -93,26 +146,6 @@ impl SnapshotWriter {
         )?);
 
         // (3) Data batch at base_offset 3: one record per KIP-631 value blob.
-        // Each `MetadataRecord` is translated against the very image being
-        // snapshotted (a whole-map V1TopicConfig diffs against its own image and
-        // so emits all-sets-no-tombstones — correct for a from-scratch snapshot).
-        let mut value_blobs: Vec<Bytes> = Vec::new();
-        for rec in &records {
-            // `V1Voters` / `V1KRaftVersion` are encoded above as KIP-853 control
-            // records, never as KIP-631 metadata values.
-            if matches!(
-                rec,
-                MetadataRecord::V1Voters(_)
-                    | MetadataRecord::V1KRaftVersion(_)
-                    | MetadataRecord::V1PartitionElr(_)
-                    | MetadataRecord::V1PartitionRecovery(_)
-            ) {
-                continue;
-            }
-            let mut blobs = to_kraft_values(rec, image)
-                .map_err(|e| RaftError::ChangeRejected(format!("snapshot encode: {e}")))?;
-            value_blobs.append(&mut blobs);
-        }
         let total_blobs = value_blobs.len();
         if !value_blobs.is_empty() {
             let last_offset_delta = total_blobs
@@ -322,6 +355,60 @@ mod tests {
                 == ControlRecord::SnapshotFooter(SnapshotFooterRecord::default())
         );
         check!(cur.is_empty());
+    }
+
+    /// The bootstrap checkpoint keeps the bootstrap records in their own
+    /// order, `metadata.version` first, as Kafka's formatter appends them. An
+    /// image of the same records would list the feature levels last, by name.
+    #[test]
+    fn the_bootstrap_checkpoint_keeps_the_records_in_their_order() {
+        use krabka_metadata::{FeatureLevelRecord, Voter, VoterEndpoint};
+
+        use crate::snapshot::{SnapshotContents, SnapshotReader};
+
+        let feature = |name: &str, level: i16| {
+            MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: name.into(),
+                level,
+            })
+        };
+        let records = vec![
+            feature("metadata.version", 27),
+            feature("group.version", 1),
+            MetadataRecord::V1ScramCredential(krabka_metadata::ScramCredentialRecord {
+                user: "alice".into(),
+                mechanism: krabka_security::SaslMechanism::ScramSha512,
+                salt: vec![1; 16],
+                stored_key: vec![2; 64],
+                server_key: vec![3; 64],
+                iterations: 4096,
+            }),
+            feature("eligible.leader.replicas.version", 1),
+        ];
+        let control_state = SnapshotControlState {
+            kraft_version: 1,
+            voters: krabka_metadata::VoterSet::from_voters([Voter {
+                id: NodeId(1),
+                directory_id: Uuid::from_u128(1),
+                endpoints: vec![VoterEndpoint {
+                    name: "CONTROLLER".into(),
+                    host: "localhost".into(),
+                    port: 9093,
+                }],
+                kraft_version: krabka_metadata::KRaftVersionRange { min: 0, max: 1 },
+            }]),
+        };
+
+        let bytes = SnapshotWriter::serialize_bootstrap(&control_state, &records, 5).unwrap();
+
+        check!(
+            SnapshotReader::read(&bytes).unwrap()
+                == SnapshotContents {
+                    control_state: Some(control_state),
+                    last_contained_log_timestamp: 5,
+                    metadata_records: records,
+                }
+        );
     }
 
     /// The apiKeys of Kafka's `MetadataRecordType` table

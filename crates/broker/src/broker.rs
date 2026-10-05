@@ -280,7 +280,10 @@ impl Broker {
 /// [`shutdown`](BrokerHandle::shutdown) for an orderly stop. Dropping the
 /// handle requests best-effort cancellation of all retained tasks.
 pub struct BrokerHandle {
-    listen_addr: SocketAddr,
+    /// The bound address of the data-plane listener that `listen_addr()`
+    /// reports. `None` on a node without the broker role, which opens no
+    /// data-plane listener.
+    listen_addr: Option<SocketAddr>,
     shutdown: CancellationToken,
     /// One task per `ListenerSpec` bound during `Broker::start`. `shutdown()`
     /// awaits every task after it stops all active connections.

@@ -418,6 +418,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
+        crate::kraft::Activation::default(),
     )
     .expect("reopen over the same data dir");
     reopened.trigger_snapshot().await.expect("trigger snapshot");

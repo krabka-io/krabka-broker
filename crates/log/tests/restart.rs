@@ -1,9 +1,6 @@
 //! What a reopened log knows about the segments it did not write.
 
-use std::{
-    collections::HashMap,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use assert2::check;
 use bytes::Bytes;
@@ -81,7 +78,6 @@ fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
     log.compact(&CompactionContext {
         now,
         last_stable_offset: Offset(i64::MAX),
-        active_producers: HashMap::new(),
     })
     .unwrap();
     check!(log.tierable_segments().len() == 1);

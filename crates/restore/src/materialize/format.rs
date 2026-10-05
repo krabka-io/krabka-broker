@@ -310,12 +310,20 @@ fn seed_metadata_records(
         }
     }
     if snapshot_records.is_some() {
+        // A feature that the snapshot does not finalize is disabled in the
+        // restored cluster. `metadata.version` is never disabled: Kafka has no
+        // `MetadataVersion` at level 0, and the active controller refuses
+        // bootstrap records that remove it. So a snapshot without one keeps
+        // the level of the format.
         features.extend(
             krabka_metadata::feature_registry()
                 .iter()
                 .filter(|feature| {
-                    feature.name() != krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
-                        && !snapshot_features.contains(feature.name())
+                    !matches!(
+                        feature.name(),
+                        krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
+                            | krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                    ) && !snapshot_features.contains(feature.name())
                 })
                 .map(|feature| {
                     MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
@@ -632,6 +640,50 @@ mod tests {
                     topics_without_configuration: vec![],
                 }
         );
+    }
+
+    /// A feature that the snapshot does not finalize is disabled, except
+    /// `metadata.version`: no `MetadataVersion` has level 0, so a snapshot
+    /// without one keeps the level the format gives.
+    #[test]
+    fn a_snapshot_without_a_metadata_version_keeps_the_formatted_level() {
+        let inventory = ArchiveInventory {
+            partitions: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
+        };
+        let group_version = MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: "group.version".to_owned(),
+            level: 1,
+        });
+
+        let (records, _) = seed_metadata_records(
+            &inventory,
+            NodeId(7),
+            None,
+            Some(std::slice::from_ref(&group_version)),
+        )
+        .expect("seed metadata");
+
+        let mut expected = vec![group_version];
+        expected.extend(
+            krabka_metadata::feature_registry()
+                .iter()
+                .filter(|registered| {
+                    !matches!(
+                        registered.name(),
+                        "metadata.version"
+                            | "group.version"
+                            | krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
+                    )
+                })
+                .map(|registered| {
+                    MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                        name: registered.name().to_owned(),
+                        level: 0,
+                    })
+                }),
+        );
+        check!(records == expected);
     }
 
     #[test]

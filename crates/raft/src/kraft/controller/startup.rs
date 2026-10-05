@@ -19,7 +19,8 @@ use uuid::Uuid;
 use super::{
     Engine, KraftConfig, KraftControlState, KraftController, METADATA_LOG_CLEAN_INTERVAL,
     PendingDowngradeSnapshot, QUORUM_STATE_FILE,
-    checkpoint::{latest_checkpoint_id, load_latest_checkpoint},
+    activation::{Activation, check_bootstrap_records},
+    checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
     quorum_state_file::load_quorum_state,
     recovery::{control_state_at, replay_committed, replay_control_records},
     timing::initial_election_at,
@@ -90,6 +91,7 @@ impl KraftController {
             max_snapshot_interval,
             metadata_snapshot_fetch_max,
             metadata_log,
+            activation,
         } = config;
 
         // Every record in a cleanly reopened log is committed. Recover the
@@ -150,7 +152,7 @@ impl KraftController {
             },
         };
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
-        let (storage_fault_tx, storage_fault_rx) = watch::channel(None);
+        let (fault_tx, fault_rx) = watch::channel(None);
         let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());
 
         let clock_base = Instant::now();
@@ -176,7 +178,7 @@ impl KraftController {
             leader_tx,
             quorum_tx,
             cmd_tx: cmd_tx.clone(),
-            storage_fault_tx,
+            fault_tx,
             data_dir,
             clock_base,
             election_timeout,
@@ -215,6 +217,8 @@ impl KraftController {
             wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: initial_hwm,
             pending_reconfig: None,
+            activation,
+            activation_fault: None,
         };
 
         // A restart can rediscover a committed downgrade whose earlier local
@@ -229,7 +233,7 @@ impl KraftController {
         Ok(Self {
             cmd_tx,
             image_rx,
-            storage_fault_rx,
+            fault_rx,
             leader_rx,
             quorum_rx,
             peers: engine_peers,
@@ -242,6 +246,13 @@ impl KraftController {
     /// [`QuorumState`] from the node-local quorum-state file. The
     /// `bootstrap` voter set/cluster id is used only when no quorum-state file
     /// exists yet.
+    ///
+    /// The bootstrap checkpoint, at offset 0 and epoch 0, is not a snapshot
+    /// of the log. The engine takes its KIP-853 control state, but it does
+    /// not apply its metadata records to the image. Those records replace
+    /// the bootstrap records of `activation` when there are any, and the
+    /// leader writes them to an empty log, as Kafka's
+    /// `QuorumController.handleLoadBootstrap` keeps them for its activation.
     ///
     /// # Errors
     /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read.
@@ -272,6 +283,7 @@ impl KraftController {
         max_snapshot_interval: Time,
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
         metadata_log: MetadataLogConfig,
+        mut activation: Activation,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let legacy_quorum_state = std::fs::metadata(data_dir.join(QUORUM_STATE_FILE))
@@ -292,13 +304,30 @@ impl KraftController {
         let mut snapshot_control = None;
         let mut last_snapshot_end_offset = Offset(0);
         let mut last_snapshot_timestamp_ms = 0;
+        let mut bootstrap_source = "the controller configuration";
         if let Some(bytes) = load_latest_checkpoint(&data_dir)? {
             let contents = crate::snapshot::SnapshotReader::read(&bytes)?;
             // The records this checkpoint contains are below its boundary and
             // gone from the log, so its header is the only place their
             // create-time survives a restart.
             last_snapshot_timestamp_ms = contents.last_contained_log_timestamp;
-            image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
+            if latest_checkpoint_id(&data_dir) == Some(BOOTSTRAP_SNAPSHOT_ID) {
+                // Kafka's `KafkaRaftClient` gives the bootstrap checkpoint to
+                // `handleLoadBootstrap` and not to `handleLoadSnapshot`. Its
+                // records are not in the log, so they are not in the image:
+                // the leader writes them to the log, and every replica
+                // applies them from there.
+                if !contents.metadata_records.is_empty() {
+                    tracing::info!(
+                        records = contents.metadata_records.len(),
+                        "loaded the bootstrap records of the bootstrap checkpoint"
+                    );
+                    activation.bootstrap_records = contents.metadata_records;
+                    bootstrap_source = "the bootstrap checkpoint";
+                }
+            } else {
+                image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
+            }
             if let Some(control) = contents.control_state {
                 image.apply(&MetadataRecord::V1KRaftVersion(
                     krabka_metadata::KRaftVersionRecord {
@@ -318,6 +347,7 @@ impl KraftController {
             // rediscovers a downgrade when a crash landed after checkpoint
             // rename but before prefix pruning.
         }
+        check_bootstrap_records(&activation.bootstrap_records, bootstrap_source)?;
         let mut downgrade_snapshot_pending = replay_committed(
             &log,
             &mut image,
@@ -382,6 +412,7 @@ impl KraftController {
                 max_snapshot_interval,
                 metadata_snapshot_fetch_max,
                 metadata_log,
+                activation,
             },
             log,
             data_dir,

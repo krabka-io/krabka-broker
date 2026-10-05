@@ -109,7 +109,13 @@ format follows the node's own `unstable.feature.versions.enable`.
 
 The adapter then formats the log directories with `krabka-format`, with the
 same cluster id and `--feature` flags that `kafka-storage.sh format` gets. It
-starts `krabka-broker` and waits for the `krabka-broker listening` log line.
+starts `krabka-broker` and waits for the `krabka-broker started` log line, as
+Kafka's `KafkaService` waits for `Kafka Server started`. Every node logs this
+line when its start is complete. The line names the listeners that the node
+opened: `listen_addr` for the client listener of a node with the broker role,
+and `controller_listen_addr` for the controller listener of a node with the
+controller role. A controller-only node opens no client listener, as Kafka's
+`ControllerServer` opens only the listeners in `controller.listener.names`.
 It finds the broker process with `pgrep -x krabka-broker`.
 
 The adapter turns krabka's audit log off. Kafka has no audit log, and the

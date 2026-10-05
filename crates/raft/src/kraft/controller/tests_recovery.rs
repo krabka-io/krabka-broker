@@ -267,6 +267,7 @@ async fn snapshot_then_restart_recovers_image() {
                 max_snapshot_interval: krabka_units::prelude::millis(0),
                 metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
                 metadata_log: test_metadata_log(),
+                activation: crate::kraft::Activation::default(),
             },
             log,
             data_dir.clone(),
@@ -301,6 +302,7 @@ async fn snapshot_then_restart_recovers_image() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
+        crate::kraft::Activation::default(),
     )
     .expect("reopen");
     assert2::assert!(ctrl2.current_image().topic("recovered").is_some());
@@ -346,6 +348,7 @@ async fn open_with_legacy_54_byte_quorum_state_advances_hwm() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
+        crate::kraft::Activation::default(),
     )
     .expect("open");
 

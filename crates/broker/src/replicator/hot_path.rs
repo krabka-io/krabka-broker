@@ -81,10 +81,7 @@ impl ReplicaSeam {
                 Arc::new(ProducerState::new()),
                 None,
             ),
-            (
-                crate::config::BrokerConfig::default().producer_id_expiration,
-                crate::config::BrokerConfig::default().max_produce_group,
-            ),
+            crate::config::BrokerConfig::default().max_produce_group,
             None,
         ));
         Ok(Self {

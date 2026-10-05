@@ -205,8 +205,10 @@ impl HealthState {
             .store(true, Ordering::Release);
     }
 
-    /// Called once every data-plane listener is bound and its accept loop is
-    /// running.
+    /// Called once every listener of this node is bound and accepting: each
+    /// data-plane listener of a node with the broker role, and the controller
+    /// listener of a node with the controller role, which the metadata phase
+    /// binds first. A controller-only node opens no data-plane listener.
     pub fn mark_listeners_bound(&self) {
         self.inner.listeners_bound.store(true, Ordering::Release);
     }

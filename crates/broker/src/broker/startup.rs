@@ -78,7 +78,8 @@ impl Broker {
     /// * `data_plane_listeners`: each listener is adopted for the data-plane
     ///   [`ListenerSpec`] whose `bind_addr` equals its local address (for the
     ///   legacy single-listener path that is `config.listen_addr`). Any
-    ///   non-matching specs still bind from `config`.
+    ///   non-matching specs still bind from `config`. A node without the broker
+    ///   role opens no data-plane listener, so it closes every supplied one.
     ///
     /// A live socket handoff closes the TOCTOU window that the bind-and-drop
     /// trick leaves open. That trick reads an ephemeral port and then drops the
@@ -189,13 +190,12 @@ impl Broker {
         //    `Arc<OnceCell<Arc<ControllerHandle>>>` that's installed into
         //    the handshake up front and `set` once the controller exists.
 
-        // KIP-853: the bootstrap records carry the seed `VotersRecord`. Load
-        // them once here so the cold-boot voter set feeds `ControllerConfig`;
-        // the same records are submitted through raft after a leader is
-        // elected (step 2b below). A `Join` node has no seed set and relies
-        // on `bootstrap_servers` + auto-join instead. Broker-only nodes never
-        // run a controller, so the records stay unused (step 2b is gated on
-        // having a non-empty set and `Bootstrap` mode).
+        // The metadata phase loads the bootstrap records of a controller and
+        // gives them to `ControllerConfig`. The active controller writes them
+        // when it activates on an empty metadata log, and every node, a
+        // broker-only node too, reads them from that log. No node submits
+        // them. A `Join` node has no seed voter set and relies on
+        // `bootstrap_servers` + auto-join instead.
         let (controller, controller_admin_router, raft_handshake_audit) = start_metadata_phase(
             &mut config,
             controller_listener,
@@ -268,8 +268,8 @@ impl Broker {
         // Auto-join grows the controller *voter* quorum, so only nodes that
         // run a controller participate. A broker-only node is a pure observer
         // and never joins the quorum.
-        // Auto-join, leader readiness, registration, and bootstrap submission
-        // are completed by `start_metadata_phase`.
+        // `start_metadata_phase` completes auto-join, leader readiness, the
+        // wait for `metadata.version`, and registration.
 
         // The metadata authority exists and this node has reached the quorum,
         // so `/readyz` can compare this node's offset against the quorum's.

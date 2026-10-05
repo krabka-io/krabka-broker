@@ -11,7 +11,8 @@ use super::*;
 use crate::{
     io::FileIo,
     log::test_support::{
-        NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, transactional_batch,
+        NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, transaction_fields,
+        transactional_batch,
     },
 };
 
@@ -182,7 +183,7 @@ fn snapshot_recovery_preserves_open_and_completed_transaction_fields() {
     check!(completed.last_sequence == 11);
     check!(completed.current_txn_first_offset == None);
     check!(completed.coordinator_epoch == 17);
-    check!(reopened.producer_transaction_state(ProducerId(77)) == (17, None));
+    check!(transaction_fields(&reopened, ProducerId(77)) == (17, None));
 }
 
 #[test]
@@ -400,7 +401,7 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
     check!(reopened.stamp_for_offset(Offset(0)) == Some(30));
     check!(reopened.stamp_for_offset(Offset(1)) == Some(30));
     check!(reopened.stamp_for_offset(Offset(2)) == None);
-    assert2::assert!(reopened.producer_transaction_state(ProducerId(1000)) == (17, None));
+    assert2::assert!(transaction_fields(&reopened, ProducerId(1000)) == (17, None));
     assert2::assert!(
         reopened
             .pending_transaction_start(ProducerId(1000))
@@ -412,14 +413,12 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
     reopened
         .append(&mut transactional_batch(1000, 4, &["next"]))
         .unwrap();
-    assert2::assert!(
-        reopened.producer_transaction_state(ProducerId(1000)) == (17, Some(Offset(3)))
-    );
+    assert2::assert!(transaction_fields(&reopened, ProducerId(1000)) == (17, Some(Offset(3))));
     drop(reopened);
 
     let recovered_again = Log::open(dir.path(), LogConfig::default()).unwrap();
     assert2::assert!(
-        recovered_again.producer_transaction_state(ProducerId(1000)) == (17, Some(Offset(3)))
+        transaction_fields(&recovered_again, ProducerId(1000)) == (17, Some(Offset(3)))
     );
 }
 

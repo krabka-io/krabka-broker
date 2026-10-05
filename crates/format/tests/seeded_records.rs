@@ -7,9 +7,9 @@
 //! the restore tool does not repeat the bootstrap write itself.
 //!
 //! Each test formats a directory in process and reads back what the two
-//! consumers of the seed stream wrote: the bootstrap files the broker pre-loads
+//! consumers of the seed stream wrote: the bootstrap files a controller loads
 //! (`bootstrap.records.bin` and its `bootstrap.json` mirror), and the
-//! offset-zero KIP-630/KIP-853 checkpoint a dynamic format writes.
+//! offset-zero KIP-630/KIP-853 bootstrap checkpoint a dynamic format writes.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ use assert2::check;
 use clap::Parser as _;
 use krabka_format::MetadataRecord;
 use krabka_metadata::{
-    KRaftVersionRecord, LeaderEpoch, MetadataImage, NodeId, PartitionRecord, TopicRecord,
+    KRaftVersionRecord, LeaderEpoch, NodeId, PartitionRecord, TopicRecord, VoterSet, VotersRecord,
 };
 use serde_wincode::SerdeCompat;
 use uuid::Uuid;
@@ -173,42 +173,38 @@ async fn the_manifest_mirrors_the_seeded_binary_stream() {
     check!(records.ends_with(&extra));
 }
 
-/// The offset-zero checkpoint is the image a dynamically formatted controller
-/// recovers on its first boot, so the seeded topics have to be in it and not
-/// only in the bootstrap files.
+/// The offset-zero checkpoint is Kafka's bootstrap snapshot: the KIP-853
+/// control state, then the seed stream in its own order, the seeded topics
+/// too. The active controller writes that stream to the metadata log, so a
+/// checkpoint that missed the seeded records, or that reordered the stream,
+/// would boot a different cluster.
 #[tokio::test]
 async fn a_dynamic_format_seeds_the_offset_zero_checkpoint() {
     let parent = tempfile::tempdir().unwrap();
     let log_dir = empty_log_dir(&parent, "seeded");
     let extra = restored_topic("restored-orders", 1, 2);
 
-    format(&log_dir, &["--no-initial-controllers"], extra).await;
+    format(&log_dir, &["--no-initial-controllers"], extra.clone()).await;
 
-    // Rebuild the image the checkpoint encodes: the KIP-853 control state a
-    // dynamic format writes, then the seed stream that reached the bootstrap
-    // files. A checkpoint that missed the seeded records cannot match it.
-    let mut image = MetadataImage::new(Uuid::parse_str(CLUSTER_ID).unwrap());
-    image.apply(&MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
-        kraft_version: 1,
+    let stream = bootstrap_records(&log_dir);
+    check!(stream.ends_with(&extra));
+    let mut expected = vec![
+        MetadataRecord::V1KRaftVersion(KRaftVersionRecord { kraft_version: 1 }),
+        MetadataRecord::V1Voters(VotersRecord {
+            voters: VoterSet::default(),
+        }),
+    ];
+    // Kafka's `TopicRecord` carries no partition count: the partition records
+    // after it give the count. So a topic reads back with none.
+    expected.extend(stream.into_iter().map(|record| match record {
+        MetadataRecord::V1Topic(topic) => MetadataRecord::V1Topic(TopicRecord {
+            partitions: 0,
+            ..topic
+        }),
+        other => other,
     }));
-    for record in &bootstrap_records(&log_dir) {
-        image.apply(record);
-    }
-
-    // The partition count is derived from the partition records, so a topic
-    // seeded with two of them reads back with two.
-    check!(
-        image.topic("restored-orders")
-            == Some(&TopicRecord {
-                name: "restored-orders".to_string(),
-                topic_id: Uuid::from_u128(1),
-                partitions: 2,
-                replication_factor: 1,
-            })
-    );
-    let expected = krabka_raft::serialize_metadata_snapshot(&image, 0).expect("serialize image");
     let written = std::fs::read(offset_zero_checkpoint(&log_dir)).expect("checkpoint");
-    check!(written.as_slice() == &expected[..]);
+    check!(krabka_raft::deserialize_metadata_snapshot_image(&written).ok() == Some(expected));
 }
 
 /// `run` seeds nothing, so it has to write what `run_with_records` writes for an

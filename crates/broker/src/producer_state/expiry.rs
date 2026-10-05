@@ -1,11 +1,12 @@
-//! The `producer.id.expiration.ms` inactivity window: which producers still
-//! count as active, and eviction of the ones that have gone quiet.
+//! The `producer.id.expiration.ms` inactivity window: eviction of the
+//! producers that have gone quiet.
 //!
-//! The log cleaner reads the active set so compaction keeps a live producer's
-//! last batch, and a broker maintenance loop calls the eviction so the
-//! per-partition maps do not grow without bound.
+//! A broker maintenance loop calls the eviction so the per-partition maps do
+//! not grow without bound. The log cleaner does not read this tracker: it reads
+//! the producer state of the partition log, which a follower also updates
+//! (`krabka_log::Log::compact`).
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use krabka_ids::PartitionIndex;
 use krabka_units::{Time, convert::TimeExt as _};
@@ -14,65 +15,6 @@ use tokio::sync::Mutex;
 use super::{PartitionMap, PartitionProducerState, ProducerState};
 
 impl ProducerState {
-    /// Snapshot of currently-active producers on `(topic, partition)`.
-    ///
-    /// The map holds `producer_id` → that producer's last record, as Kafka's
-    /// `UnifiedLog.lastRecordsOfActiveProducers` reads it: the last offset of
-    /// its last data batch (none for a producer that only has transaction
-    /// markers) and its current epoch. A producer is "active" unless
-    /// [`ProducerEntry::is_expired`](super::ProducerEntry::is_expired) holds,
-    /// the predicate Kafka's `producer.id.expiration.ms` sweep uses. This
-    /// function excludes expired producers.
-    ///
-    /// The cleaner calls it to build a `CompactionContext`. The cleaner must
-    /// keep an active producer's last record with `RETAIN_EMPTY` even when
-    /// compaction removes all of its records, so the producer's
-    /// sequence/epoch state survives.
-    ///
-    /// This function returns an empty map for an unknown `(topic, partition)`.
-    ///
-    /// The caller is the partition writer task's `WriterMessage::Compact`
-    /// handler, which fills the `CompactionContext::active_producers` set.
-    /// `spawn_partition` threads the broker-wide `ProducerState` into
-    /// `partition_writer::run` for that handler.
-    pub async fn active_snapshot(
-        &self,
-        topic: &str,
-        partition: PartitionIndex,
-        now_ms: i64,
-        expiration: Time,
-    ) -> HashMap<i64, krabka_log::ProducerLastRecord> {
-        // Mirror `snapshot`: avoid inserting an empty entry for an unknown
-        // partition (the borrowed lookups allocate nothing on a miss).
-        let Some(topic_ref) = self.by_topic.get(topic) else {
-            return HashMap::new();
-        };
-        let parts = topic_ref.value().clone();
-        drop(topic_ref);
-        let Some(part_ref) = parts.get(&partition) else {
-            return HashMap::new();
-        };
-        let handle = part_ref.value().clone();
-        drop(part_ref);
-        let state = handle.lock().await;
-        // Public return stays `HashMap<i64, i64>`; unwrap the `ProducerId` key at
-        // the boundary (the caller re-wraps into the log seam's `ProducerId`).
-        state
-            .entries
-            .iter()
-            .filter(|(_pid, e)| !e.is_expired(now_ms, expiration.millis_i64()))
-            .map(|(pid, e)| {
-                let last_record = krabka_log::ProducerLastRecord {
-                    // A marker-only entry has no data batch: `last_offset < 0`.
-                    last_data_offset: (e.last_offset >= 0)
-                        .then_some(krabka_log::Offset(e.last_offset)),
-                    producer_epoch: e.epoch,
-                };
-                (pid.get(), last_record)
-            })
-            .collect()
-    }
-
     /// Evict idempotent-producer entries that are expired at `now_ms`.
     ///
     /// This is Kafka's `ProducerStateManager.removeExpiredProducers` for
@@ -130,9 +72,9 @@ impl ProducerState {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
     use krabka_log::ProducerId;
-    use krabka_units::{millis, secs};
+    use krabka_units::millis;
 
     use super::*;
     use crate::producer_state::Decision;
@@ -227,69 +169,6 @@ mod tests {
                 "{label}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn active_snapshot_excludes_expired_includes_active() {
-        let s = ProducerState::new();
-        // pid 1: last batch at offset 10 at t=1_000; pid 2: offset 20 at
-        // t=9_500.
-        commit!(s, "t", PartitionIndex(0), 1, 0, 0, 0, 10, 1_000).await;
-        commit!(s, "t", PartitionIndex(0), 2, 0, 0, 0, 20, 9_500).await;
-        // now = 10_000, expiration = 5_000 → pid 1 (age 9_000) excluded;
-        // pid 2 (age 500) included with its last record.
-        let snap = s
-            .active_snapshot("t", PartitionIndex(0), 10_000, secs(5))
-            .await;
-        let expected = maplit::hashmap! {
-            2 => krabka_log::ProducerLastRecord {
-                last_data_offset: Some(krabka_log::Offset(20)),
-                producer_epoch: 0,
-            },
-        };
-        assert!(snap == expected);
-        // Unknown partition / topic → empty without panicking.
-        for (topic, partition) in [("t", PartitionIndex(99)), ("nope", PartitionIndex(0))] {
-            assert!(
-                s.active_snapshot(topic, partition, 10_000, secs(5)).await == HashMap::new(),
-                "case: {topic}/{partition}"
-            );
-        }
-    }
-
-    /// A producer that only has a transaction marker left has no data offset
-    /// (Kafka's `LastRecord.lastDataOffset` is empty) and keeps its epoch, so
-    /// the cleaner keeps the marker of that epoch (#1198).
-    #[tokio::test]
-    async fn active_snapshot_reports_no_data_offset_for_a_marker_only_producer() {
-        let s = ProducerState::new();
-        s.mirror_log_entries(
-            "t",
-            PartitionIndex(0),
-            vec![krabka_log::ProducerSnapshotEntry {
-                producer_id: krabka_log::ProducerId(1000),
-                producer_epoch: 4,
-                last_sequence: -1,
-                last_offset: krabka_log::Offset(-1),
-                offset_delta: 0,
-                timestamp: 9_500,
-                coordinator_epoch: 0,
-                current_txn_first_offset: None,
-            }],
-        )
-        .await;
-
-        let snap = s
-            .active_snapshot("t", PartitionIndex(0), 10_000, secs(5))
-            .await;
-
-        let expected = maplit::hashmap! {
-            1000 => krabka_log::ProducerLastRecord {
-                last_data_offset: None,
-                producer_epoch: 4,
-            },
-        };
-        assert!(snap == expected);
     }
 
     #[tokio::test]

@@ -80,10 +80,28 @@ impl BrokerHandle {
         &self.broker
     }
 
-    /// The actual bound `SocketAddr`. This is useful when
-    /// `BrokerConfig.listen_addr` used port 0 and the OS picked the port.
+    /// The bound address of the listener that serves this node's Kafka
+    /// requests. This is useful when `BrokerConfig.listen_addr` used port 0
+    /// and the OS picked the port.
+    ///
+    /// On a node with the broker role this is the data-plane listener of
+    /// [`Self::data_plane_addr`]. A node without the broker role opens no
+    /// data-plane listener, as Kafka's controller-only node opens only the
+    /// listeners that `controller.listener.names` names. There this is the
+    /// controller listener of [`Self::controller_addr`], which serves the
+    /// controller APIs that an admin client reaches with
+    /// `--bootstrap-controller`.
     #[must_use]
     pub fn listen_addr(&self) -> SocketAddr {
+        self.listen_addr.unwrap_or_else(|| self.controller_addr())
+    }
+
+    /// The bound address of the data-plane listener that clients and the
+    /// other brokers reach: the inter-broker listener, or the first listener
+    /// when none has that name. `None` on a node without the broker role,
+    /// which opens no data-plane listener.
+    #[must_use]
+    pub fn data_plane_addr(&self) -> Option<SocketAddr> {
         self.listen_addr
     }
 
