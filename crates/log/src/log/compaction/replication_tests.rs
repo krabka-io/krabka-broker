@@ -5,14 +5,14 @@
 
 use krabka_ids::{LeaderEpoch, Offset};
 use krabka_protocol::records::RecordBatch;
-use krabka_units::prelude::{bytes, mebibytes};
+use krabka_units::prelude::mebibytes;
 use tempfile::tempdir;
 
 use super::*;
 use crate::{
     CleanupPolicy,
     config::LogConfig,
-    log::test_support::{compaction_ctx, keyed_batch, test_log, verbatim_from},
+    log::test_support::{compaction_ctx, keyed_batch, test_log, tiny_segments, verbatim_from},
 };
 
 /// A leader that one compaction pass has cut holes into. Each batch sits in a
@@ -30,8 +30,7 @@ fn compacted_leader(dir: &std::path::Path) -> Log {
         dir,
         LogConfig {
             cleanup_policy: CleanupPolicy::Compact,
-            segment_size: bytes(1),
-            ..LogConfig::default()
+            ..tiny_segments()
         },
     )
     .unwrap();

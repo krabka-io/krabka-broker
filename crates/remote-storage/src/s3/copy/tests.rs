@@ -14,8 +14,8 @@ use crate::{
     s3::{
         S3RemoteStorage,
         test_support::{
-            WORM_KEY_ID, rsm, sample_data, sample_metadata, stamped_metadata, worm_epoch, worm_rsm,
-            write_file,
+            WORM_KEY_ID, rsm, sample_data, sample_metadata, seeded_blocking, stamped_metadata,
+            worm_epoch, worm_rsm, write_file,
         },
     },
     storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
@@ -29,16 +29,11 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn copy_then_fetch_full_segment() {
     let store = rsm(None);
-    let src = TempDir::new().unwrap();
     let md = sample_metadata(10);
-    tokio::task::spawn_blocking(move || {
-        store
-            .copy_log_segment_data(&md, &sample_data(src.path(), true))
-            .unwrap();
+    seeded_blocking(store, md, true, move |store, md| {
         assert!(store.fetch_log_segment(&md, 0, None).unwrap() == b"0123456789");
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 fn write_log_segment(dir: &std::path::Path, len: usize) -> PathBuf {
@@ -198,15 +193,10 @@ fn multipart_manifest_entry_requires_a_version() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worm_copy_writes_a_manifest_next_to_the_segment() {
-    let src = TempDir::new().unwrap();
     let keys = TempDir::new().unwrap();
     let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
     let md = stamped_metadata(50, 0, ChainHead::GENESIS);
-    tokio::task::spawn_blocking(move || {
-        store
-            .copy_log_segment_data(&md, &sample_data(src.path(), true))
-            .unwrap();
-
+    seeded_blocking(store, md, true, move |store, md| {
         // The manifest is the log's key with the suffix swapped, so a
         // verifier that can list a partition prefix finds it beside the
         // data it describes.
@@ -226,21 +216,15 @@ async fn worm_copy_writes_a_manifest_next_to_the_segment() {
             &signature.public_key.0
         ));
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worm_manifest_lists_every_object_with_its_digest() {
-    let src = TempDir::new().unwrap();
     let keys = TempDir::new().unwrap();
     let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
     let md = stamped_metadata(51, 0, ChainHead::GENESIS);
-    tokio::task::spawn_blocking(move || {
-        store
-            .copy_log_segment_data(&md, &sample_data(src.path(), true))
-            .unwrap();
-
+    seeded_blocking(store, md, true, move |store, md| {
         // `InMemory` hands out etags from a per-store counter, so a fresh
         // store numbers this copy's six objects 0..=5 in upload order.
         // The digests are computed here from the fixture bodies, never
@@ -280,8 +264,7 @@ async fn worm_manifest_lists_every_object_with_its_digest() {
         ];
         check!(read_manifest(&store, &md).body.objects == expected);
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 /// A segment with no transaction index and no producer snapshot lists

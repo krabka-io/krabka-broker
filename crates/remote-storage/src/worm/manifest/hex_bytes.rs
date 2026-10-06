@@ -4,8 +4,6 @@
 //! signature, whose length the type system cannot pin. Both share the hex
 //! codec in this file, and `ChainHead` uses it too.
 
-use std::fmt;
-
 use hex::FromHex as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
@@ -13,7 +11,10 @@ use sha2::{Digest, Sha256};
 /// `SHA-256` digest of one archived object's body.
 ///
 /// Serialises as a lowercase hex string.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug, derive_more::Display,
+)]
+#[display("{}", hex::encode(_0))]
 #[debug("Sha256Digest({})", hex::encode(_0))]
 pub struct Sha256Digest(pub [u8; 32]);
 
@@ -29,7 +30,8 @@ impl Sha256Digest {
 ///
 /// Used for the public key and the signature, neither of which has a fixed
 /// length the type system can pin.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug, derive_more::Display)]
+#[display("{}", hex::encode(_0))]
 #[debug("HexBytes({})", hex::encode(_0))]
 pub struct HexBytes(pub Vec<u8>);
 
@@ -49,12 +51,6 @@ where
         .map_err(|_| de::Error::custom(format!("expected 64 hex characters, got `{text}`")))
 }
 
-impl fmt::Display for Sha256Digest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode(self.0))
-    }
-}
-
 impl Serialize for Sha256Digest {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -70,12 +66,6 @@ impl<'de> Deserialize<'de> for Sha256Digest {
         D: Deserializer<'de>,
     {
         deserialize_hex32(deserializer).map(Self)
-    }
-}
-
-impl fmt::Display for HexBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode(&self.0))
     }
 }
 

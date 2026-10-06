@@ -517,7 +517,7 @@ mod tests {
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{compaction_ctx, keyed_batch},
+        log::test_support::{compaction_ctx, keyed_batch, tiny_segments},
         name,
     };
 
@@ -644,8 +644,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
         for i in 0..12 {
@@ -696,11 +695,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
             // Longer than the second that separates two appends, and short
             // enough to leave the older segments cleanable.
             min_compaction_lag: Time::from_millis(1_500),
-            ..Default::default()
+            ..tiny_segments()
         };
         let log = log_stamped_a_second_apart(dir.path(), cfg, 6);
 
@@ -754,8 +752,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
-            ..Default::default()
+            ..tiny_segments()
         };
         // Two appends: one sealed segment and the active one.
         let mut log = log_stamped_a_second_apart(dir.path(), cfg, 2);
@@ -791,9 +788,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
             min_compaction_lag: Time::from_millis(3_000),
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
         // The first segment holds two records under one key, written at
@@ -843,9 +839,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
             min_compaction_lag: Time::from_millis(2_500),
-            ..Default::default()
+            ..tiny_segments()
         };
         // Sealed segments carry timestamps 0..=4_000 and the active one 5_000.
         // At 6_000 the lag withholds everything stamped after 3_500, so the
@@ -889,8 +884,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = log_stamped_a_second_apart(dir.path(), cfg, 6);
         // Five sealed segments (one batch each) and the active sixth.
@@ -995,9 +989,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
             min_cleanable_dirty_ratio: fraction(1.0),
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
         for i in 0..3 {
@@ -1020,8 +1013,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
         for i in 0..3 {
@@ -1107,9 +1099,8 @@ mod tests {
             let dir = tempdir().unwrap();
             let cfg = LogConfig {
                 cleanup_policy: crate::CleanupPolicy::Compact,
-                segment_size: bytes(1), // one batch per segment
                 max_decompressed_record: limit,
-                ..Default::default()
+                ..tiny_segments()
             };
             let mut log = Log::open(dir.path(), cfg).unwrap();
             let large = [b'x'; 1_000];
@@ -1177,9 +1168,8 @@ mod tests {
             let cfg = LogConfig {
                 cleanup_policy: crate::CleanupPolicy::Compact,
                 delivery_policy: crate::config::DeliveryPolicy::Scheduled,
-                segment_size: bytes(1), // one batch per segment
                 max_decompressed_record: limit,
-                ..Default::default()
+                ..tiny_segments()
             };
             let mut log = Log::open(dir.path(), cfg).unwrap();
             let large = [b'x'; 1_000];
@@ -1273,8 +1263,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1), // one batch per segment: every append exceeds this and rolls
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
 
@@ -1353,8 +1342,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1), // one record per sealed segment
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
         // Six distinct keys: nothing is superseded, so the pass only
@@ -1421,8 +1409,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1),
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
         for i in 0..6 {

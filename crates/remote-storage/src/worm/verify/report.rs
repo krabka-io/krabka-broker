@@ -227,11 +227,7 @@ mod tests {
         archiver::WormArchiver,
         chain::WormChainRecord,
         manifest::{ChainStamp, manifest_head},
-        verify::{
-            VerifyRequest,
-            test_support::{Archive, SEGMENT_SPAN, put_raw},
-            verify_archive,
-        },
+        verify::test_support::{Archive, SEGMENT_SPAN, put_raw},
     };
 
     #[test]
@@ -274,13 +270,7 @@ mod tests {
             .unwrap();
         put_raw(&archive.ops, &segment.manifest_key, sealed.bytes).await;
 
-        let report = verify_archive(
-            &archive.store,
-            &VerifyRequest::default(),
-            &archive.trusted(),
-        )
-        .await
-        .unwrap();
+        let report = archive.verify().await;
 
         check!(report.ok());
         check!(

@@ -5,7 +5,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use crate::{
     GcsConfig, ObjectStoreError, S3Config,
     build::{build_gcs_store, build_s3_store},
-    multipart::{s3_bucket_url, s3_http_client, signed_s3_get_xml},
+    multipart::{read_ok_body, s3_bucket_url, s3_http_client, signed_s3_get_xml},
 };
 
 #[derive(Deserialize)]
@@ -133,21 +133,7 @@ pub async fn verify_gcs_worm_bucket(cfg: &GcsConfig) -> Result<(), ObjectStoreEr
     if !credential.bearer.is_empty() {
         request = request.bearer_auth(&credential.bearer);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    if !status.is_success() {
-        return Err(ObjectStoreError::Backend(format!(
-            "GCS Buckets.get returned {status}: {}",
-            String::from_utf8_lossy(&body)
-        )));
-    }
+    let body = read_ok_body(request, "GCS Buckets.get").await?;
     let policy: GcsBucketPolicy = serde_json::from_slice(&body)
         .map_err(|error| ObjectStoreError::Backend(format!("GCS Buckets.get: {error}")))?;
     validate_gcs_policy(cfg, policy)

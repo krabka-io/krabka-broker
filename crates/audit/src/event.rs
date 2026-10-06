@@ -5,7 +5,10 @@
 use serde::Serialize;
 
 /// Outcome of an audited action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// `as_str` is the lowercase status the audit sink records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase")]
 pub enum AuditOutcome {
     Success,
     Failure,

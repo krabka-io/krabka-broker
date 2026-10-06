@@ -80,11 +80,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::worm::verify::{
-        VerifyRequest,
-        test_support::{Archive, put_raw},
-        verify_archive,
-    };
+    use crate::worm::verify::test_support::{Archive, put_raw};
 
     #[tokio::test]
     async fn an_oversized_manifest_object_is_a_break_and_not_an_error() {
@@ -97,13 +93,7 @@ mod tests {
         )
         .await;
 
-        let report = verify_archive(
-            &archive.store,
-            &VerifyRequest::default(),
-            &archive.trusted(),
-        )
-        .await
-        .unwrap();
+        let report = archive.verify().await;
 
         check!(!report.ok());
         match report.first_break() {

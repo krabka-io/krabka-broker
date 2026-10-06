@@ -3,13 +3,15 @@
 //! unstamped partition writes identical bytes.
 
 use assert2::check;
-use krabka_units::prelude::{bytes, mebibytes};
+use krabka_units::prelude::mebibytes;
 use tempfile::tempdir;
 
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{abort_marker, commit_marker, sample_batch, test_log, transactional_batch},
+    log::test_support::{
+        abort_marker, commit_marker, rolling_test_log, sample_batch, test_log, transactional_batch,
+    },
 };
 
 // ---- .stampindex append-path wiring tests ----
@@ -171,14 +173,7 @@ fn abort_leaves_transactional_data_unstamped() {
 #[test]
 fn commit_succeeds_after_transaction_data_is_retained_away() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(7, 1),
     ))
@@ -315,14 +310,7 @@ fn startup_hides_legacy_append_stamp_for_open_transaction() {
 #[test]
 fn transaction_commit_stamps_data_in_sealed_segments() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(50, 1),
     ))

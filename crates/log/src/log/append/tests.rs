@@ -12,8 +12,8 @@ use crate::{
     io::LogIo,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        abort_marker, log_append_time_log, sample_batch, sample_batch_with_epoch, test_batch_at,
-        test_log, transactional_batch, verbatim_from,
+        abort_marker, log_append_time_log, rolling_test_log, sample_batch, sample_batch_with_epoch,
+        test_batch_at, test_log, tiny_segments, transactional_batch, verbatim_from,
     },
     stamp_index::{StampEntry, StampIndex},
 };
@@ -398,9 +398,8 @@ fn post_roll_failure_restores_the_previous_active_segment() {
     let mut log = Log::open(
         dir.path(),
         LogConfig {
-            segment_size: bytes(1),
             flush_on_append: true,
-            ..LogConfig::default()
+            ..tiny_segments()
         },
     )
     .unwrap();
@@ -432,14 +431,7 @@ fn post_roll_failure_restores_the_previous_active_segment() {
 #[test]
 fn post_roll_partial_write_restores_the_previous_active_segment() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.append(&mut sample_batch(1)).unwrap();
     log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
         16,
@@ -706,14 +698,7 @@ fn a_full_offset_or_time_index_rolls_the_segment() {
 #[test]
 fn roll_reopens_stampindex_for_new_segment() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1), // roll on every append after the first
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(100, 5),
     ))

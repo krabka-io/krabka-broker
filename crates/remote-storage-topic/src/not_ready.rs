@@ -27,6 +27,7 @@ use krabka_remote_storage::{
 ///
 /// Construct it with [`NotReadyRlmm::new`] and pass it as the initial
 /// placeholder to [`crate::SwappableRlmm::new`].
+#[derive(Default)]
 pub struct NotReadyRlmm;
 
 impl NotReadyRlmm {
@@ -34,12 +35,6 @@ impl NotReadyRlmm {
     #[must_use]
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for NotReadyRlmm {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

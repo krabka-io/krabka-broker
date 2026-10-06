@@ -29,7 +29,9 @@ use crate::{
     config::LogConfig,
     error::LogError,
     io::{IoTarget, LogIo},
-    log::test_support::{compaction_ctx, keyed_batch, sample_batch, sample_batch_with_epoch},
+    log::test_support::{
+        compaction_ctx, keyed_batch, sample_batch, sample_batch_with_epoch, tiny_segments,
+    },
     name,
 };
 
@@ -213,9 +215,8 @@ fn a_disk_full_producer_snapshot_fails_the_roll_and_the_log_reopens_without_it()
         // Every append after the first rolls the active segment, and a roll is
         // what publishes the boundary snapshot.
         let config = LogConfig {
-            segment_size: bytes(1),
             flush_on_append: true,
-            ..LogConfig::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), config.clone()).unwrap();
         log.append(&mut sample_batch(2)).unwrap();
@@ -277,8 +278,7 @@ fn a_disk_full_leader_epoch_checkpoint_leaves_the_previous_checkpoint_standing()
 fn compactable_log(dir: &Path) -> (LogConfig, Log) {
     let config = LogConfig {
         cleanup_policy: CleanupPolicy::Compact,
-        segment_size: bytes(1),
-        ..LogConfig::default()
+        ..tiny_segments()
     };
     let mut log = Log::open(dir, config.clone()).unwrap();
     for i in 0..12 {
@@ -371,9 +371,8 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
     for on_rename in [true, false] {
         let dir = tempdir().unwrap();
         let config = LogConfig {
-            segment_size: bytes(1),
             retention_size: Some(ByteSize::ZERO),
-            ..LogConfig::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), config).unwrap();
         for _ in 0..4 {
@@ -428,10 +427,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
 #[test]
 fn log_open_reclaims_what_an_interrupted_segment_deletion_left_behind() {
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let config = tiny_segments();
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
     for _ in 0..4 {
         log.append(&mut sample_batch(2)).unwrap();

@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::{
-    event::{AuditEvent, AuditEventClass, AuditOutcome},
+    event::{AuditEvent, AuditEventClass},
     ocsf::{ProductInfo, to_ocsf},
 };
 
@@ -90,18 +90,11 @@ fn principal_and_status(event: &AuditEvent) -> Option<(String, &'static str)> {
         }
         | AuditEvent::PrivilegedAction {
             principal, outcome, ..
-        } => Some((principal.name.clone(), status_str(*outcome))),
+        } => Some((principal.name.clone(), outcome.as_str())),
         AuditEvent::AuthorizationDenied { principal, .. } => {
             Some((principal.name.clone(), "denied"))
         }
         AuditEvent::Lifecycle { .. } => None,
-    }
-}
-
-fn status_str(outcome: AuditOutcome) -> &'static str {
-    match outcome {
-        AuditOutcome::Success => "success",
-        AuditOutcome::Failure => "failure",
     }
 }
 

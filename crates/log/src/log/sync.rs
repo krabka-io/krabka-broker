@@ -112,10 +112,12 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use krabka_ids::Offset;
-    use krabka_units::prelude::bytes;
 
     use super::*;
-    use crate::{config::LogConfig, log::test_support::sample_batch};
+    use crate::{
+        config::LogConfig,
+        log::test_support::{rolling_test_log, sample_batch},
+    };
 
     #[test]
     fn sync_persists_appended_records() {
@@ -152,14 +154,7 @@ mod tests {
                     Log::open(dir.path(), LogConfig::default()).unwrap()
                 }
                 Case::Rollover => {
-                    let mut log = Log::open(
-                        dir.path(),
-                        LogConfig {
-                            segment_size: bytes(1),
-                            ..LogConfig::default()
-                        },
-                    )
-                    .unwrap();
+                    let mut log = rolling_test_log(dir.path());
                     log.append(&mut sample_batch(1)).unwrap();
                     log.sync().unwrap();
                     log.append(&mut sample_batch(1)).unwrap();
@@ -177,14 +172,7 @@ mod tests {
     #[test]
     fn sync_flushes_sealed_and_active_segments_after_rollover() {
         let dir = tempfile::tempdir().unwrap();
-        let mut log = Log::open(
-            dir.path(),
-            LogConfig {
-                segment_size: bytes(1),
-                ..LogConfig::default()
-            },
-        )
-        .unwrap();
+        let mut log = rolling_test_log(dir.path());
         log.append(&mut sample_batch(1)).unwrap();
         log.sync().unwrap();
         sync_observer::take_segment_flushes();

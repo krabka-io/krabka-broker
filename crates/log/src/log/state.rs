@@ -510,11 +510,13 @@ impl Log {
 mod tests {
     use assert2::check;
     use krabka_ids::LeaderEpoch;
-    use krabka_units::prelude::{bytes, kibibytes, minutes};
+    use krabka_units::prelude::{kibibytes, minutes};
     use tempfile::tempdir;
 
     use super::*;
-    use crate::log::test_support::{sample_batch, sample_batch_with_epoch, test_log};
+    use crate::log::test_support::{
+        sample_batch, sample_batch_with_epoch, test_log, tiny_segments,
+    };
 
     /// A hard reset leaves the log empty at the new base, with the last stable
     /// offset there too.
@@ -633,9 +635,8 @@ mod tests {
     #[test]
     fn the_log_start_epoch_comes_only_from_an_established_log_start() {
         let config = LogConfig {
-            segment_size: bytes(1),
             remote_storage_enable: true,
-            ..LogConfig::default()
+            ..tiny_segments()
         };
         // Three batches of three records, each rolling into its own segment:
         // epoch 1 at 0, epoch 2 at 3, epoch 4 at 6.

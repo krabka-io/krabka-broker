@@ -17,7 +17,7 @@ use crate::{
     metadata::{
         RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
     },
-    storage_manager::LogSegmentData,
+    storage_manager::{LogSegmentData, RemoteStorageManager},
     worm::{ChainHead, ChainStamp, EpochId, ManifestSeq, WormChainRecord, WormConfig},
 };
 
@@ -76,6 +76,26 @@ pub(super) fn sample_data(src: &std::path::Path, with_txn: bool) -> LogSegmentDa
         producer_snapshot_index: Some(write_file(src, "00.snapshot", b"SNAP")),
         leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
     }
+}
+
+/// Copy one [`sample_data`] segment into `store` as `md` on the blocking
+/// pool, where the store's synchronous API may block, and then run `then`
+/// there with both.
+pub(super) async fn seeded_blocking(
+    store: S3RemoteStorage,
+    md: RemoteLogSegmentMetadata,
+    with_txn: bool,
+    then: impl FnOnce(S3RemoteStorage, RemoteLogSegmentMetadata) + Send + 'static,
+) {
+    tokio::task::spawn_blocking(move || {
+        let src = TempDir::new().unwrap();
+        store
+            .copy_log_segment_data(&md, &sample_data(src.path(), with_txn))
+            .unwrap();
+        then(store, md);
+    })
+    .await
+    .unwrap();
 }
 
 /// The chain epoch every stamped fixture belongs to.

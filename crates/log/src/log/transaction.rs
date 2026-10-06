@@ -190,15 +190,14 @@ impl Log {
 mod tests {
     use bytes::Bytes;
     use krabka_ids::LeaderEpoch;
-    use krabka_units::prelude::bytes;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
         config::LogConfig,
         log::test_support::{
-            abort_marker, commit_marker, sample_batch, test_batch_at, test_log, transaction_fields,
-            transactional_batch, verbatim_from,
+            abort_marker, commit_marker, sample_batch, test_batch_at, test_log, tiny_segments,
+            transaction_fields, transactional_batch, verbatim_from,
         },
         name,
         txn_index::TxnIndex,
@@ -339,10 +338,7 @@ mod tests {
         let mut transaction = transactional_batch(1000, 0, &["a", "b", "c"]);
         log.append(&mut transaction).unwrap();
 
-        log.set_config(LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        });
+        log.set_config(tiny_segments());
         let (marker_base, _) = log.append(&mut abort_marker(1000, 0)).unwrap();
         log.append(&mut sample_batch(1)).unwrap();
         std::fs::remove_file(name::txnindex_path(dir.path(), marker_base.0)).unwrap();

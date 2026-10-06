@@ -9,7 +9,10 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{sample_batch, sample_batch_with_epoch, test_batch_at, test_log},
+    log::test_support::{
+        rolling_test_log, sample_batch, sample_batch_with_epoch, test_batch_at, test_log,
+        tiny_segments,
+    },
     producer_snapshot::ProducerSnapshotEntry,
     stamp_index::{StampEntry, StampIndex},
     txn_index::AbortedTxn,
@@ -123,14 +126,7 @@ fn truncation_clamps_tail_state_to_the_actual_retained_batch_prefix() {
 #[test]
 fn truncate_to_rebuilds_producer_state_from_surviving_batches() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     let mut first = sample_batch(2);
     first.producer_id = 42;
     first.producer_epoch = 3;
@@ -178,14 +174,7 @@ fn truncate_to_rebuilds_producer_state_from_surviving_batches() {
 #[test]
 fn truncate_to_removes_future_empty_producer_snapshots() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     for _ in 0..3 {
         log.append(&mut sample_batch(2)).unwrap();
     }
@@ -229,10 +218,7 @@ fn producer_snapshots_follow_kafkas_lifecycle() {
     ];
     for (action, expected) in cases {
         let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        };
+        let config = tiny_segments();
         let mut log = Log::open(dir.path(), config.clone()).unwrap();
         for sequence in [0, 2, 4] {
             let mut batch = sample_batch(2);
@@ -290,10 +276,7 @@ fn truncate_to_promoted_sealed_uses_relative_offset() {
         segment_size: gibibytes(1),
         ..LogConfig::default()
     };
-    let tiny = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let tiny = tiny_segments();
     // Batch A → active base 0.
     log.append(&mut test_batch_at(0)).unwrap();
     // Roll: seal base 0, fresh active base 1, batch B.
@@ -327,10 +310,7 @@ fn truncate_to_active_segment_uses_relative_offset() {
         segment_size: gibibytes(1),
         ..LogConfig::default()
     };
-    let tiny = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let tiny = tiny_segments();
     // Batch A → active base 0.
     log.append(&mut test_batch_at(0)).unwrap();
     // Roll: seal base 0, fresh active base 1, batch B.
@@ -377,14 +357,7 @@ fn truncate_removes_stamps_for_discarded_tail() {
 #[test]
 fn truncate_preserves_stamp_indexes_before_promoted_segment() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(10, 1),
     ))
@@ -403,14 +376,7 @@ fn truncate_preserves_stamp_indexes_before_promoted_segment() {
 #[test]
 fn trim_removes_only_evicted_segment_stamp_indexes() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(10, 1),
     ))
@@ -565,14 +531,7 @@ fn truncation_reloads_from_the_newest_snapshot_between_log_start_and_cut() {
         (2, 2, vec![], vec![]),
     ] {
         let dir = tempdir().unwrap();
-        let mut log = Log::open(
-            dir.path(),
-            LogConfig {
-                segment_size: bytes(1),
-                ..LogConfig::default()
-            },
-        )
-        .unwrap();
+        let mut log = rolling_test_log(dir.path());
         // One record per producer and per segment: segments at 0..=3 and a
         // snapshot at every roll, 1..=3.
         for producer_id in 1..=4 {

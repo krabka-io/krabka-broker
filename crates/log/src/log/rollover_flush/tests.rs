@@ -15,7 +15,7 @@ use tempfile::tempdir;
 
 use crate::{
     Log, LogConfig, LogError, LogIo,
-    log::test_support::{sample_batch, verbatim_from},
+    log::test_support::{sample_batch, tiny_segments, verbatim_from},
     name, producer_snapshot,
 };
 
@@ -68,10 +68,9 @@ fn first_append(dir: &std::path::Path, strict: bool) -> Log {
     let mut log = Log::open(
         dir,
         LogConfig {
-            segment_size: bytes(1),
             flush_on_append: strict,
             retention: None,
-            ..LogConfig::default()
+            ..tiny_segments()
         },
     )
     .unwrap();
