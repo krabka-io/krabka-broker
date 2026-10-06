@@ -9,13 +9,7 @@
 //! defaults they fall back to stay with the rest of the configuration
 //! defaults, in the parent module.
 
-use std::{fmt, str::FromStr};
-
 use krabka_macros::RefinedNewtype;
-use krabka_units::{
-    fmt::Human as _,
-    prelude::{ByteSize, ByteSizeExt as _},
-};
 use refined_type::rule::{GreaterI32, GreaterU32, GreaterUsize};
 
 use super::{
@@ -49,77 +43,25 @@ pub struct ControllerFetchMissLimit(u32);
 )]
 pub struct MetadataRaftCommandQueueCapacity(usize);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The most bytes one metadata Raft fetch carries, a whole byte count that
+/// fits the protocol's `int32` field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
+#[refined(
+    rule(GreaterI32<0>),
+    quantity = ByteSize,
+    label = "metadata raft fetch max",
+    getter = bytes,
+    quantity_getter = size,
+    default = DEFAULT_METADATA_RAFT_FETCH_MAX,
+    from_str,
+    display
+)]
 pub struct MetadataRaftFetchMax(i32);
-
-impl MetadataRaftFetchMax {
-    /// Validate the protocol byte count.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `value` is zero or negative.
-    pub fn new(value: i32) -> Result<Self, String> {
-        GreaterI32::<0>::new(value)
-            .map(|value| Self(value.into_value()))
-            .map_err(|error| format!("metadata raft fetch max: {error}"))
-    }
-
-    #[must_use]
-    pub const fn bytes(self) -> i32 {
-        self.0
-    }
-
-    #[must_use]
-    pub fn size(self) -> ByteSize {
-        ByteSize::from_bytes_i64(i64::from(self.0))
-    }
-}
-
-impl TryFrom<ByteSize> for MetadataRaftFetchMax {
-    type Error = String;
-
-    fn try_from(value: ByteSize) -> Result<Self, Self::Error> {
-        let bytes = value.bytes_f64();
-        if !bytes.is_finite()
-            || bytes.fract() != 0.0
-            || !(1.0..=f64::from(i32::MAX)).contains(&bytes)
-        {
-            return Err(
-                "metadata raft fetch max must be a positive whole-byte value that fits i32"
-                    .to_owned(),
-            );
-        }
-        Self::new(value.bytes_i32())
-    }
-}
-
-impl Default for MetadataRaftFetchMax {
-    fn default() -> Self {
-        Self::try_from(DEFAULT_METADATA_RAFT_FETCH_MAX)
-            .expect("default metadata raft fetch max is protocol-safe")
-    }
-}
-
-impl FromStr for MetadataRaftFetchMax {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        krabka_units::parse::byte_size(value)
-            .map_err(|error| error.to_string())?
-            .try_into()
-    }
-}
-
-impl fmt::Display for MetadataRaftFetchMax {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.size().human().fmt(formatter)
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::mebibytes;
+    use krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes};
 
     use super::*;
 

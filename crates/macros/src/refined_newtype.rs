@@ -47,6 +47,81 @@ struct RefinedArgs {
     /// The name of a free function that parses text into the newtype.
     #[meta(default)]
     parse_fn: Option<Tokens>,
+    /// The `krabka_units` quantity `new` takes as a whole number of its unit.
+    #[meta(default)]
+    quantity: Option<Tokens>,
+    /// The name of a method that returns the value as its quantity.
+    #[meta(default)]
+    quantity_getter: Option<Tokens>,
+}
+
+/// A `krabka_units` quantity that a `quantity = <name>` newtype holds as a
+/// whole number of one unit.
+struct Quantity {
+    /// The quantity type.
+    ty: TokenStream,
+    /// The `krabka_units::convert` trait with its conversions.
+    ext: TokenStream,
+    /// The method that rounds a quantity to a `raw` count of the unit.
+    to_raw: TokenStream,
+    /// The constructor from a `raw` count of the unit.
+    from_raw: TokenStream,
+    /// The integer `to_raw` returns and `from_raw` takes.
+    raw: TokenStream,
+    /// The `krabka_units::parse` function for the quantity's text.
+    parse: TokenStream,
+    /// The unit, for the error text.
+    unit: &'static str,
+}
+
+impl Quantity {
+    /// The quantity that `name` names.
+    fn named(name: &Tokens) -> Result<Self, ParseError> {
+        let (ty, ext, to_raw, from_raw, raw, parse, unit) = match name.0.to_string().as_str() {
+            "ByteSize" => (
+                moxy::template! { ::krabka_units::ByteSize },
+                moxy::template! { ::krabka_units::convert::ByteSizeExt },
+                moxy::template! { bytes_i64 },
+                moxy::template! { from_bytes_i64 },
+                moxy::template! { i64 },
+                moxy::template! { ::krabka_units::parse::byte_size },
+                "bytes",
+            ),
+            "Time" => (
+                moxy::template! { ::krabka_units::Time },
+                moxy::template! { ::krabka_units::convert::TimeExt },
+                moxy::template! { millis_i64 },
+                moxy::template! { from_millis },
+                moxy::template! { i64 },
+                moxy::template! { ::krabka_units::parse::time },
+                "milliseconds",
+            ),
+            "Frequency" => (
+                moxy::template! { ::krabka_units::Frequency },
+                moxy::template! { ::krabka_units::convert::FrequencyExt },
+                moxy::template! { per_sec_u64 },
+                moxy::template! { from_per_sec_u64 },
+                moxy::template! { u64 },
+                moxy::template! { ::krabka_units::parse::frequency },
+                "Hz",
+            ),
+            _ => {
+                return Err(ParseError::new(
+                    name.0.span(),
+                    "`quantity` is `ByteSize`, `Time` or `Frequency`",
+                ));
+            }
+        };
+        Ok(Self {
+            ty,
+            ext,
+            to_raw,
+            from_raw,
+            raw,
+            parse,
+            unit,
+        })
+    }
 }
 
 /// The single field of a newtype, or an error naming the derive.
@@ -65,9 +140,16 @@ pub(crate) fn inner_type(item: &ItemStruct, derive: &str) -> Result<Type, ParseE
 /// The doc text of the generated free parse function.
 fn parse_fn_doc(name: &str) -> String {
     format!(
-        " Parse a [`{name}`] from text.\n\n # Errors\n\n Returns an error when `value` is \
-         not a number, or is one that [`{name}::new`] refuses."
+        " Parse a [`{name}`] from text.\n\n # Errors\n\n Returns an error when `value` does \
+         not parse, or parses to a value that [`{name}::new`] refuses."
     )
+}
+
+/// The error text of a quantity that is not a whole number of `unit` that
+/// fits in `inner`.
+fn whole_unit_error(label: Option<&str>, unit: &str, inner: &str) -> String {
+    let rule = format!("must be a whole number of {unit} that fits in {inner}");
+    label.map_or_else(|| rule.clone(), |label| format!("{label}: {rule}"))
 }
 
 /// Expands `#[derive(RefinedNewtype)]` on `item`.
@@ -79,10 +161,20 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             "`RefinedNewtype` needs `#[refined(rule = <refined type>)]`",
         ));
     };
-    if args.label.is_some() && !args.string_error {
+    let quantity = args.quantity.as_ref().map(Quantity::named).transpose()?;
+    // A quantity that is not a whole number of its unit has no rule error to
+    // return, so a quantity newtype's errors are always text.
+    let string_error = args.string_error || quantity.is_some();
+    if args.label.is_some() && !string_error {
         return Err(ParseError::new(
             item.ident.span(),
             "`label` prefixes a `String` error: add `string_error`",
+        ));
+    }
+    if args.quantity_getter.is_some() && quantity.is_none() {
+        return Err(ParseError::new(
+            item.ident.span(),
+            "`quantity_getter` needs `quantity = ByteSize|Time|Frequency`",
         ));
     }
 
@@ -94,12 +186,12 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         .map_or_else(|| moxy::template! { into_value }, |getter| getter.0);
     let span = ident.span();
     let default_expect = LitStr::new(&format!("the default {ident} satisfies its rule"), span);
-    let error = if args.string_error {
+    let error = if string_error {
         moxy::template! { ::std::string::String }
     } else {
         moxy::template! { ::refined_type::result::Error<{{ inner }}> }
     };
-    let map_error = match (&args.label, args.string_error) {
+    let map_error = match (&args.label, string_error) {
         (Some(label), _) => {
             let format = LitStr::new(&format!("{label}: {{error}}"), span);
             moxy::template! { .map_err(|error| ::std::format!({{ format }})) }
@@ -109,9 +201,16 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         }
         (None, false) => TokenStream::new(),
     };
-    // Text through the inner type's parse, then through `new`; both errors
-    // become `String`.
-    let validate = if args.string_error {
+    // Text through the quantity's or the inner type's parse, then through
+    // `new`; both errors become `String`.
+    let parser = quantity.as_ref().map_or_else(
+        || moxy::template! { value.parse::<{{ inner }}>() },
+        |quantity| {
+            let parse = &quantity.parse;
+            moxy::template! { {{ parse }}(value) }
+        },
+    );
+    let validate = if string_error {
         moxy::template! { .and_then({{ ident }}::new) }
     } else {
         moxy::template! {
@@ -119,8 +218,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         }
     };
     let parse = moxy::template! {
-        value
-            .parse::<{{ inner }}>()
+        {{ parser }}
             .map_err(|error| ::std::string::ToString::to_string(&error))
             {{ validate }}
     };
@@ -129,9 +227,64 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         (name.0, doc)
     });
 
+    // `new` takes the field's type, or the quantity, which has to be a whole
+    // number of its unit that the field holds before the rule sees it.
+    let (new_input, to_inner) = match &quantity {
+        None => (moxy::template! { {{ inner }} }, TokenStream::new()),
+        Some(Quantity {
+            ty,
+            ext,
+            to_raw,
+            from_raw,
+            raw,
+            unit,
+            ..
+        }) => {
+            let inner_name = moxy::template! { {{ inner }} }.to_string();
+            let whole = LitStr::new(
+                &whole_unit_error(args.label.as_deref(), unit, &inner_name),
+                span,
+            );
+            let to_inner = moxy::template! {
+                let raw = <{{ ty }} as {{ ext }}>::{{ to_raw }}(value);
+                let value = if <{{ ty }} as {{ ext }}>::{{ from_raw }}(raw) == value {
+                    <{{ inner }} as ::core::convert::TryFrom<{{ raw }}>>::try_from(raw).ok()
+                } else {
+                    ::core::option::Option::None
+                }
+                .ok_or_else(|| ::std::string::String::from({{ whole }}))?;
+            };
+            (moxy::template! { {{ ty }} }, to_inner)
+        }
+    };
+    // The validated field as its quantity. `new` built the field from a
+    // `raw` count, so it converts back.
+    let as_quantity = quantity.as_ref().map(
+        |Quantity {
+             ty, ext, from_raw, raw, ..
+         }| {
+            moxy::template! {
+                <{{ ty }} as {{ ext }}>::{{ from_raw }}(
+                    <{{ raw }} as ::core::convert::TryFrom<{{ inner }}>>::try_from(self.0)
+                        .unwrap_or_else(|_| ::core::unreachable!("`new` built the field from a raw count")),
+                )
+            }
+        },
+    );
+    let quantity_getter = args
+        .quantity_getter
+        .map(|name| name.0)
+        .zip(quantity.as_ref().map(|quantity| quantity.ty.clone()));
+
     let default_value = args.default_value.map(|tokens| tokens.0);
     let from_str = args.from_str;
-    let display = args.display;
+    let display = match (&as_quantity, args.display) {
+        (_, false) => None,
+        (None, true) => Some(moxy::template! { ::core::fmt::Display::fmt(&self.0, formatter) }),
+        (Some(as_quantity), true) => Some(moxy::template! {
+            ::core::fmt::Display::fmt(&::krabka_units::fmt::Human::human({{ as_quantity }}), formatter)
+        }),
+    };
     Ok(moxy::template! {
         impl {{ ident }} {
             /// Validate `value` against the type's rule and wrap it.
@@ -139,7 +292,8 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             /// # Errors
             ///
             /// Returns an error when `value` does not satisfy the rule.
-            {{ vis }} fn new(value: {{ inner }}) -> ::core::result::Result<Self, {{ error }}> {
+            {{ vis }} fn new(value: {{ new_input }}) -> ::core::result::Result<Self, {{ error }}> {
+                {{ to_inner }}
                 <{{ rule }}>::new(value)
                     .map(|value| Self(value.into_value()))
                     {{ map_error }}
@@ -150,12 +304,30 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             {{ vis }} const fn {{ getter }}(self) -> {{ inner }} {
                 self.0
             }
+
+            @if let (Some((name, ty)), Some(as_quantity)) = (&quantity_getter, &as_quantity) {
+                /// The validated value as its quantity.
+                #[must_use]
+                {{ vis }} fn {{ name }}(self) -> {{ ty }} {
+                    {{ as_quantity }}
+                }
+            }
         }
 
         @if let Some(default_value) = &default_value {
             impl ::core::default::Default for {{ ident }} {
                 fn default() -> Self {
                     Self::new({{ default_value }}).expect({{ default_expect }})
+                }
+            }
+        }
+
+        @if let Some(quantity) = &quantity {
+            impl ::core::convert::TryFrom<{{ quantity.ty }}> for {{ ident }} {
+                type Error = ::std::string::String;
+
+                fn try_from(value: {{ quantity.ty }}) -> ::core::result::Result<Self, Self::Error> {
+                    Self::new(value)
                 }
             }
         }
@@ -170,10 +342,10 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             }
         }
 
-        @if display {
+        @if let Some(display) = &display {
             impl ::core::fmt::Display for {{ ident }} {
                 fn fmt(&self, formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                    ::core::fmt::Display::fmt(&self.0, formatter)
+                    {{ display }}
                 }
             }
         }

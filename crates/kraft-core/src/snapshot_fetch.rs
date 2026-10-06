@@ -9,6 +9,7 @@
 //! transfer, so the engine restarts cleanly against the current leader.
 
 use bytes::{Bytes, BytesMut};
+use krabka_macros::RefinedNewtype;
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, gibibytes};
 use krabka_verified::{SnapshotChunkDecision, snapshot_chunk_admission};
 use refined_type::rule::MinMaxU64;
@@ -30,44 +31,20 @@ pub type SnapshotId = (i64, i32);
 pub const METADATA_SNAPSHOT_FETCH_HARD_MAX: ByteSize = gibibytes(1);
 
 const METADATA_SNAPSHOT_FETCH_HARD_MAX_BYTES: u64 = 1_073_741_824;
-type RefinedMetadataSnapshotFetchBytes = MinMaxU64<1, METADATA_SNAPSHOT_FETCH_HARD_MAX_BYTES>;
 
 /// Validated deployment limit for one metadata snapshot fetch.
 ///
 /// Operators may lower this limit. No configuration can raise the fixed 1 GiB
 /// security ceiling.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
+#[refined(
+    rule(MinMaxU64<1, METADATA_SNAPSHOT_FETCH_HARD_MAX_BYTES>),
+    quantity = ByteSize,
+    label = "metadata snapshot fetch max",
+    quantity_getter = byte_size,
+    default = METADATA_SNAPSHOT_FETCH_HARD_MAX
+)]
 pub struct MetadataSnapshotFetchMax(u64);
-
-impl MetadataSnapshotFetchMax {
-    /// Validate a positive whole-byte limit at or below the security ceiling.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for fractional, non-finite, zero, or over-ceiling
-    /// quantities.
-    pub fn new(value: ByteSize) -> Result<Self, String> {
-        let raw_bytes = value.bytes_f64();
-        if !raw_bytes.is_finite() || raw_bytes.fract() != 0.0 {
-            return Err("metadata snapshot fetch maximum must be a whole number of bytes".into());
-        }
-        RefinedMetadataSnapshotFetchBytes::new(value.bytes_u64())
-            .map(|value| Self(value.into_value()))
-            .map_err(|error| error.to_string())
-    }
-
-    /// Return the validated limit as a dimensioned quantity.
-    #[must_use]
-    pub fn byte_size(self) -> ByteSize {
-        ByteSize::from_bytes(self.0)
-    }
-}
-
-impl Default for MetadataSnapshotFetchMax {
-    fn default() -> Self {
-        Self(METADATA_SNAPSHOT_FETCH_HARD_MAX_BYTES)
-    }
-}
 
 /// In-flight reassembly of one snapshot from one leader.
 #[derive(Debug)]

@@ -206,12 +206,27 @@
 //! - `display` — implement `Display` as the field's.
 //! - `parse_fn = name` — add a free `fn name(&str) -> Result<Self, String>`
 //!   that parses the way `from_str` does.
+//! - `quantity = ByteSize`, `Time` or `Frequency` — the field is a whole
+//!   number of bytes, milliseconds or Hz, and `new` takes the `krabka_units`
+//!   quantity. It refuses a fraction, an infinity, or a count the field type
+//!   cannot hold with `"<label>: must be a whole number of <unit> that fits in
+//!   <field type>"`, then hands the count to the rule. It implies
+//!   `string_error`, adds `TryFrom<quantity>` through `new`, makes `from_str`
+//!   parse with `krabka_units::parse` and `display` print the quantity's
+//!   `human()` text, and makes `default` take a quantity.
+//! - `quantity_getter = name` — with `quantity`, add a getter that returns the
+//!   value as its quantity.
 //!
 //! ```ignore
 //! #[derive(Clone, Copy, krabka_macros::RefinedNewtype)]
 //! #[refined(rule(GreaterU32<0>), string_error, label = "fetch miss limit", getter = get,
 //!           default = 3, from_str, display)]
 //! pub struct FetchMissLimit(u32);
+//!
+//! #[derive(Clone, Copy, krabka_macros::RefinedNewtype)]
+//! #[refined(rule(GreaterI32<0>), quantity = ByteSize, label = "fetch max", getter = bytes,
+//!           quantity_getter = size, default = mebibytes(8), from_str, display)]
+//! pub struct FetchMax(i32);
 //! ```
 //!
 //! # `PrimitiveCmp`
@@ -290,9 +305,10 @@ pub fn human_units(meta: TokenStream, item: TokenStream) -> Result<TokenStream, 
     human_units::expand(meta, item)
 }
 
-/// Derives `new`, a getter, and optionally `Default`, `FromStr`, `Display` and
-/// a free parse function for a tuple newtype over a `refined_type` rule. The
-/// crate documentation lists the `#[refined(...)]` arguments.
+/// Derives `new`, a getter, and optionally `Default`, `FromStr`, `Display`, a
+/// free parse function and whole-unit quantity conversions for a tuple newtype
+/// over a `refined_type` rule. The crate documentation lists the
+/// `#[refined(...)]` arguments.
 #[moxy::derive(RefinedNewtype, attributes(refined))]
 pub fn refined_newtype(item: ItemStruct) -> Result<TokenStream, ParseError> {
     refined_newtype::expand(item)

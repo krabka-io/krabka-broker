@@ -7,9 +7,11 @@
 //! inside the `int32` millisecond and byte ranges the Kafka wire carries.
 
 use krabka_client_core::{ClientFrameMax, ConnectionDispatchQueueCapacity};
+use krabka_macros::RefinedNewtype;
 use krabka_units::prelude::{
     ByteSize, ByteSizeExt as _, Time, TimeExt as _, mebibytes, millis, secs,
 };
+use refined_type::rule::GreaterUsize;
 
 /// Default name of the internal metadata topic.
 pub const METADATA_TOPIC: &str = "__remote_log_metadata";
@@ -48,34 +50,15 @@ pub const DEFAULT_METADATA_FETCH_RETRY_BACKOFF: Time = millis(200);
 pub const DEFAULT_METADATA_EVENT_QUEUE_CAPACITY: usize = 1024;
 
 /// Positive capacity of the shared metadata-event delivery queue.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
+#[refined(
+    rule(GreaterUsize<0>),
+    string_error,
+    label = "metadata event queue capacity",
+    getter = capacity,
+    default = DEFAULT_METADATA_EVENT_QUEUE_CAPACITY
+)]
 pub struct MetadataEventQueueCapacity(usize);
-
-impl MetadataEventQueueCapacity {
-    /// Validate a metadata-event queue capacity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `value` is zero.
-    pub fn new(value: usize) -> Result<Self, String> {
-        refined_type::rule::GreaterUsize::<0>::new(value)
-            .map(|value| Self(value.into_value()))
-            .map_err(|error| format!("metadata event queue capacity: {error}"))
-    }
-
-    /// Return the validated channel capacity.
-    #[must_use]
-    pub const fn capacity(self) -> usize {
-        self.0
-    }
-}
-
-impl Default for MetadataEventQueueCapacity {
-    fn default() -> Self {
-        Self::new(DEFAULT_METADATA_EVENT_QUEUE_CAPACITY)
-            .expect("default metadata event queue capacity is positive")
-    }
-}
 
 /// Construction-time configuration for
 /// [`KafkaMetadataEventLog`](super::KafkaMetadataEventLog).
