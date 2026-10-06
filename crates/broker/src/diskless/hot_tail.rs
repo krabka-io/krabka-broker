@@ -12,21 +12,16 @@ use krabka_units::convert::ByteSizeExt as _;
 use uuid::Uuid;
 
 /// Advisory cache of recently quorum-committed diskless WAL batches.
-#[derive(Debug)]
+#[derive(Debug, krabka_macros::FieldDefaults)]
 pub(crate) struct HotTailCache {
+    #[default(
+        crate::config::DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE
+            .bytes_u64()
+            .try_into()
+            .unwrap_or(usize::MAX)
+    )]
     max_bytes: usize,
     state: Mutex<HotTailState>,
-}
-
-impl Default for HotTailCache {
-    fn default() -> Self {
-        Self::new(
-            crate::config::DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE
-                .bytes_u64()
-                .try_into()
-                .unwrap_or(usize::MAX),
-        )
-    }
 }
 
 impl HotTailCache {

@@ -74,9 +74,19 @@ pub(super) fn resolve_topic_compression(
 /// `CreateTime`. A `LogAppendTime` topic overwrites every timestamp with the
 /// broker's clock at append, so there is nothing left for the window to
 /// refuse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Default` is the policy that bounds nothing: the producer's own timestamps,
+/// and neither window applied. This is not the policy a stock topic resolves to.
+/// [`resolve_timestamp_policy`] gives an unconfigured topic the broker's
+/// own default, which normally bounds the future window at Kafka's
+/// compiled-in one hour. What resolves to this is a
+/// `delivery.mode=scheduled` topic, whose timestamps are delivery times
+/// rather than create times, and the benchmark seam, which exists to time
+/// the append rather than the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct TimestampPolicy {
     /// The topic's `message.timestamp.type`.
+    #[default(TimestampType::CreateTime)]
     timestamp_type: TimestampType,
     /// `message.timestamp.before.max.ms`: how far behind the broker's clock a
     /// producer timestamp may sit. `None` is Kafka's `Long.MAX_VALUE` default,
@@ -89,26 +99,6 @@ pub struct TimestampPolicy {
     /// default too -- see [`crate::config::BrokerConfig`]'s
     /// `default_message_timestamp_after_max_ms`).
     after_max_ms: Option<i64>,
-}
-
-impl Default for TimestampPolicy {
-    /// The policy that bounds nothing: the producer's own timestamps, and
-    /// neither window applied.
-    ///
-    /// This is not the policy a stock topic resolves to.
-    /// [`resolve_timestamp_policy`] gives an unconfigured topic the broker's
-    /// own default, which normally bounds the future window at Kafka's
-    /// compiled-in one hour. What resolves to this is a
-    /// `delivery.mode=scheduled` topic, whose timestamps are delivery times
-    /// rather than create times, and the benchmark seam, which exists to time
-    /// the append rather than the window.
-    fn default() -> Self {
-        Self {
-            timestamp_type: TimestampType::CreateTime,
-            before_max_ms: None,
-            after_max_ms: None,
-        }
-    }
 }
 
 impl TimestampPolicy {

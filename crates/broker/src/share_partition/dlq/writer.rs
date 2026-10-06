@@ -75,6 +75,8 @@ const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// The result of one attempt of a request.
+#[derive(krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase")]
 enum Attempt<T> {
     Done(T),
     /// Try again after a pause: a leader that is not there yet, a metadata
@@ -717,14 +719,6 @@ mod tests {
         }
     }
 
-    fn outcome<T>(attempt: &Attempt<T>) -> &'static str {
-        match attempt {
-            Attempt::Done(_) => "done",
-            Attempt::Retry(_) => "retry",
-            Attempt::Fatal(_) => "fatal",
-        }
-    }
-
     /// Kafka's `handleProduceResponse`: success is done, a leader that has
     /// moved is tried again, any other error is final, and so is an answer with
     /// no row for the partition.
@@ -746,7 +740,7 @@ mod tests {
         assert!(
             cases
                 .iter()
-                .map(|(response, _)| outcome(&classify_produce(response, &target)))
+                .map(|(response, _)| classify_produce(response, &target).as_str())
                 .collect::<Vec<_>>()
                 == cases.iter().map(|(_, want)| *want).collect::<Vec<_>>()
         );
@@ -779,8 +773,8 @@ mod tests {
 
         assert!(
             [
-                outcome(&classify_produce(&other_topic, &target(1, 2))),
-                outcome(&classify_produce(&both, &target(1, 2))),
+                classify_produce(&other_topic, &target(1, 2)).as_str(),
+                classify_produce(&both, &target(1, 2)).as_str(),
             ] == ["fatal", "retry"]
         );
     }
@@ -1193,7 +1187,7 @@ mod tests {
 
         let actual: Vec<&str> = cases
             .into_iter()
-            .map(|(result, _)| outcome(&classify_create(result, "dlq.g")))
+            .map(|(result, _)| classify_create(result, "dlq.g").as_str())
             .collect();
 
         assert!(actual == expected);

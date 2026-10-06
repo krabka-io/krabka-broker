@@ -112,11 +112,14 @@ fn read_all(partitions: &[BenchPartition]) -> usize {
 }
 
 /// The three hand-off shapes, in report order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(all, as_str = name)]
 enum Handoff {
     /// One `spawn_blocking` per partition, awaited in turn.
+    #[enum_str(name = "spawn_blocking_per_partition")]
     PerPartition,
     /// One `spawn_blocking` covering the whole pending set.
+    #[enum_str(name = "spawn_blocking_batched")]
     Batched,
     /// No hand-off: one `block_in_place` per partition on the reactor worker,
     /// which is the shape the read loop actually has -- `do_read` is called
@@ -124,19 +127,8 @@ enum Handoff {
     /// partition too. The first call hands the worker's core to a replacement
     /// thread and the rest find no core left to hand over, so the per-call
     /// cost after the first is a thread-local check.
+    #[enum_str(name = "block_in_place")]
     InPlace,
-}
-
-impl Handoff {
-    const ALL: [Self; 3] = [Self::PerPartition, Self::Batched, Self::InPlace];
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::PerPartition => "spawn_blocking_per_partition",
-            Self::Batched => "spawn_blocking_batched",
-            Self::InPlace => "block_in_place",
-        }
-    }
 }
 
 /// Serve one fetch across every partition, under one hand-off shape.

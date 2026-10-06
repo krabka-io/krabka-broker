@@ -8,7 +8,7 @@ use assert2::{assert, check};
 use tempfile::TempDir;
 
 use super::{entry, fresh_key, write_key_file};
-use crate::operator_keys::{OperatorKey, OperatorKeyError, OperatorKeys};
+use crate::operator_keys::{OperatorKey, OperatorKeys};
 
 #[test]
 fn load_binds_every_key_to_its_principal() {
@@ -112,13 +112,6 @@ fn load_rejects_an_unusable_entry() {
         ),
     ] {
         assert!(let Err(error) = OperatorKeys::load(&entries), "case {name}");
-        let variant = match error {
-            OperatorKeyError::BlankField { .. } => "BlankField",
-            OperatorKeyError::Unreadable { .. } => "Unreadable",
-            OperatorKeyError::Malformed { .. } => "Malformed",
-            OperatorKeyError::DuplicateKeyId { .. } => "DuplicateKeyId",
-            OperatorKeyError::DuplicatePrincipal { .. } => "DuplicatePrincipal",
-        };
-        check!(variant == expect, "case {name}");
+        check!(error.as_str() == expect, "case {name}");
     }
 }

@@ -22,7 +22,8 @@ use super::{
 };
 
 /// One named pass rule. The name is the `always` property that checks it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, krabka_macros::EnumStr)]
+#[enum_str(all)]
 pub(super) enum Invariant {
     /// A control marker leaves the log only through its delete horizon. Every
     /// input marker whose horizon has not elapsed is in the output. Markers
@@ -50,13 +51,6 @@ pub(super) enum Invariant {
 }
 
 impl Invariant {
-    pub(super) const ALL: [Self; 5] = [
-        Self::ControlNotDeduped,
-        Self::MarkerDataPrecedence,
-        Self::TombstoneAging,
-        Self::IdempotentStamp,
-        Self::NoDataLoss,
-    ];
 
     /// Whether this rule holds for a pass at `clock` that turned `input` into
     /// `output`.

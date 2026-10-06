@@ -12,7 +12,7 @@ use std::path::PathBuf;
 /// Every variant is a startup error. A key set that a broker cannot load is
 /// never downgraded to a smaller one: a signature checked against a partial
 /// trust set is a signature check that silently does nothing.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, krabka_macros::EnumStr)]
 #[non_exhaustive]
 pub enum OperatorKeyError {
     /// A `key_id` or a `principal` is blank. Neither can be matched against a

@@ -22,24 +22,18 @@ use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
 
 /// Why a record goes to the dead-letter queue: Kafka's
 /// `ShareGroupDLQManager.CLIENT_REJECT` and `DELIVERY_COUNT_EXCEEDED`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, krabka_macros::EnumStr)]
+#[enum_str(as_str = message)]
 pub enum DlqCause {
     /// A member acknowledged the record with `Reject`.
+    #[enum_str(name = "Offset rejected by client.")]
     ClientReject,
     /// The record used up the group's delivery count limit.
+    #[enum_str(name = "Offset delivery count exceeded the threshold.")]
     DeliveryCountExceeded,
 }
 
 impl DlqCause {
-    /// The text of the `__dlq.errors.message` header: the message of Kafka's
-    /// `ShareGroupDLQThrowable`.
-    #[must_use]
-    pub fn message(self) -> &'static str {
-        match self {
-            Self::ClientReject => "Offset rejected by client.",
-            Self::DeliveryCountExceeded => "Offset delivery count exceeded the threshold.",
-        }
-    }
 
     /// The cause of a run that was restored as `Archiving`. The cause is not
     /// persisted, so, as Kafka's `maybeResumeDlqArchiving` does, a run whose

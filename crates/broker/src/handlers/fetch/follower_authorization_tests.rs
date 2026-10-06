@@ -57,24 +57,18 @@ const RECORDS: [&[u8]; 2] = [b"committed-later", b"not-committed-yet"];
 const LOG_END: i64 = 2;
 
 /// The principal that sends the fetch, by the grant that it holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(as_str = name)]
 enum Caller {
     /// `Read` on every topic, and nothing on the cluster.
+    #[enum_str(name = "reader")]
     TopicReader,
     /// `ClusterAction` on the cluster, and nothing on any topic.
+    #[enum_str(name = "replicator")]
     Replicator,
     /// No grant.
+    #[enum_str(name = "stranger")]
     Stranger,
-}
-
-impl Caller {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::TopicReader => "reader",
-            Self::Replicator => "replicator",
-            Self::Stranger => "stranger",
-        }
-    }
 }
 
 /// Allows exactly the grants that [`Caller`] documents.

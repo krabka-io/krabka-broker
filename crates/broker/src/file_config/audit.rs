@@ -13,21 +13,24 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 /// `[audit]` section of `broker.toml` (`FedRAMP` 20x MLA).
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq, krabka_macros::FieldDefaults)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditConfig {
     /// Whether the audit subsystem is active.
     #[serde(default = "default_audit_enabled")]
+    #[default(default_audit_enabled())]
     pub enabled: bool,
     /// Whether privileged operations continue when audit processing fails.
     #[serde(default = "default_audit_failure_mode")]
     #[schemars(with = "String")]
+    #[default(krabka_audit::AuditMode::FailOpen)]
     pub failure_mode: krabka_audit::AuditMode,
     /// Internal topic name for audit records. It has to start with `__`: the
     /// broker reports it internal on `Metadata` and refuses to freeze it by
     /// that prefix, and a name outside the convention would satisfy only the
     /// first of the two.
     #[serde(default = "default_audit_topic")]
+    #[default(default_audit_topic())]
     pub topic: String,
     /// Ed25519 checkpoint signing key. An absent table keeps the current key.
     /// The broker has none by default: chaining only, no checkpoints.
@@ -40,43 +43,23 @@ pub struct FileAuditConfig {
     pub spool: Option<FileAuditSpoolConfig>,
 }
 
-impl Default for FileAuditConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_audit_enabled(),
-            failure_mode: krabka_audit::AuditMode::FailOpen,
-            topic: default_audit_topic(),
-            signing: None,
-            checkpoint: None,
-            spool: None,
-        }
-    }
-}
-
 /// `[audit.spool]` — durable spool for the AU-5 degraded path.
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq, krabka_macros::FieldDefaults)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditSpoolConfig {
     /// Directory that holds the spool files. A relative path resolves under
     /// the broker's log directory.
     #[serde(default = "default_spool_dir")]
+    #[default(default_spool_dir())]
     pub dir: String,
     /// Cap on the total size of the spool on disk.
     #[serde(default = "default_spool_max_bytes")]
+    #[default(default_spool_max_bytes())]
     pub max_bytes: u64,
     /// Number of appended records between durable file syncs.
     #[serde(default = "default_spool_sync_every_n")]
+    #[default(default_spool_sync_every_n())]
     pub sync_every_n: NonZeroU64,
-}
-
-impl Default for FileAuditSpoolConfig {
-    fn default() -> Self {
-        Self {
-            dir: default_spool_dir(),
-            max_bytes: default_spool_max_bytes(),
-            sync_every_n: default_spool_sync_every_n(),
-        }
-    }
 }
 
 fn default_spool_dir() -> String {
@@ -103,24 +86,17 @@ pub struct FileAuditSigningConfig {
 }
 
 /// `[audit.checkpoint]` — checkpoint cadence.
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq, krabka_macros::FieldDefaults)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditCheckpointConfig {
     /// Emit a checkpoint after this many audit records.
     #[serde(default = "default_checkpoint_every_n")]
+    #[default(default_checkpoint_every_n())]
     pub every_n: u64,
     /// Emit a checkpoint at least this often, in seconds.
     #[serde(default = "default_checkpoint_every_secs")]
+    #[default(default_checkpoint_every_secs())]
     pub every_secs: u64,
-}
-
-impl Default for FileAuditCheckpointConfig {
-    fn default() -> Self {
-        Self {
-            every_n: default_checkpoint_every_n(),
-            every_secs: default_checkpoint_every_secs(),
-        }
-    }
 }
 
 fn default_checkpoint_every_n() -> u64 {

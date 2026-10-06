@@ -13,14 +13,14 @@ pub fn parse_roles_arg(roles: &[String]) -> Result<Vec<krabka_broker::config::No
     use krabka_broker::config::NodeRole;
     roles
         .iter()
-        .map(|r| match r.to_ascii_lowercase().as_str() {
-            "controller" => Ok(NodeRole::Controller),
-            "broker" => Ok(NodeRole::Broker),
-            "witness" => Ok(NodeRole::Witness),
-            other => Err(format!(
-                "unknown --process-roles value `{other}` \
-                 (expected `controller`, `broker`, or `witness`)"
-            )),
+        .map(|r| {
+            let lower = r.to_ascii_lowercase();
+            NodeRole::parse(&lower).ok_or_else(|| {
+                format!(
+                    "unknown --process-roles value `{lower}` \
+                     (expected `controller`, `broker`, or `witness`)"
+                )
+            })
         })
         .collect()
 }

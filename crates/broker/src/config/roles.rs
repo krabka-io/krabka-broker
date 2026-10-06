@@ -9,7 +9,8 @@ use crate::{BrokerError, config::BrokerConfig};
 ///
 /// [`Witness`][NodeRole::Witness] is a modifier on that set, not a
 /// replacement for it. A witness node lists all three roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase", parse)]
 pub enum NodeRole {
     /// The node votes in the `__cluster_metadata` quorum.
     Controller,

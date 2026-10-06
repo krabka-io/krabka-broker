@@ -22,22 +22,17 @@ pub struct BucketEntry {
     pub last_accessed: Mutex<Instant>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, krabka_macros::FieldDefaults)]
 pub struct QuotaBuckets {
     /// Keyed by (`quota_key`, canonical entity key). There is one bucket for
     /// each (`quota_type`, entity) pair, allocated lazily on the first
     /// lookup.
     buckets: DashMap<(String, EntityKey), Arc<BucketEntry>>,
     controller_mutations: DashMap<EntityKey, Arc<Mutex<ControllerMutationBucket>>>,
+    #[default(crate::config::DEFAULT_QUOTA_WINDOW)]
     quota_window: Time,
     /// The addresses the image's `ip` quota entity names stand for.
     ip_names: IpNames,
-}
-
-impl Default for QuotaBuckets {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 #[derive(Debug)]
@@ -54,7 +49,7 @@ impl QuotaBuckets {
     /// callers that have no config to read, which is the in-process tests.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_window(crate::config::DEFAULT_QUOTA_WINDOW)
+        Self::default()
     }
 
     /// Buckets whose byte-rate burst is `rate * quota_window`, which is the

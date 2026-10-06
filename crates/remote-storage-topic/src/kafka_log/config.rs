@@ -6,8 +6,10 @@
 //! the per-partition fetch loops, and the validation that keeps every tunable
 //! inside the `int32` millisecond and byte ranges the Kafka wire carries.
 
-use krabka_client_core::{ClientFrameMax, ConnectionDispatchQueueCapacity};
-use krabka_macros::RefinedNewtype;
+use krabka_client_core::{
+    ClientFrameMax, ConnectionDispatchQueueCapacity, security::ClientSecurity,
+};
+use krabka_macros::{FieldDefaults, RefinedNewtype};
 use krabka_units::prelude::{
     ByteSize, ByteSizeExt as _, Time, TimeExt as _, mebibytes, millis, secs,
 };
@@ -62,7 +64,7 @@ pub struct MetadataEventQueueCapacity(usize);
 
 /// Construction-time configuration for
 /// [`KafkaMetadataEventLog`](super::KafkaMetadataEventLog).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FieldDefaults)]
 pub struct KafkaMetadataLogConfig {
     /// `host:port` for the Kafka client to bootstrap from. The TBRLMM in a
     /// broker connects over loopback to its own listener.
@@ -70,36 +72,46 @@ pub struct KafkaMetadataLogConfig {
     /// Internal topic name. Production deployments keep the default. The
     /// field exists so multiple isolated clusters can share an environment in
     /// tests.
+    #[default(METADATA_TOPIC.to_string())]
     pub topic: String,
     /// Number of partitions to create the topic with on first startup.
     /// The log ignores this value when the topic already exists, and the
     /// existing count wins. The log does not support re-bucketing on
     /// partition growth.
+    #[default(DEFAULT_NUM_PARTITIONS)]
     pub num_partitions: i32,
     /// Replication factor to create the topic with on first startup.
     /// The log ignores this value when the topic already exists.
+    #[default(DEFAULT_REPLICATION)]
     pub replication: i32,
     /// `min.insync.replicas` to create the topic with on first startup.
     /// `None` leaves the setting to the cluster default. The log ignores this
     /// value when the topic already exists.
+    #[default(Some(DEFAULT_MIN_ISR))]
     pub min_isr: Option<i32>,
     /// `client_id` for the producer and consumer. It is diagnostic only.
+    #[default("krabka-rlmm".to_string())]
     pub client_id: String,
     /// Provision and maintain this internal topic with log compaction.
     pub compacted: bool,
     /// Create the topic when it is absent. Read-only tooling disables this.
+    #[default(true)]
     pub provision_topic: bool,
     /// Client TLS/SASL security applied to the producer, the raw client,
     /// the admin client, and every per-partition fetch connection.
     /// `None` is plaintext loopback, and it is the default.
-    pub security: Option<krabka_client_core::security::ClientSecurity>,
+    pub security: Option<ClientSecurity>,
     /// Timeout for provisioning the internal topic.
+    #[default(DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT)]
     pub topic_create_timeout: Time,
     /// Maximum wait for each per-partition metadata fetch.
+    #[default(DEFAULT_METADATA_FETCH_MAX_WAIT)]
     pub fetch_max_wait: Time,
     /// Maximum bytes returned by each per-partition metadata fetch.
+    #[default(DEFAULT_METADATA_FETCH_MAX_BYTES)]
     pub fetch_max_bytes: ByteSize,
     /// Backoff after a failed metadata fetch.
+    #[default(DEFAULT_METADATA_FETCH_RETRY_BACKOFF)]
     pub fetch_retry_backoff: Time,
     /// Capacity of the shared metadata-event delivery queue.
     pub event_queue_capacity: MetadataEventQueueCapacity,
@@ -115,21 +127,7 @@ impl KafkaMetadataLogConfig {
     pub fn new(bootstrap: impl Into<String>) -> Self {
         Self {
             bootstrap: bootstrap.into(),
-            topic: METADATA_TOPIC.to_string(),
-            num_partitions: DEFAULT_NUM_PARTITIONS,
-            replication: DEFAULT_REPLICATION,
-            min_isr: Some(DEFAULT_MIN_ISR),
-            client_id: "krabka-rlmm".to_string(),
-            compacted: false,
-            provision_topic: true,
-            security: None,
-            topic_create_timeout: DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
-            fetch_max_wait: DEFAULT_METADATA_FETCH_MAX_WAIT,
-            fetch_max_bytes: DEFAULT_METADATA_FETCH_MAX_BYTES,
-            fetch_retry_backoff: DEFAULT_METADATA_FETCH_RETRY_BACKOFF,
-            event_queue_capacity: MetadataEventQueueCapacity::default(),
-            dispatch_queue_capacity: ConnectionDispatchQueueCapacity::default(),
-            frame_max: ClientFrameMax::default(),
+            ..Self::default()
         }
     }
 

@@ -163,6 +163,7 @@ pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
         ));
     }
 
+    let (impl_generics, type_generics, where_clause) = item.generics.split();
     let ident = item.ident;
     let vis = item.vis;
     let receiver = if has_fields {
@@ -178,7 +179,7 @@ pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
     let all = args.all;
     let label_value = args.label_value;
     Ok(moxy::template! {
-        impl {{ ident }} {
+        impl {{ impl_generics }} {{ ident }} {{ type_generics }} {{ where_clause }} {
             /// The text this variant stands for.
             #[must_use]
             {{ vis }} const fn {{ as_str }}({{ receiver }}) -> &'static str {
@@ -207,7 +208,9 @@ pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
         }
 
         @if label_value {
-            impl ::prometheus_client::encoding::EncodeLabelValue for {{ ident }} {
+            impl {{ impl_generics }} ::prometheus_client::encoding::EncodeLabelValue
+                for {{ ident }} {{ type_generics }} {{ where_clause }}
+            {
                 fn encode(
                     &self,
                     encoder: &mut ::prometheus_client::encoding::LabelValueEncoder<'_>,

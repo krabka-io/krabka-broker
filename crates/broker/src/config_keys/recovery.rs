@@ -20,7 +20,8 @@ pub(crate) const UNCLEAN_LEADER_ELECTION_ENABLE: &str = "unclean.leader.election
 pub(crate) const UNCLEAN_RECOVERY_STRATEGY: &str = "unclean.recovery.strategy";
 
 /// Resolved value of `unclean.recovery.strategy` for a topic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(parse = parse_raw)]
 pub(crate) enum RecoveryStrategy {
     /// No offset-aware recovery. Defer to `unclean.leader.election.enable`.
     None,
@@ -34,14 +35,7 @@ pub(crate) enum RecoveryStrategy {
 
 impl RecoveryStrategy {
     pub(crate) fn parse(value: &str) -> Option<Self> {
-        // A broker resource stores the client's string, and Kafka's
-        // `ConfigDef.parse` trims a `STRING` value before it checks it.
-        match super::parse::java_trim(value) {
-            "None" => Some(Self::None),
-            "Balanced" => Some(Self::Balanced),
-            "Aggressive" => Some(Self::Aggressive),
-            _ => None,
-        }
+        Self::parse_raw(super::parse::java_trim(value))
     }
 }
 

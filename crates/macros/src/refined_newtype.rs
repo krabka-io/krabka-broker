@@ -2,24 +2,10 @@
 
 use moxy::{
     ast::{Attributed, ItemStruct, ParseError, Type},
-    token::{LitStr, Spanner, TokenStream},
+    token::{LitStr, TokenStream},
 };
 
-use crate::meta::Tokens;
-
-/// The tokens inside a `key(...)` argument. A type with generic arguments
-/// goes here rather than after `=`, where moxy reads an expression and stops
-/// at the `<`.
-struct Parenthesized(TokenStream);
-
-impl moxy::ast::FromMeta for Parenthesized {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
-        match &meta.content {
-            moxy::ast::MetaContent::List(group) => Ok(Self(group.tokens.clone())),
-            _ => Err(ParseError::new(meta.span(), "expected `key(<type>)`")),
-        }
-    }
-}
+use crate::meta::{Parenthesized, Tokens};
 
 /// The arguments of the `#[refined(...)]` struct attribute.
 #[derive(moxy::FromMeta)]

@@ -41,15 +41,6 @@
 
 use criterion::{criterion_group, criterion_main};
 
-/// Every response size the sweep covers, and the label each is reported under.
-const SIZES: [(&str, usize); 5] = [
-    ("4KiB", 4 * 1024),
-    ("16KiB", 16 * 1024),
-    ("32KiB", 32 * 1024),
-    ("64KiB", 64 * 1024),
-    ("256KiB", 256 * 1024),
-];
-
 /// The sweep, on the platforms that have a file-to-socket `sendfile(2)`:
 /// Linux, the Apple targets, and FreeBSD/DragonFly.
 #[cfg(any(
@@ -84,7 +75,14 @@ mod sweep {
         runtime::Runtime,
     };
 
-    use super::SIZES;
+    /// Every response size the sweep covers, and the label each is reported under.
+    const SIZES: [(&str, usize); 5] = [
+        ("4KiB", 4 * 1024),
+        ("16KiB", 16 * 1024),
+        ("32KiB", 32 * 1024),
+        ("64KiB", 64 * 1024),
+        ("256KiB", 256 * 1024),
+    ];
 
     /// Untimed drains run before the measured ones, over the same socket.
     ///
@@ -109,7 +107,8 @@ mod sweep {
     const SOCKET_BUFFER: usize = 1024 * 1024;
 
     /// The two ways a records region reaches the socket.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+    #[enum_str(case = "lowercase", as_str = name)]
     pub(crate) enum Case {
         /// `pread` the region into a buffer, then write the buffer.
         Vectored,
@@ -124,13 +123,6 @@ mod sweep {
             match self {
                 Self::Vectored => FetchDrainPath::Vectored,
                 Self::Sendfile => FetchDrainPath::Sendfile,
-            }
-        }
-
-        fn name(self) -> &'static str {
-            match self {
-                Self::Vectored => "vectored",
-                Self::Sendfile => "sendfile",
             }
         }
     }

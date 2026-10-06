@@ -55,28 +55,21 @@ impl ConfigError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(parse)]
 pub(crate) enum MatchSelector {
+    #[enum_str(name = "client_instance_id")]
     InstanceId,
+    #[enum_str(name = "client_id")]
     Id,
+    #[enum_str(name = "client_software_name")]
     SoftwareName,
+    #[enum_str(name = "client_software_version")]
     SoftwareVersion,
+    #[enum_str(name = "client_source_address")]
     SourceAddress,
+    #[enum_str(name = "client_source_port")]
     SourcePort,
-}
-
-impl MatchSelector {
-    fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "client_instance_id" => Self::InstanceId,
-            "client_id" => Self::Id,
-            "client_software_name" => Self::SoftwareName,
-            "client_software_version" => Self::SoftwareVersion,
-            "client_source_address" => Self::SourceAddress,
-            "client_source_port" => Self::SourcePort,
-            _ => return None,
-        })
-    }
 }
 
 #[derive(Debug, Clone)]

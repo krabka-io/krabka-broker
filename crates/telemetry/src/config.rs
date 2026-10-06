@@ -12,12 +12,15 @@ use crate::error::TelemetryError;
 /// OTLP transport.
 ///
 /// The variants mirror the `OTEL_EXPORTER_OTLP_PROTOCOL` spec values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(as_str = default_endpoint)]
 pub enum OtlpProtocol {
     /// The OTLP/gRPC transport. Default collector port `4317`.
+    #[enum_str(name = "http://localhost:4317")]
     Grpc,
     /// The OTLP/HTTP transport with protobuf payloads. Default collector port
     /// `4318`.
+    #[enum_str(name = "http://localhost:4318")]
     HttpProtobuf,
 }
 
@@ -31,14 +34,6 @@ impl OtlpProtocol {
         match s.trim().to_ascii_lowercase().as_str() {
             "http/protobuf" | "http" | "httpbinary" | "http-protobuf" => Self::HttpProtobuf,
             _ => Self::Grpc,
-        }
-    }
-
-    #[must_use]
-    pub fn default_endpoint(self) -> &'static str {
-        match self {
-            Self::Grpc => "http://localhost:4317",
-            Self::HttpProtobuf => "http://localhost:4318",
         }
     }
 }

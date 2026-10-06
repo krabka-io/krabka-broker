@@ -19,3 +19,18 @@ impl moxy::ast::FromMeta for Tokens {
         }
     }
 }
+
+/// The tokens inside a `key(...)` argument.
+pub(crate) struct Parenthesized(pub(crate) TokenStream);
+
+impl moxy::ast::FromMeta for Parenthesized {
+    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+        match &meta.content {
+            moxy::ast::MetaContent::List(group) if !group.tokens.is_empty() => {
+                Ok(Self(group.tokens.clone()))
+            }
+            _ => Err(ParseError::new(meta.span(), "expected `key(...)`")),
+        }
+    }
+}
+

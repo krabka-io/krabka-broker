@@ -15,19 +15,18 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::sync::Notify;
 
 /// Lets a produce re-arm the delivery scheduler before its current sleep ends.
+#[derive(krabka_macros::FieldDefaults)]
 pub(crate) struct DeliveryWaker {
     /// Epoch-millisecond instant the scheduler next wakes on its own.
     /// [`i64::MAX`] until the task arms for the first time.
+    #[default(AtomicI64::new(i64::MAX))]
     wakes_at_ms: AtomicI64,
     notify: Notify,
 }
 
 impl DeliveryWaker {
     pub(crate) fn new() -> Self {
-        Self {
-            wakes_at_ms: AtomicI64::new(i64::MAX),
-            notify: Notify::new(),
-        }
+        Self::default()
     }
 
     /// Publish the instant the scheduler is about to sleep until.
@@ -57,12 +56,6 @@ impl DeliveryWaker {
     /// Wait until a produce asks for an earlier deadline.
     pub(crate) async fn woken(&self) {
         self.notify.notified().await;
-    }
-}
-
-impl Default for DeliveryWaker {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

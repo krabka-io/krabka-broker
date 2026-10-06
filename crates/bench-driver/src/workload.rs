@@ -109,10 +109,12 @@ pub const fn default_consumer_build_max_backoff() -> Time {
     DEFAULT_CONSUMER_BUILD_MAX_BACKOFF
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ConsumerBuildRetryPolicy {
     attempts: ConsumerBuildAttempts,
+    #[default(default_consumer_build_initial_backoff())]
     initial_backoff: Time,
+    #[default(default_consumer_build_max_backoff())]
     max_backoff: Time,
 }
 
@@ -150,17 +152,6 @@ impl ConsumerBuildRetryPolicy {
     #[must_use]
     pub fn max_backoff(self) -> Time {
         self.max_backoff
-    }
-}
-
-impl Default for ConsumerBuildRetryPolicy {
-    fn default() -> Self {
-        Self::new(
-            ConsumerBuildAttempts::default(),
-            default_consumer_build_initial_backoff(),
-            default_consumer_build_max_backoff(),
-        )
-        .expect("default consumer-build retry range is ordered")
     }
 }
 

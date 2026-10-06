@@ -42,7 +42,8 @@ impl ReplicaView {
 /// Which built-in selector the broker uses. Maps to Kafka's
 /// `replica.selector.class`, but as a native enum. Krabka does not load
 /// JVM classes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
+#[enum_str(case = "kebab-case", parse)]
 pub enum ReplicaSelectorKind {
     /// Always read from the leader. Default.
     #[default]
@@ -57,11 +58,8 @@ impl ReplicaSelectorKind {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn from_config_str(s: &str) -> Result<Self, String> {
-        match s.trim() {
-            "leader" => Ok(Self::Leader),
-            "rack-aware" => Ok(Self::RackAware),
-            other => Err(other.to_string()),
-        }
+        let trimmed = s.trim();
+        Self::parse(trimmed).ok_or_else(|| trimmed.to_string())
     }
 
     /// Choose the preferred read replica. Returns a node id, or `-1` for

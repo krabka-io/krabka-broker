@@ -125,3 +125,21 @@ fn label_value_encodes_the_text() {
                  phases_total{phase=\"compact,delete\"} 1\n# EOF\n"
     );
 }
+
+#[derive(EnumStr)]
+#[enum_str(case = "lowercase")]
+enum GenericAttempt<T> {
+    Done(T),
+    Retry(String),
+}
+
+#[test]
+fn as_str_works_on_generic_enum() {
+    let done = GenericAttempt::Done(42);
+    let retry = GenericAttempt::<()>::Retry("later".into());
+    assert!(done.as_str() == "done");
+    assert!(retry.as_str() == "retry");
+    let GenericAttempt::Retry(msg) = retry else { unreachable!() };
+    assert!(msg == "later");
+}
+

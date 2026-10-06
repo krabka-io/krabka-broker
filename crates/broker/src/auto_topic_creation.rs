@@ -620,8 +620,9 @@ pub fn creatable_topic(config: &BrokerConfig, name: &str) -> CreatableTopic {
 /// first goes, not the one used least recently. An entry that a newer
 /// [`Self::put`] replaced stays in the heap, and its sequence number tells
 /// that it is stale.
-#[derive(Debug)]
+#[derive(Debug, krabka_macros::FieldDefaults)]
 struct ExpiringErrorCache {
+    #[default(ERROR_CACHE_CAPACITY)]
     capacity: usize,
     inner: Mutex<ErrorCacheInner>,
 }
@@ -643,13 +644,8 @@ struct ErrorEntry {
     sequence: u64,
 }
 
-impl Default for ExpiringErrorCache {
-    fn default() -> Self {
-        Self::new(ERROR_CACHE_CAPACITY)
-    }
-}
-
 impl ExpiringErrorCache {
+    #[cfg(test)]
     fn new(capacity: usize) -> Self {
         Self {
             capacity,

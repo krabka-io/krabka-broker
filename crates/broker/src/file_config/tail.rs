@@ -143,13 +143,11 @@ pub(super) fn apply_config_tail(
         cfg.roles = process
             .roles
             .iter()
-            .map(|role| match role.to_ascii_lowercase().as_str() {
-                "controller" => Ok(crate::config::NodeRole::Controller),
-                "broker" => Ok(crate::config::NodeRole::Broker),
-                "witness" => Ok(crate::config::NodeRole::Witness),
-                other => Err(FileConfigError::InvalidConfig(format!(
-                    "unknown process.role `{other}`"
-                ))),
+            .map(|role| {
+                let lower = role.to_ascii_lowercase();
+                crate::config::NodeRole::parse(&lower).ok_or_else(|| {
+                    FileConfigError::InvalidConfig(format!("unknown process.role `{lower}`"))
+                })
             })
             .collect::<Result<_, _>>()?;
     }

@@ -5,22 +5,7 @@ use moxy::{
     token::{Spanner, TokenStream},
 };
 
-/// The expression inside a field's `#[default(...)]`.
-struct DefaultExpr(TokenStream);
-
-impl moxy::ast::FromMeta for DefaultExpr {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
-        match &meta.content {
-            moxy::ast::MetaContent::List(group) if !group.tokens.is_empty() => {
-                Ok(Self(group.tokens.clone()))
-            }
-            _ => Err(ParseError::new(
-                meta.span(),
-                "expected `#[default(<expression>)]`",
-            )),
-        }
-    }
-}
+use crate::meta::Parenthesized;
 
 /// `name: <value>` for `field`: its `#[default(...)]` expression, or
 /// `Default::default()`.
@@ -31,9 +16,9 @@ fn initializer(field: &Field) -> Result<TokenStream, ParseError> {
             "`FieldDefaults` needs named fields",
         ));
     };
-    let value = field.parse_meta::<DefaultExpr>("default")?.map_or_else(
+    let value = field.parse_meta::<Parenthesized>("default")?.map_or_else(
         || moxy::template! { ::core::default::Default::default() },
-        |DefaultExpr(value)| value,
+        |Parenthesized(value)| value,
     );
     Ok(moxy::template! { {{ ident }}: {{ value }}, })
 }

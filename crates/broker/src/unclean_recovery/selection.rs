@@ -101,19 +101,23 @@ pub(crate) fn select_best_replica(responses: &[ReplicaLogInfo]) -> Option<NodeId
 }
 
 /// Which rule chose the leader, and so whether the election lost anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(as_str = describe)]
 pub(crate) enum ElectionBasis {
     /// The partition record still names the winner in its ISR, so it holds
     /// every committed record. This is the first disjunct of Kafka's
     /// `isValidNewLeader`, and Kafka reports the election as clean.
+    #[enum_str(name = "from the partition's in-sync replicas, so no committed record is lost")]
     InSyncReplica,
     /// The winner was in the partition's eligible-leader-replica set, so it
     /// held every committed record when it left the ISR. Kafka reports this
     /// election as clean.
+    #[enum_str(name = "from the eligible leader replicas, so no committed record is lost")]
     EligibleLeaderReplica,
     /// Nothing known to be complete answered, so the winner is only the most
     /// complete log among the survivors that did. Committed records the
     /// partition acknowledged may not be in it.
+    #[enum_str(name = "as the most complete surviving log, so committed records may be lost")]
     MostCompleteLog,
 }
 
@@ -122,22 +126,6 @@ impl ElectionBasis {
     /// `unclean` flag on Kafka's `PartitionChangeBuilder.ElectionResult`.
     pub(crate) fn loses_data(self) -> bool {
         self == Self::MostCompleteLog
-    }
-
-    /// The clause an operator-facing log line or audit reason reads, after the
-    /// broker id: "elected broker 3 <this>".
-    pub(crate) fn describe(self) -> &'static str {
-        match self {
-            Self::InSyncReplica => {
-                "from the partition's in-sync replicas, so no committed record is lost"
-            }
-            Self::EligibleLeaderReplica => {
-                "from the eligible leader replicas, so no committed record is lost"
-            }
-            Self::MostCompleteLog => {
-                "as the most complete surviving log, so committed records may be lost"
-            }
-        }
     }
 }
 
