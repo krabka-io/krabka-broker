@@ -9,13 +9,11 @@ use krabka_protocol::owned::unregister_controller_response::MAX_VERSION;
 
 use super::*;
 
-fn encode_request(req: &UnregisterControllerRequest) -> Bytes {
-    crate::test_support::encode_request(req, MAX_VERSION)
-}
-
-fn decode_response(bytes: &Bytes) -> UnregisterControllerResponse {
-    crate::test_support::decode_response(bytes, MAX_VERSION)
-}
+crate::test_support::codec_helpers!(
+    UnregisterControllerRequest,
+    UnregisterControllerResponse,
+    version = MAX_VERSION
+);
 
 fn registration(node_id: u64) -> MetadataRecord {
     MetadataRecord::V1ControllerRegistration(ControllerRegistrationRecord {
@@ -127,7 +125,7 @@ async fn finalize_metadata_version(broker: &Broker, level: i16) {
     let principal = crate::test_support::principal("Cluster:Alter");
     let peer = crate::test_support::peer();
     let ctx = crate::test_support::request_context(&principal, &peer, "kafka-features");
-    let answer = crate::handlers::update_features::handle(
+    let answer = crate::handlers::update_features::answer(
         broker,
         UpdateFeaturesRequest {
             feature_updates: vec![FeatureUpdateKey {
@@ -180,7 +178,7 @@ async fn send(
         ..Default::default()
     });
     decode_response(
-        &handle(broker, MAX_VERSION, 1, &body, &ctx)
+        &handle(broker, MAX_VERSION, &body, &ctx)
             .await
             .expect("an answer"),
     )

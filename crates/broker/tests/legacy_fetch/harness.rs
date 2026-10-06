@@ -14,11 +14,9 @@ use krabka_protocol::{
     kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
     },
-    primitives::uuid::Uuid as WireUuid,
     records::{RecordBatch, RecordsPayload},
 };
 use tokio::{
@@ -26,11 +24,13 @@ use tokio::{
     net::TcpStream,
 };
 
+use crate::kafka_wire;
+
 // ── Wire helpers ──────────────────────────────────────────────────────────────
 
-/// Sends a non-flexible Kafka request frame, v0 to v11, and returns the
-/// response body bytes with the `correlation_id` already stripped. Neither
-/// direction carries tagged-fields bytes, because v3 is non-flexible.
+/// One length-prefixed request/response exchange with non-flexible v1 request
+/// and v0 response headers; see [`kafka_wire::round_trip`]. Panics on an I/O
+/// error.
 pub async fn round_trip_nonflexible(
     stream: &mut TcpStream,
     api_key: i16,
@@ -38,53 +38,20 @@ pub async fn round_trip_nonflexible(
     corr_id: i32,
     body: &[u8],
 ) -> Vec<u8> {
-    let client_id = "legacy-fetch-test";
-    let mut frame = BytesMut::with_capacity(12 + client_id.len() + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    frame.put_i16(i16::try_from(client_id.len()).expect("fits in i16"));
-    frame.put_slice(client_id.as_bytes());
-    // non-flexible: NO trailing tagged-fields byte in request header
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await
-        .expect("write frame length");
-    stream.write_all(&frame).await.expect("write frame body");
-    stream.flush().await.expect("flush");
-
-    let resp_len = stream.read_u32().await.expect("read resp length");
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await.expect("read resp body");
-
-    let mut cur: &[u8] = &resp;
-    let _corr = cur.get_i32(); // strip correlation_id
-    // non-flexible response header: just the 4-byte correlation_id, nothing more
-    cur.to_vec()
+    kafka_wire::round_trip(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        "legacy-fetch-test",
+        false,
+        body,
+    )
+    .await
+    .expect("non-flexible round trip")
 }
 
 // ── Topic helpers ─────────────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-pub async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
 
 /// Creates a single-partition topic with the modern client and asserts that it
 /// succeeds.

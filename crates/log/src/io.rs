@@ -39,6 +39,9 @@ pub enum IoTarget {
     /// A segment file being renamed to its `.deleted` tombstone or unlinked
     /// by retention.
     SegmentDeletion,
+    /// A file outside any partition log that another crate replaces through
+    /// [`write_file_atomic`]. Only the real-file I/O ever writes one.
+    External,
 }
 
 /// The operating-system I/O boundary every durable log write crosses.
@@ -160,6 +163,52 @@ pub(crate) fn write_all(
     Ok(())
 }
 
+/// Replace `path` with `bytes` atomically and durably through real file I/O:
+/// write `tmp`, sync it, rename it over `path`, then sync the parent
+/// directory. This is the entry point for files outside a partition log, such
+/// as the controller's `quorum-state` file and its metadata checkpoints, which
+/// have no fault-injection seam of their own.
+///
+/// # Errors
+/// Returns the first create, write, sync or rename error.
+pub fn write_file_atomic(tmp: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic(&FileIo, IoTarget::External, tmp, path, bytes, true)
+}
+
+/// Replace `path` with `bytes` atomically: write them to `tmp`, flush `tmp` to
+/// stable storage, rename it over `path`, and, when `sync_dir` is set, `fsync`
+/// `path`'s parent directory so the rename itself is durable.
+///
+/// Every step goes through `io` on behalf of `target`, so a fault injector can
+/// fail the write, the flush, the rename or the directory sync. A failure
+/// before the rename leaves `path` as it was; `tmp` may be left behind.
+///
+/// # Errors
+/// Returns the first create, write, sync or rename error.
+pub(crate) fn write_atomic(
+    io: &dyn LogIo,
+    target: IoTarget,
+    tmp: &Path,
+    path: &Path,
+    bytes: &[u8],
+    sync_dir: bool,
+) -> std::io::Result<()> {
+    {
+        let file = File::create(tmp)?;
+        write_all(io, target, &file, bytes)?;
+        io.sync_file(target, &file)?;
+    }
+    io.rename(target, tmp, path)?;
+    if sync_dir {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        io.sync_dir(parent)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(crate) struct FileIo;
 
@@ -215,6 +264,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = File::create(dir.path().join("scratch")).unwrap();
         (dir, file)
+    }
+
+    #[test]
+    fn write_atomic_replaces_the_target_and_consumes_the_staging_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state");
+        let tmp = dir.path().join("state.tmp");
+        std::fs::write(&path, b"old contents").unwrap();
+
+        for contents in [b"new".as_slice(), b"newer"] {
+            write_file_atomic(&tmp, &path, contents).unwrap();
+            check!(std::fs::read(&path).unwrap() == contents.to_vec());
+            check!(!tmp.exists());
+        }
+    }
+
+    #[test]
+    fn write_atomic_leaves_the_target_alone_when_the_staged_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state");
+        let tmp = dir.path().join("state.tmp");
+        std::fs::write(&path, b"old").unwrap();
+
+        let io = Scripted::new(vec![Err(std::io::Error::from(
+            std::io::ErrorKind::StorageFull,
+        ))]);
+        let error = write_atomic(&io, IoTarget::External, &tmp, &path, b"new", true).unwrap_err();
+        check!(error.kind() == std::io::ErrorKind::StorageFull);
+        check!(std::fs::read(&path).unwrap() == b"old".to_vec());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::path::PathBuf;
 
 use assert2::{assert, check};
 use krabka_metadata::{BrokerRegistrationRecord, LeaderEpoch, MetadataError};
@@ -22,17 +22,8 @@ fn node(node_id: NodeId, roles: &[NodeRole]) -> BrokerConfig {
 fn registration(node_id: u64) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
         fenced: true,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(node_id),
-        broker_epoch: 0,
         incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
-        host: "127.0.0.1".into(),
-        port: 9_092,
-        rack: None,
-        endpoints: vec![],
-        log_dirs: vec![],
-        features: BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 

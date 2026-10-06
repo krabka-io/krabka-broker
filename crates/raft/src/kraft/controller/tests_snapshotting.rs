@@ -436,13 +436,13 @@ async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
     ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
     await_leader(&ctrl, Some(NodeId(1))).await;
 
-    let before = Engine::wall_clock_ms();
+    let before = KraftController::wall_clock_ms();
     for name in ["a", "b", "c", "d"] {
         submit_change_with_timeout(&ctrl, topic_record(name), "snapshot threshold submit")
             .await
             .unwrap();
     }
-    let after = Engine::wall_clock_ms();
+    let after = KraftController::wall_clock_ms();
 
     let bytes = load_latest_checkpoint(dir.path())
         .expect("scan checkpoints")

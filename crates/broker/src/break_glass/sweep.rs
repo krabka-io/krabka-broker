@@ -37,6 +37,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::task_util::run_every;
+
 /// How long a proposal stays in the image after it expires.
 pub(crate) const PROPOSAL_RETENTION: Time = hours(24);
 
@@ -62,17 +64,9 @@ pub(crate) async fn run(
     retention: Time,
     shutdown: CancellationToken,
 ) {
-    let mut tick = tokio::time::interval(interval.to_std());
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = tick.tick() => sweep(&*controller, retention).await,
-            () = shutdown.cancelled() => {
-                info!("break-glass proposal sweep shutting down");
-                return;
-            }
-        }
-    }
+    let tick = tokio::time::interval(interval.to_std());
+    run_every(tick, &shutdown, || sweep(&*controller, retention)).await;
+    info!("break-glass proposal sweep shutting down");
 }
 
 /// Tombstone every proposal that fell out of retention.

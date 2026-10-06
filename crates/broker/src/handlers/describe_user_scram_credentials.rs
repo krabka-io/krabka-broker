@@ -1,21 +1,15 @@
 //! `DescribeUserScramCredentials` (`api_key` 50, KIP-554 read half).
 
-use bytes::Bytes;
-use krabka_metadata::{MetadataImage, ResourceType};
-use krabka_protocol::{
-    Encode,
-    owned::{
-        describe_user_scram_credentials_request::{DescribeUserScramCredentialsRequest, UserName},
-        describe_user_scram_credentials_response::{
-            CredentialInfo, DescribeUserScramCredentialsResponse,
-            DescribeUserScramCredentialsResult,
-        },
+use krabka_metadata::MetadataImage;
+use krabka_protocol::owned::{
+    describe_user_scram_credentials_request::{DescribeUserScramCredentialsRequest, UserName},
+    describe_user_scram_credentials_response::{
+        CredentialInfo, DescribeUserScramCredentialsResponse, DescribeUserScramCredentialsResult,
     },
 };
 use krabka_security::SaslMechanism;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND},
 };
@@ -40,23 +34,13 @@ const DESCRIBE_USER_THAT_DOES_NOT_EXIST: &str =
 pub(crate) fn handle(
     broker: &Broker,
     req: DescribeUserScramCredentialsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<DescribeUserScramCredentialsResponse, crate::error::BrokerError> {
     let image = broker.controller.current_image();
 
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Describe,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
-        return encode_response(&denied_response(&req), api_version);
+    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return Ok(denied_response(&req));
     }
 
     let known_users: std::collections::HashSet<String> =
@@ -65,14 +49,13 @@ pub(crate) fn handle(
 
     let results = build_results(&image, &known_users, targets);
 
-    let resp = DescribeUserScramCredentialsResponse {
+    Ok(DescribeUserScramCredentialsResponse {
         throttle_time_ms: 0,
         error_code: 0,
         error_message: None,
         results,
         ..Default::default()
-    };
-    encode_response(&resp, api_version)
+    })
 }
 
 /// The refusal Kafka's `DescribeUserScramCredentialsRequest.getErrorResponse`
@@ -220,23 +203,12 @@ fn sasl_mechanism_to_byte(m: SaslMechanism) -> i8 {
     }
 }
 
-fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(
-        resp,
-        api_version,
-        "encode DescribeUserScramCredentials",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{AclOperation, MetadataRecord, ScramCredentialRecord};
+    use krabka_metadata::{AclOperation, MetadataRecord, ResourceType, ScramCredentialRecord};
     use krabka_protocol::UnknownTaggedFields;
 
     #[derive(Debug)]
@@ -260,6 +232,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::authorizer::AuthorizationResult;
 
     fn img_with_scram(users: &[(&str, SaslMechanism, u32)]) -> MetadataImage {
         let mut img = MetadataImage::new(uuid::Uuid::nil());
@@ -455,18 +428,24 @@ mod tests {
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "scram-describe-test");
 
-        let bytes = handle(
+        let resp = handle(
             &broker,
             DescribeUserScramCredentialsRequest::default(),
-            &ctx,
             0,
+            &ctx,
         )
-        .expect("describe should encode");
-        let resp: DescribeUserScramCredentialsResponse =
-            crate::test_support::decode_response(&bytes, 0);
+        .expect("describe");
 
-        assert!(resp.error_code == 0, "Cluster Describe should authorize");
-        assert!(resp.results.is_empty());
+        assert!(
+            resp == DescribeUserScramCredentialsResponse {
+                throttle_time_ms: 0,
+                error_code: 0,
+                error_message: None,
+                results: Vec::new(),
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            },
+            "Cluster Describe should authorize"
+        );
         broker_handle.shutdown().await;
     }
 
@@ -481,15 +460,13 @@ mod tests {
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "scram-describe-test");
 
-        let bytes = handle(
+        let resp = handle(
             &broker,
             DescribeUserScramCredentialsRequest::default(),
-            &ctx,
             0,
+            &ctx,
         )
-        .expect("describe denial should encode");
-        let resp: DescribeUserScramCredentialsResponse =
-            crate::test_support::decode_response(&bytes, 0);
+        .expect("describe denial");
 
         assert!(
             resp == DescribeUserScramCredentialsResponse {

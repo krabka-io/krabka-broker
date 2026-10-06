@@ -6,7 +6,7 @@
 //! in `limits`, and the router seams the broker installs on a controller live
 //! in `routing`.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use krabka_kraft_core::snapshot_fetch::METADATA_SNAPSHOT_FETCH_HARD_MAX;
 use krabka_units::{
@@ -104,40 +104,36 @@ pub enum BootstrapMode {
 ///
 /// The defaults are Kafka's: 100 MiB requests, ten idle minutes, and no
 /// connection ceiling.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ListenerLimits {
     /// `socket.request.max.bytes`: the largest request frame the listener
     /// reads. A larger size prefix closes the connection before the frame is
     /// read, as `NetworkReceive.readFrom` does.
+    #[default(mebibytes(100))]
     pub max_request_size: ByteSize,
     /// `connections.max.idle.ms`: how long the listener waits for the next
     /// request frame before it closes the connection. `None` expires none.
-    pub max_idle: Option<std::time::Duration>,
+    #[default(Some(Duration::from_mins(10)))]
+    pub max_idle: Option<Duration>,
     /// `max.connections`: live connections the listener accepts, `usize::MAX`
     /// for no ceiling.
+    #[default(usize::MAX)]
     pub max_connections: usize,
     /// `max.connections.per.ip`: live connections per peer address,
     /// `usize::MAX` for no ceiling.
+    #[default(usize::MAX)]
     pub max_connections_per_ip: usize,
 }
 
-impl Default for ListenerLimits {
-    fn default() -> Self {
-        Self {
-            max_request_size: mebibytes(100),
-            max_idle: Some(std::time::Duration::from_mins(10)),
-            max_connections: usize::MAX,
-            max_connections_per_ip: usize::MAX,
-        }
-    }
-}
-
-#[derive(Clone)]
+// Quantities render in the operator form (`1s`, `20MiB`) rather than `uom`'s
+// dimension-annotated `Debug`, which is unreadable in a log.
+#[derive(Clone, derive_more::Debug)]
 pub struct ControllerConfig {
     /// Capacity used by outbound controller client connections.
     pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     /// Maximum frame size used by outbound controller client connections.
     pub client_frame_max: krabka_client_core::ClientFrameMax,
+    #[debug("{:?}", node_id.0)]
     pub node_id: NodeId,
     /// Endpoints used only to discover the leader at cold start (KIP-853 dynamic).
     pub bootstrap_servers: Vec<String>,
@@ -154,9 +150,11 @@ pub struct ControllerConfig {
     /// keeps the metadata partition in its
     /// [`METADATA_PARTITION_DIR`] subdirectory.
     pub log_dir: PathBuf,
+    #[debug("{:?}", election_timeout.human().to_string())]
     pub election_timeout: Time,
     /// Explicit heartbeat cadence. `None` preserves the derived
     /// `election_timeout / 3` behavior.
+    #[debug("{:?}", heartbeat_interval.map(|value| value.human().to_string()))]
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
     pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
@@ -172,6 +170,7 @@ pub struct ControllerConfig {
     /// at offset 0 and epoch 0 that holds metadata records replaces them, as
     /// Kafka's `QuorumController.handleLoadBootstrap` does. An empty list
     /// writes nothing.
+    #[debug("{}", bootstrap_records.len())]
     pub bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
     /// This node's static `min.insync.replicas`: Kafka's
     /// `ConfigurationControlManager.getStaticallyConfiguredMinInsyncReplicas`.
@@ -189,18 +188,22 @@ pub struct ControllerConfig {
     /// to peers (legacy PLAINTEXT-only path). The broker injects an
     /// `InterBrokerClient`-backed dialer here when inter-broker TLS or
     /// SASL is configured.
+    #[debug("{}", dialer.is_some())]
     pub dialer: Option<Arc<dyn OutboundDialer>>,
     /// Optional inbound handshake hook. `None` keeps the legacy
     /// PLAINTEXT path. The broker injects a `BrokerRaftHandshake`
     /// implementation here when the controller listener should
     /// terminate TLS and/or SASL before raft frames start flowing.
+    #[debug("{}", handshake.is_some())]
     pub handshake: Option<Arc<dyn crate::RaftListenerHandshake>>,
     /// Optional KIP-595 shard router. Metadata traffic returns `None`; diskless
     /// WAL shards return an encoded response body and bypass metadata dispatch.
+    #[debug("{}", shard_router.is_some())]
     pub shard_router: Option<Arc<dyn RaftShardRouter>>,
     /// Optional KIP-919 Admin router. The broker injects its existing handler
     /// registry here after construction, keeping controller and broker
     /// semantics on one implementation.
+    #[debug("{}", admin_router.is_some())]
     pub admin_router: Option<Arc<dyn ControllerAdminRouter>>,
     /// Kafka's internal `unstable.api.versions.enable`: whether the controller
     /// listener advertises and accepts a `latestVersionUnstable` version, and
@@ -216,8 +219,10 @@ pub struct ControllerConfig {
     /// listener.
     pub listener_limits: ListenerLimits,
     /// `metadata.log.max.record.bytes.between.snapshots` (default 20 MiB).
+    #[debug("{:?}", max_bytes_between_snapshots.human().to_string())]
     pub max_bytes_between_snapshots: ByteSize,
     /// `metadata.log.max.snapshot.interval.ms` (default 1 h; 0 = disabled).
+    #[debug("{:?}", max_snapshot_interval.human().to_string())]
     pub max_snapshot_interval: Time,
     /// Snapshot once committed offset advances this many records past the last
     /// snapshot. The cleaning by [`Self::metadata_log`]'s retention limits
@@ -226,80 +231,11 @@ pub struct ControllerConfig {
     pub snapshot_interval_records: u64,
     /// Maximum metadata snapshot size this follower will fetch. Deployments may
     /// lower the default 1 GiB security ceiling but cannot raise it.
+    #[debug("{:?}", metadata_snapshot_fetch_max.human().to_string())]
     pub metadata_snapshot_fetch_max: ByteSize,
     /// How the metadata log rolls, how long it keeps the prefix a snapshot
     /// covers, and how often an idle leader appends to it.
     pub metadata_log: MetadataLogConfig,
-}
-
-impl std::fmt::Debug for ControllerConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ControllerConfig")
-            .field(
-                "client_dispatch_queue_capacity",
-                &self.client_dispatch_queue_capacity,
-            )
-            .field("client_frame_max", &self.client_frame_max)
-            .field("node_id", &self.node_id.0)
-            .field("bootstrap_servers", &self.bootstrap_servers)
-            .field("directory_id", &self.directory_id)
-            .field("auto_join", &self.auto_join)
-            .field("observer_lag_bound", &self.observer_lag_bound)
-            .field("initial_voters", &self.initial_voters)
-            .field("controller_listen_addr", &self.controller_listen_addr)
-            .field("log_dir", &self.log_dir)
-            // Quantities render in the operator form (`1s`, `20MiB`) rather than
-            // `uom`'s dimension-annotated `Debug`, which is unreadable in a log.
-            .field(
-                "election_timeout",
-                &self.election_timeout.human().to_string(),
-            )
-            .field(
-                "heartbeat_interval",
-                &self
-                    .heartbeat_interval
-                    .map(|value| value.human().to_string()),
-            )
-            .field(
-                "controller_fetch_miss_limit",
-                &self.controller_fetch_miss_limit,
-            )
-            .field(
-                "metadata_raft_command_queue_capacity",
-                &self.metadata_raft_command_queue_capacity,
-            )
-            .field("metadata_raft_fetch_max", &self.metadata_raft_fetch_max)
-            .field("client_id", &self.client_id)
-            .field("bootstrap_mode", &self.bootstrap_mode)
-            .field("bootstrap_records", &self.bootstrap_records.len())
-            .field(
-                "default_min_insync_replicas",
-                &self.default_min_insync_replicas,
-            )
-            .field("cluster_id", &self.cluster_id)
-            .field("dialer", &self.dialer.is_some())
-            .field("handshake", &self.handshake.is_some())
-            .field("shard_router", &self.shard_router.is_some())
-            .field("admin_router", &self.admin_router.is_some())
-            .field("unstable_api_versions", &self.unstable_api_versions)
-            .field("unstable_feature_versions", &self.unstable_feature_versions)
-            .field("listener_limits", &self.listener_limits)
-            .field(
-                "max_bytes_between_snapshots",
-                &self.max_bytes_between_snapshots.human().to_string(),
-            )
-            .field(
-                "max_snapshot_interval",
-                &self.max_snapshot_interval.human().to_string(),
-            )
-            .field("snapshot_interval_records", &self.snapshot_interval_records)
-            .field(
-                "metadata_snapshot_fetch_max",
-                &self.metadata_snapshot_fetch_max.human().to_string(),
-            )
-            .field("metadata_log", &self.metadata_log)
-            .finish()
-    }
 }
 
 impl ControllerConfig {

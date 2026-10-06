@@ -19,13 +19,9 @@
 //! query through the topology topic-Describe filter, and `render` projects
 //! the actor's describe view onto the response types.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        streams_group_describe_request::StreamsGroupDescribeRequest,
-        streams_group_describe_response::{DescribedGroup, StreamsGroupDescribeResponse},
-    },
+use krabka_protocol::owned::{
+    streams_group_describe_request::StreamsGroupDescribeRequest,
+    streams_group_describe_response::{DescribedGroup, StreamsGroupDescribeResponse},
 };
 
 mod group;
@@ -40,36 +36,23 @@ mod tests;
 use self::group::{Included, describe_group};
 use crate::{broker::Broker, codes, error::BrokerError};
 
-/// Minimum finalized `streams.version` feature level at which the broker
-/// serves the KIP-1071 streams RPCs, heartbeat and describe.
-const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
-
 // cargo-mutants: streams-coordinator response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: StreamsGroupDescribeRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let streams_enabled = broker.config.streams_group.enable;
+) -> Result<StreamsGroupDescribeResponse, BrokerError> {
     let image = broker.controller.current_image();
     let ng = broker.group_coordinator.clone();
-    let mut cur: &[u8] = req_bytes;
-    let req = StreamsGroupDescribeRequest::decode(&mut cur, version)?;
 
     // KIP-1071: same gate as the heartbeat — finalized streams.version >= 1
     // AND the config kill-switch. Kafka's
     // `StreamsGroupDescribeRequest.getErrorResponse` answers every requested
     // group id with UNSUPPORTED_VERSION when the protocol is off, checked
     // once for the whole request and before any ACL check runs.
-    let enabled = crate::features::feature_enabled(
-        &image,
-        crate::features::STREAMS_VERSION,
-        STREAMS_VERSION_MIN_LEVEL,
-    ) && streams_enabled;
-    if !enabled {
+    if !crate::handlers::streams_protocol_enabled(broker, &image) {
         let groups = req
             .group_ids
             .iter()
@@ -83,7 +66,7 @@ pub(crate) async fn handle(
             groups,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     // Kafka puts `GROUP_AUTHORIZATION_FAILED` rows first, ahead of
@@ -92,13 +75,11 @@ pub(crate) async fn handle(
     let mut denied_rows: Vec<DescribedGroup> = Vec::new();
     let mut other_rows: Vec<DescribedGroup> = Vec::new();
     for gid in &req.group_ids {
-        if crate::handlers::acl_denied(
+        if crate::handlers::group_describe_denied(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            krabka_metadata::ResourceType::Group,
             gid,
-            krabka_metadata::AclOperation::Describe,
         ) {
             denied_rows.push(DescribedGroup {
                 group_id: gid.clone(),
@@ -124,9 +105,8 @@ pub(crate) async fn handle(
     }
     denied_rows.extend(other_rows);
 
-    let resp = StreamsGroupDescribeResponse {
+    Ok(StreamsGroupDescribeResponse {
         groups: denied_rows,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }

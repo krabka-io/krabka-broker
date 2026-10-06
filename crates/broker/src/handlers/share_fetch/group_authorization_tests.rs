@@ -39,7 +39,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -116,11 +117,7 @@ impl Authorizer for GrantsByName {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsByName);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsByName)).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
@@ -201,10 +198,10 @@ async fn share_fetch_checks_group_read_before_topic_read() {
                 }],
                 ..Default::default()
             };
-            let response = super::handle(
+            let response = crate::test_support::try_dispatch_context(
                 &shared,
+                krabka_protocol::owned::share_fetch_request::API_KEY,
                 version,
-                7,
                 &encode_request(&request, version),
                 &ctx,
             )
@@ -305,10 +302,10 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
                 }],
                 ..Default::default()
             };
-            let response = crate::handlers::share_acknowledge::handle(
+            let response = crate::test_support::try_dispatch_context(
                 &shared,
+                krabka_protocol::owned::share_acknowledge_request::API_KEY,
                 version,
-                7,
                 &encode_request(&request, version),
                 &ctx,
             )

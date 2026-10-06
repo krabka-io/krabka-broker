@@ -11,7 +11,6 @@
 //! `AlterUserScramCredentials`, so the handler receives the authenticated
 //! principal and the peer for the ACL check.
 
-use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     update_features_request::UpdateFeaturesRequest,
     update_features_response::UpdateFeaturesResponse,
@@ -33,11 +32,7 @@ use self::{
     response::{feature_error, success, top_level_error},
     validate::{UpdateError, plan_updates},
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes, error::BrokerError};
 
 /// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
 /// quorum leadership.
@@ -78,6 +73,8 @@ fn kraft_upgrade_refusal(
     }
 }
 
+/// The `typed` dispatch entry point: [`answer`], which the generated adapter
+/// encodes.
 #[tracing::instrument(
     name = "handle_update_features",
     level = "info",
@@ -89,22 +86,22 @@ pub(crate) async fn handle(
     req: UpdateFeaturesRequest,
     version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<UpdateFeaturesResponse, BrokerError> {
+    Ok(answer(broker, req, version, ctx).await)
+}
+
+/// Runs the `UpdateFeatures` request at `version` and returns the typed
+/// response.
+pub(crate) async fn answer(
+    broker: &Broker,
+    req: UpdateFeaturesRequest,
+    version: i16,
+    ctx: &crate::handlers::RequestContext<'_>,
 ) -> UpdateFeaturesResponse {
     let image = broker.controller.current_image();
 
     // Whole-request Cluster:Alter gate.
-    let authorized = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Alter,
-        },
-    ) == AuthorizationResult::Allow;
-
-    if !authorized {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return top_level_error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",

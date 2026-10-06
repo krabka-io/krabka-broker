@@ -27,11 +27,11 @@
 //! key string keeps the legacy `i16` length prefix and a key carries no
 //! tagged-field trailer. Only the values are flexible.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use krabka_protocol::ProtocolError;
 
 use crate::{
-    coordinator::unified::persistence::{get_string, put_string},
+    coordinator::unified::persistence::{encode_string_key, get_string},
     error::BrokerError,
 };
 
@@ -62,10 +62,7 @@ pub enum StreamsGroupKey {
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes.
 pub fn encode_group_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_GROUP_METADATA);
-    put_string(&mut buf, group_id)?;
-    Ok(buf.freeze())
+    encode_string_key(KEY_STREAMS_GROUP_METADATA, &[group_id])
 }
 
 /// Encodes the member-metadata key.
@@ -75,11 +72,7 @@ pub fn encode_group_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes.
 pub fn encode_member_metadata_key(group_id: &str, member_id: &str) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_MEMBER_METADATA);
-    put_string(&mut buf, group_id)?;
-    put_string(&mut buf, member_id)?;
-    Ok(buf.freeze())
+    encode_string_key(KEY_STREAMS_MEMBER_METADATA, &[group_id, member_id])
 }
 
 /// Encodes the topology key.
@@ -89,10 +82,7 @@ pub fn encode_member_metadata_key(group_id: &str, member_id: &str) -> Result<Byt
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes.
 pub fn encode_topology_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_TOPOLOGY);
-    put_string(&mut buf, group_id)?;
-    Ok(buf.freeze())
+    encode_string_key(KEY_STREAMS_TOPOLOGY, &[group_id])
 }
 
 /// Encodes the partition-metadata key.
@@ -102,10 +92,7 @@ pub fn encode_topology_key(group_id: &str) -> Result<Bytes, BrokerError> {
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes.
 pub fn encode_partition_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_PARTITION_METADATA);
-    put_string(&mut buf, group_id)?;
-    Ok(buf.freeze())
+    encode_string_key(KEY_STREAMS_PARTITION_METADATA, &[group_id])
 }
 
 /// Encodes the target-assignment-metadata key.
@@ -115,10 +102,7 @@ pub fn encode_partition_metadata_key(group_id: &str) -> Result<Bytes, BrokerErro
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes.
 pub fn encode_target_assignment_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_TARGET_ASSIGNMENT_METADATA);
-    put_string(&mut buf, group_id)?;
-    Ok(buf.freeze())
+    encode_string_key(KEY_STREAMS_TARGET_ASSIGNMENT_METADATA, &[group_id])
 }
 
 /// Encodes the target-assignment-member key.
@@ -131,11 +115,7 @@ pub fn encode_target_assignment_member_key(
     group_id: &str,
     member_id: &str,
 ) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER);
-    put_string(&mut buf, group_id)?;
-    put_string(&mut buf, member_id)?;
-    Ok(buf.freeze())
+    encode_string_key(KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER, &[group_id, member_id])
 }
 
 /// Encodes the current-member-assignment key.
@@ -148,11 +128,10 @@ pub fn encode_current_member_assignment_key(
     group_id: &str,
     member_id: &str,
 ) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
-    buf.put_i16(KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT);
-    put_string(&mut buf, group_id)?;
-    put_string(&mut buf, member_id)?;
-    Ok(buf.freeze())
+    encode_string_key(
+        KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT,
+        &[group_id, member_id],
+    )
 }
 
 /// Encodes a [`StreamsGroupKey`] for dispatch, with a leading `i16` key

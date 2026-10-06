@@ -38,7 +38,12 @@ use krabka_protocol::{
 };
 use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_action_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorCodeResponse as _, cluster_action_denied},
+};
 
 #[tracing::instrument(
     name = "handle_update_raft_voter",
@@ -50,7 +55,6 @@ use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_action_
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -113,29 +117,19 @@ pub(crate) async fn handle(
 
     // Kafka's `RaftUtil.updateVoterResponse` names the leader in every answer.
     let quorum = broker.controller.quorum_snapshot().unwrap_or(quorum);
-    encode_resp(
-        version,
+    crate::handlers::encode_response(
         &UpdateRaftVoterResponse {
             error_code,
             current_leader: voter_requests::update_voter_current_leader(&quorum),
             ..Default::default()
         },
+        version,
     )
-}
-
-fn encode_resp(version: i16, resp: &UpdateRaftVoterResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }
 
 /// Encodes a response that carries nothing but `error_code`.
 fn refuse(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    encode_resp(
-        version,
-        &UpdateRaftVoterResponse {
-            error_code,
-            ..Default::default()
-        },
-    )
+    crate::handlers::encode_response(&UpdateRaftVoterResponse::error(error_code), version)
 }
 
 #[cfg(test)]
@@ -147,7 +141,6 @@ mod tests {
         owned::update_raft_voter_request::{KRaftVersionFeature, Listener},
         primitives::uuid::Uuid as ProtoUuid,
     };
-    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -196,7 +189,7 @@ mod tests {
                 error_code: codes::INVALID_REQUEST,
                 ..Default::default()
             };
-            let bytes = encode_resp(version, &resp).expect("encode");
+            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
             let mut cur: &[u8] = &bytes;
             let decoded = UpdateRaftVoterResponse::decode(&mut cur, version).expect("decode");
             assert!(decoded.error_code == codes::INVALID_REQUEST);
@@ -209,16 +202,12 @@ mod tests {
         let version = 0;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("alice");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req_bytes = encode_request(&request(2), version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -233,11 +222,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(-7);
@@ -246,7 +231,7 @@ mod tests {
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -264,11 +249,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
@@ -324,7 +305,7 @@ mod tests {
             let mut req = well_formed();
             mutate(&mut req);
             let req_bytes = encode_request(&req, version);
-            let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+            let resp = super::handle(&broker, version, &req_bytes, &ctx)
                 .await
                 .expect("handle");
             let resp = decode_response(&resp, version);
@@ -352,11 +333,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut named = request(2);
@@ -373,7 +350,7 @@ mod tests {
         let mut codes_seen = Vec::new();
         for req in [named, anonymous] {
             let req_bytes = encode_request(&req, version);
-            let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+            let resp = super::handle(&broker, version, &req_bytes, &ctx)
                 .await
                 .expect("handle");
             codes_seen.push(decode_response(&resp, version).error_code);
@@ -441,18 +418,14 @@ mod tests {
         for (api_name, api, grant, want_cluster_authorization_failed) in cases {
             let (broker_handle, _dir) = start_broker(Arc::new(GrantOnly(grant))).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = Principal {
-                name: "alice".into(),
-                auth_method: AuthMethod::Anonymous,
-                groups: Vec::new(),
-            };
+            let principal = crate::test_support::principal("alice");
             let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let ctx = test_context(&principal, &peer);
 
             let error_code = match api {
                 Api::Update => {
                     let req_bytes = encode_request(&request(2), version);
-                    let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+                    let resp = super::handle(&broker, version, &req_bytes, &ctx)
                         .await
                         .expect("handle");
                     decode_response(&resp, version).error_code
@@ -473,11 +446,10 @@ mod tests {
                         ..Default::default()
                     };
                     let req_bytes = crate::test_support::encode_request(&req, version);
-                    let resp = crate::handlers::add_raft_voter::handle(
-                        &broker, version, 123, &req_bytes, &ctx,
-                    )
-                    .await
-                    .expect("handle");
+                    let resp =
+                        crate::handlers::add_raft_voter::handle(&broker, version, &req_bytes, &ctx)
+                            .await
+                            .expect("handle");
                     crate::test_support::decode_response::<AddRaftVoterResponse>(&resp, version)
                         .error_code
                 }
@@ -490,7 +462,7 @@ mod tests {
                     };
                     let req_bytes = crate::test_support::encode_request(&req, version);
                     let resp = crate::handlers::remove_raft_voter::handle(
-                        &broker, version, 123, &req_bytes, &ctx,
+                        &broker, version, &req_bytes, &ctx,
                     )
                     .await
                     .expect("handle");
@@ -514,11 +486,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(2);
@@ -530,7 +498,7 @@ mod tests {
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);

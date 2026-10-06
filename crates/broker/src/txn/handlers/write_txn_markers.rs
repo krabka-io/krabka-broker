@@ -30,17 +30,13 @@
 //! Wire format: v1 flexible with tagged fields, and v2 flexible with
 //! `transaction_version`.
 
-use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        write_txn_markers_request::WriteTxnMarkersRequest,
-        write_txn_markers_response::{
-            WritableTxnMarkerPartitionResult, WritableTxnMarkerResult,
-            WritableTxnMarkerTopicResult, WriteTxnMarkersResponse,
-        },
+use krabka_protocol::owned::{
+    write_txn_markers_request::WriteTxnMarkersRequest,
+    write_txn_markers_response::{
+        WritableTxnMarkerPartitionResult, WritableTxnMarkerResult, WritableTxnMarkerTopicResult,
+        WriteTxnMarkersResponse,
     },
 };
 
@@ -73,13 +69,10 @@ use crate::{
 /// and no marker is written.
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: WriteTxnMarkersRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = WriteTxnMarkersRequest::decode(&mut cur, version)?;
+) -> Result<WriteTxnMarkersResponse, BrokerError> {
     let authorizer = broker.config.authorizer.as_ref();
     let image = broker.controller.current_image();
     let resp = if cluster_alter_denied(authorizer, &image, ctx)
@@ -89,9 +82,7 @@ pub(crate) async fn handle(
     } else {
         serve(broker, req).await
     };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
+    Ok(resp)
 }
 
 /// The response Kafka's `WriteTxnMarkersRequest.getErrorResponse` builds for
@@ -304,24 +295,16 @@ mod tests {
 
     const VERSION: i16 = 2;
 
-    crate::test_support::codec_helpers!(
-        WriteTxnMarkersRequest,
-        WriteTxnMarkersResponse,
-        version = VERSION
-    );
-
     /// Serves a request as a principal that the default `AllowAllAuthorizer`
     /// allows.
     async fn handle_allowed(
         broker: &Broker,
-        version: i16,
-        correlation_id: i32,
-        body: &[u8],
-    ) -> Result<Bytes, BrokerError> {
+        req: WriteTxnMarkersRequest,
+    ) -> Result<WriteTxnMarkersResponse, BrokerError> {
         let user = crate::test_support::principal("ANONYMOUS");
         let address = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&user, &address, "write-txn-markers-test");
-        super::handle(broker, version, correlation_id, body, &ctx).await
+        super::handle(broker, req, VERSION, &ctx).await
     }
 
     fn marker(producer_id: i64, topic: &str, partitions: Vec<i32>) -> WritableTxnMarker {
@@ -417,18 +400,16 @@ mod tests {
 
             let bytes = handle_allowed(
                 &broker,
-                VERSION,
-                123,
-                &encode_request(&WriteTxnMarkersRequest {
+                WriteTxnMarkersRequest {
                     markers: vec![marker(91, "orders", vec![1])],
                     ..Default::default()
-                }),
+                },
             )
             .await
             .expect("handle");
 
             assert!(
-                decode_response(&bytes)
+                bytes
                     == WriteTxnMarkersResponse {
                         markers: vec![result(91, "orders", &[(1, expected_code)])],
                         unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -499,13 +480,13 @@ mod tests {
                     });
             }
 
-            let request = encode_request(&WriteTxnMarkersRequest {
+            let request = WriteTxnMarkersRequest {
                 markers: vec![marker(91, "orders", vec![1])],
                 ..Default::default()
-            });
+            };
             let answer = tokio::spawn({
                 let broker = std::sync::Arc::clone(&broker);
-                async move { handle_allowed(&broker, VERSION, 123, &request).await }
+                async move { handle_allowed(&broker, request).await }
             });
             if !matches!(change, Change::UnderMinIsr) {
                 loop {
@@ -531,7 +512,7 @@ mod tests {
             let bytes = answer.await.expect("the handler task").expect("handle");
 
             assert!(
-                decode_response(&bytes)
+                bytes
                     == WriteTxnMarkersResponse {
                         markers: vec![result(91, "orders", &[(1, expected_code)])],
                         unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -558,22 +539,20 @@ mod tests {
 
         let bytes = handle_allowed(
             &broker,
-            VERSION,
-            123,
-            &encode_request(&WriteTxnMarkersRequest {
+            WriteTxnMarkersRequest {
                 markers: vec![
                     marker(91, "orders", vec![1]),
                     marker(92, "orders", vec![1]),
                     marker(91, "orders", vec![2]),
                 ],
                 ..Default::default()
-            }),
+            },
         )
         .await
         .expect("handle");
 
         assert!(
-            decode_response(&bytes)
+            bytes
                 == WriteTxnMarkersResponse {
                     markers: vec![
                         result(91, "orders", &[(1, codes::NONE), (2, codes::NONE)]),
@@ -642,10 +621,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let response = handle_allowed(&broker, VERSION, 1, &encode_request(&req))
-            .await
-            .expect("commit marker");
-        let response = decode_response(&response);
+        let response = handle_allowed(&broker, req).await.expect("commit marker");
         assert!(response.markers[0].topics[0].partitions[0].error_code == codes::NONE);
 
         let handle = broker
@@ -763,10 +739,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let response = handle_allowed(&broker, VERSION, 1, &encode_request(&req))
-            .await
-            .expect("abort marker");
-        let response = decode_response(&response);
+        let response = handle_allowed(&broker, req).await.expect("abort marker");
         assert!(
             response
                 == WriteTxnMarkersResponse {
@@ -883,12 +856,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let response = handle_allowed(&broker, VERSION, 1, &encode_request(&req))
-            .await
-            .expect("commit marker");
-        assert!(
-            decode_response(&response).markers[0].topics[0].partitions[0].error_code == codes::NONE
-        );
+        let response = handle_allowed(&broker, req).await.expect("commit marker");
+        assert!(response.markers[0].topics[0].partitions[0].error_code == codes::NONE);
 
         for (group_id, topic, partition, offset) in
             [(first, "orders", 2, 42), (second, "payments", 5, 7)]

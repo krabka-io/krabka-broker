@@ -19,6 +19,7 @@
 //! and the on-disk and `DescribeLogDirs` readings the scenarios make of it,
 //! and `moves`, `errors` and `startup` one scenario group each.
 
+mod kafka_wire;
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `alter_replica_log_dirs/` directory, which keeps the parts out of `tests/`

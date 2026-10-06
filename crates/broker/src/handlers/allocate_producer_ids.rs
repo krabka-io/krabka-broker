@@ -1,14 +1,10 @@
 //! `AllocateProducerIds` (`api_key=67`). Reserves one durable, cluster-wide
 //! producer-ID block for a registered broker.
 
-use bytes::Bytes;
 use krabka_metadata::NodeId;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        allocate_producer_ids_request::AllocateProducerIdsRequest,
-        allocate_producer_ids_response::AllocateProducerIdsResponse,
-    },
+use krabka_protocol::owned::{
+    allocate_producer_ids_request::AllocateProducerIdsRequest,
+    allocate_producer_ids_response::AllocateProducerIdsResponse,
 };
 
 use crate::{
@@ -28,34 +24,27 @@ use crate::{
 /// against the principal that the envelope names.
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    request: AllocateProducerIdsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut input: &[u8] = req_bytes;
-    let request = AllocateProducerIdsRequest::decode(&mut input, version)?;
+) -> Result<AllocateProducerIdsResponse, BrokerError> {
     if crate::handlers::cluster_action_denied(
         broker.config.authorizer.as_ref(),
         &broker.controller.current_image(),
         ctx,
     ) {
-        return crate::handlers::encode_response(
-            &AllocateProducerIdsResponse {
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            },
-            version,
-        );
+        return Ok(AllocateProducerIdsResponse {
+            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+            ..Default::default()
+        });
     }
-    serve(broker, version, &request).await
+    Ok(serve(broker, &request).await)
 }
 
 async fn serve(
     broker: &Broker,
-    version: i16,
     request: &AllocateProducerIdsRequest,
-) -> Result<Bytes, BrokerError> {
+) -> AllocateProducerIdsResponse {
     let controller = broker.controller.clone();
     let result = match u64::try_from(request.broker_id) {
         Ok(broker_id) => allocate_block(&controller, NodeId(broker_id), request.broker_epoch).await,
@@ -64,7 +53,7 @@ async fn serve(
         ))),
     };
 
-    let response = match result {
+    match result {
         Ok(block) => AllocateProducerIdsResponse {
             error_code: codes::NONE,
             producer_id_start: block.first,
@@ -91,8 +80,7 @@ async fn serve(
                 ..Default::default()
             }
         }
-    };
-    crate::handlers::encode_response(&response, version)
+    }
 }
 
 #[cfg(test)]
@@ -101,32 +89,21 @@ mod tests {
 
     use super::*;
 
-    crate::test_support::codec_helpers!(
-        AllocateProducerIdsRequest,
-        AllocateProducerIdsResponse,
-        version = 0
-    );
-
     /// Serves a request as a principal that the default `AllowAllAuthorizer`
     /// allows.
     async fn handle_allowed(
         broker: &Broker,
-        version: i16,
-        correlation_id: i32,
-        body: &[u8],
-    ) -> Result<Bytes, BrokerError> {
+        request: AllocateProducerIdsRequest,
+    ) -> AllocateProducerIdsResponse {
         let user = crate::test_support::principal("ANONYMOUS");
         let address = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&user, &address, "allocate-test");
-        handle(broker, version, correlation_id, body, &ctx).await
+        handle(broker, request, 0, &ctx).await.expect("handle")
     }
 
     #[tokio::test]
     async fn allocates_consecutive_durable_blocks_and_fences_stale_epochs() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
-        })
-        .await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit().await;
         let broker = broker_handle.broker_arc_for_test();
         let broker_id = i32::try_from(broker.config.node_id.0).unwrap();
         let broker_epoch = broker
@@ -140,16 +117,8 @@ mod tests {
             ..Default::default()
         };
 
-        let first = decode_response(
-            &handle_allowed(&broker, 0, 1, &encode_request(&request(broker_epoch)))
-                .await
-                .unwrap(),
-        );
-        let second = decode_response(
-            &handle_allowed(&broker, 0, 2, &encode_request(&request(broker_epoch)))
-                .await
-                .unwrap(),
-        );
+        let first = handle_allowed(&broker, request(broker_epoch)).await;
+        let second = handle_allowed(&broker, request(broker_epoch)).await;
         assert!(first.error_code == codes::NONE);
         assert!(first.producer_id_start == 0);
         assert!(first.producer_id_len == 1_000);
@@ -159,13 +128,10 @@ mod tests {
         // Both calls may observe the same candidate frontier. The controller
         // accepts one exact record, and the loser retries from the committed
         // boundary instead of returning an overlapping block.
-        let concurrent = encode_request(&request(broker_epoch));
-        let (third_bytes, fourth_bytes) = tokio::join!(
-            handle_allowed(&broker, 0, 3, &concurrent),
-            handle_allowed(&broker, 0, 4, &concurrent),
+        let (third, fourth) = tokio::join!(
+            handle_allowed(&broker, request(broker_epoch)),
+            handle_allowed(&broker, request(broker_epoch)),
         );
-        let third = decode_response(&third_bytes.unwrap());
-        let fourth = decode_response(&fourth_bytes.unwrap());
         let mut concurrent_starts = [third.producer_id_start, fourth.producer_id_start];
         concurrent_starts.sort_unstable();
         assert!(concurrent_starts == [2_000, 3_000]);
@@ -214,11 +180,7 @@ mod tests {
                 broker_epoch: epoch,
                 ..Default::default()
             };
-            let answered = decode_response(
-                &handle_allowed(&broker, 0, 5, &encode_request(&request))
-                    .await
-                    .unwrap(),
-            );
+            let answered = handle_allowed(&broker, request).await;
             check!(answered == expected, "{label}");
         }
         assert!(broker.controller.current_image().next_producer_id() == 5_000);
@@ -236,11 +198,7 @@ mod tests {
             )])
             .await
             .expect("seed producer ID limit");
-        let exhausted = decode_response(
-            &handle_allowed(&broker, 0, 7, &encode_request(&request(broker_epoch)))
-                .await
-                .unwrap(),
-        );
+        let exhausted = handle_allowed(&broker, request(broker_epoch)).await;
         assert!(exhausted.error_code == codes::UNKNOWN_SERVER_ERROR);
         assert!(exhausted.producer_id_start == -1);
         assert!(exhausted.producer_id_len == 0);
@@ -254,8 +212,7 @@ mod tests {
     /// the next block start does not move.
     #[tokio::test]
     async fn allocation_needs_cluster_action() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
             config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
         })
         .await;
@@ -292,15 +249,15 @@ mod tests {
         for (grants, expected, next_producer_id) in cases {
             let user = crate::test_support::principal(grants);
             let ctx = crate::test_support::request_context(&user, &address, "allocate-test");
-            let bytes = crate::test_support::dispatch_context(
+            let answered: AllocateProducerIdsResponse = crate::test_support::dispatch_wire(
                 &broker,
                 krabka_protocol::owned::allocate_producer_ids_request::API_KEY,
                 0,
-                &encode_request(&request),
+                &request,
                 &ctx,
             )
             .await;
-            check!(decode_response(&bytes) == expected, "{grants}");
+            check!(answered == expected, "{grants}");
             check!(
                 broker.controller.current_image().next_producer_id() == next_producer_id,
                 "{grants}"

@@ -292,7 +292,7 @@ mod tests {
             AlterReplicaLogDirsResponse,
         },
     };
-    use krabka_security::{AuthMethod, Principal, SaslMechanism};
+    use krabka_security::SaslMechanism;
 
     use super::*;
     use crate::{
@@ -305,11 +305,7 @@ mod tests {
 
     fn authed(name: &str) -> ConnectionAuth {
         ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: name.into(),
-                auth_method: AuthMethod::Anonymous,
-                groups: vec![],
-            },
+            principal: crate::test_support::principal(name),
             mechanism: SaslMechanism::Plain,
             expires_at_ms: None,
             authenticated_via_token: false,

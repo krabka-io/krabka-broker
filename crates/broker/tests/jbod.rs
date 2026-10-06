@@ -10,10 +10,12 @@
 //!   2. `DescribeLogDirs` reports one result per directory, and the union of
 //!      those results covers every partition and matches what is on disk.
 
+mod kafka_wire;
+
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
@@ -25,42 +27,20 @@ use krabka_protocol::{
     },
 };
 use tempfile::TempDir;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
 const CLIENT_ID: &str = "krabka-jbod-test";
 
+/// One length-prefixed request/response exchange on correlation id 1, with
+/// flexible headers because every API this suite sends is flexible; see
+/// [`kafka_wire::round_trip`].
 async fn round_trip(
     stream: &mut TcpStream,
     api_key: i16,
     api_version: i16,
     body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(1);
-    frame.put_i16(i16::try_from(CLIENT_ID.len()).unwrap());
-    frame.put_slice(CLIENT_ID.as_bytes());
-    frame.put_u8(0); // header tagged-fields (all APIs here are flexible)
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    let _tagged = cur.get_u8(); // v1 response header tagged-fields
-    Ok(cur.to_vec())
+) -> io::Result<Vec<u8>> {
+    kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
 }
 
 fn start_two_dir_broker()

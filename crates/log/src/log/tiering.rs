@@ -112,11 +112,7 @@ fn epochs_for_range(
 fn last_modified_ms(path: &Path) -> i64 {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |since| {
-            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
-        })
+        .map_or(0, retention::now_ms)
 }
 
 impl Log {
@@ -132,30 +128,6 @@ impl Log {
         } else {
             last_modified_ms(&name::log_path(&self.dir, segment.base_offset().0))
         }
-    }
-
-    /// Kafka's `UnifiedLog.onlyLocalLogSegmentsSize()`: the `.log` bytes of
-    /// every local segment, the active one included, whose base offset is
-    /// above `highest_offset_in_remote_storage`, so that none of its records
-    /// is in the remote tier yet. `None` means the remote tier holds nothing
-    /// (Kafka's `-1`), and every local segment counts.
-    ///
-    /// Kafka's remote retention (`buildRetentionSizeData`) adds this to the
-    /// remote tier's own bytes, so `retention.bytes` bounds the partition's
-    /// whole footprint and not just its remote part.
-    #[must_use]
-    pub fn only_local_log_segments_size(
-        &self,
-        highest_offset_in_remote_storage: Option<Offset>,
-    ) -> ByteSize {
-        self.segments
-            .iter()
-            .chain(self.active.as_ref())
-            .filter(|segment| {
-                highest_offset_in_remote_storage
-                    .is_none_or(|highest| segment.base_offset() > highest)
-            })
-            .fold(ByteSize::ZERO, |total, segment| total + segment.size())
     }
 
     /// First absolute offset still readable from this broker's local disk

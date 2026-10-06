@@ -35,17 +35,12 @@ use krabka_protocol::owned::{
     sync_group_request::{self, SyncGroupRequest, SyncGroupRequestAssignment},
     sync_group_response::SyncGroupResponse,
 };
-use krabka_security::{AuthMethod, Principal};
+use krabka_security::Principal;
 
 use crate::{
     broker::{Broker, BrokerHandle},
     codes,
     error::BrokerError,
-    handlers::{
-        consumer_group_heartbeat, heartbeat, join_group, share_group_heartbeat,
-        streams_group_heartbeat, sync_group,
-    },
-    share_coordinator::handlers::initialize,
     test_support::{decode_response, encode_request},
 };
 
@@ -146,11 +141,7 @@ impl Env {
             handle,
             broker,
             _dir: dir,
-            principal: Principal {
-                name: "ANONYMOUS".into(),
-                auth_method: AuthMethod::Anonymous,
-                groups: vec![],
-            },
+            principal: crate::test_support::principal("ANONYMOUS"),
             peer: SocketAddr::from(([127, 0, 0, 1], 9092)),
         }
     }
@@ -233,10 +224,10 @@ async fn consumer_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = consumer_group_heartbeat::handle(
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            consumer_group_heartbeat_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx(&client_id),
         )
@@ -278,10 +269,10 @@ async fn share_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = share_group_heartbeat::handle(
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            share_group_heartbeat_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx(&client_id),
         )
@@ -341,10 +332,10 @@ async fn streams_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = streams_group_heartbeat::handle(
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            streams_group_heartbeat_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx(&client_id),
         )
@@ -394,10 +385,10 @@ async fn classic_join_takes_32767_byte_ids_and_refuses_32768() {
 
         let result = tokio::time::timeout(
             Duration::from_secs(20),
-            join_group::handle(
+            crate::test_support::try_dispatch_context(
                 &env.broker,
+                join_group_request::API_KEY,
                 VERSION,
-                1,
                 &encode_request(&request, VERSION),
                 &env.ctx(&client_id),
             ),
@@ -444,10 +435,10 @@ async fn join(
 ) -> JoinGroupResponse {
     let bytes = tokio::time::timeout(
         Duration::from_secs(20),
-        join_group::handle(
+        crate::test_support::try_dispatch_context(
             &env.broker,
+            join_group_request::API_KEY,
             version,
-            1,
             &encode_request(request, version),
             &env.ctx(client_id),
         ),
@@ -618,10 +609,10 @@ async fn a_generated_member_id_over_32767_bytes_fails_the_join() {
             }],
             ..Default::default()
         };
-        let synced = sync_group::handle(
+        let synced = crate::test_support::try_dispatch_context(
             &env.broker,
+            sync_group_request::API_KEY,
             SYNC_VERSION,
-            2,
             &encode_request(&sync, SYNC_VERSION),
             &env.ctx(&client_id),
         )
@@ -671,10 +662,10 @@ async fn initialize_share_group_state_takes_a_32767_byte_group_id_and_refuses_32
             ..Default::default()
         };
 
-        let result = initialize::handle(
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            initialize_share_group_state_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx("record-strings-test"),
         )
@@ -715,10 +706,11 @@ async fn classic_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = heartbeat::handle(
+        // Through the dispatch adapter, which decodes the request.
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            heartbeat_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx(&client_id),
         )

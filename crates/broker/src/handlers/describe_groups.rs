@@ -27,18 +27,14 @@
 //! `i32::MIN` "not present" sentinel.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_groups_request::DescribeGroupsRequest,
-        describe_groups_response::{DescribeGroupsResponse, DescribedGroup, DescribedGroupMember},
-    },
+use krabka_metadata::ResourceType;
+use krabka_protocol::owned::{
+    describe_groups_request::DescribeGroupsRequest,
+    describe_groups_response::{DescribeGroupsResponse, DescribedGroup, DescribedGroupMember},
 };
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     coordinator::unified::{
@@ -61,19 +57,15 @@ const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
     name = "handle_describe_groups",
     level = "info",
     skip_all,
-    fields(api = "DescribeGroups", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeGroups", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: DescribeGroupsRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeGroupsRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeGroupsResponse, BrokerError> {
     let image = broker.controller.current_image();
 
     // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
@@ -81,14 +73,12 @@ pub(crate) async fn handle(
     let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
     for gid in req.groups {
-        let acl_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Group,
-            resource_name: gid.as_str(),
-            operation: AclOperation::Describe,
-        };
-        if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
+        if crate::handlers::group_describe_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            gid.as_str(),
+        ) {
             denied.push(DescribedGroup {
                 group_id: gid,
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
@@ -125,12 +115,11 @@ pub(crate) async fn handle(
     }
 
     denied.extend(groups);
-    let resp = DescribeGroupsResponse {
+    Ok(DescribeGroupsResponse {
         groups: denied,
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Describes one allowed group the way `GroupMetadataManager.describeGroups`
@@ -210,7 +199,7 @@ fn described_classic(view: ClassicView) -> DescribedGroup {
         .collect();
     DescribedGroup {
         group_id: view.group_id,
-        group_state: state_to_str(view.state).into(),
+        group_state: view.state.as_str().into(),
         protocol_type: view.protocol_type.unwrap_or_default(),
         protocol_data: if stable {
             view.protocol_name.unwrap_or_default()
@@ -223,20 +212,12 @@ fn described_classic(view: ClassicView) -> DescribedGroup {
     }
 }
 
-fn state_to_str(s: GroupState) -> &'static str {
-    match s {
-        GroupState::Empty => "Empty",
-        GroupState::PreparingRebalance => "PreparingRebalance",
-        GroupState::CompletingRebalance => "CompletingRebalance",
-        GroupState::Stable => "Stable",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
+    use krabka_metadata::AclOperation;
 
     use super::*;
     use crate::{
@@ -246,11 +227,7 @@ mod tests {
 
     const VERSION: i16 = krabka_protocol::owned::describe_groups_response::MAX_VERSION;
 
-    crate::test_support::wire_helpers!(
-        DescribeGroupsRequest,
-        DescribeGroupsResponse,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     /// Start a broker with `authorizer` and audit off, and wait until its
     /// group coordinator serves `__consumer_offsets`.
@@ -297,10 +274,9 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let bytes = handle(broker, version, 123, &encode_request(req, version), &ctx)
+        handle(broker, req.clone(), version, &ctx)
             .await
-            .expect("handle");
-        decode_response(&bytes, version)
+            .expect("handle")
     }
 
     /// A Deny on `Describe Group` answers the row, not the request: each named
@@ -549,15 +525,12 @@ mod tests {
     }
 
     fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-            resource_type: ResourceType::Group,
-            resource_name: group.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:admin".into(),
-            host: "*".into(),
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+            ResourceType::Group,
+            group,
+            "User:admin",
             operation,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+        ))
     }
 
     fn bit(op: AclOperation) -> i32 {
@@ -661,7 +634,7 @@ mod tests {
                 GroupState::CompletingRebalance,
                 GroupState::Stable,
             ]
-            .map(state_to_str)
+            .map(GroupState::as_str)
                 == [
                     "Empty",
                     "PreparingRebalance",

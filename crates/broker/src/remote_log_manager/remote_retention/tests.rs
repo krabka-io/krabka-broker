@@ -13,9 +13,14 @@ use krabka_units::{bytes, hours, millis};
 use uuid::Uuid;
 
 use super::*;
-use crate::remote_log_manager::{
-    copy_eligible, now_ms,
-    test_support::{FakeWormArchive, rolled_log, seed_finished_segments, synth_export, tier, tp},
+use crate::{
+    remote_log_manager::{
+        copy_eligible,
+        test_support::{
+            FakeWormArchive, rolled_log, seed_finished_segments, synth_export, tier, tp,
+        },
+    },
+    time_util::now_ms,
 };
 
 /// A partition whose `DeleteRecords` floor has never moved: offset 0, so no

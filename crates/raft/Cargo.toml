@@ -32,6 +32,7 @@ krabka-metadata = { version = "0.5.0" }
 krabka-log = { version = "0.7.0", path = "../log" }
 krabka-protocol = { version = "0.5.0", default-features = false }
 krabka-verified = { version = "0.7.0", path = "../verified" }
+krabka-macros = { version = "0.7.0", path = "../macros" }
 krabka-client-core = { version = "0.5.0" }
 krabka-units = { workspace = true }
 refined_type = { workspace = true }
@@ -41,6 +42,7 @@ serde-wincode = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
 dashmap = { workspace = true }
+derive_more = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

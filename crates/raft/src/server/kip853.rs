@@ -51,7 +51,7 @@ mod tests {
 
     use super::*;
     use crate::server::test_support::{
-        activate_dynamic_membership, single_voter_engine, wait_for_leader,
+        activate_dynamic_membership, decoded, single_voter_engine, wait_for_leader,
     };
 
     /// The listener answers `DescribeQuorum` from the live engine: the
@@ -167,8 +167,7 @@ mod tests {
             super::kip853_admin_response(API_KEY_DESCRIBE_QUORUM, 2, &request_body, &engine)
                 .await
                 .expect("DescribeQuorum");
-        let mut response_bytes = response_body.as_ref();
-        let response = DescribeQuorumResponse::decode(&mut response_bytes, 2).unwrap();
+        let response = decoded::<DescribeQuorumResponse>(&response_body, 2);
         let partition = &response.topics[0].partitions[0];
         check!(response.topics[0].topic_name == "__cluster_metadata");
         check!(partition.partition_index == 0);
@@ -218,8 +217,7 @@ mod tests {
             super::kip853_admin_response(API_KEY_DESCRIBE_QUORUM, 2, &describe_body, &engine)
                 .await
                 .expect("DescribeQuorum with observer");
-        let mut response_bytes = response_body.as_ref();
-        let response = DescribeQuorumResponse::decode(&mut response_bytes, 2).unwrap();
+        let response = decoded::<DescribeQuorumResponse>(&response_body, 2);
         let partition = &response.topics[0].partitions[0];
         check!(partition.observers.len() == 1);
         check!(partition.observers[0].replica_id == 99);
@@ -236,8 +234,7 @@ mod tests {
             super::kip853_admin_response(API_KEY_ADD_RAFT_VOTER, 0, &add_body, &engine)
                 .await
                 .expect("AddRaftVoter");
-        let mut add_resp_bytes = add_resp_body.as_ref();
-        let add_resp = AddRaftVoterResponse::decode(&mut add_resp_bytes, 0).unwrap();
+        let add_resp = decoded::<AddRaftVoterResponse>(&add_resp_body, 0);
         check!(add_resp.error_code == 42);
 
         // Test API_KEY_UPDATE_RAFT_VOTER through kip853_admin_response
@@ -251,8 +248,7 @@ mod tests {
             super::kip853_admin_response(API_KEY_UPDATE_RAFT_VOTER, 0, &update_body, &engine)
                 .await
                 .expect("UpdateRaftVoter");
-        let mut update_resp_bytes = update_resp_body.as_ref();
-        let update_resp = UpdateRaftVoterResponse::decode(&mut update_resp_bytes, 0).unwrap();
+        let update_resp = decoded::<UpdateRaftVoterResponse>(&update_resp_body, 0);
         check!(update_resp.error_code == 104);
 
         let remove = RemoveRaftVoterRequest {
@@ -269,8 +265,7 @@ mod tests {
             super::kip853_admin_response(API_KEY_REMOVE_RAFT_VOTER, 0, &request_body, &engine)
                 .await
                 .expect("RemoveRaftVoter");
-        let mut response_bytes = response_body.as_ref();
-        let response = RemoveRaftVoterResponse::decode(&mut response_bytes, 0).unwrap();
+        let response = decoded::<RemoveRaftVoterResponse>(&response_body, 0);
         // `VoterSet.removeVoter` refuses to empty the set, and
         // `RemoveVoterHandler` answers that with VOTER_NOT_FOUND (127).
         check!(

@@ -34,13 +34,13 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 
-use super::handle;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -55,11 +55,7 @@ const REMOTE: WireUuid = WireUuid([0x22; 16]);
 const ORPHAN: WireUuid = WireUuid([0x77; 16]);
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
 }
 
 async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
@@ -122,9 +118,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
         .controller
         .submit_change(vec![
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                node_id: NodeId(2),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "legacy-2".into(),
                 port: 1000,
                 rack: Some("rack-2".into()),
@@ -134,11 +128,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
                     port: 9192,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                log_dirs: vec![],
-                features: std::collections::BTreeMap::new(),
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
+                ..crate::test_support::broker_registration(2)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "remote".into(),
@@ -215,10 +205,10 @@ async fn share_fetch_sends_the_endpoint_of_each_remote_leader_once() {
     let user = principal("share-consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
-    let response = handle(
+    let response = crate::test_support::try_dispatch_context(
         &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
         version,
-        7,
         &encode_request(&request, version),
         &ctx,
     )
@@ -315,10 +305,10 @@ async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_
         ..Default::default()
     };
     let version = share_acknowledge_response::MAX_VERSION;
-    let response = crate::handlers::share_acknowledge::handle(
+    let response = crate::test_support::try_dispatch_context(
         &shared,
+        krabka_protocol::owned::share_acknowledge_request::API_KEY,
         version,
-        7,
         &encode_request(&request, version),
         &ctx,
     )

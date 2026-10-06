@@ -13,6 +13,7 @@ use crate::{
     error::RaftError,
     kraft::{
         event::Event,
+        transport::PeerApi,
         types::{Epoch, NodeId, ReplicaKey},
     },
 };
@@ -50,6 +51,78 @@ pub enum Inbound {
         version: i16,
         reply: oneshot::Sender<Bytes>,
     },
+}
+
+impl Inbound {
+    /// The inbound RPC of peer api `api`.
+    #[must_use]
+    pub fn new(api: PeerApi, req: Bytes, version: i16, reply: oneshot::Sender<Bytes>) -> Self {
+        match api {
+            PeerApi::Fetch => Self::Fetch {
+                req,
+                version,
+                reply,
+            },
+            PeerApi::Vote => Self::Vote {
+                req,
+                version,
+                reply,
+            },
+            PeerApi::BeginQuorumEpoch => Self::BeginQuorumEpoch {
+                req,
+                version,
+                reply,
+            },
+            PeerApi::EndQuorumEpoch => Self::EndQuorumEpoch {
+                req,
+                version,
+                reply,
+            },
+            PeerApi::FetchSnapshot => Self::FetchSnapshot {
+                req,
+                version,
+                reply,
+            },
+        }
+    }
+
+    /// The peer api, request body, request version and reply oneshot.
+    #[must_use]
+    pub fn into_parts(self) -> (PeerApi, Bytes, i16, oneshot::Sender<Bytes>) {
+        let api = match &self {
+            Self::Fetch { .. } => PeerApi::Fetch,
+            Self::Vote { .. } => PeerApi::Vote,
+            Self::BeginQuorumEpoch { .. } => PeerApi::BeginQuorumEpoch,
+            Self::EndQuorumEpoch { .. } => PeerApi::EndQuorumEpoch,
+            Self::FetchSnapshot { .. } => PeerApi::FetchSnapshot,
+        };
+        let (Self::Fetch {
+            req,
+            version,
+            reply,
+        }
+        | Self::Vote {
+            req,
+            version,
+            reply,
+        }
+        | Self::BeginQuorumEpoch {
+            req,
+            version,
+            reply,
+        }
+        | Self::EndQuorumEpoch {
+            req,
+            version,
+            reply,
+        }
+        | Self::FetchSnapshot {
+            req,
+            version,
+            reply,
+        }) = self;
+        (api, req, version, reply)
+    }
 }
 
 /// Everything that arrives on the engine's mpsc and drives one turn of the

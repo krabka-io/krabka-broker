@@ -8,6 +8,14 @@ use krabka_verified::{
 
 use super::IpNames;
 
+/// The value of the `name` entity type (`"user"`, `"client-id"`) in `key`, or
+/// `None` when `key` has no such entry or names its default entity.
+pub(crate) fn entity_field(key: &EntityKey, name: &str) -> Option<String> {
+    key.iter()
+        .find(|(k, _)| k == name)
+        .and_then(|(_, v)| v.clone())
+}
+
 /// Return the configured value for `quota_key` under the most-specific
 /// matching entity for `(principal, client_id)`. First match wins, in the
 /// order of Kafka's `ClientQuotaManager.DefaultQuotaCallback`:

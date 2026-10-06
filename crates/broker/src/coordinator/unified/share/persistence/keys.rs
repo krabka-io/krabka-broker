@@ -20,11 +20,11 @@
 //! key string keeps the legacy `i16` length prefix and a key carries no
 //! tagged-field trailer. Only the values are flexible.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use krabka_protocol::ProtocolError;
 
 use crate::{
-    coordinator::unified::persistence::{get_string, put_string},
+    coordinator::unified::persistence::{encode_string_key, get_string},
     error::BrokerError,
 };
 
@@ -52,46 +52,29 @@ pub enum ShareGroupKey {
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes, which a non-flexible key string cannot carry.
 pub fn encode_share_key(key: &ShareGroupKey) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
     match key {
         ShareGroupKey::GroupMetadata { group_id } => {
-            buf.put_i16(KEY_SHARE_GROUP_METADATA);
-            put_string(&mut buf, group_id)?;
+            encode_string_key(KEY_SHARE_GROUP_METADATA, &[group_id])
         }
         ShareGroupKey::MemberMetadata {
             group_id,
             member_id,
-        } => {
-            buf.put_i16(KEY_SHARE_MEMBER_METADATA);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, member_id)?;
-        }
+        } => encode_string_key(KEY_SHARE_MEMBER_METADATA, &[group_id, member_id]),
         ShareGroupKey::TargetAssignmentMetadata { group_id } => {
-            buf.put_i16(KEY_SHARE_TARGET_ASSIGNMENT_METADATA);
-            put_string(&mut buf, group_id)?;
+            encode_string_key(KEY_SHARE_TARGET_ASSIGNMENT_METADATA, &[group_id])
         }
         ShareGroupKey::TargetAssignmentMember {
             group_id,
             member_id,
-        } => {
-            buf.put_i16(KEY_SHARE_TARGET_ASSIGNMENT_MEMBER);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, member_id)?;
-        }
+        } => encode_string_key(KEY_SHARE_TARGET_ASSIGNMENT_MEMBER, &[group_id, member_id]),
         ShareGroupKey::CurrentMemberAssignment {
             group_id,
             member_id,
-        } => {
-            buf.put_i16(KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, member_id)?;
-        }
+        } => encode_string_key(KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT, &[group_id, member_id]),
         ShareGroupKey::StatePartitionMetadata { group_id } => {
-            buf.put_i16(KEY_SHARE_GROUP_STATE_PARTITION_METADATA);
-            put_string(&mut buf, group_id)?;
+            encode_string_key(KEY_SHARE_GROUP_STATE_PARTITION_METADATA, &[group_id])
         }
     }
-    Ok(buf.freeze())
 }
 
 /// # Errors

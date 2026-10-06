@@ -537,3 +537,19 @@ fn metadata_log_settings_apply_from_cli_and_environment() {
     }
     assert!(actual == cases);
 }
+
+/// `--queued-max-requests` parses into a `PositiveCount` and reaches the
+/// runtime config as its `usize`.
+#[test]
+fn queued_max_requests_flag_reaches_the_runtime_config() {
+    let _guard = env_guard();
+
+    let args = Args::try_parse_from(["krabka-broker", "--queued-max-requests=5"])
+        .expect("parse --queued-max-requests");
+    assert!(
+        args.runtime
+            .queued_max_requests
+            .map(krabka_broker::config_value::PositiveCount::into_value)
+            == Some(5)
+    );
+}

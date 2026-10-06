@@ -12,10 +12,9 @@
 //! as a whole goes through `FindCoordinatorRequest.getErrorResponse`, which
 //! puts `Errors.message()` on the top-level answer or on every v4+ row.
 
-use bytes::Bytes;
 use krabka_protocol::owned::find_coordinator_response::{Coordinator, FindCoordinatorResponse};
 
-use crate::{codes, error::BrokerError};
+use crate::codes;
 
 /// Kafka's `Errors.message()` for the codes `FindCoordinator` answers.
 pub(super) fn error_message(error_code: i16) -> Option<String> {
@@ -66,12 +65,12 @@ fn legacy_response(row: &Coordinator) -> FindCoordinatorResponse {
     }
 }
 
-/// Encode the answer to a request whose keys each got a row.
-pub(super) fn encode_coordinators(
+/// The answer to a request whose keys each got a row.
+pub(super) fn coordinators_response(
     version: i16,
     coordinators: Vec<Coordinator>,
-) -> Result<Bytes, BrokerError> {
-    let response = if version < 4 {
+) -> FindCoordinatorResponse {
+    if version < 4 {
         let row = coordinators
             .first()
             .cloned()
@@ -82,17 +81,16 @@ pub(super) fn encode_coordinators(
             coordinators,
             ..Default::default()
         }
-    };
-    crate::handlers::encode_response(&response, version)
+    }
 }
 
-/// Encode the answer to a request that failed as a whole with `error_code`.
-pub(super) fn encode_request_error(
+/// The answer to a request that failed as a whole with `error_code`.
+pub(super) fn request_error_response(
     version: i16,
     error_code: i16,
     keys: Vec<String>,
-) -> Result<Bytes, BrokerError> {
-    let response = if version < 4 {
+) -> FindCoordinatorResponse {
+    if version < 4 {
         legacy_response(&no_node_row(String::new(), error_code))
     } else {
         FindCoordinatorResponse {
@@ -105,6 +103,5 @@ pub(super) fn encode_request_error(
                 .collect(),
             ..Default::default()
         }
-    };
-    crate::handlers::encode_response(&response, version)
+    }
 }

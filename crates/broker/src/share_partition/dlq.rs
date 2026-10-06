@@ -23,8 +23,6 @@
 //! Whether a write succeeds does not decide the record's fate. Kafka archives
 //! the record whatever [`DlqSink::write`] answers, and logs a failure.
 
-use std::fmt;
-
 use async_trait::async_trait;
 use krabka_log::Offset;
 
@@ -54,24 +52,16 @@ pub struct DlqRequest {
 }
 
 /// Why a dead-letter write failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DlqError {
     /// The group's dead-letter topic is not usable as configured: Kafka's
     /// `ConfigException`.
+    #[error("{0}")]
     Config(String),
     /// The topic could not be created, or the records could not be produced.
+    #[error("{0}")]
     Write(String),
 }
-
-impl fmt::Display for DlqError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Config(message) | Self::Write(message) => f.write_str(message),
-        }
-    }
-}
-
-impl std::error::Error for DlqError {}
 
 /// Where the leader manager sends a run of records: Kafka's
 /// `ShareGroupDLQManager`.

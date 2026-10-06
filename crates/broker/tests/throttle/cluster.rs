@@ -17,7 +17,7 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 
-use crate::wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 /// Start a single-broker SASL/PLAINTEXT cluster.
 /// Returns `(handle, _dir, addr)`.
@@ -84,12 +84,12 @@ pub async fn create_topic_as_admin(
         timeout_ms: 5_000,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, "admin", b"admin-secret")
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "admin", b"admin-secret")
         .await
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -123,7 +123,7 @@ pub async fn create_topic_plaintext(addr: SocketAddr, topic: &str, partitions: i
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;

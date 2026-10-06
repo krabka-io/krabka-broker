@@ -48,7 +48,10 @@ pub enum ObjectStoreConfig {
 /// The credentials come either from `access_key_id` and `secret_access_key` or
 /// from the standard AWS credential chain. When both fields are `None`,
 /// `object_store` falls back to the environment-variable chain.
-#[derive(Clone)]
+///
+/// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
+/// call never leaks them.
+#[derive(Clone, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct S3Config {
     /// S3 bucket name.
     pub bucket: String,
@@ -63,88 +66,54 @@ pub struct S3Config {
     pub endpoint: Option<String>,
     /// Optional explicit access key id. Without it, the backend falls back to
     /// the AWS credential chain.
+    #[debug("{:?}", access_key_id.as_ref().map(|_| "***"))]
     pub access_key_id: Option<String>,
     /// Optional explicit secret access key. Without it, the backend falls back
     /// to the AWS credential chain.
+    #[debug("{:?}", secret_access_key.as_ref().map(|_| "***"))]
     pub secret_access_key: Option<String>,
     /// Allow plaintext HTTP. `MinIO` without TLS requires it.
     pub allow_http: bool,
     /// Files of at least this size upload with multipart. Defaults to
     /// [`DEFAULT_MULTIPART_THRESHOLD`].
+    #[default(DEFAULT_MULTIPART_THRESHOLD)]
     pub multipart_threshold: u64,
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
+    #[default(DEFAULT_MULTIPART_CHUNK_SIZE)]
     pub multipart_chunk_size: usize,
     /// Enable conditional puts (`If-None-Match`) so a `PutMode::Create` write
     /// fails instead of silently overwriting. Defaults to `true`.
+    #[default(true)]
     pub conditional_put: bool,
     /// Send `x-amz-checksum-sha256` so the server verifies each object on
     /// ingest. Defaults to `true`.
+    #[default(true)]
     pub checksum_sha256: bool,
     /// How many times one request is retried before the error surfaces.
     /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
+    #[default(DEFAULT_MAX_RETRIES)]
     pub max_retries: usize,
     /// Ceiling on the wall-clock time one request may spend across all of its
     /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
+    #[default(DEFAULT_RETRY_TIMEOUT)]
     pub retry_timeout: Duration,
     /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    #[default(DEFAULT_REQUEST_TIMEOUT)]
     pub request_timeout: Duration,
     /// Ceiling on the connect phase alone. Defaults to
     /// [`DEFAULT_CONNECT_TIMEOUT`].
+    #[default(DEFAULT_CONNECT_TIMEOUT)]
     pub connect_timeout: Duration,
-}
-
-impl std::fmt::Debug for S3Config {
-    /// Redacts credential fields, so a stray `{:?}` call or tracing call never
-    /// leaks them.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***");
-        f.debug_struct("S3Config")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
-            .field("region", &self.region)
-            .field("endpoint", &self.endpoint)
-            .field("access_key_id", &redact(&self.access_key_id))
-            .field("secret_access_key", &redact(&self.secret_access_key))
-            .field("allow_http", &self.allow_http)
-            .field("multipart_threshold", &self.multipart_threshold)
-            .field("multipart_chunk_size", &self.multipart_chunk_size)
-            .field("conditional_put", &self.conditional_put)
-            .field("checksum_sha256", &self.checksum_sha256)
-            .field("max_retries", &self.max_retries)
-            .field("retry_timeout", &self.retry_timeout)
-            .field("request_timeout", &self.request_timeout)
-            .field("connect_timeout", &self.connect_timeout)
-            .finish()
-    }
-}
-
-impl Default for S3Config {
-    fn default() -> Self {
-        Self {
-            bucket: String::new(),
-            prefix: None,
-            region: String::new(),
-            endpoint: None,
-            access_key_id: None,
-            secret_access_key: None,
-            allow_http: false,
-            multipart_threshold: DEFAULT_MULTIPART_THRESHOLD,
-            multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
-            conditional_put: true,
-            checksum_sha256: true,
-            max_retries: DEFAULT_MAX_RETRIES,
-            retry_timeout: DEFAULT_RETRY_TIMEOUT,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
-    }
 }
 
 /// Connection and bucket parameters for native Google Cloud Storage.
 ///
 /// If every credential field is `None`, the config selects Workload Identity or
 /// ADC through the metadata server. This is the keyless GKE production path.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
+/// call never leaks them.
+#[derive(Clone, PartialEq, Eq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct GcsConfig {
     /// GCS bucket name.
     pub bucket: String,
@@ -152,11 +121,14 @@ pub struct GcsConfig {
     /// slash.
     pub prefix: Option<String>,
     /// Optional path to a service-account JSON key file.
+    #[debug("{:?}", service_account_path.as_ref().map(|_| "***"))]
     pub service_account_path: Option<String>,
     /// Optional inline service-account JSON key. It is mutually exclusive with
     /// the path.
+    #[debug("{:?}", service_account_key.as_ref().map(|_| "***"))]
     pub service_account_key: Option<String>,
     /// Optional path to an application-default-credentials JSON file.
+    #[debug("{:?}", application_credentials_path.as_ref().map(|_| "***"))]
     pub application_credentials_path: Option<String>,
     /// Optional custom GCS API base URL, for example `http://fake-gcs:4443`.
     pub endpoint: Option<String>,
@@ -164,66 +136,26 @@ pub struct GcsConfig {
     pub allow_http: bool,
     /// Files of at least this size upload with resumable multipart. Defaults
     /// to [`DEFAULT_MULTIPART_THRESHOLD`].
+    #[default(DEFAULT_MULTIPART_THRESHOLD)]
     pub multipart_threshold: u64,
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
+    #[default(DEFAULT_MULTIPART_CHUNK_SIZE)]
     pub multipart_chunk_size: usize,
     /// How many times one request is retried before the error surfaces.
     /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
+    #[default(DEFAULT_MAX_RETRIES)]
     pub max_retries: usize,
     /// Ceiling on the wall-clock time one request may spend across all of its
     /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
+    #[default(DEFAULT_RETRY_TIMEOUT)]
     pub retry_timeout: Duration,
     /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    #[default(DEFAULT_REQUEST_TIMEOUT)]
     pub request_timeout: Duration,
     /// Ceiling on the connect phase alone. Defaults to
     /// [`DEFAULT_CONNECT_TIMEOUT`].
+    #[default(DEFAULT_CONNECT_TIMEOUT)]
     pub connect_timeout: Duration,
-}
-
-impl std::fmt::Debug for GcsConfig {
-    /// Redacts credential fields, so a stray `{:?}` call or tracing call never
-    /// leaks them.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***");
-        f.debug_struct("GcsConfig")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
-            .field("service_account_path", &redact(&self.service_account_path))
-            .field("service_account_key", &redact(&self.service_account_key))
-            .field(
-                "application_credentials_path",
-                &redact(&self.application_credentials_path),
-            )
-            .field("endpoint", &self.endpoint)
-            .field("allow_http", &self.allow_http)
-            .field("multipart_threshold", &self.multipart_threshold)
-            .field("multipart_chunk_size", &self.multipart_chunk_size)
-            .field("max_retries", &self.max_retries)
-            .field("retry_timeout", &self.retry_timeout)
-            .field("request_timeout", &self.request_timeout)
-            .field("connect_timeout", &self.connect_timeout)
-            .finish()
-    }
-}
-
-impl Default for GcsConfig {
-    fn default() -> Self {
-        Self {
-            bucket: String::new(),
-            prefix: None,
-            service_account_path: None,
-            service_account_key: None,
-            application_credentials_path: None,
-            endpoint: None,
-            allow_http: false,
-            multipart_threshold: DEFAULT_MULTIPART_THRESHOLD,
-            multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
-            max_retries: DEFAULT_MAX_RETRIES,
-            retry_timeout: DEFAULT_RETRY_TIMEOUT,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
-    }
 }
 
 #[cfg(test)]

@@ -7,28 +7,27 @@
 //! own background sweep run and watches a dead group disappear from
 //! `ListGroups`.
 
+mod support;
+
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig, codes};
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
-        describe_configs_response::DescribeConfigsResourceResult,
-        list_groups_request::ListGroupsRequest,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-        },
-        offset_delete_request::{
-            OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
-        },
+use krabka_protocol::owned::{
+    create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+    describe_configs_response::DescribeConfigsResourceResult,
+    list_groups_request::ListGroupsRequest,
+    offset_commit_request::{
+        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     },
-    primitives::uuid::Uuid as WireUuid,
+    offset_delete_request::{
+        OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
+    },
 };
 use krabka_units::{millis, minutes};
+use support::topic_id_for;
 
 /// `ConfigResource.Type.BROKER`.
 const RESOURCE_TYPE_BROKER: i8 = 4;
@@ -50,25 +49,6 @@ const CONFIG_TYPE_INT: i8 = 3;
 const CONFIG_TYPE_LONG: i8 = 5;
 const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
 const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
-
-/// The `topic_id` KIP-516 keys a commit by, read back through `Metadata`.
-async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id")
-        .topics
-        .iter()
-        .find(|topic| topic.name.as_deref() == Some(name))
-        .map(|topic| topic.topic_id)
-        .unwrap_or_default()
-}
 
 async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
     Arc::new(

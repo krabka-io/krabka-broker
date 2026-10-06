@@ -21,6 +21,7 @@ mod handshake;
 mod harness;
 #[path = "auth_handlers/inter_broker.rs"]
 mod inter_broker;
+mod kafka_wire;
 #[path = "auth_handlers/oauthbearer.rs"]
 mod oauthbearer;
 #[path = "auth_handlers/oauthbearer_sessions.rs"]

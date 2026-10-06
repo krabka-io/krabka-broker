@@ -52,7 +52,6 @@ const CLUSTER_METADATA_TOPIC: &str = "__cluster_metadata";
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -194,8 +193,7 @@ mod tests {
     /// `CLUSTER_AUTHORIZATION_FAILED` and no snapshot bytes.
     #[tokio::test]
     async fn fetch_snapshot_needs_cluster_action() {
-        let (handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
             config.authorizer = Arc::new(crate::test_support::GrantsInPrincipalName);
         })
         .await;
@@ -252,8 +250,7 @@ mod tests {
     #[tokio::test]
     async fn the_broker_listener_answers_as_kafkas_raft_client_does() {
         let version = fetch_snapshot_response::MAX_VERSION;
-        let (handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
             config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         })
         .await;
@@ -376,7 +373,6 @@ mod tests {
             let bytes = super::handle(
                 &broker,
                 version,
-                1,
                 &crate::test_support::encode_request(&req, version),
                 &ctx,
             )

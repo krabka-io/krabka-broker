@@ -229,10 +229,7 @@ impl ShareGroupState {
             session_timeout,
         );
         for id in &expired {
-            self.members.remove(id);
-        }
-        if !expired.is_empty() {
-            self.dirty = true;
+            self.remove_member(id);
         }
         expired
     }

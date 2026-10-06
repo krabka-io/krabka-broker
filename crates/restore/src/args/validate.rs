@@ -3,56 +3,14 @@
 //! A backend sub-flag such as `--archive-s3-region` belongs to the backend its
 //! `--archive-*` flag selected, and a bound belongs to a partition of a topic
 //! `--topic` selects; neither is a constraint clap's `ArgGroup` can state, so
-//! both are checked here and reported as `RestoreError::InvalidArgument`.
+//! both are checked here and reported as `RestoreError::InvalidArgument`. The
+//! backend rule is `krabka_object_store::ArchiveArgs::validate`, the one
+//! `krabka backup` applies to the same flags.
 
 use super::{PartitionRef, RestoreArgs};
 use crate::error::RestoreError;
 
 impl RestoreArgs {
-    /// Reject a sub-flag of a backend that was not selected.
-    fn validate_backend_flags(&self) -> Result<(), RestoreError> {
-        let archive = &self.archive;
-        let s3 = [
-            ("--archive-s3-region", archive.s3_region.is_some()),
-            ("--archive-s3-endpoint", archive.s3_endpoint.is_some()),
-            (
-                "--archive-s3-access-key-id",
-                archive.s3_access_key_id.is_some(),
-            ),
-            (
-                "--archive-s3-secret-access-key",
-                archive.s3_secret_access_key.is_some(),
-            ),
-            ("--archive-s3-allow-http", archive.s3_allow_http),
-        ];
-        let gcs = [
-            (
-                "--archive-gcs-service-account-path",
-                archive.gcs_service_account_path.is_some(),
-            ),
-            ("--archive-gcs-endpoint", archive.gcs_endpoint.is_some()),
-            ("--archive-gcs-allow-http", archive.gcs_allow_http),
-        ];
-        for (flags, selected, needs) in [
-            (&s3[..], archive.s3_bucket.is_some(), "--archive-s3-bucket"),
-            (
-                &gcs[..],
-                archive.gcs_bucket.is_some(),
-                "--archive-gcs-bucket",
-            ),
-        ] {
-            if selected {
-                continue;
-            }
-            if let Some((flag, _)) = flags.iter().find(|(_, given)| *given) {
-                return Err(RestoreError::InvalidArgument(format!(
-                    "{flag} needs {needs}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
     /// Check the flag combinations clap cannot express.
     ///
     /// # Errors
@@ -62,7 +20,10 @@ impl RestoreArgs {
     /// two `--to-offset` bounds, or when a bound names a topic that `--topic`
     /// excludes. Each means the operator wrote a flag that can never apply.
     pub fn validate(&self) -> Result<(), RestoreError> {
-        self.validate_backend_flags()?;
+        self.archive
+            .location
+            .validate()
+            .map_err(|error| RestoreError::InvalidArgument(error.to_string()))?;
 
         if self.archive.worm_key_id.len() != self.archive.worm_public_key.len() {
             return Err(RestoreError::InvalidArgument(format!(
@@ -130,7 +91,7 @@ mod tests {
     use assert2::check;
     use clap::Parser as _;
 
-    use crate::args::test_support::args_from;
+    use crate::{args::test_support::args_from, error::RestoreError};
 
     #[test]
     fn backend_sub_flags_require_their_bucket() {
@@ -147,7 +108,10 @@ mod tests {
             // The archive source in `args_from` is `--archive-local`, so every one
             // of these names a backend that was not selected.
             let args = args_from(&stray).expect("args");
-            check!(args.validate().is_err(), "{stray:?}");
+            check!(
+                matches!(args.validate(), Err(RestoreError::InvalidArgument(_))),
+                "{stray:?}"
+            );
         }
     }
 

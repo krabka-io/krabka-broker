@@ -99,8 +99,8 @@ impl Checkpoint {
         let seq_high = Seq(v.get("seq_high")?.as_u64()?);
         let chain_head = from_hex32(v.get("chain_head")?.as_str()?)?;
         let time_ms = EpochMs(v.get("time")?.as_i64()?);
-        let signature = hex_vec(v.get("signature")?.as_str()?)?;
-        let public_key = hex_vec(v.get("public_key")?.as_str()?)?;
+        let signature = hex::decode(v.get("signature")?.as_str()?).ok()?;
+        let public_key = hex::decode(v.get("public_key")?.as_str()?).ok()?;
         Some(Self {
             key_id,
             seq_high,
@@ -110,16 +110,6 @@ impl Checkpoint {
             public_key,
         })
     }
-}
-
-fn hex_vec(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect()
 }
 
 #[cfg(test)]
@@ -173,5 +163,20 @@ mod tests {
         // flip the head the signature was computed over
         cp.chain_head = [4u8; 32];
         check!(!cp.verify(&pubkey));
+    }
+
+    #[test]
+    fn from_value_rejects_malformed_hex_without_panicking() {
+        let (s, _) = signer();
+        let cp = Checkpoint::signed(&s, Seq(1), &[5u8; 32], EpochMs(10));
+        for (name, bad) in [
+            ("non-ASCII straddling a pair", "a\u{e9}a"),
+            ("sign prefix", "+f"),
+            ("odd length", "abc"),
+        ] {
+            let mut v: serde_json::Value = serde_json::from_slice(&cp.to_record().value).unwrap();
+            v["signature"] = serde_json::Value::from(bad);
+            check!(Checkpoint::from_value(&v).is_none(), "case {name}");
+        }
     }
 }

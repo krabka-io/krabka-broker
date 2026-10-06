@@ -118,6 +118,7 @@ pub(crate) fn submit_error(error: &RaftError) -> (i16, String) {
 /// The struct exists so that one call site names each field. The event carries
 /// thirteen of them, and a positional call would be unreadable and easy to
 /// transpose.
+#[derive(Clone, Copy)]
 pub(crate) struct PrivilegedAudit<'a> {
     /// Whether the phase succeeded.
     pub outcome: AuditOutcome,
@@ -154,7 +155,12 @@ pub(crate) fn audit_privileged(
     approver_set_fingerprint: String,
     event: &PrivilegedAudit<'_>,
 ) {
-    audit_log.emit(privileged_event(ctx, approver_set_fingerprint, event));
+    audit_log.emit(privileged_event(
+        ctx,
+        approver_set_fingerprint,
+        event,
+        NO_SIGNED_STAMP,
+    ));
 }
 
 /// Write the action's intent before a fail-closed caller mutates state.
@@ -173,24 +179,33 @@ pub(crate) async fn require_privileged(
     let attempted = PrivilegedAudit {
         outcome: AuditOutcome::Success,
         phase: PrivilegedPhase::Attempted,
-        action: event.action,
-        target: event.target,
-        proposal_id: event.proposal_id,
-        counterparties: event.counterparties,
-        key_id: event.key_id,
-        signature: event.signature,
-        signature_verified: event.signature_verified,
-        reason: event.reason,
+        ..*event
     };
     audit_log
-        .emit_required(privileged_event(ctx, approver_set_fingerprint, &attempted))
+        .emit_required(privileged_event(
+            ctx,
+            approver_set_fingerprint,
+            &attempted,
+            NO_SIGNED_STAMP,
+        ))
         .await
 }
 
-fn privileged_event(
+/// The `signed_at_ms` of a break-glass event.
+///
+/// A break-glass approval signs the proposal's `created_at_ms` and
+/// `expires_at_ms`, not one stamp, so there is nothing to put there.
+const NO_SIGNED_STAMP: i64 = 0;
+
+/// Build the [`AuditEvent::PrivilegedAction`] that `event` describes.
+///
+/// `signed_at_ms` is the stamp inside the signed preimage, which a write-freeze
+/// carries and a break-glass event does not.
+pub(crate) fn privileged_event(
     ctx: &RequestContext<'_>,
     approver_set_fingerprint: String,
     event: &PrivilegedAudit<'_>,
+    signed_at_ms: i64,
 ) -> AuditEvent {
     AuditEvent::PrivilegedAction {
         outcome: event.outcome,
@@ -217,9 +232,7 @@ fn privileged_event(
         key_id: event.key_id.to_owned(),
         signature: event.signature.to_vec(),
         signature_verified: event.signature_verified,
-        // A break-glass approval signs the proposal's `created_at_ms` and
-        // `expires_at_ms`, not one stamp, so there is nothing to put here.
-        signed_at_ms: 0,
+        signed_at_ms,
         source: AuditEndpoint {
             ip: ctx.peer.ip().to_string(),
             port: ctx.peer.port(),
@@ -232,16 +245,12 @@ fn privileged_event(
 #[cfg(test)]
 pub(crate) mod tests {
     use assert2::{assert, check};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::Principal;
 
     use super::*;
 
     pub(crate) fn principal(name: &str) -> Principal {
-        Principal {
-            name: name.to_owned(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        }
+        crate::test_support::sasl_principal(name)
     }
 
     pub(crate) fn peer() -> std::net::SocketAddr {

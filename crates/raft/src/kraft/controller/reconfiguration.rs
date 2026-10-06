@@ -17,7 +17,7 @@ use krabka_verified::reconfiguration::{
 use tokio::sync::oneshot;
 
 use super::{
-    Engine, PendingReconfig,
+    Engine, KraftController, PendingReconfig,
     control_state::{voter_set_to_wire, voter_supports_version},
     offsets::{hwm_reaches_waiter, leader_alone_is_majority, validate_append_result},
     records::{decode_control_record, start_of_epoch_batch, typed_control_batch},
@@ -147,7 +147,9 @@ impl Engine {
         let voters = self.core.quorum_state().voters.clone();
         let controls = bootstrap_controls(kraft_version, expected_base, &voters);
         let mut batch = start_of_epoch_batch(epoch, self.me, &voters, &controls)?;
-        let base = self.log.append(&mut batch, Self::wall_clock_ms())?;
+        let base = self
+            .log
+            .append(&mut batch, KraftController::wall_clock_ms())?;
         validate_append_result(
             "leader-change",
             expected_base,
@@ -377,7 +379,10 @@ impl Engine {
                 return;
             }
         };
-        let base = match self.log.append(&mut batch, Self::wall_clock_ms()) {
+        let base = match self
+            .log
+            .append(&mut batch, KraftController::wall_clock_ms())
+        {
             Ok(base) => base,
             Err(error) => {
                 let _ = reply.send(Err(error));

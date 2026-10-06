@@ -1,10 +1,8 @@
 //! The metric seam of the barrier coordinator.
 //!
-//! The coordinator reports each injection through this trait. The broker binds
-//! it to the process metric registry. A unit test binds [`NoBarrierMetrics`],
-//! so no test needs a live registry.
+//! The coordinator reports each injection through [`BrokerBarrierMetrics`],
+//! which feeds the process metric registry.
 
-use krabka_ids::PartitionIndex;
 use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::barrier::persistence::CutStatus;
@@ -25,30 +23,9 @@ pub(crate) struct InjectionReport {
 }
 
 /// The counters and gauges that the barrier coordinator feeds.
-pub(crate) trait BarrierMetrics: Send + Sync {
-    /// The coordinator wrote the injection-start record of `epoch`.
-    fn injection_started(&self, group: &str, epoch: i64);
-
-    /// The coordinator published the cut of one injection.
-    fn injection_completed(&self, group: &str, report: InjectionReport);
-
-    /// One marker landed in a partition this broker leads, or in one a remote
-    /// leader answered for.
-    fn marker_written(&self, topic: &str);
-
-    /// One marker append failed. The coordinator retries the partition until
-    /// its deadline runs out.
-    fn marker_append_failed(&self, topic: &str, partition: PartitionIndex);
-
-    /// How many groups this broker coordinates now.
-    fn groups_coordinated(&self, count: usize);
-}
-
-/// The [`BarrierMetrics`] the running broker uses.
 ///
 /// It holds a [`BrokerMetrics`](crate::metrics::BrokerMetrics), which clones
-/// cheaply, so the coordinator can own one behind an `Arc<dyn BarrierMetrics>`
-/// without borrowing from the broker.
+/// cheaply, so the coordinator can own one without borrowing from the broker.
 #[derive(Clone)]
 pub(crate) struct BrokerBarrierMetrics {
     metrics: crate::metrics::BrokerMetrics,
@@ -64,17 +41,17 @@ impl BrokerBarrierMetrics {
             group: group.to_owned(),
         }
     }
-}
 
-impl BarrierMetrics for BrokerBarrierMetrics {
-    fn injection_started(&self, group: &str, _epoch: i64) {
+    /// The coordinator wrote the injection-start record of `epoch`.
+    pub(crate) fn injection_started(&self, group: &str, _epoch: i64) {
         self.metrics
             .barrier_epochs_started_total
             .get_or_create(&Self::group(group))
             .inc();
     }
 
-    fn injection_completed(&self, group: &str, report: InjectionReport) {
+    /// The coordinator published the cut of one injection.
+    pub(crate) fn injection_completed(&self, group: &str, report: InjectionReport) {
         let label = Self::group(group);
         // A partial cut is published, so it counts as an outcome, not as a
         // failure. The two counters separate the alertable case from the
@@ -104,43 +81,20 @@ impl BarrierMetrics for BrokerBarrierMetrics {
             .set(report.epoch);
     }
 
-    fn marker_written(&self, topic: &str) {
-        let label = crate::metrics::TopicLabel {
-            topic: std::sync::Arc::from(topic),
-        };
-        self.metrics
-            .barrier_markers_written_total
-            .get_or_create(&label)
-            .inc();
-        self.metrics.track_topic_series(&label);
+    /// One marker landed in a partition this broker leads, or in one a remote
+    /// leader answered for.
+    pub(crate) fn marker_written(&self, topic: &str) {
+        self.metrics.count_topic(
+            &self.metrics.barrier_markers_written_total,
+            std::sync::Arc::from(topic),
+            1,
+        );
     }
 
-    fn marker_append_failed(&self, _topic: &str, _partition: PartitionIndex) {
-        // No counter carries this yet. Every call site logs the topic, the
-        // partition and the error at warn, and a run of failures shows up as a
-        // partial cut on barrier_epochs_published_partial_total.
-    }
-
-    fn groups_coordinated(&self, count: usize) {
+    /// How many groups this broker coordinates now.
+    pub(crate) fn groups_coordinated(&self, count: usize) {
         self.metrics
             .barrier_groups_coordinated
             .set(i64::try_from(count).unwrap_or(i64::MAX));
     }
-}
-
-/// A [`BarrierMetrics`] that counts nothing.
-///
-/// It exists so a unit test needs no live metric registry.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct NoBarrierMetrics;
-
-#[cfg(test)]
-impl BarrierMetrics for NoBarrierMetrics {
-    fn injection_started(&self, _group: &str, _epoch: i64) {}
-
-    fn marker_written(&self, _topic: &str) {}
-    fn injection_completed(&self, _group: &str, _report: InjectionReport) {}
-    fn marker_append_failed(&self, _topic: &str, _partition: PartitionIndex) {}
-    fn groups_coordinated(&self, _count: usize) {}
 }

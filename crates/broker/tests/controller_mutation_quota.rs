@@ -16,12 +16,15 @@
 // where every `.rs` file would become another test binary.
 #[path = "controller_mutation_quota/cluster.rs"]
 mod cluster;
+mod kafka_wire;
 #[path = "controller_mutation_quota/quota_admin.rs"]
 mod quota_admin;
 #[path = "controller_mutation_quota/topic_admin.rs"]
 mod topic_admin;
-#[path = "controller_mutation_quota/wire.rs"]
-mod wire;
+
+/// The client id every request header in this suite carries, which is what the
+/// broker reads when it looks the mutation quota up.
+const CLIENT_ID: &str = "krabka-mutation-quota-test";
 
 use assert2::{assert, check};
 use krabka_metadata::{

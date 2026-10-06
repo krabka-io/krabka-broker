@@ -9,7 +9,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{sample_batch, sample_batch_with_epoch, test_batch_at},
+    log::test_support::{sample_batch, sample_batch_with_epoch, test_batch_at, test_log},
     producer_snapshot::ProducerSnapshotEntry,
     stamp_index::{StampEntry, StampIndex},
     txn_index::AbortedTxn,
@@ -25,8 +25,7 @@ use crate::{
 /// on every fetch and never rejoin the ISR.
 #[test]
 fn a_truncation_below_the_log_start_lowers_the_start_to_the_target() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (dir, mut log) = test_log();
     for _ in 0..4 {
         let mut batch = sample_batch(2);
         log.append(&mut batch).expect("append");
@@ -52,8 +51,7 @@ fn a_truncation_below_the_log_start_lowers_the_start_to_the_target() {
 /// starts and ends at the target, and appends continue from there.
 #[test]
 fn a_truncation_below_every_local_segment_resets_the_log_at_the_target() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     log.reset_to(Offset(20)).unwrap();
     for _ in 0..3 {
         let mut batch = sample_batch(2);
@@ -73,8 +71,7 @@ fn a_truncation_below_every_local_segment_resets_the_log_at_the_target() {
 
 #[test]
 fn truncate_to_drops_later_records() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b1 = sample_batch(3);
     let mut b2 = sample_batch(2);
     log.append(&mut b1).unwrap();
@@ -87,8 +84,7 @@ fn truncate_to_drops_later_records() {
 
 #[test]
 fn truncation_clamps_tail_state_to_the_actual_retained_batch_prefix() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     log.append(&mut sample_batch(3)).unwrap();
     log.append(&mut sample_batch(3)).unwrap();
     log.active_txn_index
@@ -272,8 +268,7 @@ fn producer_snapshots_follow_kafkas_lifecycle() {
 
 #[test]
 fn truncate_to_log_end_is_noop() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b = sample_batch(2);
     log.append(&mut b).unwrap();
     let before = log.log_end_offset();
@@ -290,8 +285,7 @@ fn truncate_to_log_end_is_noop() {
 // (`rel = 3`) leave every batch in place → log_end 4.
 #[test]
 fn truncate_to_promoted_sealed_uses_relative_offset() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let big = LogConfig {
         segment_size: gibibytes(1),
         ..LogConfig::default()
@@ -328,8 +322,7 @@ fn truncate_to_promoted_sealed_uses_relative_offset() {
 // mutant (`rel = 4`) drops nothing → log_end 4.
 #[test]
 fn truncate_to_active_segment_uses_relative_offset() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let big = LogConfig {
         segment_size: gibibytes(1),
         ..LogConfig::default()
@@ -357,8 +350,7 @@ fn truncate_to_active_segment_uses_relative_offset() {
 
 #[test]
 fn truncate_removes_stamps_for_discarded_tail() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (dir, mut log) = test_log();
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(10, 1),
     ))
@@ -475,8 +467,7 @@ fn a_no_op_truncation_still_drops_an_epoch_no_record_backs() {
         start_offset: Offset(start_offset),
     };
     for (name, target) in [("at the log end", 3), ("past the log end", 9)] {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         log.append(&mut sample_batch_with_epoch(3, 1)).unwrap();
         log.assign_epoch_start_offset(LeaderEpoch(5), Offset(3))
             .unwrap();
@@ -526,8 +517,7 @@ fn trim_to_offset_drops_old_segments() {
 
 #[test]
 fn trim_to_offset_clamps_to_leo() {
-    let dir = tempdir().expect("tempdir");
-    let mut log = Log::open(dir.path(), LogConfig::default()).expect("open");
+    let (_dir, mut log) = test_log();
     for _ in 0..3 {
         let mut b = sample_batch(1);
         log.append(&mut b).expect("append");
@@ -540,15 +530,13 @@ fn trim_to_offset_clamps_to_leo() {
 
 #[test]
 fn trim_to_offset_rejects_negative() {
-    let dir = tempdir().expect("tempdir");
-    let mut log = Log::open(dir.path(), LogConfig::default()).expect("open");
+    let (_dir, mut log) = test_log();
     assert2::assert!(log.trim_to_offset(Offset(-5)).is_err());
 }
 
 #[test]
 fn trim_to_offset_idempotent_at_or_below_log_start() {
-    let dir = tempdir().expect("tempdir");
-    let mut log = Log::open(dir.path(), LogConfig::default()).expect("open");
+    let (_dir, mut log) = test_log();
     for _ in 0..3 {
         let mut b = sample_batch(1);
         log.append(&mut b).expect("append");

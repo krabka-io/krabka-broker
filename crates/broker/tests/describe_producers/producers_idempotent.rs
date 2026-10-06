@@ -53,7 +53,7 @@ async fn empty_partition_returns_no_active_producers() {
 async fn after_idempotent_produce_describe_returns_the_producer() {
     let p = support::start().await;
     create_topic(&p.client, "t", 1).await;
-    let topic_id = topic_id_for(&p, "t").await;
+    let topic_id = topic_id_for(&p.client, "t").await;
 
     let (pid, epoch) = init_producer(&p).await;
     assert!(pid >= 0);
@@ -117,7 +117,7 @@ async fn after_idempotent_produce_describe_returns_the_producer() {
 async fn multiple_producers_on_same_partition_all_surfaced() {
     let p = support::start().await;
     create_topic(&p.client, "shared", 1).await;
-    let topic_id = topic_id_for(&p, "shared").await;
+    let topic_id = topic_id_for(&p.client, "shared").await;
 
     let (pid_a, epoch_a) = init_producer(&p).await;
     let (pid_b, epoch_b) = init_producer(&p).await;

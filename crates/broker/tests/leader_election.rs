@@ -18,9 +18,9 @@ use krabka_protocol::{
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
-    primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
+use support::{cluster_lock, topic_id_for};
 use tempfile::TempDir;
 
 mod support;
@@ -59,24 +59,6 @@ async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str, rf: i1
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "CreateTopics: {resp:?}");
     broker.wait_until_partition_present(name, 0).await;
-}
-
-async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 fn record_batch_with_values(values: &[&str]) -> RecordBatch {
@@ -132,12 +114,6 @@ async fn produce_acks(
     } else {
         Err(pr.error_code)
     }
-}
-
-// Cluster lock — same rationale as replication.rs.
-fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 /// Waits until every survivor sees a controller leader that is not `victim`.

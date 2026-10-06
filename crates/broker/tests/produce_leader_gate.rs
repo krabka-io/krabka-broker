@@ -28,10 +28,7 @@
 //! These tests are Windows-gated like the other multi-broker tests. openraft
 //! `debug_assert!` races on the hosted Windows scheduler.
 
-use std::{
-    sync::OnceLock,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use assert2::assert;
 use krabka_broker::BrokerHandle;
@@ -45,7 +42,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
-use tokio::sync::Mutex;
+use support::cluster_lock;
 
 mod support;
 
@@ -57,11 +54,6 @@ mod support;
 /// advertises the address of the listener the request arrived on, so this is
 /// the endpoint name the refusal must answer with.
 const PLAINTEXT_LISTENER: &str = "PLAINTEXT";
-
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 fn one_record_batch(v: &str) -> RecordBatch {
     RecordBatch {

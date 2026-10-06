@@ -6,19 +6,16 @@
 //! `TOPIC_AUTHORIZATION_FAILED` -- no partial disclosure, and the group
 //! coordinator never runs.
 
-use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use krabka_protocol::owned::streams_group_heartbeat_request::Topology;
 
-use crate::{broker::Broker, handlers::RequestContext};
+use crate::broker::Broker;
 
 /// Kafka's `requiredTopics`: every source, repartition sink, repartition
 /// source and changelog topic of the topology, deduplicated in first-seen
 /// order across the subtopologies.
 pub(super) fn required_topics(topology: &Topology) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for subtopology in &topology.subtopologies {
-        let names = subtopology
+    dedup_first_seen(topology.subtopologies.iter().flat_map(|subtopology| {
+        subtopology
             .source_topics
             .iter()
             .map(String::as_str)
@@ -39,14 +36,20 @@ pub(super) fn required_topics(topology: &Topology) -> Vec<String> {
                     .state_changelog_topics
                     .iter()
                     .map(|topic| topic.name.as_str()),
-            );
-        for name in names {
-            if seen.insert(name) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    out
+            )
+    }))
+}
+
+/// `names` with every repeat dropped, in first-seen order: the dedupe of
+/// Kafka's `requiredTopics`, shared by the heartbeat and describe views of a
+/// topology.
+pub(crate) fn dedup_first_seen<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    names
+        .into_iter()
+        .filter(|name| seen.insert(*name))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Kafka's `Topic.isInternal` and `Topic.isValid` checks on `required`, both
@@ -76,26 +79,6 @@ pub(super) fn invalid_topology_message(broker: &Broker, required: &[String]) -> 
         ));
     }
     None
-}
-
-/// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)`: `true` when
-/// any of `required` denies `Describe`.
-pub(super) fn describe_denied(
-    broker: &Broker,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-    required: &[String],
-) -> bool {
-    required.iter().any(|topic| {
-        crate::handlers::acl_denied(
-            broker.config.authorizer.as_ref(),
-            image,
-            ctx,
-            ResourceType::Topic,
-            topic,
-            AclOperation::Describe,
-        )
-    })
 }
 
 #[cfg(test)]

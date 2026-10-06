@@ -9,10 +9,13 @@
 //! partition -- the reconnect storm an operator used to see during a roll.
 
 use krabka_client_core::{Connection, ConnectionOptions};
+use krabka_security::ListenerProtocol;
 use krabka_units::{Time, convert::TimeExt, fmt::Human as _};
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::FetcherConfig;
+use crate::{config::ReplicationRuntimeConfig, network::client::InterBrokerClient};
 
 pub(super) fn connection_options(client_id: &str) -> ConnectionOptions {
     ConnectionOptions {
@@ -21,51 +24,98 @@ pub(super) fn connection_options(client_id: &str) -> ConnectionOptions {
     }
 }
 
+/// One leader to dial, and the policy that governs redials.
+///
+/// Both the partition fetcher and the diskless WAL follower build one, so the
+/// two share a reconnect schedule and a shutdown race.
+pub(crate) struct LeaderDial<'a> {
+    /// Names the caller in the retry warning.
+    pub(crate) label: &'static str,
+    pub(crate) client: &'a InterBrokerClient,
+    pub(crate) host: &'a str,
+    pub(crate) port: u16,
+    pub(crate) protocol: ListenerProtocol,
+    pub(crate) server_name: &'a str,
+    pub(crate) client_id: &'a str,
+    pub(crate) replication: &'a ReplicationRuntimeConfig,
+    pub(crate) shutdown: &'a CancellationToken,
+}
+
+impl<'a> LeaderDial<'a> {
+    fn fetcher(fetcher: &'a FetcherConfig) -> Self {
+        Self {
+            label: "replicator",
+            client: &fetcher.inter_broker_client,
+            host: &fetcher.leader_host,
+            port: fetcher.leader_port,
+            protocol: fetcher.inter_broker_listener_protocol,
+            server_name: &fetcher.inter_broker_server_name,
+            client_id: &fetcher.client_id,
+            replication: &fetcher.replication,
+            shutdown: &fetcher.shutdown,
+        }
+    }
+}
+
 /// Opens a [`Connection`] against a fetcher's leader.
+///
+/// See [`connect_leader_with_backoff`].
+pub(super) async fn connect_with_backoff(fetcher: &FetcherConfig) -> Result<Connection, String> {
+    connect_leader_with_backoff(&LeaderDial::fetcher(fetcher)).await
+}
+
+/// Opens a [`Connection`] against `dial`'s leader.
 ///
 /// The function retries with exponential backoff, with a cap from the
 /// configured reconnect policy. It returns `Err` only if a shutdown starts
-/// during the wait.
+/// during a dial or the wait.
 ///
 /// The connection routes through the shared [`InterBrokerClient`], which runs
 /// TLS and SASL when the inter-broker listener needs them. It falls back to
 /// plain TCP for `ListenerProtocol::Plaintext`.
-pub(super) async fn connect_with_backoff(fetcher: &FetcherConfig) -> Result<Connection, String> {
-    let mut delay = reconnect_delay(&fetcher.replication, None);
+pub(crate) async fn connect_leader_with_backoff(
+    dial: &LeaderDial<'_>,
+) -> Result<Connection, String> {
+    let mut delay = reconnect_delay(dial.replication, None);
     loop {
-        let opts = connection_options(&fetcher.client_id);
-        let attempt = fetcher.inter_broker_client.connect_as_connection(
-            &fetcher.leader_host,
-            fetcher.leader_port,
-            fetcher.inter_broker_listener_protocol,
-            &fetcher.inter_broker_server_name,
-            opts,
+        let attempt = dial.client.connect_as_connection(
+            dial.host,
+            dial.port,
+            dial.protocol,
+            dial.server_name,
+            connection_options(dial.client_id),
         );
         let result = tokio::select! {
-            () = fetcher.shutdown.cancelled() => return Err("cancelled".into()),
+            () = dial.shutdown.cancelled() => return Err("cancelled".into()),
             r = attempt => r,
         };
         match result {
             Ok(c) => return Ok(c),
             Err(e) => {
                 warn!(
-                    host = %fetcher.leader_host, port = fetcher.leader_port, error = %e,
-                    "replicator: connect failed; retrying after {}", delay.human()
+                    host = %dial.host, port = dial.port, error = %e,
+                    "{}: connect failed; retrying after {}", dial.label, delay.human()
                 );
-                tokio::select! {
-                    () = fetcher.shutdown.cancelled() => return Err("cancelled".into()),
-                    () = tokio::time::sleep(delay.to_std()) => {}
-                }
-                delay = reconnect_delay(&fetcher.replication, Some(delay));
+                sleep_or_cancel(dial.shutdown, delay).await?;
+                delay = reconnect_delay(dial.replication, Some(delay));
             }
         }
     }
 }
 
-fn reconnect_delay(
-    replication: &crate::config::ReplicationRuntimeConfig,
-    previous: Option<Time>,
-) -> Time {
+/// Sleeps for `delay`, or returns `Err` as soon as `shutdown` is cancelled,
+/// so a shutdown always wins over a pending retry delay.
+pub(crate) async fn sleep_or_cancel(
+    shutdown: &CancellationToken,
+    delay: Time,
+) -> Result<(), String> {
+    tokio::select! {
+        () = shutdown.cancelled() => Err("cancelled".into()),
+        () = tokio::time::sleep(delay.to_std()) => Ok(()),
+    }
+}
+
+fn reconnect_delay(replication: &ReplicationRuntimeConfig, previous: Option<Time>) -> Time {
     previous.map_or(replication.reconnect_initial_delay, |delay| {
         // `Time` has no `Ord` — its `f64` storage is only `PartialOrd` — so the
         // cap is applied by comparison rather than `Ord::min`.
@@ -78,7 +128,7 @@ fn reconnect_delay(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::millis;
+    use krabka_units::{millis, secs};
 
     use super::*;
     use crate::replicator::test_support::{LEADER_ID, image_with_leader, test_config};
@@ -94,5 +144,14 @@ mod tests {
         let capped = reconnect_delay(&cfg.replication, Some(second));
 
         assert!((first, second, capped) == (millis(37), millis(74), millis(100)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_completes_on_delay_or_cancellation() {
+        let shutdown = CancellationToken::new();
+        assert!(sleep_or_cancel(&shutdown, millis(10)).await.is_ok());
+
+        shutdown.cancel();
+        assert!(sleep_or_cancel(&shutdown, secs(1)).await.is_err());
     }
 }

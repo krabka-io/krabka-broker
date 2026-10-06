@@ -8,17 +8,13 @@
 //! Request fields: `transactional_id`, `producer_id`, `producer_epoch`, `group_id`.
 //! Response fields: `throttle_time_ms`, `error_code`.
 
-use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-    },
+use krabka_protocol::owned::{
+    add_offsets_to_txn_request::AddOffsetsToTxnRequest,
+    add_offsets_to_txn_response::AddOffsetsToTxnResponse,
 };
 
 use crate::{
@@ -26,7 +22,7 @@ use crate::{
     codes,
     coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
     error::BrokerError,
-    handlers::{RequestContext, acl_denied, group_read_denied},
+    handlers::{ErrorCodeResponse as _, RequestContext, acl_denied, group_read_denied},
     txn::{
         coordinator::TxnCoordinator,
         state::{TopicPartition, TxnEntry, TxnState},
@@ -37,17 +33,14 @@ use crate::{
 
 pub(crate) async fn handle(
     broker: &Broker,
+    req: AddOffsetsToTxnRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = AddOffsetsToTxnRequest::decode(&mut cur, version)?;
+) -> Result<AddOffsetsToTxnResponse, BrokerError> {
     if let Some(error_code) = authorization_error(broker, ctx, &req) {
-        return encode_response(version, error_code);
+        return Ok(AddOffsetsToTxnResponse::error(error_code));
     }
-    serve(broker, version, req).await
+    Ok(serve(broker, version, req).await)
 }
 
 /// Kafka's `KafkaApis.handleAddOffsetsToTxnRequest` checks `Write` on the
@@ -81,7 +74,7 @@ fn serve(
     broker: &Broker,
     version: i16,
     req: AddOffsetsToTxnRequest,
-) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
+) -> BoxFuture<'static, AddOffsetsToTxnResponse> {
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
     Box::pin(async move {
@@ -108,18 +101,8 @@ fn serve(
             txnv,
         )
         .await;
-        encode_response(version, wire_code(version, code))
+        AddOffsetsToTxnResponse::error(crate::txn::util::producer_fenced_wire_code(version, code))
     })
-}
-
-/// Kafka `KafkaApis.handleAddOffsetsToTxnRequest`: a client below version 2
-/// does not know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
-fn wire_code(version: i16, code: i16) -> i16 {
-    if version < 2 && code == codes::PRODUCER_FENCED {
-        codes::INVALID_PRODUCER_EPOCH
-    } else {
-        code
-    }
 }
 
 /// What `AddOffsetsToTxn` does with one coordinator entry.
@@ -227,18 +210,6 @@ async fn add_offsets_partition(
             coord.append_error_code(transactional_id, &error).await
         }
     }
-}
-
-// ── encoding helpers ──────────────────────────────────────────────────────────
-
-fn encode_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    let resp = AddOffsetsToTxnResponse {
-        error_code,
-        ..Default::default()
-    };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
 }
 
 #[cfg(test)]

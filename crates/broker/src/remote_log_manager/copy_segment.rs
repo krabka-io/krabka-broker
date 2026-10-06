@@ -18,10 +18,9 @@ use super::{
     RemoteTier,
     archive::{ArchiveMode, ChainPosition},
     leader_epoch::leader_epoch_index_bytes,
-    now_ms,
     rlmm::rlmm_mutate,
 };
-use crate::metrics::RemoteTierPath;
+use crate::{metrics::RemoteTierPath, time_util::now_ms};
 
 /// What one [`copy_one`] attempt left behind.
 #[derive(Debug)]

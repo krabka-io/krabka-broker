@@ -316,23 +316,12 @@ impl krabka_raft::OutboundDialer for InterBrokerDialer {
         // (the openraft `Node.addr` string). For SocketAddr-style
         // addresses we honour the configured `server_name` for SNI
         // separately from the literal host string.
-        let (host, port) = match addr.rsplit_once(':') {
-            Some((h, p)) => {
-                let port: u16 = p.parse().map_err(|e: std::num::ParseIntError| {
-                    krabka_client_core::ClientError::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("invalid raft peer port in {addr:?}: {e}"),
-                    ))
-                })?;
-                (h.to_string(), port)
-            }
-            None => {
-                return Err(krabka_client_core::ClientError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("raft peer address missing port: {addr:?}"),
-                )));
-            }
-        };
+        let (host, port) = crate::host_port::parse_host_port(addr).ok_or_else(|| {
+            krabka_client_core::ClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid raft peer address {addr:?}"),
+            ))
+        })?;
         self.client
             .connect_as_connection(
                 &host,

@@ -15,7 +15,7 @@ use krabka_protocol::krabka::barrier::{
     WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
     WriteBarrierMarkersResponse,
 };
-use krabka_security::{AuthMethod, Principal};
+use krabka_security::Principal;
 
 use crate::{
     authorizer::AllowAllAuthorizer,
@@ -29,11 +29,7 @@ use crate::{
 const VERSION: i16 = 0;
 
 fn principal() -> Principal {
-    Principal {
-        name: "ANONYMOUS".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: vec![],
-    }
+    crate::test_support::principal("ANONYMOUS")
 }
 
 fn entry(group: &str, topic: &str, delete: bool) -> AlterableBarrierGroup {

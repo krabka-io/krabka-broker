@@ -21,6 +21,8 @@ use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::task_util::run_every;
+
 /// Minimal controller surface for the sweep. [`crate::broker`] adapts the
 /// real [`krabka_raft::ControllerHandle`]. Tests inject a mock.
 #[async_trait]
@@ -36,17 +38,9 @@ pub(crate) async fn run(
     interval: Time,
     shutdown: CancellationToken,
 ) {
-    let mut tick = tokio::time::interval(interval.to_std());
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = tick.tick() => sweep(&*controller).await,
-            () = shutdown.cancelled() => {
-                info!("delegation-token cleanup shutting down");
-                return;
-            }
-        }
-    }
+    let tick = tokio::time::interval(interval.to_std());
+    run_every(tick, &shutdown, || sweep(&*controller)).await;
+    info!("delegation-token cleanup shutting down");
 }
 
 pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {

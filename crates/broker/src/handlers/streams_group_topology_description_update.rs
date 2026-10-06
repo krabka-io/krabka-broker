@@ -24,13 +24,9 @@
 //!    `INVALID_REQUEST` for another topology epoch or a malformed
 //!    description, or success once the description is stored.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        streams_group_topology_description_update_request::StreamsGroupTopologyDescriptionUpdateRequest,
-        streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
-    },
+use krabka_protocol::owned::{
+    streams_group_topology_description_update_request::StreamsGroupTopologyDescriptionUpdateRequest,
+    streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
 };
 use tokio::sync::oneshot;
 
@@ -42,7 +38,7 @@ use crate::{
         streams::actor::{DescriptionPush, PushAnswer, StreamsGroupActorMessage},
     },
     error::BrokerError,
-    handlers::{RequestContext, group_read_denied},
+    handlers::{ErrorResponse as _, RequestContext, group_read_denied},
 };
 
 /// The message of trunk's `UnsupportedVersionException` for a broker with no
@@ -50,35 +46,24 @@ use crate::{
 const NO_PLUGIN_MESSAGE: &str =
     "The broker has no streams group topology description plugin configured.";
 
-/// Minimum finalized `streams.version` at which the broker serves the
-/// KIP-1071 streams RPCs.
-const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
-
 #[tracing::instrument(
     name = "handle_streams_group_topology_description_update",
     level = "info",
     skip_all,
-    fields(api = "StreamsGroupTopologyDescriptionUpdate", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "StreamsGroupTopologyDescriptionUpdate", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: StreamsGroupTopologyDescriptionUpdateRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = StreamsGroupTopologyDescriptionUpdateRequest::decode(&mut cur, version)?;
+) -> Result<StreamsGroupTopologyDescriptionUpdateResponse, BrokerError> {
     let (error_code, error_message) = answer(broker, req, ctx).await;
-    crate::handlers::encode_response(
-        &StreamsGroupTopologyDescriptionUpdateResponse {
-            error_code,
-            error_message,
-            ..Default::default()
-        },
-        version,
-    )
+    Ok(StreamsGroupTopologyDescriptionUpdateResponse::error(
+        error_code,
+        error_message,
+    ))
 }
 
 /// The error code and message that trunk answers `req` with.
@@ -90,13 +75,7 @@ async fn answer(
     let invalid = |message: &str| (codes::INVALID_REQUEST, Some(message.to_owned()));
     {
         let image = broker.controller.current_image();
-        let streams_enabled = broker.config.streams_group.enable
-            && crate::features::feature_enabled(
-                &image,
-                crate::features::STREAMS_VERSION,
-                STREAMS_VERSION_MIN_LEVEL,
-            );
-        if !streams_enabled {
+        if !crate::handlers::streams_protocol_enabled(broker, &image) {
             return (codes::UNSUPPORTED_VERSION, None);
         }
         if group_read_denied(

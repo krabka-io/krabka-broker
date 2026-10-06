@@ -44,7 +44,7 @@ async fn idempotent_produce_dedups_duplicate_batch() {
     let p = support::start().await;
 
     create_topic(&p, "idem", 1).await;
-    let idem_id = topic_id_for(&p, "idem").await;
+    let idem_id = topic_id_for(&p.client, "idem").await;
 
     let init = p
         .client
@@ -89,7 +89,7 @@ async fn out_of_order_returns_45() {
     let p = support::start().await;
 
     create_topic(&p, "ooo", 1).await;
-    let ooo_id = topic_id_for(&p, "ooo").await;
+    let ooo_id = topic_id_for(&p.client, "ooo").await;
 
     let init = p
         .client

@@ -51,13 +51,13 @@ use super::{
         actor::{GroupActorMessage, ReapOutcome},
     },
 };
-use crate::metadata_source::MetadataSource;
+use crate::{metadata_source::MetadataSource, task_util::run_every};
 
 #[cfg(test)]
 mod tests;
 
-/// Spawn the sweep. It returns when `shutdown` is cancelled.
-pub(crate) fn spawn(
+/// Runs the sweep. It returns when `shutdown` is cancelled.
+pub(crate) async fn run(
     node_id: NodeId,
     metadata: Arc<dyn MetadataSource>,
     coordinator: Arc<GroupCoordinator>,
@@ -65,49 +65,23 @@ pub(crate) fn spawn(
     retention: Time,
     shutdown: CancellationToken,
 ) {
-    tokio::spawn(run(
-        node_id,
-        metadata,
-        coordinator,
-        interval,
-        retention,
-        shutdown,
-    ));
-}
-
-async fn run(
-    node_id: NodeId,
-    metadata: Arc<dyn MetadataSource>,
-    coordinator: Arc<GroupCoordinator>,
-    interval: Time,
-    retention: Time,
-    shutdown: CancellationToken,
-) {
-    let mut tick = tokio::time::interval(interval.to_std());
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let retention_ms = retention.millis_i64();
-    loop {
-        tokio::select! {
-            _ = tick.tick() => {
-                let image = metadata.current_image();
-                let owned = |group_id: &str| {
-                    local_partition_for_group(&image, node_id, group_id).is_ok()
-                };
-                sweep(
-                    &coordinator,
-                    owned,
-                    crate::time_util::now_ms(),
-                    retention_ms,
-                    interval.millis_i64(),
-                )
-                .await;
-            }
-            () = shutdown.cancelled() => {
-                tracing::info!("offset-retention sweep shutting down");
-                return;
-            }
-        }
-    }
+    let tick = tokio::time::interval(interval.to_std());
+    let (metadata, coordinator) = (&metadata, &coordinator);
+    run_every(tick, &shutdown, move || async move {
+        let image = metadata.current_image();
+        let owned = |group_id: &str| local_partition_for_group(&image, node_id, group_id).is_ok();
+        sweep(
+            coordinator,
+            owned,
+            crate::time_util::now_ms(),
+            retention_ms,
+            interval.millis_i64(),
+        )
+        .await;
+    })
+    .await;
+    tracing::info!("offset-retention sweep shutting down");
 }
 
 /// One pass over the coordinator's groups.

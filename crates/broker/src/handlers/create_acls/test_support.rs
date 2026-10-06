@@ -1,16 +1,12 @@
 //! Fixtures shared by the `create_acls` test modules.
 //!
 //! The wire constants, the `AclCreation` and `CreateAclsRequest` builders, the
-//! one-argument `validate` shim that allows CIDR hosts, and the response and
-//! context helpers are used from more than one of the sibling test modules, so
-//! they live here rather than being repeated in each.
+//! one-argument `validate` shim that allows CIDR hosts, and the context helper
+//! are used from more than one of the sibling test modules, so they live here
+//! rather than being repeated in each.
 
-use bytes::Bytes;
 use krabka_metadata::AclEntry;
-use krabka_protocol::owned::{
-    create_acls_request::{AclCreation, CreateAclsRequest},
-    create_acls_response::CreateAclsResponse,
-};
+use krabka_protocol::owned::create_acls_request::{AclCreation, CreateAclsRequest};
 
 use crate::broker::BrokerHandle;
 
@@ -41,21 +37,7 @@ pub(super) fn request(creations: Vec<AclCreation>) -> CreateAclsRequest {
     }
 }
 
-/// The `decode_response` that `crate::test_support::response_helpers!` would
-/// generate, written out because the sibling test modules reach it across
-/// module boundaries and a macro-generated item cannot be re-exported.
-pub(super) fn decode_response(bytes: &Bytes) -> CreateAclsResponse {
-    crate::test_support::decode_response(bytes, VERSION)
-}
-
-/// The `test_context` counterpart to [`decode_response`], with the
-/// `admin-client` client id that the `CreateAcls` tests use.
-pub(super) fn test_context<'a>(
-    principal: &'a krabka_security::Principal,
-    peer: &'a std::net::SocketAddr,
-) -> crate::handlers::RequestContext<'a> {
-    crate::test_support::request_context(principal, peer, "admin-client")
-}
+crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
 pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> {
     handle

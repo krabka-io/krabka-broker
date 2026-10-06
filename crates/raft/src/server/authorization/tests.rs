@@ -33,7 +33,7 @@ use crate::{
     kraft::transport::api_key,
     server::{
         ConnectionContext, handle_conn,
-        test_support::{single_voter_engine, wait_for_leader},
+        test_support::{encoded, single_voter_engine, wait_for_leader},
     },
     wire::{
         API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
@@ -476,12 +476,6 @@ fn submit_change(topic: &str) -> Bytes {
     .encode_v0(&mut out)
     .expect("submit request");
     Bytes::from(out)
-}
-
-fn encoded(message: &impl krabka_protocol::Encode, version: i16) -> Bytes {
-    let mut body = BytesMut::new();
-    message.encode(&mut body, version).unwrap();
-    body.freeze()
 }
 
 /// One request of [`a_denied_request_never_reaches_the_engine`]: its name, the

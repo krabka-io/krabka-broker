@@ -11,7 +11,7 @@ use krabka_units::{ByteSize, Time, bytes, mebibytes, millis, secs};
 /// This type is not `Eq`: every value here is a quantity, and its `f64`
 /// storage is only `PartialEq`. Three of the fields reach the wire, as
 /// `FetchRequest`'s `max_bytes`, `min_bytes`, and `max_wait_ms`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ReplicationRuntimeConfig {
     /// How many fetchers this broker runs per leader it follows.
     ///
@@ -25,11 +25,14 @@ pub struct ReplicationRuntimeConfig {
     ///
     /// Zero is treated as one: a leader with no fetcher would never be
     /// followed at all.
+    #[default(1)]
     pub fetchers: usize,
 
     /// Maximum bytes requested from a leader in one replication fetch.
+    #[default(mebibytes(1))]
     pub fetch_max: ByteSize,
     /// Maximum leader wait for a replication fetch.
+    #[default(millis(500))]
     pub fetch_max_wait: Time,
     /// Minimum bytes that satisfy a replication fetch.
     ///
@@ -37,37 +40,27 @@ pub struct ReplicationRuntimeConfig {
     /// honours it as a floor the way Kafka does: the fetch is held until that
     /// many bytes are readable across its partitions or `fetch_max_wait`
     /// expires, however many appends it takes to get there.
+    #[default(bytes(1))]
     pub fetch_min: ByteSize,
     /// Delay after a replication throttle budget is exhausted.
+    #[default(millis(100))]
     pub throttle_exhausted_backoff: Time,
     /// Retry delay after sending a replication request fails.
+    #[default(secs(1))]
     pub send_error_backoff: Time,
     /// Retry delay when the leader does not yet know the topic.
+    #[default(millis(100))]
     pub unknown_topic_retry_delay: Time,
     /// Retry delay after a leader-epoch fence.
+    #[default(millis(200))]
     pub epoch_fence_backoff: Time,
     /// Retry delay after an unexpected replication error.
+    #[default(millis(500))]
     pub unexpected_error_backoff: Time,
     /// Initial delay before reconnecting to a leader.
+    #[default(millis(100))]
     pub reconnect_initial_delay: Time,
     /// Maximum delay between leader reconnection attempts.
+    #[default(secs(5))]
     pub reconnect_delay_cap: Time,
-}
-
-impl Default for ReplicationRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            fetchers: 1,
-            fetch_max: mebibytes(1),
-            fetch_max_wait: millis(500),
-            fetch_min: bytes(1),
-            throttle_exhausted_backoff: millis(100),
-            send_error_backoff: secs(1),
-            unknown_topic_retry_delay: millis(100),
-            epoch_fence_backoff: millis(200),
-            unexpected_error_backoff: millis(500),
-            reconnect_initial_delay: millis(100),
-            reconnect_delay_cap: secs(5),
-        }
-    }
 }

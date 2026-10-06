@@ -13,22 +13,30 @@
 /// [`std::fmt::Display`]. The two are deliberately different: the label has to
 /// be low-cardinality for Prometheus, and the message has to name the id and
 /// the subject so that a person can act on it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", as_str = label)]
 pub enum RejectReason {
     /// The field carries no Confluent frame.
+    #[error("not a Confluent-framed payload: {0}")]
     Unframed(String),
     /// The frame is well formed but the registry does not know the id.
+    #[error("schema id {0} is not registered")]
     UnknownId(u32),
     /// The id resolves, but it is not registered under this topic's subject.
+    #[error("schema id {id} is not registered under subject {subject}")]
     WrongSubject { id: u32, subject: String },
     /// The id resolves and belongs here, but the body is not an instance of
     /// the schema. Only
     /// [`ValidationMode::Full`][crate::schema_validation::ValidationMode::Full]
     /// can produce this.
+    #[error("body does not match schema id {id}: {detail}")]
     BodyMismatch { id: u32, detail: String },
     /// The registry could not provide an authoritative answer yet.
+    #[error("schema registry unavailable: {0}")]
     RegistryUnavailable(String),
     /// The registry provided a permanent or malformed response.
+    #[enum_str(name = "registry_unavailable")]
+    #[error("schema registry unavailable: {detail}")]
     RegistryRejected {
         kind: krabka_verified::SchemaFailureKind,
         detail: String,
@@ -48,42 +56,6 @@ impl RejectReason {
         "body_mismatch",
         "registry_unavailable",
     ];
-
-    /// The metric label for this reason. Low cardinality by construction: it
-    /// carries none of the ids or subjects the message does.
-    #[must_use]
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Unframed(_) => "unframed",
-            Self::UnknownId(_) => "unknown_id",
-            Self::WrongSubject { .. } => "wrong_subject",
-            Self::BodyMismatch { .. } => "body_mismatch",
-            Self::RegistryUnavailable(_) | Self::RegistryRejected { .. } => "registry_unavailable",
-        }
-    }
-}
-
-impl std::fmt::Display for RejectReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unframed(detail) => {
-                write!(f, "not a Confluent-framed payload: {detail}")
-            }
-            Self::UnknownId(id) => write!(f, "schema id {id} is not registered"),
-            Self::WrongSubject { id, subject } => {
-                write!(
-                    f,
-                    "schema id {id} is not registered under subject {subject}"
-                )
-            }
-            Self::BodyMismatch { id, detail } => {
-                write!(f, "body does not match schema id {id}: {detail}")
-            }
-            Self::RegistryUnavailable(detail) | Self::RegistryRejected { detail, .. } => {
-                write!(f, "schema registry unavailable: {detail}")
-            }
-        }
-    }
 }
 
 #[cfg(test)]

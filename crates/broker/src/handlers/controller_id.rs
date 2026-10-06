@@ -88,18 +88,8 @@ mod tests {
 
     fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id,
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
             host: "broker-host".into(),
-            port: 9_092,
-            rack: None,
-            log_dirs: vec![],
-            endpoints: vec![],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node_id.0)
         }
     }
 

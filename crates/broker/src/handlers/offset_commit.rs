@@ -14,8 +14,7 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::AclOperation;
 use krabka_protocol::{
     owned::{
         offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestTopic},
@@ -30,11 +29,10 @@ use tokio::sync::oneshot;
 
 use self::response::ResponseBuilder;
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::{
-        partitioner::{GroupRoutingError, local_partition_for_group},
         persistence::OffsetCommitValue,
         unified::{
             actor::{
@@ -88,37 +86,33 @@ const FIRST_GROUP_ID_NOT_FOUND_VERSION: i16 = 9;
     name = "handle_offset_commit",
     level = "info",
     skip_all,
-    fields(api = "OffsetCommit", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "OffsetCommit", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    mut req: OffsetCommitRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let mut req: OffsetCommitRequest = crate::handlers::decode_group_request(&mut cur, version)?;
+) -> Result<OffsetCommitResponse, BrokerError> {
     let image = broker.controller.current_image();
 
-    let group_request = AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type: ResourceType::Group,
-        resource_name: req.group_id.as_str(),
-        operation: AclOperation::Read,
-    };
-    if broker.config.authorizer.authorize(&*image, &group_request) == AuthorizationResult::Deny {
-        return encode(
-            version,
-            &build_response_all(&req, codes::GROUP_AUTHORIZATION_FAILED),
-        );
+    if crate::handlers::group_read_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        req.group_id.as_str(),
+    ) {
+        return Ok(build_response_all(&req, codes::GROUP_AUTHORIZATION_FAILED));
     }
 
     let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
     if use_topic_ids {
-        resolve_topic_names(&mut req, &image);
+        // v10+ rows carry only `topic_id`; a zero or unknown id keeps the
+        // empty name.
+        for topic in &mut req.topics {
+            topic.name = crate::handlers::requested_topic_name(&image, &topic.name, topic.topic_id);
+        }
     }
 
     let allowed: Vec<bool> = {
@@ -153,27 +147,12 @@ pub(crate) async fn handle(
         }
     }
     if accepted.is_empty() {
-        return encode(version, &response.build());
+        return Ok(response.build());
     }
 
     req.topics = accepted;
     response.merge(commit(broker, &req, version).await);
-    encode(version, &response.build())
-}
-
-/// Sets the name of each topic row whose `topic_id` the image knows.
-///
-/// A row whose id the image does not know keeps its empty name. That includes
-/// the zero id, which names no topic.
-fn resolve_topic_names(request: &mut OffsetCommitRequest, image: &krabka_metadata::MetadataImage) {
-    for topic in &mut request.topics {
-        if topic.topic_id == WireUuid::ZERO {
-            continue;
-        }
-        if let Some(name) = image.topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0)) {
-            topic.name = name.to_string();
-        }
-    }
+    Ok(response.build())
 }
 
 /// Keeps the partitions of an authorized `topic` that the image holds.
@@ -239,19 +218,11 @@ async fn commit_rows(
     version: i16,
 ) -> Result<Vec<OffsetCommitResponseTopic>, i16> {
     let image = broker.controller.current_image();
-    match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-        Ok(partition) => {
-            if let Some(code) =
-                crate::handlers::coordinator_routing::group_partition_loading(broker, partition)
-            {
-                return Err(code);
-            }
-        }
-        Err(GroupRoutingError::Unavailable) => return Err(codes::COORDINATOR_NOT_AVAILABLE),
-        Err(GroupRoutingError::NotCoordinator) => return Err(codes::NOT_COORDINATOR),
+    if let Some(code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+        return Err(code);
     }
 
-    let now_ms = now_ms();
+    let now_ms = crate::time_util::now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
     // Kafka's `commitOffset` runs the per-partition validator only on the
     // partitions whose metadata fits, so split them out first.
@@ -352,15 +323,6 @@ struct Commit<'a> {
 fn expire_timestamp_ms(retention_time_ms: i64, now_ms: i64) -> Option<i64> {
     (retention_time_ms != DEFAULT_RETENTION_TIME_MS)
         .then(|| now_ms.saturating_add(retention_time_ms))
-}
-
-fn now_ms() -> i64 {
-    i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis()),
-    )
-    .unwrap_or(0)
 }
 
 /// Finds the group of `req` and validates the commit against its membership,
@@ -561,10 +523,6 @@ fn build_response_all(req: &OffsetCommitRequest, code: i16) -> OffsetCommitRespo
         throttle_time_ms: 0,
         ..Default::default()
     }
-}
-
-fn encode(version: i16, resp: &OffsetCommitResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }
 
 #[cfg(test)]

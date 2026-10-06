@@ -198,12 +198,7 @@ impl StreamsGroupState {
             session_timeout,
         );
         for id in &evicted {
-            self.members.remove(id);
-            self.rebalance_deadlines.remove(id);
-        }
-        if !evicted.is_empty() {
-            self.dirty = true;
-            self.clear_shutdown_request_when_empty();
+            self.remove_member(id);
         }
         evicted
     }

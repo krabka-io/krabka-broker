@@ -5,7 +5,7 @@
 //! pure planning that turns one alter row into a `PartitionRecord`, or into a
 //! wire error code, lives in `plan`, the KFC-9 break-glass gate over a cancel
 //! and the batch one request accumulates live in `cancel_approval`, and the
-//! result rows and the encode step live in `response`.
+//! result rows and the whole-request refusal live in `response`.
 //!
 //! # KFC-9: a cancel needs two people, and every alter respects a freeze
 //!
@@ -25,8 +25,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bytes::Bytes;
-use krabka_metadata::ResourceType;
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
@@ -51,10 +49,9 @@ mod tests;
 pub(crate) use self::plan::process_one_partition;
 use self::{
     cancel_approval::{ReassignBatch, ReassignEnv, alter_one},
-    response::{encode_response, encode_whole_request_error, mark_submit_failed},
+    response::{mark_submit_failed, whole_request_error},
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, POLICY_VIOLATION},
     freeze::resolve::resolve_freeze_mutation,
@@ -71,28 +68,17 @@ use crate::{
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterPartitionReassignmentsRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<AlterPartitionReassignmentsResponse, crate::error::BrokerError> {
     let image = broker.controller.current_image();
     // Whole-request Cluster Alter authorize.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Alter,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
-        return encode_whole_request_error(
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return Ok(whole_request_error(
             &req,
             CLUSTER_AUTHORIZATION_FAILED,
             "alter-reassignment denied",
-            api_version,
-        );
+        ));
     }
 
     let env = ReassignEnv {
@@ -178,15 +164,14 @@ pub(crate) async fn handle(
         .collect();
     // Kafka's `ReplicationControlManager.alterPartitionReassignments` sets the
     // top-level `ErrorMessage` to null explicitly.
-    let resp = AlterPartitionReassignmentsResponse {
+    Ok(AlterPartitionReassignmentsResponse {
         throttle_time_ms: 0,
         allow_replication_factor_change: req.allow_replication_factor_change,
         error_code: 0,
         error_message: None,
         responses,
         unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    encode_response(&resp, api_version)
+    })
 }
 
 /// The partitions an `AlterPartitionReassignments` request actually

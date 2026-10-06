@@ -2,7 +2,7 @@
 //! with its config overrides, resolving its `topic_id`, and producing one
 //! keyed record.
 //!
-//! Each helper encodes a request body, hands it to `round_trip`, and decodes
+//! Each helper encodes a request body, hands it to [`kafka_wire::round_trip`], and decodes
 //! the matching response, so the API versions this suite pins are all stated
 //! in one file.
 
@@ -25,7 +25,7 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::compaction_wire::round_trip;
+use crate::{CLIENT_ID, kafka_wire};
 
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
 pub(crate) async fn create_topic_with_configs(
@@ -58,7 +58,7 @@ pub(crate) async fn create_topic_with_configs(
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, version).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -85,7 +85,7 @@ pub(crate) async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, version).expect("encode Metadata");
-    let resp_bytes = round_trip(&mut stream, 3, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 3, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("Metadata round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -137,7 +137,7 @@ pub(crate) async fn produce_record(
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, version).expect("encode Produce");
-    let resp_bytes = round_trip(&mut stream, 0, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 0, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("Produce round-trip");
     let mut cur: &[u8] = &resp_bytes;

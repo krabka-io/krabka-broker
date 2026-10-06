@@ -50,9 +50,12 @@ mod admin_api;
 mod cluster;
 #[path = "client_quotas/data_plane.rs"]
 mod data_plane;
+mod kafka_wire;
 #[path = "client_quotas/quota_admin.rs"]
 mod quota_admin;
 #[path = "client_quotas/throttling.rs"]
 mod throttling;
-#[path = "client_quotas/wire.rs"]
-mod wire;
+
+/// The client id every request header in this suite carries, which is the id
+/// the user/client-id tuple quota matches on.
+const CLIENT_ID: &str = "krabka-quota-test";

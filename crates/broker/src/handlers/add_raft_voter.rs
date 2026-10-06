@@ -28,7 +28,12 @@ use krabka_protocol::{
 };
 use krabka_raft::{reconfig::AddVoter, voter_requests};
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorResponse as _, cluster_alter_denied},
+};
 
 #[tracing::instrument(
     name = "handle_add_raft_voter",
@@ -40,7 +45,6 @@ use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_d
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -52,13 +56,10 @@ pub(crate) async fn handle(
     // Cluster:Alter gate — KIP-853 reconfiguration is a cluster-wide
     // mutation, same gate as UnregisterBroker.
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_resp(
+        return respond(
             version,
-            &AddRaftVoterResponse {
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("add-raft-voter denied".into()),
-                ..Default::default()
-            },
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            Some("add-raft-voter denied".into()),
         );
     }
 
@@ -78,13 +79,10 @@ pub(crate) async fn handle(
         // `validateLeaderOnlyRequest` with only the error code set, so the
         // nullable message stays at the generated empty-string default, not
         // null and not `Errors.message()`.
-        return encode_resp(
+        return respond(
             version,
-            &AddRaftVoterResponse {
-                error_code: voter_requests::NOT_LEADER_OR_FOLLOWER,
-                error_message: Some(String::new()),
-                ..Default::default()
-            },
+            voter_requests::NOT_LEADER_OR_FOLLOWER,
+            Some(String::new()),
         );
     };
     let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
@@ -127,14 +125,7 @@ pub(crate) async fn handle(
             },
         };
     if let Some((error_code, error_message)) = refusal {
-        return encode_resp(
-            version,
-            &AddRaftVoterResponse {
-                error_code,
-                error_message,
-                ..Default::default()
-            },
-        );
+        return respond(version, error_code, error_message);
     }
 
     let (error_code, error_message) = voter_requests::reconfiguration_refusal(
@@ -153,13 +144,18 @@ pub(crate) async fn handle(
         );
     }
 
-    encode_resp(
+    respond(version, error_code, error_message)
+}
+
+/// Encodes a response that carries only `error_code` and `error_message`.
+fn respond(
+    version: i16,
+    error_code: i16,
+    error_message: Option<String>,
+) -> Result<Bytes, BrokerError> {
+    crate::handlers::encode_response(
+        &AddRaftVoterResponse::error(error_code, error_message),
         version,
-        &AddRaftVoterResponse {
-            error_code,
-            error_message,
-            ..Default::default()
-        },
     )
 }
 
@@ -229,10 +225,6 @@ async fn probe_candidate(
     Ok(())
 }
 
-fn encode_resp(version: i16, resp: &AddRaftVoterResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
@@ -241,7 +233,6 @@ mod tests {
     use krabka_protocol::{
         owned::add_raft_voter_request::Listener, primitives::uuid::Uuid as ProtoUuid,
     };
-    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -286,7 +277,7 @@ mod tests {
                 error_message: Some("not the raft leader".into()),
                 ..Default::default()
             };
-            let bytes = encode_resp(version, &resp).expect("encode");
+            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
             let mut cur: &[u8] = &bytes;
             let decoded = AddRaftVoterResponse::decode(&mut cur, version).expect("decode");
             assert!(decoded.error_code == codes::NOT_LEADER_OR_FOLLOWER);
@@ -299,16 +290,12 @@ mod tests {
         let version = 1;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("alice");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req_bytes = encode_request(&request(2), version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -324,18 +311,14 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(-7);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -356,18 +339,14 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(2);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);

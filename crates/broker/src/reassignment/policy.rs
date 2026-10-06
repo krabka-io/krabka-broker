@@ -181,12 +181,7 @@ pub(crate) async fn compute_reassignment_progress(
     let mut updates = Vec::new();
     // Snapshot the alive set once (single lock) instead of taking the
     // liveness lock per target replica in the leader-handoff branch.
-    let alive: std::collections::HashSet<NodeId> = liveness
-        .alive_snapshot()
-        .await
-        .into_iter()
-        .map(NodeId)
-        .collect();
+    let alive = liveness.alive_node_ids().await;
     for pr in image.reassignments_in_flight() {
         if matches!(
             resolve_freeze_mutation(
@@ -681,18 +676,9 @@ mod tests {
         for n in 1..=6u64 {
             img_inner.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(n),
-                    broker_epoch: 0,
-                    incarnation_id: Uuid::nil(),
                     host: String::new(),
                     port: 0,
-                    rack: None,
-                    log_dirs: vec![],
-                    endpoints: vec![],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(n)
                 },
             ));
         }

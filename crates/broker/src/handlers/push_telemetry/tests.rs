@@ -9,7 +9,6 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid};
 use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, metric, number_data_point};
-use prost::Message as _;
 use uuid::Uuid;
 
 use super::*;

@@ -10,15 +10,10 @@ use std::sync::Arc;
 use super::{actor::MetadataProvider, reconciler};
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
+#[derive(derive_more::Debug)]
 pub struct ImageMetadataProvider {
+    #[debug(skip)]
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
-}
-
-impl std::fmt::Debug for ImageMetadataProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ImageMetadataProvider")
-            .finish_non_exhaustive()
-    }
 }
 
 impl MetadataProvider for ImageMetadataProvider {
@@ -92,18 +87,11 @@ mod tests {
         ] {
             image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: krabka_metadata::NodeId(node_id),
                     broker_epoch: i64::try_from(node_id).unwrap(),
                     incarnation_id: real_uuid(u8::try_from(node_id).unwrap()),
                     host: format!("broker-{node_id}"),
-                    port: 9092,
                     rack,
-                    log_dirs: vec![],
-                    endpoints: vec![],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node_id)
                 },
             ));
         }

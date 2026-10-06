@@ -1,14 +1,14 @@
-//! Wraps a `DescribeQuorum` request in a KIP-590 `Envelope` before it is
-//! forwarded to the active controller, and unwraps the leader's
-//! `EnvelopeResponse` back into the plain `DescribeQuorumResponse` body a
-//! caller expects.
+//! Unwraps the leader's `EnvelopeResponse` to a forwarded `DescribeQuorum`
+//! back into the plain `DescribeQuorumResponse` body a caller expects. The
+//! request side is wrapped in a KIP-590 `Envelope` by the shared
+//! [`crate::handlers::forward_to_controller::build`].
 //!
 //! [`krabka_raft::ControllerHandle::forward_raw`] dials the leader's
 //! controller listener as THIS node's own inter-broker service identity, not
 //! the caller's. Forwarding the bare `DescribeQuorumRequest` bytes at
 //! `api_key=55` would have the leader's controller listener re-authorize
 //! `Describe` against that service identity instead of the caller who
-//! already passed [`super::authz::cluster_describe_denied`] on this node --
+//! already passed [`crate::handlers::cluster_describe_denied`] on this node --
 //! fencing out a legitimately-authorized caller for the sole reason that it
 //! happened to land on a follower (review of #1034). Sending an `Envelope`
 //! (`api_key=58`, KIP-590) instead carries the caller's own principal and
@@ -17,9 +17,9 @@
 //! and [`super::handle`] re-runs the same `Describe` gate correctly on the
 //! leader.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{
         describe_quorum_request::API_KEY as DESCRIBE_QUORUM_API_KEY,
         envelope_request,
@@ -27,16 +27,10 @@ use krabka_protocol::{
     },
 };
 
-use crate::{
-    broker::Broker,
-    codes,
-    envelope::{self, ForwardedPrincipal, ForwardedRequest},
-    error::BrokerError,
-    handlers::RequestContext,
-};
+use crate::{broker::Broker, codes, envelope, error::BrokerError};
 
-/// `Envelope`'s api key (58, KIP-590): what this module actually sends on the
-/// wire, in place of the bare `DescribeQuorum` api key (55).
+/// `Envelope`'s api key (58, KIP-590): what `DescribeQuorum` forwarding sends
+/// on the wire, in place of the bare `DescribeQuorum` api key (55).
 pub(super) const ENVELOPE_API_KEY: i16 = envelope_request::API_KEY;
 
 /// `Envelope`'s one wire version.
@@ -48,44 +42,6 @@ pub(super) const ENVELOPE_VERSION: i16 = envelope_request::MIN_VERSION;
 /// error code is a protocol-shape failure this module does not expect to
 /// produce, so it is treated the same as a forwarding failure below.
 const ENVELOPE_CLUSTER_AUTHORIZATION_FAILED: i16 = codes::CLUSTER_AUTHORIZATION_FAILED;
-
-/// Build the `EnvelopeRequest` wire bytes for forwarding `req_bytes` (the
-/// already-decoded-shape `DescribeQuorumRequest` body at `version`) to the
-/// active controller, carrying `ctx`'s principal and peer address the way a
-/// JVM broker's own `KafkaApis.forwardToController` would.
-///
-/// # Errors
-/// Returns an error if the generated codec rejects the assembled envelope.
-pub(super) fn build(
-    broker: &Broker,
-    req_bytes: &[u8],
-    version: i16,
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    // The embedded `RequestHeader` carries a correlation id local to this one
-    // hop. Only the envelope response echoes it back, and this module strips
-    // that header before it returns.
-    let request_data = envelope::wrap_request(&ForwardedRequest {
-        api_key: DESCRIBE_QUORUM_API_KEY,
-        api_version: version,
-        correlation_id: 0,
-        client_id: ctx.client_id.map(ToOwned::to_owned),
-        body: Bytes::copy_from_slice(req_bytes),
-        body_flexible: broker
-            .handlers()
-            .body_flexible(DESCRIBE_QUORUM_API_KEY, version),
-    });
-    // Krabka's own `envelope::deserialize_principal` reads the principal back
-    // on the receiving side and authorizes on `name` alone.
-    let principal = ForwardedPrincipal {
-        name: ctx.principal.name.clone(),
-        token_authenticated: false,
-    };
-    let request = envelope::envelope_request(request_data, &principal, ctx.peer.ip())?;
-    let mut out = BytesMut::with_capacity(request.encoded_len(ENVELOPE_VERSION));
-    request.encode(&mut out, ENVELOPE_VERSION)?;
-    Ok(out.freeze())
-}
 
 /// Decode the leader's `EnvelopeResponse` and return the plain
 /// `DescribeQuorumResponse` body it wrapped, exactly as if this node had

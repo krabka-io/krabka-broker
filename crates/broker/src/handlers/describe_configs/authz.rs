@@ -150,11 +150,7 @@ mod tests {
     use super::*;
 
     fn anon() -> krabka_security::Principal {
-        krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        }
+        crate::test_support::principal("ANONYMOUS")
     }
 
     #[test]
@@ -207,15 +203,12 @@ mod tests {
             let mut image = MetadataImage::new(Uuid::nil());
             if let Some(operation) = grant {
                 image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-                    krabka_metadata::AclEntry {
-                        resource_type: ResourceType::Cluster,
-                        resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME.into(),
-                        pattern_type: krabka_metadata::PatternType::Literal,
-                        principal: "User:ANONYMOUS".into(),
-                        host: "*".into(),
+                    crate::test_support::allow_acl(
+                        ResourceType::Cluster,
+                        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                        "User:ANONYMOUS",
                         operation,
-                        permission_type: krabka_metadata::PermissionType::Allow,
-                    },
+                    ),
                 ));
             }
             let code = super::resource_authz_failure(

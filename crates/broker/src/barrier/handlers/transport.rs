@@ -228,10 +228,9 @@ fn placements(response: &WriteBarrierMarkersResponse) -> Vec<MarkerPlacement> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use assert2::check;
-    use krabka_ids::{NodeId, PartitionIndex};
+    use krabka_ids::PartitionIndex;
     use krabka_log::Offset;
     use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataImage};
     use krabka_protocol::krabka::barrier::{
@@ -263,18 +262,9 @@ mod tests {
 
     fn registration(endpoints: Vec<BrokerEndpoint>) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(2),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
             host: "legacy.example".to_owned(),
-            port: 9092,
-            rack: None,
             endpoints,
-            log_dirs: Vec::new(),
-            features: BTreeMap::new(),
+            ..crate::test_support::broker_registration(2)
         }
     }
 

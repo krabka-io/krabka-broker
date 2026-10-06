@@ -135,11 +135,7 @@ mod tests {
     }
 
     fn anon() -> krabka_security::Principal {
-        krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        }
+        crate::test_support::principal("ANONYMOUS")
     }
 
     /// (version, key type, key, expected admission) under an authorizer that

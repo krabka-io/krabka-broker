@@ -7,10 +7,9 @@
 //! A cluster with no authorizer configured has no ACLs to project, and says
 //! so with `SECURITY_DISABLED` rather than an empty listing.
 
-use bytes::Bytes;
 use krabka_metadata::AclEntry;
 use krabka_protocol::{
-    Encode, ProtocolError,
+    ProtocolError,
     owned::{
         describe_acls_request::DescribeAclsRequest,
         describe_acls_response::{AclDescription, DescribeAclsResource, DescribeAclsResponse},
@@ -18,31 +17,16 @@ use krabka_protocol::{
 };
 
 use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
+    NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
     binding_filter::{AclBindingFilter, UnknownElement, WireAclBindingFilter},
     operation_to_wire, pattern_type_to_wire, permission_to_wire, resource_type_to_wire,
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes, handlers::ErrorResponse as _};
 
 /// The message of a cluster-describe refusal. Kafka's `AuthHelper` writes
 /// "Request <request> needs DESCRIBE permission.", where `<request>` is the JVM
 /// `toString` of the channel request; krabka names the API in its place.
 const CLUSTER_DESCRIBE_DENIED_MESSAGE: &str = "Request DescribeAcls needs DESCRIBE permission.";
-
-fn describe_acls_error_response(
-    error_code: i16,
-    error_message: &'static str,
-) -> DescribeAclsResponse {
-    DescribeAclsResponse {
-        error_code,
-        error_message: Some(error_message.into()),
-        ..Default::default()
-    }
-}
 
 fn acl_description(entry: &AclEntry) -> AclDescription {
     AclDescription {
@@ -96,9 +80,9 @@ fn describe_acls_response(resources: Vec<DescribeAclsResource>) -> DescribeAclsR
 pub(crate) fn handle(
     broker: &Broker,
     req: DescribeAclsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<DescribeAclsResponse, crate::error::BrokerError> {
     // Kafka's `DescribeAclsRequest` constructor refuses an `UNKNOWN` element
     // while the request parses, before any authorization, and the broker
     // closes the connection. The error return is that close.
@@ -107,22 +91,11 @@ pub(crate) fn handle(
     })?;
 
     let image = broker.controller.current_image();
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Describe,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
-        let resp = describe_acls_error_response(
+    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return Ok(DescribeAclsResponse::error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
-            CLUSTER_DESCRIBE_DENIED_MESSAGE,
-        );
-        return encode_response(&resp, api_version);
+            Some(CLUSTER_DESCRIBE_DENIED_MESSAGE.into()),
+        ));
     }
 
     // No authorizer: there is nothing to describe, and Kafka says so rather
@@ -130,12 +103,16 @@ pub(crate) fn handle(
     // `KafkaApis.handleDescribeAcls` runs the cluster-describe check first
     // and only then matches on `authorizer.isEmpty`, which is the order here.
     if !broker.config.authorizer.is_configured() {
-        let resp = describe_acls_error_response(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE);
-        return encode_response(&resp, api_version);
+        return Ok(DescribeAclsResponse::error(
+            codes::SECURITY_DISABLED,
+            Some(NO_AUTHORIZER_MESSAGE.into()),
+        ));
     }
 
-    let resp = describe_acls_response(matching_resources(image.all_acls(), &filter));
-    encode_response(&resp, api_version)
+    Ok(describe_acls_response(matching_resources(
+        image.all_acls(),
+        &filter,
+    )))
 }
 
 /// Groups the ACLs `filter` matches by resource pattern, the nested shape
@@ -177,21 +154,12 @@ fn build_filter(req: &DescribeAclsRequest) -> Result<AclBindingFilter, UnknownEl
     })
 }
 
-fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(resp, api_version, "encode DescribeAcls")
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{
-        AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-    };
+    use krabka_metadata::{AclOperation, MetadataRecord, PatternType, ResourceType};
     use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
@@ -218,15 +186,7 @@ mod tests {
     type PatternRow<'a> = (i8, Option<&'a str>, &'a [(&'a str, i8)]);
 
     fn acl(resource_name: &str, principal: &str, operation: AclOperation) -> AclEntry {
-        AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: resource_name.into(),
-            pattern_type: PatternType::Literal,
-            principal: principal.into(),
-            host: "*".into(),
-            operation,
-            permission_type: PermissionType::Allow,
-        }
+        crate::test_support::allow_acl(ResourceType::Topic, resource_name, principal, operation)
     }
 
     fn request(
@@ -246,11 +206,7 @@ mod tests {
         }
     }
 
-    crate::test_support::response_helpers!(
-        DescribeAclsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -332,7 +288,10 @@ mod tests {
 
     #[test]
     fn response_helpers_preserve_error_resource_and_acl_fields() {
-        let err = describe_acls_error_response(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE);
+        let err = DescribeAclsResponse::error(
+            codes::SECURITY_DISABLED,
+            Some(NO_AUTHORIZER_MESSAGE.into()),
+        );
         let expected_err = DescribeAclsResponse {
             throttle_time_ms: 0,
             error_code: codes::SECURITY_DISABLED,
@@ -389,11 +348,10 @@ mod tests {
         let resp = handle(
             &broker,
             request(Some("orders"), Some("User:alice"), OPERATION_READ),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
@@ -423,11 +381,10 @@ mod tests {
         let resp = handle(
             &broker,
             request(Some("orders"), Some("User:alice"), OPERATION_READ),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
@@ -453,7 +410,7 @@ mod tests {
         let mut req = request(Some("orders"), Some("User:alice"), OPERATION_READ);
         req.operation = 0;
 
-        let result = handle(&broker, req, &ctx, VERSION);
+        let result = handle(&broker, req, VERSION, &ctx);
 
         assert!(
             let Err(crate::error::BrokerError::Protocol(ProtocolError::InvalidValue(
@@ -510,8 +467,8 @@ mod tests {
         for (name, edit) in cases {
             let mut req = any.clone();
             edit(&mut req);
-            let resp = handle(&broker, req, &ctx, VERSION).expect("handle");
-            check!(decode_response(&resp) == expected, "{name}");
+            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            check!(resp == expected, "{name}");
         }
         broker_handle.shutdown().await;
     }
@@ -611,8 +568,7 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let resp = handle(&broker, req, &ctx, VERSION).expect("handle");
-            let mut resp = decode_response(&resp);
+            let mut resp = handle(&broker, req, VERSION, &ctx).expect("handle");
             resp.resources
                 .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
 
@@ -675,9 +631,9 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let resp = handle(&broker, req, &ctx, VERSION).expect("handle");
+            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
             check!(
-                decode_response(&resp).resources.len() == want,
+                resp.resources.len() == want,
                 "principal {principal_filter:?} host {host_filter:?}"
             );
         }
@@ -703,11 +659,10 @@ mod tests {
         let resp = handle(
             &broker,
             request(Some("orders"), Some("User:alice"), OPERATION_READ),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,

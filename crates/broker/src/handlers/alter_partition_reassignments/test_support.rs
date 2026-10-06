@@ -1,25 +1,18 @@
-//! The request builder, the metadata images, and the wire helpers that the
+//! The request builder, the metadata images, and the context helper that the
 //! `AlterPartitionReassignments` tests share.
 //!
 //! The response tests and the end-to-end handler tests build the same
-//! single-partition request and decode the same response type, and the
+//! single-partition request, and the
 //! planning tests and the cancel-approval tests seed the same one-partition
 //! image, so the fixtures live in one module rather than once per test file.
 
-use std::net::SocketAddr;
-
-use bytes::Bytes;
 use krabka_metadata::{
     BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
 };
-use krabka_protocol::owned::{
-    alter_partition_reassignments_request::{
-        AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
-    },
-    alter_partition_reassignments_response::AlterPartitionReassignmentsResponse,
+use krabka_protocol::owned::alter_partition_reassignments_request::{
+    AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
 };
 use krabka_raft::NodeId;
-use krabka_security::Principal;
 
 pub(super) fn request(
     allow_replication_factor_change: bool,
@@ -43,16 +36,7 @@ pub(super) fn request(
     }
 }
 
-pub(super) fn decode_response(bytes: &Bytes, version: i16) -> AlterPartitionReassignmentsResponse {
-    crate::test_support::decode_response(bytes, version)
-}
-
-pub(super) fn test_context<'a>(
-    principal: &'a Principal,
-    peer: &'a SocketAddr,
-) -> crate::handlers::RequestContext<'a> {
-    crate::test_support::request_context(principal, peer, "admin-client")
-}
+crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
 /// An image holding topic `foo` with one partition in the given reassignment
 /// state, at partition epoch 0.
@@ -81,18 +65,8 @@ pub(super) fn img_with_epoch(
     for n in 1u64..=6 {
         img.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(n),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "localhost".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(n)
             },
         ));
     }

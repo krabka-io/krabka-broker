@@ -8,7 +8,7 @@ use super::{ContextHandler, DispatchEntry, DispatchRegistry};
 use crate::{
     broker::Broker,
     error::BrokerError,
-    handlers::{ApiKeyCode, ApiVersion, CorrelationId, RequestContext},
+    handlers::{ApiKeyCode, ApiVersion, RequestContext},
 };
 
 // `KRABKA_PRIVATE_API_KEY_FLOOR` for why.

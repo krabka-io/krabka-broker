@@ -20,7 +20,7 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use super::wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 /// The `AddOffsetsToTxn` version the driver below speaks: the newest the
 /// broker advertises, and flexible (v3+), so the response header carries the
@@ -54,9 +54,17 @@ pub async fn drive_add_offsets_to_txn(
     let mut body = BytesMut::new();
     req.encode(&mut body, ADD_OFFSETS_TO_TXN_VERSION)
         .expect("encode AddOffsetsToTxn");
-    let resp_bytes = round_trip(stream, 25, ADD_OFFSETS_TO_TXN_VERSION, corr_id, true, &body)
-        .await
-        .expect("AddOffsetsToTxn round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        stream,
+        25,
+        ADD_OFFSETS_TO_TXN_VERSION,
+        corr_id,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .expect("AddOffsetsToTxn round-trip");
     let mut cur: &[u8] = &resp_bytes;
     AddOffsetsToTxnResponse::decode(&mut cur, ADD_OFFSETS_TO_TXN_VERSION)
         .expect("decode AddOffsetsToTxnResponse")
@@ -106,12 +114,12 @@ pub async fn drive_produce_sasl(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass)
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
         .await
         .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();
     req.encode(&mut body, version).expect("encode Produce");
-    let resp_bytes = round_trip(&mut stream, 0, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 0, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("Produce round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -147,12 +155,12 @@ pub async fn drive_fetch_sasl(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass)
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
         .await
         .expect("SASL authenticate for Fetch");
     let mut body = BytesMut::new();
     req.encode(&mut body, version).expect("encode Fetch");
-    let resp_bytes = round_trip(&mut stream, 1, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 1, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("Fetch round-trip");
     let mut cur: &[u8] = &resp_bytes;

@@ -94,6 +94,7 @@ where
         .collect()
 }
 
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 pub struct FileListener {
     /// Listener name, for example `"PLAINTEXT"` or `"SASL_SSL"`. It is the
@@ -115,14 +116,10 @@ pub struct FileListener {
     /// Per-listener `connections.max.idle.ms`. Absent leaves this listener on
     /// the broker-wide `connections_max_idle`. Maps to an entry in
     /// [`crate::BrokerConfig::connections_max_idle_overrides`].
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_idle: Option<krabka_units::Time>,
     /// Per-listener KIP-368 `connections.max.reauth.ms`. Absent leaves this
     /// listener on the broker-wide `connections_max_reauth`. Maps to an entry
     /// in [`crate::BrokerConfig::connections_max_reauth_overrides`].
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_reauth: Option<krabka_units::Time>,
 }
 

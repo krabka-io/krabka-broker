@@ -229,6 +229,9 @@ pub mod metadata_observer;
 pub mod metadata_source;
 pub mod metrics;
 pub(crate) mod metrics_server;
+/// Shared breadth-first runner for the exhaustive Stateright models.
+#[cfg(test)]
+pub(crate) mod model_check;
 pub mod network;
 // The OAUTHBEARER token introspection client and the JWKS refresher need an
 // HTTP client stack, which wasm32-wasip1 does not have.
@@ -263,6 +266,7 @@ pub(crate) mod site_placement;
 /// election, and `acks=all` durability under a data-bearing witness.
 #[cfg(test)]
 mod stretch_cluster_model;
+pub(crate) mod task_util;
 pub mod telemetry;
 /// Shared scaffolding for the per-handler `#[cfg(test)] mod tests` modules
 /// (deny-all authorizer, principal/peer/context builders, wire codec helpers,

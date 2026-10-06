@@ -37,14 +37,22 @@ pub struct ListenerSpec {
 ///
 /// There is one variant for each SASL mechanism the inter-broker client
 /// supports.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// `Debug` renders the `Plain` and `Scram` passwords as `<redacted>`;
+/// `BrokerConfig` derives `Debug`, and this enum sits inside it.
+#[derive(Clone, PartialEq, Eq, derive_more::Debug)]
 pub enum InterBrokerCredentials {
     /// SASL/PLAIN: `\0username\0password`.
-    Plain { username: String, password: String },
+    Plain {
+        username: String,
+        #[debug("{:?}", "<redacted>")]
+        password: String,
+    },
     /// SASL/SCRAM (SHA-256 or SHA-512).
     Scram {
         mechanism: SaslMechanism,
         username: String,
+        #[debug("{:?}", "<redacted>")]
         password: String,
     },
     /// SASL/GSSAPI: authenticate as `client_principal` with the long-term key
@@ -61,46 +69,6 @@ pub enum InterBrokerCredentials {
     /// SASL/OAUTHBEARER. The token file is read on every new outbound
     /// connection so credential rotation does not require a broker restart.
     OAuthBearer { token_path: PathBuf },
-}
-
-/// Hand-written so the `Plain` and `Scram` passwords render as `<redacted>`;
-/// `BrokerConfig` derives `Debug`, and this enum sits inside it.
-impl std::fmt::Debug for InterBrokerCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Plain { username, .. } => f
-                .debug_struct("Plain")
-                .field("username", username)
-                .field("password", &"<redacted>")
-                .finish(),
-            Self::Scram {
-                mechanism,
-                username,
-                ..
-            } => f
-                .debug_struct("Scram")
-                .field("mechanism", mechanism)
-                .field("username", username)
-                .field("password", &"<redacted>")
-                .finish(),
-            Self::Gssapi {
-                keytab_path,
-                client_principal,
-                service_name,
-                kdc_url,
-            } => f
-                .debug_struct("Gssapi")
-                .field("keytab_path", keytab_path)
-                .field("client_principal", client_principal)
-                .field("service_name", service_name)
-                .field("kdc_url", kdc_url)
-                .finish(),
-            Self::OAuthBearer { token_path } => f
-                .debug_struct("OAuthBearer")
-                .field("token_path", token_path)
-                .finish(),
-        }
-    }
 }
 
 impl InterBrokerCredentials {

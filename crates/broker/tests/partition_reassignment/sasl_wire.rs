@@ -2,97 +2,19 @@
 //!
 //! The deny test needs a principal that is not a super-user, so it runs against
 //! a single-broker `SASL_PLAINTEXT` listener with `SimpleAclAuthorizer`
-//! installed. This module holds the handshake, that cluster boot, and the
+//! installed. This module holds that cluster boot and the
 //! authenticated `CreateTopics` and `AlterPartitionReassignments` drivers.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
-    },
-};
+use krabka_protocol::{self, Decode, Encode};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
-use tokio::net::TcpStream;
 
-use crate::plaintext_wire::round_trip;
-
-/// Opens a TCP stream to `addr` and drives `ApiVersions`, then
-/// `SaslHandshake(PLAIN)`, then `SaslAuthenticate(\0user\0password)`. It
-/// returns the authenticated stream. Copied verbatim from
-/// `elect_leaders.rs`.
-async fn sasl_plain_authenticate(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-) -> Result<TcpStream, io::Error> {
-    let mut stream = TcpStream::connect(addr).await?;
-
-    // 1. ApiVersions v0 (non-flexible).
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
-    let av_resp_bytes = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
-    let mut cur: &[u8] = &av_resp_bytes;
-    ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
-
-    // 2. SaslHandshake v1 (non-flexible, mechanism="PLAIN").
-    let mut sh_body = BytesMut::new();
-    SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
-        ..Default::default()
-    }
-    .encode(&mut sh_body, 1)
-    .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &sh_body).await?;
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
-
-    // 3. SaslAuthenticate v2 (flexible). auth_bytes = \0user\0password.
-    let mut payload = Vec::with_capacity(2 + user.len() + password.len());
-    payload.push(0); // empty authzid
-    payload.extend_from_slice(user.as_bytes());
-    payload.push(0);
-    payload.extend_from_slice(password);
-    let mut auth_body = BytesMut::new();
-    SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(payload),
-        ..Default::default()
-    }
-    .encode(&mut auth_body, 2)
-    .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
-    let auth_resp_bytes = round_trip(&mut stream, 36, 2, 3, true, &auth_body).await?;
-    let mut cur: &[u8] = &auth_resp_bytes;
-    let auth_resp = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))?;
-    if auth_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslAuthenticate failed: error_code={} message={:?}",
-            auth_resp.error_code, auth_resp.error_message
-        )));
-    }
-
-    Ok(stream)
-}
+use crate::{kafka_wire, plaintext_wire::CLIENT_ID};
 
 /// Starts a single-broker SASL/PLAINTEXT cluster and returns
 /// `(handle, _dir, addr)`. `super_user` becomes the only super-user. `users`
@@ -163,12 +85,12 @@ pub async fn create_topic_as_admin(
         timeout_ms: 5_000,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, "admin", b"admin-secret")
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "admin", b"admin-secret")
         .await
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -224,13 +146,13 @@ pub async fn drive_alter_reassignments_sasl_plain(
         topics,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for AlterPartitionReassignments");
     let mut body = BytesMut::new();
     req.encode(&mut body, 1)
         .expect("encode AlterPartitionReassignments");
-    let resp_bytes = round_trip(&mut stream, 45, 1, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 45, 1, 1, CLIENT_ID, true, &body)
         .await
         .expect("AlterPartitionReassignments round-trip");
     let mut cur: &[u8] = &resp_bytes;

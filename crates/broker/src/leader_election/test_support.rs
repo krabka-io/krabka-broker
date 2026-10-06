@@ -253,18 +253,9 @@ pub fn register_brokers(img: &mut MetadataImage, ids: &[u64]) {
 pub fn register_broker_with_dirs(img: &mut MetadataImage, id: u64, log_dirs: Vec<uuid::Uuid>) {
     img.apply(&MetadataRecord::V1BrokerRegistration(
         krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(id),
-            broker_epoch: 0,
             incarnation_id: Uuid::from_u128(u128::from(id)),
-            host: "127.0.0.1".into(),
-            port: 9_092,
-            rack: None,
-            endpoints: vec![],
             log_dirs,
-            features: BTreeMap::new(),
+            ..crate::test_support::broker_registration(id)
         },
     ));
 }

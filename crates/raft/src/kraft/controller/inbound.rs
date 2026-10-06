@@ -4,6 +4,7 @@
 
 use krabka_ids::Offset;
 use krabka_metadata::VoterSet;
+use krabka_protocol::owned::fetch_request::FetchRequest;
 use tokio::{sync::oneshot, time::Instant};
 
 use super::{
@@ -15,7 +16,7 @@ use crate::kraft::{
     action::Action,
     event::Event,
     role::Role,
-    transport::{Inbound, wire},
+    transport::{Inbound, PeerApi, wire},
     types::{Epoch, LogView as _, NodeId, ReplicaKey},
 };
 
@@ -59,50 +60,18 @@ impl Engine {
     pub fn on_inbound(&mut self, inbound: Inbound) {
         // Decode the request body, run it through the core, and encode the
         // produced reply back onto the oneshot.
-        match inbound {
-            // A body that does not decode drops `reply`, which closes the
-            // connection, as Kafka's `RequestContext.parseRequest` does.
-            Inbound::Vote {
-                req,
-                version,
-                reply,
-            } => {
-                if let Some(response) = self.answer_vote(&req, version) {
-                    let _ = reply.send(response);
-                }
-            }
-            Inbound::BeginQuorumEpoch {
-                req,
-                version,
-                reply,
-            } => {
-                if let Some(response) = self.answer_begin_quorum_epoch(&req, version) {
-                    let _ = reply.send(response);
-                }
-            }
-            Inbound::EndQuorumEpoch {
-                req,
-                version,
-                reply,
-            } => {
-                if let Some(response) = self.answer_end_quorum_epoch(&req, version) {
-                    let _ = reply.send(response);
-                }
-            }
-            Inbound::Fetch {
-                req,
-                version,
-                reply,
-            } => self.on_fetch_request(&req, version, reply),
-            Inbound::FetchSnapshot {
-                req,
-                version,
-                reply,
-            } => {
-                if let Some(response) = self.answer_fetch_snapshot(&req, version) {
-                    let _ = reply.send(response);
-                }
-            }
+        let (api, req, version, reply) = inbound.into_parts();
+        let response = match api {
+            PeerApi::Fetch => return self.on_fetch_request(&req, version, reply),
+            PeerApi::Vote => self.answer_vote(&req, version),
+            PeerApi::BeginQuorumEpoch => self.answer_begin_quorum_epoch(&req, version),
+            PeerApi::EndQuorumEpoch => self.answer_end_quorum_epoch(&req, version),
+            PeerApi::FetchSnapshot => self.answer_fetch_snapshot(&req, version),
+        };
+        // A body that does not decode drops `reply`, which closes the
+        // connection, as Kafka's `RequestContext.parseRequest` does.
+        if let Some(response) = response {
+            let _ = reply.send(response);
         }
     }
 
@@ -119,7 +88,7 @@ impl Engine {
     /// when the leader's high watermark is above the fetcher's. Otherwise the
     /// request is parked until [`Self::complete_parked_fetches`] answers it.
     fn on_fetch_request(&mut self, req: &[u8], version: i16, reply: oneshot::Sender<bytes::Bytes>) {
-        let Some(request) = wire::decode_fetch_request(req, version) else {
+        let Some(request) = wire::decode_request::<FetchRequest>(req, version) else {
             return;
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
@@ -153,7 +122,7 @@ impl Engine {
         }
         let fetch = FetchPartitionRequest {
             replica_id: wire::fetch_replica_id(&request, version),
-            replica_directory_id: uuid::Uuid::from_bytes(partition.replica_directory_id.0),
+            replica_directory_id: wire::uuid_from_wire(partition.replica_directory_id),
             current_leader_epoch: partition.current_leader_epoch,
             fetch_offset: partition.fetch_offset,
             last_fetched_epoch: partition.last_fetched_epoch,

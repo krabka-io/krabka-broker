@@ -40,10 +40,7 @@
 //! frozen topic is what a migration wants. Both retention passes stop, on
 //! every replica, because each one removes data from the topic's log.
 
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::{Duration, SystemTime},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use futures_util::future::join_all;
 use krabka_metadata::NodeId;
@@ -63,6 +60,7 @@ use crate::{
     metrics::BrokerMetrics,
     partition::Partition,
     partition_registry::PartitionRegistry,
+    time_util::now_ms,
 };
 
 mod archive;
@@ -154,26 +152,18 @@ const DEFAULT_TIERING_INTERVAL: Time = secs(30);
 const NO_BYTES: ByteSize = bytes(0);
 
 /// Tunables for [`run`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub(crate) struct RemoteLogManagerConfig {
+    #[default(DEFAULT_TIERING_INTERVAL)]
     pub interval: Time,
     /// Deadline on one segment copy. See [`RemoteTier::copy_timeout`].
+    #[default(crate::config::DEFAULT_REMOTE_COPY_TIMEOUT)]
     pub copy_timeout: Time,
     /// How wide one tick sweeps. See [`SweepConcurrency`].
     pub concurrency: SweepConcurrency,
     /// See [`RemoteTier::unstable_api_versions`].
+    #[default(crate::api_catalog::UnstableApiVersions::Disabled)]
     pub unstable_api_versions: crate::api_catalog::UnstableApiVersions,
-}
-
-impl Default for RemoteLogManagerConfig {
-    fn default() -> Self {
-        Self {
-            interval: DEFAULT_TIERING_INTERVAL,
-            copy_timeout: crate::config::DEFAULT_REMOTE_COPY_TIMEOUT,
-            concurrency: SweepConcurrency::default(),
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-        }
-    }
 }
 
 /// How many partition passes of each kind one tick may have in flight.
@@ -185,19 +175,12 @@ impl Default for RemoteLogManagerConfig {
 /// (`remote.log.manager.expiration.thread.pool.size`). A partition takes one
 /// slot for the whole of its pass, so the bound counts partitions in flight
 /// rather than object-store calls in flight.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub(crate) struct SweepConcurrency {
+    #[default(crate::config::DEFAULT_REMOTE_COPIER_THREADS)]
     pub copier: usize,
+    #[default(crate::config::DEFAULT_REMOTE_EXPIRATION_THREADS)]
     pub expiration: usize,
-}
-
-impl Default for SweepConcurrency {
-    fn default() -> Self {
-        Self {
-            copier: crate::config::DEFAULT_REMOTE_COPIER_THREADS,
-            expiration: crate::config::DEFAULT_REMOTE_EXPIRATION_THREADS,
-        }
-    }
 }
 
 /// The two bounds of [`SweepConcurrency`], as the semaphores one tick hands
@@ -643,16 +626,10 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
     }
 }
 
-fn now_ms() -> i64 {
-    let millis = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis();
-    i64::try_from(millis).unwrap_or(i64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig, Offset};
@@ -1472,27 +1449,5 @@ mod tests {
 
         check!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
         check!(partition.log.lock().unwrap().log_start_offset() == local_start);
-    }
-
-    #[test]
-    fn now_ms_tracks_current_unix_epoch_millis() {
-        let before = i64::try_from(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-        )
-        .unwrap();
-        let observed = now_ms();
-        let after = i64::try_from(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-        )
-        .unwrap();
-
-        assert!(observed >= before);
-        assert!(observed <= after);
     }
 }

@@ -38,7 +38,7 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::{
     ProtocolError,
-    primitives::{array, string_bytes, uuid::Uuid, varint},
+    primitives::{array, fixed, string_bytes, uuid::Uuid, varint},
     tagged_fields::{UnknownTaggedFields, WriteTaggedFields, read_tagged_fields},
 };
 
@@ -93,21 +93,13 @@ pub(crate) fn put_tagged_fields(buf: &mut BytesMut, entries: Vec<(u32, Bytes)>) 
 
 /// Reads a fixed-width `int8`.
 pub(crate) fn get_i8(buf: &mut &[u8]) -> Result<i8, BrokerError> {
-    if buf.is_empty() {
-        return Err(protocol(ProtocolError::UnexpectedEof { needed: 1 }));
-    }
-    Ok(bytes::Buf::get_i8(buf))
+    fixed::get_i8(buf).map_err(protocol)
 }
 
 /// Reads a fixed-width `uint16`, the type of the streams member's advertised
 /// port.
 pub(crate) fn get_u16(buf: &mut &[u8]) -> Result<u16, BrokerError> {
-    if buf.len() < 2 {
-        return Err(protocol(ProtocolError::UnexpectedEof {
-            needed: 2 - buf.len(),
-        }));
-    }
-    Ok(bytes::Buf::get_u16(buf))
+    fixed::get_u16(buf).map_err(protocol)
 }
 
 pub(crate) fn get_compact_string(buf: &mut &[u8]) -> Result<String, BrokerError> {

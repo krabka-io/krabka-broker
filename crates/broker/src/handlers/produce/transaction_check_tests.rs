@@ -14,7 +14,6 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
         init_producer_id_request::InitProducerIdRequest,
-        init_producer_id_response::InitProducerIdResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse},
     },
@@ -26,7 +25,7 @@ use crate::{
     codes,
     test_support::{
         decode_response, dispatch_context, encode_request, peer, principal, request_context,
-        start_broker_with,
+        start_broker_no_audit_with,
     },
     txn::state::TopicPartition,
 };
@@ -37,8 +36,7 @@ const PARTITIONS: i32 = 3;
 
 #[tokio::test]
 async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordinator_call() {
-    let (handle_, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle_, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.transaction_state_num_partitions = 1;
         cfg.transaction_state_replication_factor = 1;
     })
@@ -94,18 +92,9 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         producer_epoch: -1,
         ..Default::default()
     };
-    let init: InitProducerIdResponse = decode_response(
-        &crate::handlers::init_producer_id::handle(
-            &broker,
-            init_version,
-            1,
-            &encode_request(&init, init_version),
-            &ctx,
-        )
+    let init = crate::handlers::init_producer_id::handle(&broker, init, init_version, &ctx)
         .await
-        .expect("InitProducerId"),
-        init_version,
-    );
+        .expect("InitProducerId");
     assert!(init.error_code == codes::NONE, "InitProducerId: {init:?}");
 
     let state_partition = broker
@@ -147,7 +136,6 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         &handle(
             &broker,
             version,
-            7,
             &request_bytes,
             request_bytes.clone(),
             &ctx,

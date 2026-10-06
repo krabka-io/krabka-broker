@@ -40,8 +40,7 @@ const RETENTION_KEY: &str = "log.retention.ms";
 async fn broker_with_records(
     unstable: UnstableApiVersions,
 ) -> (BrokerHandle, krabka_client_core::Client, tempfile::TempDir) {
-    let (broker, dir) = crate::test_support::start_broker_with(move |config| {
-        config.audit_enabled = false;
+    let (broker, dir) = crate::test_support::start_broker_no_audit_with(move |config| {
         config.features.unstable_api_versions = unstable;
     })
     .await;

@@ -4,9 +4,10 @@
 //! because a truncated search proves nothing and the two must move together.
 
 use assert2::assert;
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 use super::config::ShareModel;
+use crate::model_check::run_bfs;
 
 /// Hard backstop on generated states. It bounds host memory even if
 /// `within_boundary` is looser than intended. Set it well above each config's
@@ -34,26 +35,7 @@ pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 6_477;
 /// Run one bounded config to completion. Assert that the run was exhaustive,
 /// that is, that no cap truncated it, and that all properties hold.
 pub(super) fn run(model: ShareModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert!(
-        checker.max_depth() < MAX_DEPTH,
-        "[{label}] hit depth cap {MAX_DEPTH}: search is depth-truncated, not exhaustive"
-    );
-    assert!(
-        checker.state_count() < MAX_STATES,
-        "[{label}] hit state cap {MAX_STATES}: search is truncated, not exhaustive"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert!(
         checker.unique_state_count() == pinned_unique_states,

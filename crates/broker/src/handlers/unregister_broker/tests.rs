@@ -17,10 +17,7 @@ use krabka_security::Principal;
 use uuid::Uuid;
 
 use super::*;
-use crate::{
-    authorizer::Authorizer, break_glass::gate::tests::approval, broker::BrokerHandle,
-    config::BreakGlassConfig, test_support::DenyAll,
-};
+use crate::{break_glass::gate::tests::approval, config::BreakGlassConfig, test_support::DenyAll};
 
 fn encode_request(req: &UnregisterBrokerRequest, version: i16) -> Bytes {
     crate::test_support::encode_request(req, version)
@@ -41,17 +38,10 @@ fn context<'a>(
     crate::test_support::request_context(principal, peer, "unregister-client")
 }
 
-async fn start_broker(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await
-}
-
 #[test]
 fn response_preserves_error_fields_and_throttle() {
-    let resp = response(codes::UNKNOWN_SERVER_ERROR, Some("submit failed".into()));
+    let resp =
+        UnregisterBrokerResponse::error(codes::UNKNOWN_SERVER_ERROR, Some("submit failed".into()));
 
     let expected = UnregisterBrokerResponse {
         throttle_time_ms: 0,
@@ -65,7 +55,8 @@ fn response_preserves_error_fields_and_throttle() {
 #[tokio::test]
 async fn handle_denies_cluster_alter_with_message_and_throttle() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+    let (broker_handle, _dir) =
+        crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
@@ -75,7 +66,7 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -96,7 +87,10 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
 #[tokio::test]
 async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+        Arc::new(crate::authorizer::AllowAllAuthorizer),
+    )
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
@@ -107,7 +101,7 @@ async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
             broker_id,
             ..Default::default()
         };
-        let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+        let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp);
@@ -126,7 +120,10 @@ async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
 #[tokio::test]
 async fn handle_unregisters_registered_broker_with_success_shape() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+        Arc::new(crate::authorizer::AllowAllAuthorizer),
+    )
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
@@ -136,7 +133,7 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -268,8 +265,7 @@ fn refusals(metrics: &crate::metrics::BrokerMetrics) -> u64 {
 #[tokio::test]
 async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.break_glass = gated_config();
     })
@@ -283,7 +279,7 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -314,17 +310,10 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
 fn registration(node_id: u64, fenced: bool) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
         fenced,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(node_id),
         broker_epoch: -1,
         incarnation_id: Uuid::from_u128(u128::from(node_id)),
         host: format!("broker-{node_id}"),
-        port: 9092,
-        rack: None,
-        endpoints: vec![],
-        log_dirs: vec![],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 
@@ -360,22 +349,6 @@ fn topic(partitions: i32) -> MetadataRecord {
     })
 }
 
-async fn wait_for_leader(broker: &crate::broker::Broker) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !broker
-        .controller
-        .watch_leader()
-        .borrow()
-        .is_some_and(|node| node == broker.config.node_id)
-    {
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
-
 /// Kafka's `ReplicationControlManager.unregisterBroker` writes
 /// `handleBrokerUnregistered`'s partition changes ahead of the
 /// `UnregisterBrokerRecord`: the broker leaves every ISR, and a partition it led
@@ -385,9 +358,12 @@ async fn wait_for_leader(broker: &crate::broker::Broker) {
 #[tokio::test]
 async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+        Arc::new(crate::authorizer::AllowAllAuthorizer),
+    )
+    .await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(vec![
@@ -409,7 +385,7 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -475,9 +451,12 @@ fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
 #[tokio::test]
 async fn a_request_on_the_controller_listener_is_answered_in_place() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+        Arc::new(crate::authorizer::AllowAllAuthorizer),
+    )
+    .await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
     let ctx = crate::handlers::RequestContext::new(
@@ -493,7 +472,7 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
 

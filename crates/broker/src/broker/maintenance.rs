@@ -11,8 +11,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::adapters::{ControllerAdapter, ReassignmentControllerAdapter},
-    config::BrokerConfig,
+    broker::adapters::ControllerAdapter, config::BrokerConfig,
     partition_registry::PartitionRegistry,
 };
 
@@ -105,18 +104,14 @@ fn spawn_producer_expiry(
         // delay and the period, so the first sweep runs one interval after
         // start, not at start.
         let period = scan_interval.to_std();
-        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = tick.tick() => {
-                    let now_ms = crate::time_util::now_ms();
-                    producer_state.expire_older_than(now_ms, expiration).await;
-                    expire_log_producers(&partitions, now_ms, expiration).await;
-                }
-                () = shutdown.cancelled() => return,
-            }
-        }
+        let tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        let (producer_state, partitions) = (&producer_state, &partitions);
+        crate::task_util::run_every(tick, &shutdown, move || async move {
+            let now_ms = crate::time_util::now_ms();
+            producer_state.expire_older_than(now_ms, expiration).await;
+            expire_log_producers(partitions, now_ms, expiration).await;
+        })
+        .await;
     });
 }
 
@@ -182,7 +177,7 @@ pub(super) fn spawn_cluster_data_maintenance(
         ));
     }
     let reassignment: Arc<dyn crate::reassignment::ReassignmentController> =
-        Arc::new(ReassignmentControllerAdapter {
+        Arc::new(ControllerAdapter {
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });

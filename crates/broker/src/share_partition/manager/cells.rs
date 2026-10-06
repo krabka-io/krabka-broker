@@ -5,10 +5,7 @@
 //! map, so the rule that no `DashMap` guard is held across an `.await` is
 //! checkable by reading one file.
 
-use std::{
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
 use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
@@ -22,6 +19,7 @@ use super::{
 use crate::{
     coordinator::unified::streams::config::ShareAutoOffsetReset,
     share_partition::state::AcquisitionState,
+    time_util::{duration_millis, now_ms},
 };
 
 impl SharePartitionLeaderManager {
@@ -178,9 +176,8 @@ impl SharePartitionLeaderManager {
                 ShareAutoOffsetReset::from_group_overrides(overrides)
             });
         let local = image
-            .topics()
-            .find(|t| t.topic_id == topic_id)
-            .and_then(|topic| self.partitions.get(&topic.name, PartitionIndex(partition)));
+            .topic_name_by_id(&topic_id)
+            .and_then(|topic| self.partitions.get(topic, PartitionIndex(partition)));
         let Some(local) = local else {
             return Ok(Offset(0));
         };
@@ -189,8 +186,7 @@ impl SharePartitionLeaderManager {
             ShareAutoOffsetReset::Earliest => Ok(log_start),
             ShareAutoOffsetReset::Latest => Ok(local.high_watermark().await.max(log_start)),
             ShareAutoOffsetReset::ByDuration(duration) => {
-                let target = now_ms()
-                    .saturating_sub(i64::try_from(duration.as_millis()).unwrap_or(i64::MAX));
+                let target = now_ms().saturating_sub(duration_millis(duration));
                 let found = {
                     let log = local.log.lock().expect("log mutex poisoned");
                     log.offset_for_timestamp_checked(target)
@@ -309,16 +305,6 @@ impl SharePartitionLeaderManager {
     }
 }
 
-/// Wall-clock milliseconds since the Unix epoch, the unit a record timestamp
-/// carries. A clock before the epoch reads as 0.
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -353,7 +339,7 @@ mod tests {
     async fn fresh_cell_starts_where_the_group_strategy_says() {
         let dir = tempfile::tempdir().expect("tempdir");
         let tid = uuid::Uuid::from_bytes([41; 16]);
-        let now = super::now_ms();
+        let now = crate::time_util::now_ms();
         let hour = 60 * 60 * 1_000;
         let reg = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         open_data_partition(
@@ -454,7 +440,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let tid = uuid::Uuid::from_bytes([42; 16]);
-        let now = super::now_ms();
+        let now = crate::time_util::now_ms();
         let hour = 60 * 60 * 1_000;
         let reg = Arc::new(crate::partition_registry::PartitionRegistry::new());
         open_data_partition(&reg, dir.path(), "t", 0, &[], Offset(2)).await;

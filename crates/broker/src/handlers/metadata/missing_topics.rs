@@ -33,11 +33,10 @@ use crate::{broker::Broker, codes, handlers::RequestContext, topic_creator::Forw
 /// The rows for `names`, the missing topics that the principal may describe
 /// and, when `auto_create` is set, may create. With `auto_create` set this
 /// also asks for the valid names to be created, in the name of the client of
-/// `ctx` and its request `correlation_id`.
+/// the request `ctx` serves.
 pub(super) fn missing_topic_rows(
     broker: &Broker,
     ctx: &RequestContext<'_>,
-    correlation_id: i32,
     names: &[&str],
     auto_create: bool,
 ) -> Vec<MetadataResponseTopic> {
@@ -45,7 +44,7 @@ pub(super) fn missing_topic_rows(
         return broker.auto_topic_creation.create_topics(
             broker,
             names,
-            Some(ForwardedIdentity::of(ctx, correlation_id)),
+            Some(ForwardedIdentity::of(ctx)),
         );
     }
     names

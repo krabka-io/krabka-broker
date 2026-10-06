@@ -29,12 +29,11 @@ use crate::{
         },
         group::{CoordinatorGroup, GroupKind},
     },
-    test_support::{DenyAll, decode_response, encode_request, request_context},
+    test_support::{DenyAll, request_context},
 };
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
     })
     .await;
@@ -235,22 +234,15 @@ async fn offset_delete_matches_kafka_whole_responses() {
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = request_context(&principal, &peer, "offset-delete-client");
     let version = offset_delete_response::MAX_VERSION;
-    let before_ms = super::tombstone::now_ms();
+    let before_ms = crate::time_util::now_ms();
     for (name, broker, group_id, topics, want) in rows {
         let req = krabka_protocol::owned::offset_delete_request::OffsetDeleteRequest {
             group_id: group_id.into(),
             ..req_with_topics(topics)
         };
-        let resp = handle(
-            &broker.broker_arc_for_test(),
-            version,
-            1,
-            &encode_request(&req, version),
-            &ctx,
-        )
-        .await
-        .expect("OffsetDelete");
-        let resp: OffsetDeleteResponse = decode_response(&resp, version);
+        let resp = handle(&broker.broker_arc_for_test(), req, version, &ctx)
+            .await
+            .expect("OffsetDelete");
         check!(resp == want, "{name}");
     }
 
@@ -258,7 +250,7 @@ async fn offset_delete_matches_kafka_whole_responses() {
     // be the broker's clock, so later commits do not age this segment from 1970.
     {
         let broker = allowed.broker_arc_for_test();
-        let partition = super::local_partition_for_group(
+        let partition = crate::coordinator::partitioner::local_partition_for_group(
             &broker.controller.current_image(),
             broker.config.node_id,
             "classic-g",
@@ -276,7 +268,7 @@ async fn offset_delete_matches_kafka_whole_responses() {
             .offset_for_timestamp(before_ms)
             .expect("dated tombstone");
         check!(offset == log.log_end_offset() - 1);
-        check!(timestamp <= super::tombstone::now_ms());
+        check!(timestamp <= crate::time_util::now_ms());
     }
 
     allowed.shutdown().await;

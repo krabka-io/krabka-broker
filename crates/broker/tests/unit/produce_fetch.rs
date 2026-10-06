@@ -39,7 +39,7 @@ fn one_record_batch(n: i32) -> RecordBatch {
 async fn produce_assigns_base_offsets() {
     let p = support::start().await;
     create_topic(&p, "prod", 1).await;
-    let topic_id = topic_id_for(&p, "prod").await;
+    let topic_id = topic_id_for(&p.client, "prod").await;
 
     // First produce: 3 records → base 0.
     let req = ProduceRequest {
@@ -116,7 +116,7 @@ async fn produce_without_a_topic_id_returns_unknown_topic_id() {
 async fn produce_then_fetch_round_trip() {
     let p = support::start().await;
     create_topic(&p, "round", 1).await;
-    let topic_id = topic_id_for(&p, "round").await;
+    let topic_id = topic_id_for(&p.client, "round").await;
 
     let prod = ProduceRequest {
         acks: 1,

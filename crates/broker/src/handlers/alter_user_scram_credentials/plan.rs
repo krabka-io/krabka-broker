@@ -195,16 +195,16 @@ mod tests {
         UnknownTaggedFields,
         owned::alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
     };
-    use krabka_security::{AuthMethod, Principal, scram::MIN_SCRAM_ITERATIONS};
+    use krabka_security::scram::MIN_SCRAM_ITERATIONS;
 
     use super::*;
     use crate::{
         codes,
         handlers::alter_user_scram_credentials::{
-            handle,
+            answer,
             test_support::{
                 KAFKA_DUPLICATE_RESOURCE, expected_result, start_broker, test_context,
-                valid_upsertion, valid_upsertion_for_mechanism, wait_for_leader,
+                valid_upsertion, valid_upsertion_for_mechanism,
             },
         },
     };
@@ -248,12 +248,8 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        crate::test_support::wait_for_controller_leader(&broker).await;
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req = AlterUserScramCredentialsRequest {
@@ -264,7 +260,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, &ctx).await;
+        let resp = answer(&broker, req, &ctx).await;
 
         let expected = AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,
@@ -295,7 +291,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1ScramCredential(
@@ -317,11 +313,7 @@ mod tests {
                     .is_some()
             })
             .await;
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req = AlterUserScramCredentialsRequest {
@@ -338,7 +330,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, &ctx).await;
+        let resp = answer(&broker, req, &ctx).await;
 
         let expected = AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,
@@ -369,12 +361,8 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        crate::test_support::wait_for_controller_leader(&broker).await;
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req = AlterUserScramCredentialsRequest {
@@ -391,7 +379,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, &ctx).await;
+        let resp = answer(&broker, req, &ctx).await;
 
         let expected = AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,

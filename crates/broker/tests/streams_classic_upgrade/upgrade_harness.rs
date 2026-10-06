@@ -13,7 +13,6 @@ use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_fetch_request::{
             OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
         },
@@ -37,6 +36,9 @@ pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) 
     // A streams or classic group needs `__consumer_offsets`. No broker creates
     // it at startup, so create it as a client's first lookup does.
     broker.wait_until_group_coordinator_ready().await;
+    // CreateTopics places replicas only on a broker whose first heartbeat has
+    // unfenced it, which can trail the coordinator load on a slow runner.
+    broker.wait_until_broker_electable(broker.node_id()).await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
 }
@@ -131,20 +133,4 @@ pub async fn finalize_streams_version(client: &Client) {
     );
 }
 
-pub async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
+pub use crate::support::topic_id_for;

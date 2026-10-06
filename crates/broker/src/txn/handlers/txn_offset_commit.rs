@@ -62,9 +62,11 @@
 //! the producer's verification with the transaction coordinator (KIP-890, see
 //! [`verification`]), then the KIP-447 fencing checks.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
+use krabka_protocol::owned::{
+    txn_offset_commit_request::TxnOffsetCommitRequest,
+    txn_offset_commit_response::TxnOffsetCommitResponse,
+};
 
 mod batch;
 mod existence;
@@ -81,7 +83,7 @@ mod test_support;
 use self::{
     batch::{AppendedTxnOffsets, append_txn_batch},
     existence::unknown_partitions,
-    response::{build_response, encode_err_all, encode_resp},
+    response::{build_response, error_response},
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
@@ -105,19 +107,16 @@ use crate::{
     name = "handle_txn_offset_commit",
     level = "info",
     skip_all,
-    fields(api = "TxnOffsetCommit", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "TxnOffsetCommit", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    mut req: TxnOffsetCommitRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<TxnOffsetCommitResponse, BrokerError> {
     let partitions = broker.partitions.clone();
-    let mut cur: &[u8] = req_bytes;
-    let mut req: TxnOffsetCommitRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble: Write on TransactionalId ────────────────
     {
@@ -131,7 +130,10 @@ pub(crate) async fn handle(
             operation: AclOperation::Write,
         };
         if authorizer.authorize(&*image, &tid_req) == AuthorizationResult::Deny {
-            return encode_err_all(version, &req, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+            return Ok(error_response(
+                &req,
+                codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+            ));
         }
         // Group Read gate.
         let group_req = AuthorizationRequest {
@@ -142,7 +144,7 @@ pub(crate) async fn handle(
             operation: AclOperation::Read,
         };
         if authorizer.authorize(&*image, &group_req) == AuthorizationResult::Deny {
-            return encode_err_all(version, &req, codes::GROUP_AUTHORIZATION_FAILED);
+            return Ok(error_response(&req, codes::GROUP_AUTHORIZATION_FAILED));
         }
     }
 
@@ -194,10 +196,13 @@ pub(crate) async fn handle(
         } else {
             code
         };
-        encode_resp(
-            version,
-            &build_response(&req, code, topic_ids, &denied_topics, &unknown_rows),
-        )
+        Ok(build_response(
+            &req,
+            code,
+            topic_ids,
+            &denied_topics,
+            &unknown_rows,
+        ))
     };
 
     // Kafka calls the group coordinator only when at least one row survives

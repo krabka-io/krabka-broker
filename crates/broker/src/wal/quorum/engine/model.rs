@@ -46,6 +46,7 @@ use krabka_units::convert::ByteSizeExt as _;
 use stateright::{Checker, Model, Property};
 
 use super::{OpenMode, WalReplica, WalShardEngine, split_batches};
+use crate::model_check::run_bfs;
 
 const VOTERS: usize = 3;
 const MAX_RECORDS: usize = 2;
@@ -356,20 +357,7 @@ fn model_index(offset: i64) -> usize {
 
 #[test]
 fn quorum_wal_append_ack_and_recovery_model() {
-    let checker = WalModel
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[quorum_wal_model] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert2::assert!(checker.state_count() < MAX_STATES, "state cap hit");
+    let checker = run_bfs(WalModel, "quorum_wal_model", MAX_DEPTH, MAX_STATES);
     assert2::assert!(
         checker.unique_state_count() == PINNED_UNIQUE_STATES,
         "unique-state count moved: the reachable set of this model changed"

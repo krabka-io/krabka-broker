@@ -12,7 +12,7 @@ use bytes::BytesMut;
 use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 
-use crate::wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 pub type ConfigOperations = Vec<(String, Option<String>, i8)>;
 pub type ConfigResources = Vec<(i8, String, ConfigOperations)>;
@@ -60,13 +60,13 @@ pub async fn drive_incremental_alter_configs(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for IncrementalAlterConfigs");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION)
         .expect("encode IncrementalAlterConfigs");
-    let resp_bytes = round_trip(&mut stream, 44, VERSION, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 44, VERSION, 1, CLIENT_ID, true, &body)
         .await
         .expect("IncrementalAlterConfigs round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -119,7 +119,7 @@ pub async fn drive_incremental_alter_configs_plaintext(
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION)
         .expect("encode IncrementalAlterConfigs");
-    let resp_bytes = round_trip(&mut stream, 44, VERSION, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 44, VERSION, 1, CLIENT_ID, true, &body)
         .await
         .expect("IncrementalAlterConfigs round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -160,13 +160,13 @@ pub async fn drive_describe_configs(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for DescribeConfigs");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION)
         .expect("encode DescribeConfigs");
-    let resp_bytes = round_trip(&mut stream, 32, VERSION, 1, false, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 32, VERSION, 1, CLIENT_ID, false, &body)
         .await
         .expect("DescribeConfigs round-trip");
     let mut cur: &[u8] = &resp_bytes;

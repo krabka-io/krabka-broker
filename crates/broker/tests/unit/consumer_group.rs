@@ -105,7 +105,7 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
     // KIP-516: OffsetCommit/OffsetFetch negotiate to v10/v8+, which key by
     // topic_id on the wire — so the topic must exist to carry a real UUID.
     create_topic(&p, "t", 1).await;
-    let tid = topic_id_for(&p, "t").await;
+    let tid = topic_id_for(&p.client, "t").await;
 
     // Step 1: empty member_id → broker returns one.
     let r1 = p

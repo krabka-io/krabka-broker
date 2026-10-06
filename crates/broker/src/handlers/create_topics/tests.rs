@@ -135,12 +135,7 @@ fn request(topics: Vec<CreatableTopic>) -> CreateTopicsRequest {
     }
 }
 
-crate::test_support::wire_helpers!(
-    CreateTopicsRequest,
-    CreateTopicsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -151,11 +146,9 @@ async fn drive(
     peer: &SocketAddr,
 ) -> CreateTopicsResponse {
     let ctx = test_context(principal, peer);
-    let req_bytes = encode_request(req);
-    let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+    handle(broker, req.clone(), VERSION, &ctx)
         .await
-        .expect("handle");
-    decode_response(&bytes)
+        .expect("handle")
 }
 
 async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
@@ -302,8 +295,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
     /// error message, created partitions, created replication factor)
     type Row = (i32, i16, i16, Option<&'static str>, i32, i16);
 
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.num_partitions = 4;
         cfg.default_replication_factor = 2;
     })
@@ -314,18 +306,8 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: krabka_raft::NodeId(node_id),
                     broker_epoch: -1,
-                    incarnation_id: uuid::Uuid::nil(),
-                    host: "127.0.0.1".into(),
-                    port: 9092,
-                    rack: None,
-                    log_dirs: vec![],
-                    endpoints: vec![],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node_id)
                 },
             )])
             .await
@@ -648,8 +630,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     // refuses the opt-in rather than create a topic that could never flush or
     // trim. Configure the tier this test's topic depends on.
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.rack = Some("rack-a".into());
         cfg.diskless_wal_local_replica_count = 1;
@@ -704,8 +685,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
 #[tokio::test]
 async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: object_store.path().to_path_buf(),
@@ -746,8 +726,7 @@ async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
 #[tokio::test]
 async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment() {
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: object_store.path().to_path_buf(),
@@ -1170,17 +1149,14 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
     let req = request(vec![topic_with_config("legacy")]);
     let ctx = test_context(&p, &peer);
 
-    let bytes = handle(
+    let resp: CreateTopicsResponse = crate::test_support::dispatch_wire(
         &broker,
+        krabka_protocol::api_key::ApiKey::CreateTopics as i16,
         V4,
-        123,
-        &crate::test_support::encode_request(&req, V4),
+        &req,
         &ctx,
     )
-    .await
-    .expect("handle");
-
-    let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+    .await;
     let expected = CreateTopicsResponse {
         throttle_time_ms: 0,
         topics: vec![CreatableTopicResult {
@@ -1234,8 +1210,7 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
     /// One row: the requested name, and the error code and message it gets.
     type NameCase = (String, i16, Option<String>);
 
-    let (broker_handle, dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.log_dir = cfg.log_dir.join("logs");
     })
     .await;
@@ -1471,16 +1446,14 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
+        let resp: CreateTopicsResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::api_key::ApiKey::CreateTopics as i16,
             V4,
-            123,
-            &crate::test_support::encode_request(&request(vec![topic]), V4),
+            &request(vec![topic]),
             &ctx,
         )
-        .await
-        .expect("handle");
-        let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+        .await;
 
         let expected = CreateTopicsResponse {
             throttle_time_ms: 0,
@@ -1939,15 +1912,12 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
 async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
     use crate::metrics::AuthorizationDeniedLabel;
 
-    let literal_a = AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Create,
-        permission_type: PermissionType::Allow,
-    };
+    let literal_a = crate::test_support::allow_acl(
+        ResourceType::Topic,
+        "a",
+        "User:alice",
+        AclOperation::Create,
+    );
     let denied = |operation: &str, resource_type: &str| AuthorizationDeniedLabel {
         operation: operation.into(),
         resource_type: resource_type.into(),
@@ -2306,8 +2276,7 @@ async fn too_many_partitions_message_follows_the_unstable_flag() {
     ];
 
     for (unstable, message) in cases {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.features.unstable_api_versions = unstable;
         })
         .await;

@@ -42,10 +42,8 @@
 //! with `LEADER_NOT_AVAILABLE`, or, when the leader is registered without the
 //! listener, `LISTENER_NOT_FOUND` from version 6 on.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode,
     owned::{
         metadata_request::MetadataRequest,
         metadata_response::{
@@ -103,27 +101,23 @@ const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
     name = "handle_metadata",
     level = "info",
     skip_all,
-    fields(api = "Metadata", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "Metadata", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: MetadataRequest,
     version: i16,
-    correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<MetadataResponse, BrokerError> {
     let controller = broker.controller.clone();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = MetadataRequest::decode(&mut cur, version)?;
 
     let image = controller.current_image();
 
     let requested = match lookup_requested_topics(&image, &req, version) {
         Ok(requested) => requested,
         Err(error_code) => {
-            return crate::handlers::encode_response(&error_response(&req, error_code), version);
+            return Ok(error_response(&req, error_code));
         }
     };
 
@@ -155,7 +149,6 @@ pub(crate) async fn handle(
             requested: &requested,
             unavailable: &unavailable,
             listener,
-            correlation_id,
         },
     );
 
@@ -207,7 +200,7 @@ pub(crate) async fn handle(
         resp_topics = ?resp.topics.iter().map(|t| format!("{}={:?}/p{}", t.name.as_deref().unwrap_or("?"), t.error_code, t.partitions.len())).collect::<Vec<_>>(),
         "metadata response"
     );
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Whether the principal of `ctx` holds `operation` on the cluster.
@@ -360,9 +353,6 @@ struct TopicRowInputs<'a> {
     unavailable: &'a std::collections::HashSet<u64>,
     /// The listener the request arrived on.
     listener: &'a str,
-    /// The correlation id of the request, which an auto-creation forwards to
-    /// the controller.
-    correlation_id: i32,
 }
 
 /// The topic rows, in Kafka's order: unknown ids, the described topics, the
@@ -439,7 +429,6 @@ fn build_topic_rows(
             described_rows.extend(missing_topics::missing_topic_rows(
                 broker,
                 ctx,
-                inputs.correlation_id,
                 &missing,
                 auto_create,
             ));
@@ -606,7 +595,7 @@ fn partition_row(
 }
 
 /// A node id as the wire carries it.
-fn wire_id(node: krabka_metadata::NodeId) -> i32 {
+pub(crate) fn wire_id(node: krabka_metadata::NodeId) -> i32 {
     i32::try_from(node.0).unwrap_or(i32::MAX)
 }
 
@@ -632,7 +621,7 @@ fn project_broker(
 ) -> Option<MetadataResponseBroker> {
     let endpoint = listener_endpoint(b, connection_listener_name)?;
     Some(MetadataResponseBroker {
-        node_id: i32::try_from(b.node_id.0).unwrap_or(i32::MAX),
+        node_id: wire_id(b.node_id),
         host: endpoint.host.clone(),
         port: i32::from(endpoint.port),
         rack: b.rack.clone(),
@@ -686,18 +675,11 @@ mod tests {
         endpoints: Vec<krabka_metadata::BrokerEndpoint>,
     ) -> krabka_metadata::BrokerRegistrationRecord {
         krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_metadata::NodeId(7),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
             host: "legacy-host".to_string(),
             port: 1000,
             rack: Some("rack-a".to_string()),
-            log_dirs: vec![],
             endpoints,
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(7)
         }
     }
 
@@ -775,10 +757,9 @@ mod tests {
         let p = crate::test_support::principal("describer");
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&p, &peer, "metadata-client");
-        let req = crate::test_support::encode_request(&MetadataRequest::default(), 9);
-
-        let bytes = handle(&broker, 9, 1, &req, &ctx).await.expect("handle");
-        let resp: MetadataResponse = crate::test_support::decode_response(&bytes, 9);
+        let resp = handle(&broker, MetadataRequest::default(), 9, &ctx)
+            .await
+            .expect("handle");
 
         assert!(resp.cluster_id.as_deref() == Some("AQIDBAUGBwgJCgsMDQ4PEA"));
         broker_handle.shutdown().await;

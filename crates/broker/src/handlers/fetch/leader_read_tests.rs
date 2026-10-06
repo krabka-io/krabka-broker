@@ -36,7 +36,7 @@ use crate::{
     codes,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     partition::Partition,
-    test_support::{encode_request, peer, principal, request_context, start_broker_with},
+    test_support::{encode_request, peer, principal, request_context, start_broker_no_audit_with},
 };
 
 /// The node id of the broker under test.
@@ -87,8 +87,7 @@ struct Outcome {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    start_broker_no_audit_with(|cfg| {
         // Node 2 never fetches. Keep it in the ISR for the whole test.
         cfg.replica_lag_time_max = krabka_units::secs(600);
     })

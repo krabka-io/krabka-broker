@@ -9,7 +9,9 @@
 //! it out (`0::1`).
 
 use assert2::assert;
-use krabka_metadata::{LeaderEpoch, PartitionUpdateRecord};
+use krabka_metadata::{
+    LeaderEpoch, LeaderRecoveryState, PartitionRecoveryRecord, PartitionUpdateRecord,
+};
 
 use super::*;
 use crate::{

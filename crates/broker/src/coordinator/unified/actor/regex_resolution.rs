@@ -20,11 +20,14 @@ use std::{
     time::Duration,
 };
 
-use crate::coordinator::unified::{
-    config::NextGenConfig,
-    consumer_state::{GroupState, ResolvedRegularExpression},
-    persistence_next_gen::RegularExpressionValue,
-    regex_resolver::TopicRegexResolver,
+use crate::{
+    coordinator::unified::{
+        config::NextGenConfig,
+        consumer_state::{GroupState, ResolvedRegularExpression},
+        persistence_next_gen::RegularExpressionValue,
+        regex_resolver::TopicRegexResolver,
+    },
+    time_util::duration_millis,
 };
 
 /// What a heartbeat brings to resolve a group's regular expressions.
@@ -200,7 +203,7 @@ pub(crate) fn maybe_update_regular_expressions(
 
     // 2. The last resolution is older than the minimum interval between two.
     let last_ms = state.last_regex_resolution_ms();
-    if regexes.now_ms <= last_ms.saturating_add(millis(regexes.min_refresh_interval)) {
+    if regexes.now_ms <= last_ms.saturating_add(duration_millis(regexes.min_refresh_interval)) {
         return update;
     }
 
@@ -209,7 +212,8 @@ pub(crate) fn maybe_update_regular_expressions(
     // 3.2 The metadata image changed since the last resolution.
     require_refresh |= state.last_regex_resolution_version() < regexes.refresh_version;
     // 3.3 The last resolution is older than the refresh interval.
-    require_refresh |= regexes.now_ms.saturating_sub(last_ms) > millis(regexes.refresh_interval);
+    require_refresh |=
+        regexes.now_ms.saturating_sub(last_ms) > duration_millis(regexes.refresh_interval);
 
     if require_refresh && !subscribed.is_empty() {
         let patterns: BTreeSet<String> = subscribed.keys().cloned().collect();
@@ -217,10 +221,6 @@ pub(crate) fn maybe_update_regular_expressions(
         apply_resolutions(state, &subscribed, resolved, records);
     }
     update
-}
-
-fn millis(duration: Duration) -> i64 {
-    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 fn decrement(counts: &mut HashMap<String, usize>, regex: &str) {

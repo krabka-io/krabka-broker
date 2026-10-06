@@ -70,7 +70,10 @@ pub(crate) const NODE_ID: &str = "node.id";
 /// `UNKNOWN` is deliberately absent. A key krabka reports is a key krabka has
 /// a row for, and the `DescribeConfigs` handler treats a missing row as a
 /// config it may not disclose rather than as an untyped one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `label` is the name the generated reference page prints in its type column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase", as_str = label)]
 pub(crate) enum ConfigType {
     Boolean,
     String,
@@ -96,21 +99,6 @@ impl ConfigType {
             Self::List => 7,
             Self::Class => 8,
             Self::Password => 9,
-        }
-    }
-
-    /// The name the generated reference page prints in its type column.
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Boolean => "boolean",
-            Self::String => "string",
-            Self::Int => "int",
-            Self::Short => "short",
-            Self::Long => "long",
-            Self::Double => "double",
-            Self::List => "list",
-            Self::Class => "class",
-            Self::Password => "password",
         }
     }
 }

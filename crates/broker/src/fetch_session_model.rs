@@ -39,6 +39,7 @@ use krabka_protocol::{
 use stateright::{Checker, Model, Property};
 
 use super::{CachedPartitionState, FetchSessionKey, apply_incremental};
+use crate::model_check::run_bfs;
 
 // Exhaustiveness is bounded on UNIQUE states (memory-proportional). The combined
 // forget×sub action cross-product makes the *generated* (visited-edge) count
@@ -293,23 +294,7 @@ impl Model for FsModel {
 }
 
 fn run(model: FsModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < TARGET_STATE_COUNT,
-        "[{label}] truncated — not exhaustive"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded ({})",

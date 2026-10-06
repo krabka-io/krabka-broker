@@ -30,13 +30,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        share_fetch_request::{FetchPartition, ShareFetchRequest},
-        share_fetch_response::{LeaderIdAndEpoch, NodeEndpoint},
-    },
+use krabka_protocol::owned::{
+    share_fetch_request::{FetchPartition, ShareFetchRequest},
+    share_fetch_response::{LeaderIdAndEpoch, NodeEndpoint, ShareFetchResponse},
 };
 
 mod acknowledge;
@@ -84,7 +80,7 @@ use self::{
     records::AcquireMode,
     request::has_acknowledgements,
     resolve::{RowContext, resolve_row},
-    response::{encode_error_response, encode_success_response, group_responses},
+    response::{error_response, group_responses, success_response},
 };
 use crate::{
     broker::Broker,
@@ -128,25 +124,21 @@ fn renew_fetch_fields_are_zero(req: &ShareFetchRequest) -> bool {
     name = "handle_share_fetch",
     level = "info",
     skip_all,
-    fields(api = "ShareFetch", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ShareFetch", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: ShareFetchRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ShareFetchRequest::decode(&mut cur, version)?;
-
+) -> Result<ShareFetchResponse, BrokerError> {
     let cfg = broker.config.share_group.clone();
 
     // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return encode_error_response(version, codes::UNSUPPORTED_VERSION);
+        return Ok(error_response(codes::UNSUPPORTED_VERSION));
     }
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses a null group id
     // after the feature gate, then checks `Read` on the group, then the
@@ -154,17 +146,17 @@ pub(crate) async fn handle(
     // member: the share session and the acquisition locks are keyed by the
     // member id alone.
     let Some(group) = req.group_id.clone() else {
-        return encode_error_response(version, codes::INVALID_REQUEST);
+        return Ok(error_response(codes::INVALID_REQUEST));
     };
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
-        return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
+        return Ok(error_response(codes::GROUP_AUTHORIZATION_FAILED));
     }
     // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
     // the broker setting as the default.
     let settings = GroupShareSettings::resolve(&image, &group, &cfg);
     let lock_timeout_ms = settings.record_lock_duration_ms();
     let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
-        return encode_error_response(version, codes::INVALID_REQUEST);
+        return Ok(error_response(codes::INVALID_REQUEST));
     };
 
     // KIP-1222: a renew-ack fetch renews locks and fetches no records, so
@@ -172,7 +164,7 @@ pub(crate) async fn handle(
     // records or a wait. The error response carries no message.
     let renew_only = version >= 2 && req.is_renew_ack;
     if renew_only && !renew_fetch_fields_are_zero(&req) {
-        return encode_error_response(version, codes::INVALID_REQUEST);
+        return Ok(error_response(codes::INVALID_REQUEST));
     }
 
     let mgr = broker.share_partition_leaders.clone();
@@ -220,9 +212,9 @@ pub(crate) async fn handle(
             // spin on the broker.
             let wait = u64::try_from(req.max_wait_ms).unwrap_or(0);
             tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
-            return encode_error_response(version, codes::SHARE_SESSION_LIMIT_REACHED);
+            return Ok(error_response(codes::SHARE_SESSION_LIMIT_REACHED));
         }
-        Err(code) => return encode_error_response(version, code),
+        Err(code) => return Ok(error_response(code)),
     };
 
     // The session's partitions in the session's order, then the request
@@ -359,7 +351,7 @@ pub(crate) async fn handle(
     // topic order.
     let responses = group_responses(pending);
 
-    encode_success_response(version, lock_timeout_ms, responses, node_endpoints)
+    Ok(success_response(lock_timeout_ms, responses, node_endpoints))
 }
 
 #[cfg(test)]

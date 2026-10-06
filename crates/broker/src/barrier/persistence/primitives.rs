@@ -39,11 +39,7 @@ pub(super) fn decode_vec<T>(
     element: impl Fn(&mut &[u8]) -> Result<T, ProtocolError>,
 ) -> Result<Vec<T>, ProtocolError> {
     let len = get_array_len(cur, false)?;
-    let mut out = Vec::with_capacity(len);
-    for _ in 0..len {
-        out.push(element(cur)?);
-    }
-    Ok(out)
+    (0..len).map(|_| element(cur)).collect()
 }
 
 #[cfg(test)]

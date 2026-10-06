@@ -12,6 +12,7 @@ load("@crates//:defs.bzl", "all_crate_deps", "crate_name", "edition")
 load("@package_metadata//rules:package_metadata.bzl", "package_metadata")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_proc_macro.bzl", "rust_proc_macro")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("@rules_rs_mutants//mutants:cargo_mutants_test.bzl", "cargo_mutants_test")
 load("@rules_rust//rust:defs.bzl", "rust_doc", "rust_doc_test")
@@ -126,13 +127,31 @@ def _aliases(kinds):
 
 def crate_library(name, srcs = None, **kwargs):
     """`rust_library` for a workspace member, configured from Cargo metadata."""
+    _crate(rust_library, name, srcs, **kwargs)
+
+def crate_proc_macro(name, srcs = None, **kwargs):
+    """`rust_proc_macro` for a `proc-macro = true` member, configured like `crate_library`.
+
+    A crate that uses the macros takes this target through `all_crate_deps`
+    like any other dependency; rules_rust sorts proc-macro crates out of `deps`.
+    """
+    _crate(rust_proc_macro, name, srcs, clippy = False, **kwargs)
+
+def _crate(rule, name, srcs, clippy = True, **kwargs):
+    """The target, SBOM metadata, Clippy test and rustdoc of one member's library.
+
+    `clippy = False` leaves out the Bazel Clippy test. The rules_lint Clippy
+    aspect writes no report for a `rust_proc_macro` target, so `lint_test` has
+    nothing to read and fails analysis; `cargo clippy --workspace` still lints
+    such a crate.
+    """
     metadata = name + "_package_metadata"
     package_metadata(
         name = metadata,
         # The SBOM task checks this against Cargo's resolved version.
         purl = "pkg:cargo/%s@%s" % (crate_name().replace("_", "-"), WORKSPACE_VERSION),
     )
-    rust_library(
+    rule(
         name = name,
         srcs = srcs if srcs != None else native.glob(
             ["src/**/*.rs"],
@@ -152,10 +171,11 @@ def crate_library(name, srcs = None, **kwargs):
     # Clippy as a test, so `bazel test //...` gates on it the way `cargo clippy
     # -- -D warnings` used to. The aspect alone only writes a report: it is
     # `lint_test` that turns a finding into a failure.
-    clippy_test(
-        name = name + "_clippy",
-        srcs = [":" + name],
-    )
+    if clippy:
+        clippy_test(
+            name = name + "_clippy",
+            srcs = [":" + name],
+        )
 
     # `bazel build //crates/<x>:<x>_doc` renders this crate's rustdoc. The
     # rustdoc examples themselves are run by `crate_tests`, which emits a

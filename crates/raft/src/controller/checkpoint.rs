@@ -1,6 +1,6 @@
 //! The on-disk KIP-630 metadata checkpoints: the `FetchSnapshot` answer that
 //! the engine gives a broker listener, the byte window of the newest
-//! `<end_offset>-<epoch>.checkpoint`, the scan that finds that file, and the
+//! `<end_offset>-<epoch>.checkpoint`, the read of that file, and the
 //! manual snapshot trigger. The checkpoint file layout is read straight from
 //! disk here rather than through the engine, so it is kept apart from the rest
 //! of the handle.
@@ -99,22 +99,13 @@ impl ControllerHandle {
     }
 }
 
-/// Scan `dir` for `<end_offset>-<epoch>.checkpoint` artifacts and return the
-/// highest `(end_offset, epoch)` plus its raw bytes. Matches the bare-checkpoint
-/// format the engine writes (no `.meta` sidecar).
+/// The highest `(end_offset, epoch)` `.checkpoint` in `dir` plus its raw
+/// bytes. Matches the bare-checkpoint format the engine writes (no `.meta`
+/// sidecar).
 pub(super) fn load_latest_checkpoint(dir: &std::path::Path) -> Option<((i64, i32), Vec<u8>)> {
-    let ((off, ep), path) = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_str()?;
-            let id = crate::kraft::controller::parse_checkpoint_name(name)?;
-            Some((id, entry.path()))
-        })
-        .max_by_key(|(id, _)| *id)?;
-    let bytes = std::fs::read(&path).ok()?;
-    Some(((off, ep), bytes))
+    let id = crate::kraft::controller::checkpoint::latest_checkpoint_id(dir)?;
+    let bytes = crate::kraft::controller::checkpoint::load_checkpoint_by_id(dir, id.0, id.1)?;
+    Some((id, bytes))
 }
 
 #[cfg(test)]

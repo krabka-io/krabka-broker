@@ -7,12 +7,7 @@
 //! in one place is what lets the v0 to v7 and v8 and above paths apply it
 //! identically.
 
-use krabka_metadata::{AclOperation, ResourceType};
-
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-};
+use crate::broker::Broker;
 
 /// Reports whether the principal may `Describe` the group, the gate that
 /// precedes every committed-offset read. A denial makes the whole response
@@ -23,14 +18,10 @@ pub(super) fn group_authorized(
     context: &crate::handlers::RequestContext<'_>,
     group_id: &str,
 ) -> bool {
-    broker.config.authorizer.authorize(
-        &*broker.controller.current_image(),
-        &AuthorizationRequest {
-            principal: context.principal,
-            host: context.peer,
-            resource_type: ResourceType::Group,
-            resource_name: group_id,
-            operation: AclOperation::Describe,
-        },
-    ) == AuthorizationResult::Allow
+    !crate::handlers::group_describe_denied(
+        broker.config.authorizer.as_ref(),
+        &broker.controller.current_image(),
+        context,
+        group_id,
+    )
 }

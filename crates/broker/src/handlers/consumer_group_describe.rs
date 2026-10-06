@@ -26,10 +26,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataImage};
 use krabka_protocol::{
-    Decode,
     owned::{
         common::consumer_group_describe_response::{
             assignment::Assignment, topic_partitions::TopicPartitions,
@@ -42,17 +40,13 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationResult, Authorizer, authorize_topics},
+    authorizer::Authorizer,
     broker::Broker,
     codes,
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::{authorized_operations::authorized_operations_bits, group_version_disabled},
 };
-
-/// KIP-848/KIP-584: minimum finalized `group.version` feature level that
-/// enables the next-gen consumer-group RPCs.
-const NEXT_GEN_MIN_GROUP_VERSION: i16 = 1;
 
 /// `member_type` of a member that speaks the classic protocol inside a
 /// consumer group.
@@ -62,15 +56,12 @@ const MEMBER_TYPE_CONSUMER: i8 = 1;
 
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ConsumerGroupDescribeRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<ConsumerGroupDescribeResponse, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
     let image = broker.controller.current_image();
-    let mut cur: &[u8] = req_bytes;
-    let req = ConsumerGroupDescribeRequest::decode(&mut cur, version)?;
 
     // Kafka's `isConsumerGroupProtocolEnabled` gate, checked before any
     // authorization: the `consumer` rebalance protocol must be enabled and
@@ -81,8 +72,7 @@ pub(crate) async fn handle(
             .iter()
             .map(|group_id| error_row(group_id, codes::UNSUPPORTED_VERSION, None))
             .collect();
-        let resp = response(described);
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(response(described));
     }
 
     let default_assignor = coordinator
@@ -96,13 +86,11 @@ pub(crate) async fn handle(
     let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for group_id in &req.group_ids {
-        if crate::handlers::acl_denied(
+        if crate::handlers::group_describe_denied(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            krabka_metadata::ResourceType::Group,
             group_id,
-            krabka_metadata::AclOperation::Describe,
         ) {
             denied.push(error_row(group_id, codes::GROUP_AUTHORIZATION_FAILED, None));
             continue;
@@ -172,8 +160,7 @@ pub(crate) async fn handle(
 
     denied.extend(described);
     hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
-    let resp = response(denied);
-    crate::handlers::encode_response(&resp, version)
+    Ok(response(denied))
 }
 
 /// The message of the row Kafka substitutes for a group whose assignment names
@@ -207,18 +194,8 @@ fn hide_undescribable_topics(
     }
 
     let named: HashSet<&str> = groups.iter().flat_map(topics).collect();
-    let undescribable: HashSet<String> = authorize_topics(
-        authorizer,
-        image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        named,
-    )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
-    .map(|(name, _)| name.to_owned())
-    .collect();
+    let undescribable =
+        crate::handlers::denied_topics(authorizer, image, ctx, AclOperation::Describe, named);
     if undescribable.is_empty() {
         return;
     }
@@ -330,14 +307,6 @@ fn assignment(partitions: HashMap<Uuid, Vec<i32>>, image: &MetadataImage) -> Ass
     }
 }
 
-fn group_version_disabled(image: &MetadataImage) -> bool {
-    !crate::features::feature_enabled(
-        image,
-        krabka_metadata::group_version::GROUP_VERSION_FEATURE,
-        NEXT_GEN_MIN_GROUP_VERSION,
-    )
-}
-
 fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {
     ConsumerGroupDescribeResponse {
         groups,
@@ -348,27 +317,17 @@ fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use bytes::BytesMut;
     use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use krabka_protocol::Encode;
 
     use super::*;
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
 
-    fn request(group_ids: Vec<&str>) -> Bytes {
-        let req = ConsumerGroupDescribeRequest {
+    fn request(group_ids: Vec<&str>) -> ConsumerGroupDescribeRequest {
+        ConsumerGroupDescribeRequest {
             group_ids: group_ids.into_iter().map(Into::into).collect(),
             ..Default::default()
-        };
-        let mut buf = BytesMut::with_capacity(req.encoded_len(VERSION));
-        req.encode(&mut buf, VERSION)
-            .expect("encode ConsumerGroupDescribeRequest");
-        buf.freeze()
-    }
-
-    fn decode_response(bytes: &Bytes) -> ConsumerGroupDescribeResponse {
-        crate::test_support::decode_response(bytes, VERSION)
+        }
     }
 
     /// Start a broker and wait until its group coordinator serves
@@ -629,15 +588,12 @@ mod tests {
     fn a_group_naming_an_undescribable_topic_is_replaced_by_an_error_row() {
         let mut image = image_with_topics();
         image.apply(&MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "orders".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: AclOperation::Describe,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+            crate::test_support::allow_acl(
+                krabka_metadata::ResourceType::Topic,
+                "orders",
+                "User:alice",
+                AclOperation::Describe,
+            ),
         ));
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
         let principal = crate::test_support::principal("alice");
@@ -760,10 +716,9 @@ mod tests {
             ("", row("", codes::INVALID_GROUP_ID, None)),
         ];
         for (group_id, expected) in rows {
-            let bytes = handle(&broker, VERSION, 3, &request(vec![group_id]), &ctx)
+            let resp = handle(&broker, request(vec![group_id]), VERSION, &ctx)
                 .await
                 .expect("ConsumerGroupDescribe handler");
-            let resp = decode_response(&bytes);
 
             assert!(
                 resp == ConsumerGroupDescribeResponse {
@@ -781,16 +736,14 @@ mod tests {
     /// Request `include_authorized_operations` on a request built with
     /// [`request`], which does not set it — [`request_with_ops`] below sets
     /// it explicitly.
-    fn request_with_ops(group_ids: Vec<&str>, include_authorized_operations: bool) -> Bytes {
-        let req = ConsumerGroupDescribeRequest {
-            group_ids: group_ids.into_iter().map(Into::into).collect(),
+    fn request_with_ops(
+        group_ids: Vec<&str>,
+        include_authorized_operations: bool,
+    ) -> ConsumerGroupDescribeRequest {
+        ConsumerGroupDescribeRequest {
             include_authorized_operations,
-            ..Default::default()
-        };
-        let mut buf = BytesMut::with_capacity(req.encoded_len(VERSION));
-        req.encode(&mut buf, VERSION)
-            .expect("encode ConsumerGroupDescribeRequest");
-        buf.freeze()
+            ..request(group_ids)
+        }
     }
 
     /// Lowers `group.version` back to 0 (unfinalized/disabled) on an
@@ -829,10 +782,9 @@ mod tests {
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
         let req = request(vec!["denied-group", "also-denied"]);
 
-        let bytes = handle(&broker, VERSION, 5, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupDescribe handler");
-        let resp = decode_response(&bytes);
 
         assert!(
             resp.groups
@@ -866,15 +818,12 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                krabka_metadata::AclEntry {
-                    resource_type: krabka_metadata::ResourceType::Group,
-                    resource_name: "allowed".into(),
-                    pattern_type: krabka_metadata::PatternType::Literal,
-                    principal: "User:alice".into(),
-                    host: "*".into(),
-                    operation: krabka_metadata::AclOperation::Describe,
-                    permission_type: krabka_metadata::PermissionType::Allow,
-                },
+                crate::test_support::allow_acl(
+                    krabka_metadata::ResourceType::Group,
+                    "allowed",
+                    "User:alice",
+                    krabka_metadata::AclOperation::Describe,
+                ),
             )])
             .await
             .expect("grant alice Describe on allowed");
@@ -883,10 +832,9 @@ mod tests {
         let ctx = crate::test_support::request_context(&principal, &peer, "alice-client");
         let req = request(vec!["allowed", "denied"]);
 
-        let bytes = handle(&broker, VERSION, 7, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupDescribe handler");
-        let resp = decode_response(&bytes);
 
         // Requested in order [allowed, denied]; the denied row comes first
         // in the response, ahead of the (unknown, hence GROUP_ID_NOT_FOUND)
@@ -924,11 +872,9 @@ mod tests {
 
         // Flag unset: sentinel preserved even for a clean row.
         let req_off = request_with_ops(vec!["live-group"], false);
-        let resp_off = decode_response(
-            &handle(&broker, VERSION, 9, &req_off, &ctx)
-                .await
-                .expect("ConsumerGroupDescribe handler"),
-        );
+        let resp_off = handle(&broker, req_off, VERSION, &ctx)
+            .await
+            .expect("ConsumerGroupDescribe handler");
         assert!(
             resp_off.groups
                 == vec![DescribedGroup {
@@ -946,11 +892,9 @@ mod tests {
         // (Read, Describe, Delete, DescribeConfigs, AlterConfigs) under
         // AllowAll.
         let req_on = request_with_ops(vec!["live-group"], true);
-        let resp_on = decode_response(
-            &handle(&broker, VERSION, 11, &req_on, &ctx)
-                .await
-                .expect("ConsumerGroupDescribe handler"),
-        );
+        let resp_on = handle(&broker, req_on, VERSION, &ctx)
+            .await
+            .expect("ConsumerGroupDescribe handler");
         let expected_bits = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),

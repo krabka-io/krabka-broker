@@ -20,9 +20,31 @@ use crate::{
 };
 
 impl KraftController {
-    /// The same epoch clock used for credential mutations and log timestamps.
+    /// Send the command `make` builds around a fresh reply sender to the
+    /// engine task and await its reply.
+    ///
+    /// # Errors
+    /// Returns [`RaftError::Shutdown`] if the engine task is gone, before or
+    /// after it took the command.
+    async fn ask<T>(
+        &self,
+        make: impl FnOnce(oneshot::Sender<T>) -> Command,
+    ) -> Result<T, RaftError> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(make(reply))
+            .await
+            .map_err(|_| RaftError::Shutdown)?;
+        rx.await.map_err(|_| RaftError::Shutdown)
+    }
+
+    /// Epoch milliseconds: the clock the server stamps connection expiries
+    /// with, and the engine's clock for delegation-token deadlines and for the
+    /// create-time stamped on every batch the leader appends. `Engine::now`
+    /// is monotonic from this process's own start, and a snapshot header
+    /// timestamp has to mean the same instant on every node that reads it.
     pub(crate) fn wall_clock_ms() -> i64 {
-        super::Engine::wall_clock_ms()
+        krabka_log::epoch_ms(std::time::SystemTime::now())
     }
 
     /// The node id this controller runs as.
@@ -93,12 +115,8 @@ impl KraftController {
         &self,
         records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::SubmitChange { records, reply })
-            .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)?
+        self.ask(|reply| Command::SubmitChange { records, reply })
+            .await?
     }
 
     /// Submit generation-bound delegation-token mutations.
@@ -110,12 +128,8 @@ impl KraftController {
         &self,
         mutations: Vec<crate::DelegationTokenMutation>,
     ) -> Result<SubmitChangeResult, RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::SubmitDelegationTokenMutations { mutations, reply })
-            .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)?
+        self.ask(|reply| Command::SubmitDelegationTokenMutations { mutations, reply })
+            .await?
     }
 
     /// Submit one KIP-853 voter or kraft-version control operation.
@@ -123,12 +137,8 @@ impl KraftController {
         &self,
         change: crate::reconfig::VoterChange,
     ) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::Reconfigure { change, reply })
-            .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)?
+        self.ask(|reply| Command::Reconfigure { change, reply })
+            .await?
     }
 
     /// Atomically finalize `kraft.version` in the Raft control log.
@@ -163,12 +173,8 @@ impl KraftController {
     /// # Errors
     /// Returns [`RaftError::Shutdown`] if the engine task is gone.
     pub async fn quorum_state(&self) -> Result<QuorumStateSnapshot, RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::QuorumStateSnapshot { reply })
+        self.ask(|reply| Command::QuorumStateSnapshot { reply })
             .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)
     }
 
     /// Read a committed `__cluster_metadata` slice for an observer's
@@ -183,17 +189,13 @@ impl KraftController {
         max_size: ByteSize,
         replica: Option<ReplicaKey>,
     ) -> Result<MetadataFetchSlice, RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::MetadataFetch {
-                fetch_offset,
-                max_size,
-                replica,
-                reply,
-            })
-            .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)
+        self.ask(|reply| Command::MetadataFetch {
+            fetch_offset,
+            max_size,
+            replica,
+            reply,
+        })
+        .await
     }
 
     /// Serialize the current image to a KIP-630 checkpoint under the data dir.
@@ -201,12 +203,7 @@ impl KraftController {
     /// # Errors
     /// Returns [`RaftError`] if serialization or the file write fails.
     pub async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::TriggerSnapshot { reply })
-            .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)?
+        self.ask(|reply| Command::TriggerSnapshot { reply }).await?
     }
 
     /// Inject a raw core [`Event`] into the loop (test/driver entrypoint and the
@@ -248,11 +245,7 @@ impl KraftController {
         &self,
         records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<i64, RaftError> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::TestAppendAndCommit { records, reply })
+        self.ask(|reply| Command::TestAppendAndCommit { records, reply })
             .await
-            .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)
     }
 }

@@ -44,6 +44,21 @@ pub fn test_log() -> (tempfile::TempDir, Log) {
     (dir, log)
 }
 
+/// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
+/// configures one, with everything else at its default.
+pub fn log_append_time_log() -> (tempfile::TempDir, Log) {
+    let dir = tempdir().unwrap();
+    let log = Log::open(
+        dir.path(),
+        LogConfig {
+            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    (dir, log)
+}
+
 pub fn test_batch_at(_off: i64) -> RecordBatch {
     // `Log::append` overwrites `base_offset`; one record per batch.
     let mut b = RecordBatch {

@@ -18,10 +18,12 @@
 //! the dev cert fixture path resolution and tempfile semantics are easier to
 //! keep consistent with the existing TLS integration tests.
 
-use std::{io, sync::Arc};
+mod kafka_wire;
+
+use std::sync::Arc;
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
 use krabka_protocol::{
     Decode, Encode,
@@ -31,10 +33,7 @@ use krabka_protocol::{
     },
 };
 use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
     rustls::{
@@ -43,6 +42,9 @@ use tokio_rustls::{
         pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
     },
 };
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-mtls-test";
 
 const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
 const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
@@ -222,7 +224,9 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     };
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut tls, 19, 7, 1, true, &body).await.unwrap();
+    let resp_bytes = kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body)
+        .await
+        .unwrap();
     let mut cur: &[u8] = &resp_bytes;
     let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
 
@@ -234,50 +238,6 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     );
 
     handle.shutdown().await;
-}
-
-/// PLAINTEXT-style length-prefixed request/response over an arbitrary
-/// `AsyncRead + AsyncWrite` stream. It mirrors the helper in
-/// `auth_handlers.rs` and `elect_leaders.rs`.
-async fn round_trip<S>(
-    stream: &mut S,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> Result<Vec<u8>, io::Error>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-mtls-test";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0);
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    if flexible {
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
 }
 
 /// A presented certificate whose Subject DN matches no
@@ -368,7 +328,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
 
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        round_trip(&mut tls, 19, 7, 1, true, &body),
+        kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body),
     )
     .await
     .expect("the broker must close rather than hang");
@@ -462,7 +422,7 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     // shape and gets no answer at all.
     let resp_bytes = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        round_trip(&mut tls, 19, 7, 1, true, &body),
+        kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body),
     )
     .await
     .expect("the broker must not hang")

@@ -176,11 +176,6 @@ pub(crate) fn controller_peer_allowed(
     std::sync::Arc::new(ControllerPeerAllowed(SharedAuthorizer(authorizer)))
 }
 
-/// Build an anonymous-auth [`Principal`] with the given name and no groups.
-///
-/// The name matters. Authorization decisions and audit records key on this
-/// subject, so each handler passes the identity its scenario expects, such as
-/// `"alice"`, `"admin"`, or `"ANONYMOUS"`.
 /// Finalize `eligible.leader.replicas.version` at 1 in `image`.
 ///
 /// KIP-966 ELR maintenance is gated on the feature, and its release default is
@@ -314,10 +309,25 @@ pub(crate) async fn end_heartbeat_session(broker: &crate::Broker, broker_id: u64
     broker.liveness.end_session(broker_id).await;
 }
 
+/// Build an anonymous-auth [`Principal`] with the given name and no groups.
+///
+/// The name matters. Authorization decisions and audit records key on this
+/// subject, so each handler passes the identity its scenario expects, such as
+/// `"alice"`, `"admin"`, or `"ANONYMOUS"`.
 pub(crate) fn principal(name: &str) -> Principal {
     Principal {
         name: name.into(),
         auth_method: AuthMethod::Anonymous,
+        groups: Vec::new(),
+    }
+}
+
+/// Build a SASL/PLAIN-authenticated [`Principal`] with the given name and no
+/// groups, as a client that logged in over a `SASL_PLAINTEXT` listener is.
+pub(crate) fn sasl_principal(name: &str) -> Principal {
+    Principal {
+        name: name.into(),
+        auth_method: AuthMethod::SaslPlain,
         groups: Vec::new(),
     }
 }
@@ -397,6 +407,47 @@ pub(crate) async fn lead_transaction_state_partitions(
     );
 }
 
+/// The registration of an unfenced broker `node_id` at `127.0.0.1:9092`, at
+/// broker epoch 0, with a nil incarnation id and no rack, log directories,
+/// endpoints, or supported features.
+///
+/// A test spells out each field its scenario depends on and takes the rest
+/// from here: `BrokerRegistrationRecord { fenced: true,
+/// ..broker_registration(2) }`.
+pub(crate) fn broker_registration(node_id: u64) -> krabka_metadata::BrokerRegistrationRecord {
+    krabka_metadata::BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
+        node_id: krabka_raft::NodeId(node_id),
+        broker_epoch: 0,
+        incarnation_id: uuid::Uuid::nil(),
+        host: "127.0.0.1".into(),
+        port: 9092,
+        rack: None,
+        log_dirs: vec![],
+        endpoints: vec![],
+        features: std::collections::BTreeMap::new(),
+    }
+}
+
+/// Wait up to five seconds for `broker` to become the controller leader.
+pub(crate) async fn wait_for_controller_leader(broker: &Broker) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !broker
+        .controller
+        .watch_leader()
+        .borrow()
+        .is_some_and(|node| node == broker.config.node_id)
+    {
+        assert2::assert!(
+            std::time::Instant::now() <= deadline,
+            "broker did not become controller leader"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 /// Register `node_id` as a remote broker in the controller's image.
 pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
     handle
@@ -404,18 +455,8 @@ pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
         .controller
         .submit_change(vec![MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: krabka_raft::NodeId(node_id),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..broker_registration(node_id)
             },
         )])
         .await
@@ -537,6 +578,25 @@ impl crate::authorizer::Authorizer for GrantsInPrincipalName {
     }
 }
 
+/// A literal `Allow` ACL for `principal` (such as `User:alice`) from any host,
+/// to `operation` on the `resource_type` resource named `resource_name`.
+pub(crate) fn allow_acl(
+    resource_type: krabka_metadata::ResourceType,
+    resource_name: &str,
+    principal: &str,
+    operation: krabka_metadata::AclOperation,
+) -> krabka_metadata::AclEntry {
+    krabka_metadata::AclEntry {
+        resource_type,
+        resource_name: resource_name.to_string(),
+        pattern_type: krabka_metadata::PatternType::Literal,
+        principal: principal.to_string(),
+        host: "*".to_string(),
+        operation,
+        permission_type: krabka_metadata::PermissionType::Allow,
+    }
+}
+
 /// Commit one literal `Allow` ACL for `User:<user>` on the cluster resource.
 ///
 /// A test that starts its broker with a [`crate::authorizer::SimpleAclAuthorizer`]
@@ -550,17 +610,12 @@ pub(crate) async fn grant_cluster_operation(
     handle
         .broker_arc_for_test()
         .controller
-        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME.to_string(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: format!("User:{user}"),
-                host: "*".to_string(),
-                operation,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
-        )])
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
+            krabka_metadata::ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            &format!("User:{user}"),
+            operation,
+        ))])
         .await
         .expect("commit cluster acl");
 }
@@ -581,17 +636,12 @@ pub(crate) async fn grant_topic_operation(
     handle
         .broker_arc_for_test()
         .controller
-        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: topic.to_string(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: format!("User:{user}"),
-                host: "*".to_string(),
-                operation,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
-        )])
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
+            krabka_metadata::ResourceType::Topic,
+            topic,
+            &format!("User:{user}"),
+            operation,
+        ))])
         .await
         .expect("commit topic acl");
 }
@@ -609,6 +659,20 @@ pub(crate) async fn dispatch_context(
     body: &[u8],
     ctx: &RequestContext<'_>,
 ) -> Bytes {
+    try_dispatch_context(broker, api_key, version, body, ctx)
+        .await
+        .unwrap_or_else(|error| panic!("api_key {api_key} handler: {error}"))
+}
+
+/// [`dispatch_context`], returning the handler's error instead of panicking
+/// on it: a test of a request the adapter or the handler refuses.
+pub(crate) async fn try_dispatch_context(
+    broker: &crate::broker::Broker,
+    api_key: i16,
+    version: i16,
+    body: &[u8],
+    ctx: &RequestContext<'_>,
+) -> Result<Bytes, crate::error::BrokerError> {
     let entry = broker
         .handlers()
         .get(api_key)
@@ -616,9 +680,25 @@ pub(crate) async fn dispatch_context(
     let crate::handlers::DispatchKind::Context(handler) = entry.kind() else {
         panic!("api_key {api_key} is a context dispatch, so its handler gets the principal");
     };
-    handler(broker, version, 1, body, ctx)
-        .await
-        .unwrap_or_else(|error| panic!("api_key {api_key} handler: {error}"))
+    handler(broker, version, body, ctx).await
+}
+
+/// Serve `req` through the broker's dispatch registry as wire bytes at
+/// `version`, and decode the response at the same version.
+///
+/// A `typed` handler takes and returns structs, so its unit tests call it
+/// directly. This is the path for a test about the wire itself: a field that
+/// an older version drops, or the encoding of the response.
+pub(crate) async fn dispatch_wire<Resp: Decode<'static>>(
+    broker: &crate::broker::Broker,
+    api_key: i16,
+    version: i16,
+    req: &impl Encode,
+    ctx: &RequestContext<'_>,
+) -> Resp {
+    let bytes =
+        dispatch_context(broker, api_key, version, &encode_request(req, version), ctx).await;
+    decode_response(&bytes, version)
 }
 
 /// Start an in-process broker over a fresh temp dir. It applies `configure` to
@@ -668,6 +748,27 @@ pub(crate) async fn start_broker_with_authorizer(
     start_broker_with(|cfg| cfg.authorizer = authorizer).await
 }
 
+/// Like [`start_broker_with`], but it turns `audit_enabled` off before it
+/// applies `configure`.
+///
+/// Most handler tests do not exercise the audit path and turn it off, so that
+/// audit-log assertions elsewhere in the suite stay stable.
+pub(crate) fn start_broker_no_audit_with(
+    configure: impl FnOnce(&mut BrokerConfig),
+) -> impl std::future::Future<Output = (BrokerHandle, tempfile::TempDir)> {
+    start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        configure(cfg);
+    })
+}
+
+/// Start an in-process broker on the [`BrokerConfig::for_tests`] baseline with
+/// audit logging off.
+pub(crate) fn start_broker_no_audit()
+-> impl std::future::Future<Output = (BrokerHandle, tempfile::TempDir)> {
+    start_broker_no_audit_with(|_| {})
+}
+
 /// Like [`start_broker_with_authorizer`], but it also disables audit logging.
 ///
 /// This is the second most common `start_broker` shape. Admin-handler tests
@@ -677,55 +778,23 @@ pub(crate) async fn start_broker_with_authorizer(
 pub(crate) async fn start_broker_with_authorizer_no_audit(
     authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
 ) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
 
 /// Generate the `encode_request` / `decode_response` / `test_context`
 /// wrapper trio that every handler's `#[cfg(test)] mod handler_tests` binds
 /// over [`encode_request`], [`decode_response`], and [`request_context`].
 ///
-/// Two forms:
-///
-/// - `wire_helpers!(ReqTy, RespTy, version = V, client_id = "id")`: for
-///   handlers that always drive one fixed wire version.
-/// - `wire_helpers!(ReqTy, RespTy, client_id = "id")`: for handlers whose
-///   tests vary `version` per call, for version-negotiation behaviour.
+/// `wire_helpers!(ReqTy, RespTy, version = V, client_id = "id")` pins one
+/// wire version; leaving out `version = V` makes `encode_request` and
+/// `decode_response` take the version per call instead, for
+/// version-negotiation tests. A leading visibility, as in
+/// `wire_helpers!(pub(super) ReqTy, ...)`, lets a shared `test_support`
+/// module hand the helpers to its sibling test modules.
 macro_rules! wire_helpers {
-    ($req:ty, $resp:ty, version = $version:expr, client_id = $client_id:expr) => {
-        fn encode_request(req: &$req) -> ::bytes::Bytes {
-            crate::test_support::encode_request(req, $version)
-        }
-
-        fn decode_response(bytes: &::bytes::Bytes) -> $resp {
-            crate::test_support::decode_response(bytes, $version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
-    };
-    ($req:ty, $resp:ty, client_id = $client_id:expr) => {
-        fn encode_request(req: &$req, version: i16) -> ::bytes::Bytes {
-            crate::test_support::encode_request(req, version)
-        }
-
-        fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
-            crate::test_support::decode_response(bytes, version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
+    ($vis:vis $req:ty, $resp:ty, $(version = $version:expr,)? client_id = $client_id:expr) => {
+        crate::test_support::encode_helper!($vis $req $(, version = $version)?);
+        crate::test_support::response_helpers!($vis $resp, $(version = $version,)? client_id = $client_id);
     };
 }
 pub(crate) use wire_helpers;
@@ -734,29 +803,9 @@ pub(crate) use wire_helpers;
 /// already-typed request, so there is nothing to encode, and returns wire
 /// `Bytes`. Only `decode_response` and `test_context` are needed.
 macro_rules! response_helpers {
-    ($resp:ty, version = $version:expr, client_id = $client_id:expr) => {
-        fn decode_response(bytes: &::bytes::Bytes) -> $resp {
-            crate::test_support::decode_response(bytes, $version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
-    };
-    ($resp:ty, client_id = $client_id:expr) => {
-        fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
-            crate::test_support::decode_response(bytes, version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
+    ($vis:vis $resp:ty, $(version = $version:expr,)? client_id = $client_id:expr) => {
+        crate::test_support::decode_helper!($vis $resp $(, version = $version)?);
+        crate::test_support::context_helper!($vis client_id = $client_id);
     };
 }
 pub(crate) use response_helpers;
@@ -765,26 +814,57 @@ pub(crate) use response_helpers;
 /// so there is no `test_context` to generate. It generates only
 /// `encode_request` and `decode_response`.
 macro_rules! codec_helpers {
-    ($req:ty, $resp:ty, version = $version:expr) => {
-        fn encode_request(req: &$req) -> ::bytes::Bytes {
+    ($vis:vis $req:ty, $resp:ty $(, version = $version:expr)?) => {
+        crate::test_support::encode_helper!($vis $req $(, version = $version)?);
+        crate::test_support::decode_helper!($vis $resp $(, version = $version)?);
+    };
+}
+pub(crate) use codec_helpers;
+
+/// The `encode_request` that [`wire_helpers`] and [`codec_helpers`] generate.
+macro_rules! encode_helper {
+    ($vis:vis $req:ty, version = $version:expr) => {
+        $vis fn encode_request(req: &$req) -> ::bytes::Bytes {
             crate::test_support::encode_request(req, $version)
         }
+    };
+    ($vis:vis $req:ty) => {
+        $vis fn encode_request(req: &$req, version: i16) -> ::bytes::Bytes {
+            crate::test_support::encode_request(req, version)
+        }
+    };
+}
+pub(crate) use encode_helper;
 
-        fn decode_response(bytes: &::bytes::Bytes) -> $resp {
+/// The `decode_response` that the other wire macros generate, usable on its
+/// own by a test module that decodes but never encodes or builds a context.
+macro_rules! decode_helper {
+    ($vis:vis $resp:ty, version = $version:expr) => {
+        $vis fn decode_response(bytes: &::bytes::Bytes) -> $resp {
             crate::test_support::decode_response(bytes, $version)
         }
     };
-    ($req:ty, $resp:ty) => {
-        fn encode_request(req: &$req, version: i16) -> ::bytes::Bytes {
-            crate::test_support::encode_request(req, version)
-        }
-
-        fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
+    ($vis:vis $resp:ty) => {
+        $vis fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
             crate::test_support::decode_response(bytes, version)
         }
     };
 }
-pub(crate) use codec_helpers;
+pub(crate) use decode_helper;
+
+/// The `test_context` that [`wire_helpers`] and [`response_helpers`]
+/// generate, usable on its own by a test module that needs only the context.
+macro_rules! context_helper {
+    ($vis:vis client_id = $client_id:expr) => {
+        $vis fn test_context<'a>(
+            principal: &'a krabka_security::Principal,
+            peer: &'a ::std::net::SocketAddr,
+        ) -> crate::handlers::RequestContext<'a> {
+            crate::test_support::request_context(principal, peer, $client_id)
+        }
+    };
+}
+pub(crate) use context_helper;
 
 /// The outcome a [`FakeMetadataSource`] returns from `submit_change`, as a
 /// function of the batch it was handed.

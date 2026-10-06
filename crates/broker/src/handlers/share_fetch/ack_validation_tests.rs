@@ -35,14 +35,14 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::BrokerHandle,
     codes,
     share_partition::state::RecordState::{self, Acquired},
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -86,11 +86,7 @@ impl Authorizer for DenyOnePrincipal {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(DenyOnePrincipal);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyOnePrincipal)).await
 }
 
 async fn create_topic(broker: &BrokerHandle) -> WireUuid {
@@ -157,7 +153,7 @@ async fn produce(broker: &BrokerHandle) {
     let ctx = request_context(&user, &address, "producer-client");
     let bytes = encode_request(&request, PRODUCE_VERSION);
     let response =
-        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, 7, &bytes, bytes.clone(), &ctx)
+        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, &bytes, bytes.clone(), &ctx)
             .await
             .expect("handle produce");
     let response: ProduceResponse = decode_response(&response, PRODUCE_VERSION);
@@ -241,9 +237,15 @@ async fn share_fetch(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let bytes = encode_request(&request, VERSION);
-    let response = handle(&shared, VERSION, 7, &bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        VERSION,
+        &bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     decode_response(&response, VERSION)
 }
 
@@ -282,9 +284,15 @@ async fn share_acknowledge(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let bytes = encode_request(&request, VERSION);
-    let response = crate::handlers::share_acknowledge::handle(&shared, VERSION, 7, &bytes, &ctx)
-        .await
-        .expect("handle share acknowledge");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_acknowledge_request::API_KEY,
+        VERSION,
+        &bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share acknowledge");
     decode_response(&response, VERSION)
 }
 

@@ -35,21 +35,15 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_group_member_count(&self, group_id: &str, n: usize) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let count = self
-                    .group_describe_for_test(group_id)
-                    .await
-                    .map_or(0, |v| v.members.len());
-                if count == n {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-            }
+        let settled = super::await_until(|| async {
+            self.group_describe_for_test(group_id)
+                .await
+                .map_or(0, |v| v.members.len())
+                == n
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            settled,
             "group {group_id} did not settle at {n} members within 30s"
         );
     }
@@ -96,21 +90,15 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_classic_group_member_count(&self, group_id: &str, n: usize) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let count = self
-                    .classic_group_inspect_for_test(group_id)
-                    .await
-                    .map_or(0, |v| v.members.len());
-                if count == n {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-            }
+        let settled = super::await_until(|| async {
+            self.classic_group_inspect_for_test(group_id)
+                .await
+                .map_or(0, |v| v.members.len())
+                == n
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            settled,
             "classic group {group_id} did not settle at {n} members within 30s"
         );
     }
@@ -149,21 +137,15 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_streams_group_member_count(&self, group_id: &str, n: usize) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let count = self
-                    .streams_group_describe_for_test(group_id)
-                    .await
-                    .map_or(0, |v| v.members.len());
-                if count == n {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-            }
+        let settled = super::await_until(|| async {
+            self.streams_group_describe_for_test(group_id)
+                .await
+                .map_or(0, |v| v.members.len())
+                == n
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            settled,
             "streams group {group_id} did not settle at {n} members within 30s"
         );
     }
@@ -217,17 +199,11 @@ impl BrokerHandle {
         group_id: &str,
         expected: crate::coordinator::unified::GroupType,
     ) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if self.group_type_for_test(group_id) == Some(expected) {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await;
+        let settled =
+            super::await_until(|| async { self.group_type_for_test(group_id) == Some(expected) })
+                .await;
         assert2::assert!(
-            res.is_ok(),
+            settled,
             "group {group_id} did not settle at type {expected:?} within {TEST_AWAITER_TIMEOUT:?}; \
              last={:?}",
             self.group_type_for_test(group_id)

@@ -197,7 +197,7 @@ mod tests {
     use crate::{
         config::LogConfig,
         log::test_support::{
-            abort_marker, commit_marker, sample_batch, test_batch_at, transaction_fields,
+            abort_marker, commit_marker, sample_batch, test_batch_at, test_log, transaction_fields,
             transactional_batch, verbatim_from,
         },
         name,
@@ -208,8 +208,7 @@ mod tests {
 
     #[test]
     fn transactional_batch_holds_lso() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         // First, a non-txn batch — LSO advances past it.
         let mut b0 = sample_batch(1);
         log.append(&mut b0).unwrap();
@@ -272,8 +271,7 @@ mod tests {
 
     #[test]
     fn abort_marker_writes_txnindex_entry() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
         let mut t = transactional_batch(1000, 0, &["a", "b", "c"]);
         log.append(&mut t).unwrap();
 
@@ -305,8 +303,7 @@ mod tests {
     /// `.txnindex` entry instead of the earlier unreplicated start.
     #[test]
     fn abort_marker_lso_is_held_by_an_earlier_unreplicated_transaction() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
 
         // Producer 1000 commits first: its marker lands at offset 2, and it
         // stays in `unreplicated` (this test never advances the high
@@ -338,8 +335,7 @@ mod tests {
 
     #[test]
     fn aborted_transaction_uses_cached_marker_segment_beyond_range_end() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
         let mut transaction = transactional_batch(1000, 0, &["a", "b", "c"]);
         log.append(&mut transaction).unwrap();
 
@@ -369,8 +365,7 @@ mod tests {
     // recorded `last_offset` is `3 + 1 = 4`. Mutating `+`→`-` would record 2.
     #[test]
     fn abort_marker_last_offset_uses_base_plus_delta() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
         let mut t = transactional_batch(1000, 0, &["a", "b", "c"]);
         log.append(&mut t).unwrap(); // offsets 0..=2
 
@@ -397,8 +392,7 @@ mod tests {
     // log_end. Mutating `&&`→`||` would hold LSO at the batch base (0).
     #[test]
     fn non_txn_batch_with_valid_pid_advances_lso() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         // Idempotent (not transactional) producer: pid >= 0, no transactional
         // attribute bit set.
         let mut b = sample_batch(2);
@@ -516,8 +510,7 @@ mod tests {
             },
         ];
         for case in cases {
-            let dir = tempdir().unwrap();
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let (_dir, mut log) = test_log();
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
             if case.transaction {
                 log.append(&mut transactional_batch(
@@ -561,8 +554,7 @@ mod tests {
 
     #[test]
     fn stale_pending_start_beyond_log_end_is_rejected() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         log.pending.insert(ProducerId(1000), Offset(1));
         let error = log.refresh_lso().unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = error);

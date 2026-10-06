@@ -7,6 +7,8 @@
 
 use std::collections::HashSet;
 
+use krabka_raft::NodeId;
+
 use super::{BrokerLivenessState, ControllerLivenessState, registry::BrokerEntry};
 
 impl ControllerLivenessState {
@@ -65,6 +67,16 @@ impl ControllerLivenessState {
         map.iter()
             .filter(|(_, entry)| entry.is_active())
             .map(|(&id, _)| id)
+            .collect()
+    }
+
+    /// [`alive_snapshot`](Self::alive_snapshot) as the [`NodeId`] set the
+    /// failover and reassignment scans check membership against.
+    pub(crate) async fn alive_node_ids(&self) -> HashSet<NodeId> {
+        self.alive_snapshot()
+            .await
+            .into_iter()
+            .map(NodeId)
             .collect()
     }
 

@@ -24,7 +24,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -56,11 +57,7 @@ impl Authorizer for ReadOneGroup {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(ReadOneGroup);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(ReadOneGroup)).await
 }
 
 /// One row: the group id, the member id, and the top-level error code of
@@ -169,10 +166,10 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
             share_session_epoch: 0,
             ..Default::default()
         };
-        let fetched = super::handle(
+        let fetched = crate::test_support::try_dispatch_context(
             &shared,
+            krabka_protocol::owned::share_fetch_request::API_KEY,
             fetch_version,
-            1,
             &encode_request(&fetch, fetch_version),
             &ctx,
         )
@@ -184,10 +181,10 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
             share_session_epoch: 1,
             ..Default::default()
         };
-        let acknowledged = crate::handlers::share_acknowledge::handle(
+        let acknowledged = crate::test_support::try_dispatch_context(
             &shared,
+            krabka_protocol::owned::share_acknowledge_request::API_KEY,
             acknowledge_version,
-            1,
             &encode_request(&acknowledge, acknowledge_version),
             &ctx,
         )
@@ -227,9 +224,15 @@ async fn a_member_the_group_does_not_know_still_fetches() {
         share_session_epoch: 0,
         ..Default::default()
     };
-    let response = super::handle(&shared, version, 1, &encode_request(&fetch, version), &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        version,
+        &encode_request(&fetch, version),
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
 
     assert!(
         decode_response::<ShareFetchResponse>(&response, version) == fetch_response(codes::NONE)

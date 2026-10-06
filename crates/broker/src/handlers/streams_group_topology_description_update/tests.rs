@@ -13,12 +13,7 @@ use krabka_protocol::owned::{
 
 use super::*;
 
-crate::test_support::wire_helpers!(
-    StreamsGroupTopologyDescriptionUpdateRequest,
-    StreamsGroupTopologyDescriptionUpdateResponse,
-    version = MAX_VERSION,
-    client_id = "streams-client"
-);
+crate::test_support::context_helper!(client_id = "streams-client");
 
 fn request(group_id: &str) -> StreamsGroupTopologyDescriptionUpdateRequest {
     StreamsGroupTopologyDescriptionUpdateRequest {
@@ -113,17 +108,11 @@ async fn handle_answers_as_a_trunk_broker_without_a_plugin() {
         let peer = crate::test_support::peer();
         let ctx = test_context(&principal, &peer);
 
-        let answer = handle(
-            &broker,
-            MAX_VERSION,
-            1,
-            &encode_request(&request("app")),
-            &ctx,
-        )
-        .await
-        .expect("an answer");
+        let answer = handle(&broker, request("app"), MAX_VERSION, &ctx)
+            .await
+            .expect("an answer");
 
-        assert!(decode_response(&answer) == want, "{case}");
+        assert!(answer == want, "{case}");
         broker_handle.shutdown().await;
     }
 }
@@ -183,11 +172,11 @@ async fn handle_refuses_what_a_trunk_broker_with_a_plugin_refuses() {
         ),
     ];
     for (case, push, want) in rows {
-        let answer = handle(&broker, MAX_VERSION, 1, &encode_request(&push), &ctx)
+        let answer = handle(&broker, push, MAX_VERSION, &ctx)
             .await
             .expect("an answer");
 
-        assert!(decode_response(&answer) == want, "{case}");
+        assert!(answer == want, "{case}");
     }
     broker_handle.shutdown().await;
 }

@@ -31,7 +31,7 @@ use super::{
     decision::{Checked, SequenceContext, check_retained},
     entry::{EarlierBatches, NUM_BATCHES_TO_RETAIN},
 };
-use crate::partition::LogOffset;
+use crate::{model_check::run_bfs, partition::LogOffset};
 
 const MAX_STATES: usize = 2_000_000;
 const MAX_DEPTH: usize = 40;
@@ -354,23 +354,7 @@ impl Model for ProducerModel {
 }
 
 fn run(model: ProducerModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < MAX_STATES,
-        "[{label}] state cap hit"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == pinned_unique_states,

@@ -25,7 +25,6 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 
-use super::handle;
 use crate::{
     authorizer::{
         AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
@@ -33,7 +32,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -86,11 +86,7 @@ struct Case {
 type Outcome = (i16, TopicRef, ShareFetchResponse);
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
@@ -165,9 +161,15 @@ async fn share_fetch(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let request_bytes = encode_request(request, version);
-    let response = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        version,
+        &request_bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     decode_response(&response, version)
 }
 

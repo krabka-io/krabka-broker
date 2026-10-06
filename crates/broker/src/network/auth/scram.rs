@@ -16,7 +16,7 @@ use krabka_units::Time;
 use krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source};
 
 use super::{
-    response::{fail_authenticate, fail_authenticate_with},
+    response::{fail_authenticate, fail_authenticate_with, sasl_ok},
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 
@@ -184,13 +184,7 @@ fn authenticate_scram(
                     // + `expires_at_ms`.
                     pending_token_expiry_ms: token_expiry_ms,
                 };
-                SaslAuthenticateResponse {
-                    error_code: 0,
-                    error_message: None,
-                    auth_bytes: bytes::Bytes::from(bytes),
-                    session_lifetime_ms: 0,
-                    ..Default::default()
-                }
+                sasl_ok(bytes, 0)
             }
             // Done on the first round would be a server bug — SCRAM is
             // always two round trips for SHA-512. Treat as auth failure.
@@ -244,13 +238,7 @@ fn authenticate_scram(
                     expires_at_ms,
                     authenticated_via_token: pending_token_expiry_ms.is_some(),
                 };
-                SaslAuthenticateResponse {
-                    error_code: 0,
-                    error_message: None,
-                    auth_bytes: bytes::Bytes::from(bytes),
-                    session_lifetime_ms,
-                    ..Default::default()
-                }
+                sasl_ok(bytes, session_lifetime_ms)
             }
             krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
         }

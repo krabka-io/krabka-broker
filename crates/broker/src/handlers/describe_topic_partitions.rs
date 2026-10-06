@@ -60,11 +60,9 @@
 //! never as null. This is the only API that reports ELR; Kafka's Metadata
 //! schema has no field for it in any version. See [`crate::elr`].
 
-use bytes::Bytes;
 use krabka_log::topic_name::validate_topic_name;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode,
     owned::{
         describe_topic_partitions_request::DescribeTopicPartitionsRequest,
         describe_topic_partitions_response::{
@@ -94,19 +92,15 @@ use crate::{
     name = "handle_describe_topic_partitions",
     level = "info",
     skip_all,
-    fields(api = "DescribeTopicPartitions", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeTopicPartitions", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeTopicPartitionsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeTopicPartitionsRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeTopicPartitionsResponse, BrokerError> {
     // ── 0. Cursor validation. ───────────────────────────────────────────
     // `KafkaApis.handleDescribeTopicPartitionsRequest` checks this before
     // anything else -- before authorization, before pagination -- and
@@ -119,7 +113,7 @@ pub(crate) async fn handle(
                 .iter()
                 .any(|topic| topic.name == cursor.topic_name);
         if cursor_topic_missing || cursor.partition_index < 0 {
-            return crate::handlers::encode_response(&invalid_request_response(&req), version);
+            return Ok(invalid_request_response(&req));
         }
     }
 
@@ -285,7 +279,7 @@ pub(crate) async fn handle(
         next_cursor,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 fn partition_response(
@@ -316,7 +310,8 @@ fn partition_response(
         replica_nodes: partition
             .replicas
             .iter()
-            .map(|&replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
+            .copied()
+            .map(crate::handlers::metadata::wire_id)
             .collect(),
         isr_nodes: availability.isr_nodes,
         // KIP-966. Both fields are nullable in the schema, but a real broker
@@ -439,12 +434,7 @@ mod tests {
 
     const VERSION: i16 = krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
 
-    crate::test_support::wire_helpers!(
-        DescribeTopicPartitionsRequest,
-        DescribeTopicPartitionsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -581,12 +571,9 @@ mod tests {
         // Budget of 1: "a" fills it, "b" is truncated with no row (the
         // partition-budget-at-topic-boundary rule), "c" is denied. Without
         // the fix, "c" would vanish instead of appearing after "b".
-        let req = encode_request(&request(vec!["a", "b", "c"], 1, None));
+        let req = request(vec!["a", "b", "c"], 1, None);
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
         assert!(
             resp == DescribeTopicPartitionsResponse {
@@ -641,12 +628,9 @@ mod tests {
             partition_index: 2,
             ..Default::default()
         });
-        let req = encode_request(&request(vec!["a", "b"], 2000, cursor));
+        let req = request(vec!["a", "b"], 2000, cursor);
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
         assert!(
             resp == DescribeTopicPartitionsResponse {
@@ -691,12 +675,9 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&request(vec!["b", "a", "b", "a"], 2000, None));
+        let req = request(vec!["b", "a", "b", "a"], 2000, None);
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
         let names: Vec<&str> = resp
             .topics
@@ -741,12 +722,9 @@ mod tests {
             let p = principal("admin");
             let peer = peer();
             let ctx = test_context(&p, &peer);
-            let req = encode_request(&request(vec!["a"], 2000, cursor));
+            let req = request(vec!["a"], 2000, cursor);
 
-            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&bytes);
+            let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
             assert!(
                 resp == DescribeTopicPartitionsResponse {
@@ -774,12 +752,9 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&request(vec!["a"], 0, None));
+        let req = request(vec!["a"], 0, None);
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
         let topic = resp
             .topics
@@ -819,12 +794,9 @@ mod tests {
             let p = principal("admin");
             let peer = peer();
             let ctx = test_context(&p, &peer);
-            let req = encode_request(&request(vec!["a", "b"], 1, None));
+            let req = request(vec!["a", "b"], 1, None);
 
-            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&bytes);
+            let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
             let names: Vec<&str> = resp
                 .topics
@@ -879,11 +851,8 @@ mod tests {
         let ctx = test_context(&p, &peer);
 
         for (name, error_code, is_internal) in cases {
-            let req = encode_request(&request(vec![name], 2000, None));
-            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&bytes);
+            let req = request(vec![name], 2000, None);
+            let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
             let expected_ops = authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
@@ -973,7 +942,7 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&DescribeTopicPartitionsRequest {
+        let req = DescribeTopicPartitionsRequest {
             topics: vec![
                 krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
                     name: "orders".into(),
@@ -982,12 +951,9 @@ mod tests {
             ],
             response_partition_limit: 2000,
             ..Default::default()
-        });
+        };
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
         let topic = resp
             .topics
@@ -1023,7 +989,7 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&DescribeTopicPartitionsRequest {
+        let req = DescribeTopicPartitionsRequest {
             topics: vec![
                 krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
                     name: "orders".into(),
@@ -1032,12 +998,9 @@ mod tests {
             ],
             response_partition_limit: 2000,
             ..Default::default()
-        });
+        };
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
         let topic = resp
             .topics

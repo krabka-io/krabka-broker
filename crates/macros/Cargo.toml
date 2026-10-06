@@ -1,0 +1,27 @@
+[package]
+name = "krabka-macros"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Derive macros that let one declaration in the broker stand for code it would otherwise repeat"
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+moxy = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+krabka-units = { workspace = true }
+prometheus-client = { workspace = true }
+refined_type = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

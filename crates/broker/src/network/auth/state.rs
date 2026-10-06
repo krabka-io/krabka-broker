@@ -436,11 +436,7 @@ mod tests {
         fn reauthenticating() -> ConnectionAuth {
             ConnectionAuth::Reauthenticating {
                 previous: AuthenticatedSnapshot {
-                    principal: Principal {
-                        name: "alice".into(),
-                        auth_method: AuthMethod::SaslPlain,
-                        groups: vec![],
-                    },
+                    principal: crate::test_support::sasl_principal("alice"),
                     mechanism: SaslMechanism::Plain,
                     expires_at_ms: Some(1),
                     authenticated_via_token: false,
@@ -798,11 +794,7 @@ mod tests {
             pending_token_expiry_ms: None,
         };
         let authenticated = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "ANONYMOUS".into(),
-                auth_method: krabka_security::AuthMethod::Anonymous,
-                groups: vec![],
-            },
+            principal: crate::test_support::principal("ANONYMOUS"),
             mechanism: SaslMechanism::Plain,
             expires_at_ms: None,
             authenticated_via_token: false,
@@ -824,11 +816,7 @@ mod tests {
     }
 
     fn alice() -> Principal {
-        Principal {
-            name: "alice".to_string(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec![],
-        }
+        crate::test_support::sasl_principal("alice")
     }
 
     /// The session a re-authentication is measured against: SCRAM-SHA-256
@@ -1060,11 +1048,7 @@ mod tests {
     #[test]
     fn finish_reauth_refuses_a_principal_switch_and_restores_the_old_session() {
         let mut auth = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "mallory".to_string(),
-                auth_method: AuthMethod::SaslPlain,
-                groups: vec![],
-            },
+            principal: crate::test_support::sasl_principal("mallory"),
             mechanism: SaslMechanism::Plain,
             expires_at_ms: Some(40_000),
             authenticated_via_token: false,

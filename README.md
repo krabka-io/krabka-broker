@@ -73,6 +73,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-logfmt` | logfmt encoder for structured logs. |
 | `krabka-parse-benches` | Parses Criterion benchmark output into structured JSON summaries. |
 | `krabka-docgen` | Renders the broker reference pages from the broker's own in-process data. |
+| `krabka-macros` | Derive macros for the broker: `RegisterMetrics` builds and registers `BrokerMetrics` from its field attributes. |
 | `krabka-bench-driver` | Load driver and report aggregator for the cluster benchmark harness under `bench/`. |
 | `krabka-log-iobench` | Bench-only crate: measures the log read path against mmap. |
 

@@ -25,44 +25,16 @@ fn entry(state: TxnState, partitions: &[TopicPartition]) -> TxnEntry {
     entry
 }
 
-fn decode(bytes: &Bytes, version: i16) -> AddOffsetsToTxnResponse {
-    let mut cur: &[u8] = bytes.as_ref();
-    let resp = AddOffsetsToTxnResponse::decode(&mut cur, version).expect("decode response");
-    assert!(cur.is_empty(), "response decoder consumed all bytes");
-    resp
-}
-
 #[test]
 fn the_response_carries_the_error_code() {
     for code in [codes::NONE, codes::NOT_COORDINATOR] {
-        let bytes = encode_response(4, code).expect("encode");
         check!(
-            decode(&bytes, 4)
+            AddOffsetsToTxnResponse::error(code)
                 == AddOffsetsToTxnResponse {
                     error_code: code,
                     ..Default::default()
                 }
         );
-    }
-}
-
-/// Kafka `KafkaApis.handleAddOffsetsToTxnRequest` downgrades
-/// `PRODUCER_FENCED` below version 2.
-#[test]
-fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
-    let cases = [
-        (0, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
-        (1, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
-        (2, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
-        (4, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
-        (
-            1,
-            codes::CONCURRENT_TRANSACTIONS,
-            codes::CONCURRENT_TRANSACTIONS,
-        ),
-    ];
-    for (version, code, expected) in cases {
-        check!(wire_code(version, code) == expected, "v{version} {code}");
     }
 }
 

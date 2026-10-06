@@ -21,8 +21,12 @@ workspace = true
 [features]
 # Keep the legacy feature name for consumers of the `v013` module.
 object-store-013 = []
+# `ArchiveArgs`: the `--archive-*` flags `krabka backup` and `krabka restore`
+# share, and their mapping onto an `ObjectStoreConfig`.
+clap = ["dep:clap"]
 
 [dependencies]
+clap = { workspace = true, optional = true }
 # `tokio` carries the `WriteMultipart` upload that `ObjectStoreClient` streams
 # a large segment through.
 object_store = { workspace = true, features = ["tokio"] }
@@ -30,6 +34,8 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+derive_more = { workspace = true }
+krabka-macros = { version = "0.7.0", path = "../macros" }
 futures-util = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -30,10 +30,10 @@
 //! `requestHelper.sendResponseMaybeThrottle`. Its dispatch entry is
 //! `RequestQuotaPolicy::SelfAccounted` for that reason.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
 
@@ -66,9 +66,7 @@ pub(crate) fn unsupported_version_response(
     unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<Bytes, BrokerError> {
     let response = krabka_raft::unsupported_version_response(unstable);
-    let mut body = BytesMut::with_capacity(response.encoded_len(0));
-    response.encode(&mut body, 0)?;
-    Ok(body.freeze())
+    crate::handlers::encode_response(&response, 0)
 }
 
 /// Charges the KIP-124 request quota for the handler time this request has
@@ -113,7 +111,6 @@ fn charge_request_quota(
 pub(crate) fn handle<'a>(
     broker: &'a Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &'a [u8],
     context: &'a crate::handlers::RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
@@ -167,9 +164,7 @@ pub(crate) fn handle<'a>(
                 throttle_time_ms: throttle_time_ms(),
                 ..Default::default()
             };
-            let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-            resp.encode(&mut buf, version)?;
-            return Ok(buf.freeze());
+            return crate::handlers::encode_response(&resp, version);
         }
 
         // Accepted handshake. Bump the per-(name, version) counter on
@@ -205,9 +200,7 @@ pub(crate) fn handle<'a>(
             throttle_time_ms: throttle_time_ms(),
             ..Default::default()
         };
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version)?;
-        Ok(buf.freeze())
+        crate::handlers::encode_response(&resp, version)
     })
 }
 

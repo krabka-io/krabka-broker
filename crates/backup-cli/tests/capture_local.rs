@@ -13,7 +13,7 @@
 use assert2::check;
 use krabka_backup::{
     BackupError, EXIT_INTEGRITY,
-    archive::ArchiveArgs,
+    archive::{Archive, ArchiveArgs},
     capture::capture_key,
     manifest::{MANIFEST, METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, sha256_hex},
     run,
@@ -62,7 +62,7 @@ fn archive_args(root: &std::path::Path) -> ArchiveArgs {
 }
 
 async fn read_manifest(archive_root: &std::path::Path, capture: &str) -> Manifest {
-    let store = archive_args(archive_root).open().expect("open the archive");
+    let store = Archive::open(&archive_args(archive_root)).expect("open the archive");
     let bytes = store
         .get(&capture_key(capture, MANIFEST))
         .await
@@ -108,9 +108,7 @@ async fn a_capture_copies_both_snapshots_and_records_what_it_wrote() {
 
     // The bytes in the archive are the bytes on the node, which is the whole
     // claim: a restore reads them from here.
-    let store = archive_args(archive_root.path())
-        .open()
-        .expect("open the archive");
+    let store = Archive::open(&archive_args(archive_root.path())).expect("open the archive");
     check!(
         store
             .get(&capture_key(&capture, RLMM_SNAPSHOT))

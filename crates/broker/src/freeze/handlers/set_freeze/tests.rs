@@ -8,7 +8,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord};
 use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
-use krabka_security::{AuthMethod, Principal};
+use krabka_security::Principal;
 use ring::signature::{Ed25519KeyPair, KeyPair as _};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -56,11 +56,7 @@ fn image(entries: &[(&str, PatternType)]) -> MetadataImage {
 }
 
 fn principal() -> Principal {
-    Principal {
-        name: ALICE_NAME.to_owned(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    }
+    crate::test_support::principal(ALICE_NAME)
 }
 
 fn peer() -> SocketAddr {
@@ -122,8 +118,7 @@ async fn handle_processes_request_and_encodes_response() {
 
     let dir = tempfile::TempDir::new().unwrap();
     let (config, _) = config_with_alice(&dir);
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.operator_keys = config.operator_keys;
     })
     .await;

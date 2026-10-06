@@ -24,15 +24,8 @@ fn registration(node_id: u64, log_dirs: Vec<Uuid>) -> MetadataRecord {
 /// A registration whose only endpoint is on `listener`.
 fn registration_on(node_id: u64, log_dirs: Vec<Uuid>, listener: &str) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(node_id),
-        broker_epoch: 0,
         incarnation_id: Uuid::from_u128(u128::from(node_id)),
         host: format!("broker-{node_id}"),
-        port: 9092,
-        rack: None,
         endpoints: vec![BrokerEndpoint {
             name: listener.to_owned(),
             host: format!("broker-{node_id}"),
@@ -40,7 +33,7 @@ fn registration_on(node_id: u64, log_dirs: Vec<Uuid>, listener: &str) -> Metadat
             protocol: krabka_security::ListenerProtocol::Plaintext,
         }],
         log_dirs,
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 

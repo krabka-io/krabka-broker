@@ -26,7 +26,6 @@ use krabka_protocol::{
         delete_records_request::{
             DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
         },
-        delete_records_response::DeleteRecordsResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
         share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
@@ -36,14 +35,13 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
     test_support::{
         decode_response, encode_request, initialize_share_state, peer, principal, request_context,
-        start_broker_with,
+        start_broker_no_audit_with,
     },
 };
 
@@ -58,11 +56,7 @@ const PRODUCE_VERSION: i16 = 12;
 const DELETE_RECORDS_VERSION: i16 = 2;
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
@@ -128,7 +122,6 @@ async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i3
     let response_bytes = crate::handlers::produce::handle(
         &shared,
         PRODUCE_VERSION,
-        7,
         &request_bytes,
         request_bytes.clone(),
         &ctx,
@@ -167,17 +160,10 @@ async fn delete_records(
     let user = principal("admin");
     let address = peer();
     let ctx = request_context(&user, &address, "admin-client");
-    let request_bytes = encode_request(&request, DELETE_RECORDS_VERSION);
-    let response_bytes = crate::handlers::delete_records::handle(
-        &shared,
-        DELETE_RECORDS_VERSION,
-        7,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle delete records");
-    let response: DeleteRecordsResponse = decode_response(&response_bytes, DELETE_RECORDS_VERSION);
+    let response =
+        crate::handlers::delete_records::handle(&shared, request, DELETE_RECORDS_VERSION, &ctx)
+            .await
+            .expect("handle delete records");
     response.topics[0].partitions[0].error_code
 }
 
@@ -221,9 +207,15 @@ async fn share_fetch_rows_with_max_records(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let request_bytes = encode_request(&request, version);
-    let response = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        version,
+        &request_bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     let response: ShareFetchResponse = decode_response(&response, version);
     // An incremental response leaves out a partition with nothing new.
     response
@@ -527,8 +519,7 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
 /// records each time.
 #[tokio::test]
 async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_limit() {
-    let (broker, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.max_inflight_records = 100;
     })

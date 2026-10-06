@@ -4,9 +4,10 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 use super::state::{Cleaner, CompactModel};
+use crate::model_check::run_bfs;
 
 // The `Compact` action converges many append/tick paths onto shared logs, so the
 // BFS's *generated* count (`state_count()`) runs ~2-2.5x the *unique* count. We
@@ -42,22 +43,9 @@ const PINNED_UNIQUE_STATES_BASIC: usize = 144_128;
 const PINNED_UNIQUE_STATES_WIDE: usize = 1_102_770;
 
 fn run(model: CompactModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH);
-    // Exhaustiveness: the BFS stopped because the frontier emptied, not because
-    // it hit the truncation target.
-    assert2::assert!(checker.state_count() < TARGET_STATE_COUNT);
+    // Exhaustiveness: `run_bfs` fails unless the BFS stopped because the
+    // frontier emptied, not because it hit the truncation target.
+    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     // Memory-proportional bound (resident memory ∝ distinct states).
     assert2::assert!(checker.unique_state_count() < MAX_UNIQUE_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.

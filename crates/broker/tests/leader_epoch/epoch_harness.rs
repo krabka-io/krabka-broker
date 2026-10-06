@@ -10,11 +10,7 @@ use bytes::Bytes;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-    },
-    primitives::uuid::Uuid as WireUuid,
+    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
     records::{Record, RecordBatch},
 };
 use tempfile::TempDir;
@@ -28,23 +24,7 @@ pub(crate) async fn boot_single() -> (BrokerHandle, String, TempDir) {
     (broker, bootstrap, dir)
 }
 
-pub(crate) async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
+pub(crate) use crate::support::topic_id_for;
 
 pub(crate) async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str) {
     let client = Client::builder()

@@ -20,7 +20,7 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::compaction_wire::round_trip;
+use crate::{CLIENT_ID, kafka_wire};
 
 /// A flattened record: key and value as plain byte vecs.
 #[derive(Debug)]
@@ -64,7 +64,7 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
         let mut stream = TcpStream::connect(addr).await.expect("connect");
         let mut body = BytesMut::new();
         req.encode(&mut body, version).expect("encode Fetch");
-        let resp_bytes = round_trip(&mut stream, 1, version, 1, true, &body)
+        let resp_bytes = kafka_wire::round_trip(&mut stream, 1, version, 1, CLIENT_ID, true, &body)
             .await
             .expect("Fetch round-trip");
         let mut cur: &[u8] = &resp_bytes;

@@ -8,10 +8,11 @@
 
 use clap::Parser;
 use krabka_protocol::krabka::barrier as api;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::{
     EXIT_REFUSED, EXIT_UNREACHABLE,
-    cli::{Cli, Command, as_millis_i64},
+    cli::{Cli, Command},
     report::{report_alter, report_describe, report_list, report_trigger, report_verify},
     verify,
 };
@@ -65,17 +66,14 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
                     group,
                     topics,
                     // -1 is the sentinel for "no periodic injection".
-                    interval_ms: interval.map_or(-1, as_millis_i64),
+                    interval_ms: interval.map_or(-1, Time::millis_i64),
                     retained_cuts,
                     delete: false,
                     ..api::AlterableBarrierGroup::default()
                 }],
                 ..api::AlterBarrierGroupsRequest::default()
             };
-            match client.send(request).await {
-                Ok(response) => report_alter(&response),
-                Err(error) => unreachable_broker(&error),
-            }
+            send_then(client, request, report_alter).await
         }
         Command::Delete { group } => {
             let request = api::AlterBarrierGroupsRequest {
@@ -86,35 +84,26 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
                 }],
                 ..api::AlterBarrierGroupsRequest::default()
             };
-            match client.send(request).await {
-                Ok(response) => report_alter(&response),
-                Err(error) => unreachable_broker(&error),
-            }
+            send_then(client, request, report_alter).await
         }
         Command::Describe { groups } => {
             let request = api::DescribeBarrierGroupsRequest {
                 groups,
                 ..api::DescribeBarrierGroupsRequest::default()
             };
-            match client.send(request).await {
-                Ok(response) => report_describe(&response),
-                Err(error) => unreachable_broker(&error),
-            }
+            send_then(client, request, report_describe).await
         }
         Command::Trigger { group, timeout } => {
             let request = api::TriggerBarrierRequest {
                 group,
                 // A non-positive timeout asks the broker for its own default.
                 timeout_ms: timeout
-                    .map(as_millis_i64)
+                    .map(Time::millis_i64)
                     .and_then(|ms| i32::try_from(ms).ok())
                     .unwrap_or(0),
                 ..api::TriggerBarrierRequest::default()
             };
-            match client.send(request).await {
-                Ok(response) => report_trigger(&response),
-                Err(error) => unreachable_broker(&error),
-            }
+            send_then(client, request, report_trigger).await
         }
         Command::List {
             group,
@@ -127,10 +116,7 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
                 max_results,
                 ..api::ListBarrierCutsRequest::default()
             };
-            match client.send(request).await {
-                Ok(response) => report_list(&response),
-                Err(error) => unreachable_broker(&error),
-            }
+            send_then(client, request, report_list).await
         }
         Command::Verify { group, epoch } => match verify::verify(client, &group, epoch).await {
             Ok(outcome) => report_verify(&outcome),
@@ -142,8 +128,21 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
     }
 }
 
-/// Print a transport failure, where the request's outcome is unknown.
-fn unreachable_broker(error: &krabka_client_core::ClientError) -> i32 {
-    eprintln!("the request did not complete, so its outcome is unknown: {error}");
-    EXIT_UNREACHABLE
+/// Send one request and hand its response to `report`.
+///
+/// A transport failure is printed as such and ends on `EXIT_UNREACHABLE`,
+/// because a request that did not complete says nothing about whether the
+/// broker acted on it.
+async fn send_then<R: krabka_client_core::ProtocolRequest>(
+    client: &krabka_client_core::Client,
+    request: R,
+    report: impl FnOnce(&R::Response) -> i32,
+) -> i32 {
+    match client.send(request).await {
+        Ok(response) => report(&response),
+        Err(error) => {
+            eprintln!("the request did not complete, so its outcome is unknown: {error}");
+            EXIT_UNREACHABLE
+        }
+    }
 }

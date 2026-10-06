@@ -25,12 +25,11 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
-    primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
+use support::topic_id_for;
 
 async fn create_topic(p: &support::InProcess, name: &str) {
     let resp = p
@@ -48,25 +47,6 @@ async fn create_topic(p: &support::InProcess, name: &str) {
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0);
-}
-
-async fn topic_id_for(p: &support::InProcess, name: &str) -> WireUuid {
-    let resp = p
-        .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 /// Build `n` records whose values are distinct, large, and content-addressed
@@ -146,7 +126,7 @@ fn one_drain_on(path: FetchDrainPath) -> [u64; 3] {
 async fn large_message_fetch_round_trips_byte_exact() {
     let p = support::start().await;
     create_topic(&p, "big").await;
-    let tid = topic_id_for(&p, "big").await;
+    let tid = topic_id_for(&p.client, "big").await;
 
     // 64 records × 2 KiB ≈ 128 KiB of records — far over `sendfile_min`, so
     // the Linux plaintext fetch goes zero-copy.

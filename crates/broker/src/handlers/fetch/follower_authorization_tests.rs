@@ -40,7 +40,7 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     handlers::acl_wire::CLUSTER_RESOURCE_NAME,
     partition::Partition,
-    test_support::{encode_request, peer, principal, request_context, start_broker_with},
+    test_support::{encode_request, peer, principal, request_context, start_broker_no_audit_with},
 };
 
 /// The node id of the follower that the fetches claim to be. The broker under
@@ -149,8 +149,7 @@ struct Outcome {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(Grants);
         // Node 2 never fetches. Keep it in the ISR for the whole test, so only
         // a fetch as node 2 can move the high watermark.

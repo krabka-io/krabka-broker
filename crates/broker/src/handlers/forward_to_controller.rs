@@ -47,6 +47,12 @@ pub(crate) fn wrong_controller_message(leader: Option<krabka_metadata::NodeId>) 
     )
 }
 
+/// Whether this node is the active controller, the one node that may run a
+/// request that only the active controller answers.
+pub(crate) fn is_active_controller(broker: &Broker) -> bool {
+    *broker.controller.watch_leader().borrow() == Some(broker.config.node_id)
+}
+
 /// Forwards the request of `api_key` to the active controller and returns the
 /// answer, or `None` when this node is the active controller and answers it
 /// itself.
@@ -80,7 +86,13 @@ pub(crate) async fn to_active_controller(
     })
 }
 
-fn build(
+/// Wrap `req_bytes` (an `api_key` request body at `version`) in a KIP-590
+/// `EnvelopeRequest` carrying `ctx`'s principal and peer address, and encode
+/// it at the envelope's one wire version.
+///
+/// # Errors
+/// Returns an error if the generated codec rejects the assembled envelope.
+pub(crate) fn build(
     broker: &Broker,
     api_key: ApiKeyCode,
     req_bytes: &[u8],

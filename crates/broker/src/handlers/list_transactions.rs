@@ -17,23 +17,13 @@
 //! enum already matches the JVM names verbatim (`Empty`, `Ongoing`, ...),
 //! so the mapping is direct.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        list_transactions_request::ListTransactionsRequest,
-        list_transactions_response::{ListTransactionsResponse, TransactionState},
-    },
+use krabka_protocol::owned::{
+    list_transactions_request::ListTransactionsRequest,
+    list_transactions_response::{ListTransactionsResponse, TransactionState},
 };
 
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    txn::state::TxnState,
-};
+use crate::{broker::Broker, codes, error::BrokerError, txn::state::TxnState};
 
 /// Every state name Kafka's `TransactionState.fromName` resolves. The handler
 /// echoes any filter string outside this set back in the KIP-664
@@ -53,20 +43,6 @@ const ALL_TXN_STATE_NAMES: [&str; 8] = [
     "CompleteAbort",
     "Dead",
 ];
-
-/// JVM-canonical string form of a Krabka [`TxnState`]. These names match the
-/// names the JVM coordinator emits on `TransactionState.toString()`.
-fn txn_state_str(s: TxnState) -> &'static str {
-    match s {
-        TxnState::Empty => "Empty",
-        TxnState::Ongoing => "Ongoing",
-        TxnState::PrepareCommit => "PrepareCommit",
-        TxnState::PrepareAbort => "PrepareAbort",
-        TxnState::CompleteCommit => "CompleteCommit",
-        TxnState::CompleteAbort => "CompleteAbort",
-        TxnState::Dead => "Dead",
-    }
-}
 
 /// Kafka's duration filter is a strict lower bound: a transaction whose age
 /// equals the filter is excluded. Any negative value disables the filter.
@@ -91,19 +67,15 @@ fn compile_transactional_id_pattern(pattern: Option<&str>) -> Result<Option<rege
     name = "handle_list_transactions",
     level = "info",
     skip_all,
-    fields(api = "ListTransactions", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ListTransactions", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ListTransactionsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ListTransactionsRequest::decode(&mut cur, version)?;
-
+) -> Result<ListTransactionsResponse, BrokerError> {
     // v0/v1 decode this field as `None`; v2 null and empty values both disable
     // the filter. Kafka returns a top-level INVALID_REGULAR_EXPRESSION rather
     // than treating malformed syntax as a pattern that matches nothing.
@@ -116,14 +88,11 @@ pub(crate) async fn handle(
                     %error,
                     "invalid ListTransactions transactional-id pattern"
                 );
-                return crate::handlers::encode_response(
-                    &ListTransactionsResponse {
-                        throttle_time_ms: 0,
-                        error_code: codes::INVALID_REGULAR_EXPRESSION,
-                        ..Default::default()
-                    },
-                    version,
-                );
+                return Ok(ListTransactionsResponse {
+                    throttle_time_ms: 0,
+                    error_code: codes::INVALID_REGULAR_EXPRESSION,
+                    ..Default::default()
+                });
             }
         };
 
@@ -131,14 +100,11 @@ pub(crate) async fn handle(
     // state partition loads, because the list would be short of whatever those
     // partitions hold.
     if broker.txn_coordinator.any_partition_loading().await {
-        return crate::handlers::encode_response(
-            &ListTransactionsResponse {
-                throttle_time_ms: 0,
-                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                ..Default::default()
-            },
-            version,
-        );
+        return Ok(ListTransactionsResponse {
+            throttle_time_ms: 0,
+            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ..Default::default()
+        });
     }
 
     let image = broker.controller.current_image();
@@ -174,7 +140,7 @@ pub(crate) async fn handle(
         if entry.state == TxnState::Dead {
             continue;
         }
-        let state = txn_state_str(entry.state);
+        let state = entry.state.as_str();
 
         // State filter: empty = no filter; otherwise the entry's state
         // must be one of the requested ones.
@@ -201,17 +167,14 @@ pub(crate) async fn handle(
         }
         // ACL: per-tid `Describe` on `TransactionalId`. Silent filter on
         // Deny.
-        let allow = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::TransactionalId,
-                resource_name: entry.transactional_id.as_str(),
-                operation: AclOperation::Describe,
-            },
-        );
-        if allow == AuthorizationResult::Deny {
+        if crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::TransactionalId,
+            entry.transactional_id.as_str(),
+            AclOperation::Describe,
+        ) {
             continue;
         }
 
@@ -224,14 +187,13 @@ pub(crate) async fn handle(
         });
     }
 
-    let resp = ListTransactionsResponse {
+    Ok(ListTransactionsResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         unknown_state_filters,
         transaction_states: out,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 #[cfg(test)]
@@ -246,7 +208,7 @@ mod tests {
     };
 
     #[test]
-    fn txn_state_str_matches_jvm_names() {
+    fn txn_state_as_str_matches_jvm_names() {
         let cases = [
             (TxnState::Empty, "Empty"),
             (TxnState::Ongoing, "Ongoing"),
@@ -257,7 +219,7 @@ mod tests {
             (TxnState::Dead, "Dead"),
         ];
         for (state, want) in cases {
-            assert!(txn_state_str(state) == want, "{state:?}");
+            assert!(state.as_str() == want, "{state:?}");
         }
     }
 
@@ -310,11 +272,25 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        ListTransactionsRequest,
-        ListTransactionsResponse,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
+
+    /// Serve `req` over the wire at `version`, so that the fields an older
+    /// version drops never reach the handler.
+    async fn over_the_wire(
+        broker: &Broker,
+        version: i16,
+        req: &ListTransactionsRequest,
+        ctx: &crate::handlers::RequestContext<'_>,
+    ) -> ListTransactionsResponse {
+        crate::test_support::dispatch_wire(
+            broker,
+            krabka_protocol::owned::list_transactions_request::API_KEY,
+            version,
+            req,
+            ctx,
+        )
+        .await
+    }
 
     /// Seed one transaction and exercise the filters through their actual wire
     /// versions. This also protects the producer-id filter from being inverted.
@@ -354,11 +330,7 @@ mod tests {
             duration_filter: -1,
             ..Default::default()
         };
-        let req = encode_request(&req, version);
-        let bytes = handle(&broker, version, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes, version);
+        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
         let pids: Vec<i64> = resp
             .transaction_states
@@ -388,11 +360,7 @@ mod tests {
                 transactional_id_pattern: pattern.map(str::to_owned),
                 ..Default::default()
             };
-            let req = encode_request(&req, version);
-            let bytes = handle(&broker, version, 123, &req, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&bytes, version);
+            let resp = over_the_wire(&broker, version, &req, &ctx).await;
             let pids: Vec<i64> = resp
                 .transaction_states
                 .iter()
@@ -423,12 +391,8 @@ mod tests {
             transactional_id_pattern: Some("txn-*".into()),
             ..Default::default()
         };
-        let req = encode_request(&req, version);
 
-        let bytes = handle(&broker, version, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes, version);
+        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
         let expected = ListTransactionsResponse {
             throttle_time_ms: 0,
@@ -502,20 +466,14 @@ mod tests {
         let mut expected = Vec::new();
         let mut actual = Vec::new();
         for (state_filters, listed, unknown) in cases {
-            let request = encode_request(
-                &ListTransactionsRequest {
-                    state_filters: state_filters.clone(),
-                    duration_filter: -1,
-                    ..Default::default()
-                },
-                version,
-            );
-            let response = decode_response(
-                &handle(&broker, version, 1, &request, &ctx)
-                    .await
-                    .expect("handle"),
-                version,
-            );
+            let request = ListTransactionsRequest {
+                state_filters: state_filters.clone(),
+                duration_filter: -1,
+                ..Default::default()
+            };
+            let response = handle(&broker, request, version, &ctx)
+                .await
+                .expect("handle");
             expected.push((state_filters.clone(), listed, unknown));
             actual.push((
                 state_filters,
@@ -542,17 +500,11 @@ mod tests {
 
         for (version, expected_error) in [(1, codes::NONE), (2, codes::INVALID_REGULAR_EXPRESSION)]
         {
-            let req = encode_request(
-                &ListTransactionsRequest {
-                    transactional_id_pattern: Some("(unclosed".into()),
-                    ..Default::default()
-                },
-                version,
-            );
-            let bytes = handle(&broker, version, 123, &req, &ctx)
-                .await
-                .expect("handle");
-            let response = decode_response(&bytes, version);
+            let req = ListTransactionsRequest {
+                transactional_id_pattern: Some("(unclosed".into()),
+                ..Default::default()
+            };
+            let response = over_the_wire(&broker, version, &req, &ctx).await;
             assert!(response.error_code == expected_error, "version {version}");
             assert!(response.transaction_states.is_empty(), "version {version}");
         }

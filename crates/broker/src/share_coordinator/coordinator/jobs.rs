@@ -149,8 +149,8 @@ impl ShareCoordinator {
     /// A state partition whose every key already has a cold snapshot (its
     /// write timestamp differs from its create timestamp) is skipped.
     pub(crate) async fn snapshot_cold_partitions(&self) -> usize {
-        let interval = i64::try_from(self.config.cold_partition_snapshot_interval.as_millis())
-            .unwrap_or(i64::MAX);
+        let interval =
+            crate::time_util::duration_millis(self.config.cold_partition_snapshot_interval);
         let mut written = 0;
         for state_partition in self.active_partitions().await {
             let Ok(active) = self.active(state_partition).await else {
@@ -284,23 +284,15 @@ async fn run(
                 }
                 previous = image;
             }
-            () = until(next_prune) => {
+            () = crate::time_util::sleep_until_opt(next_prune) => {
                 coordinator.prune_state_partitions().await;
                 next_prune = schedule(enabled, prune_interval);
             }
-            () = until(next_cold) => {
+            () = crate::time_util::sleep_until_opt(next_cold) => {
                 coordinator.snapshot_cold_partitions().await;
                 next_cold = schedule(enabled, cold_interval);
             }
         }
-    }
-}
-
-/// Sleeps until `deadline`, or forever when there is none.
-async fn until(deadline: Option<Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending().await,
     }
 }
 

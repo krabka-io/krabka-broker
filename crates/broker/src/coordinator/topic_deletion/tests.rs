@@ -140,15 +140,13 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
-        offset_commit_response::OffsetCommitResponse,
         offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
-        offset_fetch_response::OffsetFetchResponse,
     };
 
     use crate::{
         broker::Broker,
         codes,
-        test_support::{decode_response, encode_request, peer, principal, request_context},
+        test_support::{peer, principal, request_context},
     };
 
     const TOPIC: &str = "orders";
@@ -170,16 +168,9 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         let principal = principal("admin");
         let peer = peer();
         let ctx = request_context(&principal, &peer, "consumer");
-        let bytes = crate::handlers::offset_fetch::handle(
-            broker,
-            FETCH_VERSION,
-            2,
-            &encode_request(&request, FETCH_VERSION),
-            &ctx,
-        )
-        .await
-        .expect("OffsetFetch");
-        let response: OffsetFetchResponse = decode_response(&bytes, FETCH_VERSION);
+        let response = crate::handlers::offset_fetch::handle(broker, request, FETCH_VERSION, &ctx)
+            .await
+            .expect("OffsetFetch");
         response.topics[0].partitions[0].committed_offset
     }
 
@@ -233,16 +224,10 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         let broker = Arc::clone(&broker);
         let ctx = &ctx;
         async move {
-            let bytes = crate::handlers::offset_commit::handle(
-                &broker,
-                COMMIT_VERSION,
-                1,
-                &encode_request(&request, COMMIT_VERSION),
-                ctx,
-            )
-            .await
-            .expect("OffsetCommit");
-            let committed: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
+            let committed =
+                crate::handlers::offset_commit::handle(&broker, request, COMMIT_VERSION, ctx)
+                    .await
+                    .expect("OffsetCommit");
             committed.topics[0].partitions[0].error_code
         }
     };

@@ -166,17 +166,10 @@ mod tests {
     fn registration(node: u64, fenced: bool) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
             fenced,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(node),
             broker_epoch: i64::try_from(node).expect("small id") * 10,
             incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
-            host: "127.0.0.1".into(),
-            port: 9_092,
-            rack: None,
-            endpoints: vec![],
             log_dirs: vec![uuid::Uuid::from_u128(0x600d)],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node)
         }
     }
 

@@ -50,7 +50,7 @@ dashmap = "6"
 # Derive boilerplate for domain newtypes (Display/From/Into/Deref/AsRef/
 # Constructor/FromStr and numeric ops) so wrappers over wire/domain primitives
 # stay one-liners. See docs/style_guides/code_style_guide.md#newtypes-for-domain-values.
-derive_more = { version = "2", features = ["display", "from", "into", "deref", "as_ref", "constructor", "from_str", "add", "add_assign", "mul", "sum"] }
+derive_more = { version = "2", features = ["debug", "display", "from", "into", "deref", "deref_mut", "as_ref", "constructor", "from_str", "add", "add_assign", "mul", "sum"] }
 # KIP-714: `CLIENT_METRICS` `match` patterns are `java.util.regex.Pattern`s,
 # lookaround and backreferences included, which the `regex` crate refuses.
 fancy-regex = "0.19"
@@ -81,6 +81,9 @@ maplit = "1"
 # Dev-dependency only — `#[cfg_attr(test, mockall::automock)]` keeps it out of
 # shipped builds.
 mockall = "0.15"
+# Token, syntax-tree and template layer for the `krabka-macros` derives: one
+# dependency in place of the `proc-macro2` / `syn` / `quote` trio.
+moxy = { version = "0.5.3", features = ["macros", "template"] }
 # mutants: `#[cfg_attr(test, mutants::skip)]` attribute for cargo-mutants. Used
 # only where `exclude_re` cannot reliably suppress a mutant (struct-field-deletion
 # mutants on a live-IO adapter). Dev-dependency only; expands to nothing.

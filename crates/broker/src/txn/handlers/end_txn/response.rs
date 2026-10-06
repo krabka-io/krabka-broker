@@ -1,11 +1,10 @@
-//! The `EndTxnResponse` encoders. One shape carries the successful completion
+//! The `EndTxnResponse` shapes. One carries the successful completion
 //! identity, the other the wire sentinels that stand in for it when the handler
 //! answers with an error code.
 
-use bytes::{Bytes, BytesMut};
-use krabka_protocol::{Encode, owned::end_txn_response::EndTxnResponse};
+use krabka_protocol::owned::end_txn_response::EndTxnResponse;
 
-use crate::{codes, error::BrokerError};
+use crate::codes;
 
 /// Kafka wire sentinel: "no producer id" (`RecordBatch.NO_PRODUCER_ID`).
 /// Returned on `EndTxn` error responses, where the identity is meaningless.
@@ -14,57 +13,34 @@ const NO_PRODUCER_ID: i64 = -1;
 /// Kafka wire sentinel: "no producer epoch" (`RecordBatch.NO_PRODUCER_EPOCH`).
 const NO_PRODUCER_EPOCH: i16 = -1;
 
-/// Kafka `KafkaApis.handleEndTxnRequest`: a client below `EndTxn` v2 does not
-/// know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
-fn wire_code(version: i16, error_code: i16) -> i16 {
-    if version < 2 && error_code == codes::PRODUCER_FENCED {
-        codes::INVALID_PRODUCER_EPOCH
-    } else {
-        error_code
-    }
-}
-
-pub(super) fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
+pub(super) fn err_response(version: i16, error_code: i16) -> EndTxnResponse {
     // On the error path the producer_id/epoch fields are not meaningful;
     // leave them at the "no producer" wire sentinels.
-    encode_response(
-        version,
-        wire_code(version, error_code),
+    response(
+        crate::txn::util::producer_fenced_wire_code(version, error_code),
         NO_PRODUCER_ID,
         NO_PRODUCER_EPOCH,
     )
 }
 
-/// Encode a successful `EndTxn` response. `producer_id` and `producer_epoch`
-/// are the post-completion identity. The epoch bumps for a `TV_2` client, that
-/// is `EndTxn` v5, or rolls to a new `producer_id` on epoch exhaustion; see
+/// A successful `EndTxn` response. `producer_id` and `producer_epoch` are the
+/// post-completion identity. The epoch bumps for a `TV_2` client, that is
+/// `EndTxn` v5, or rolls to a new `producer_id` on epoch exhaustion; see
 /// [`next_producer_identity`](super::producer_identity::next_producer_identity). They
 /// are only on the wire at v5 (KIP-890). A lower version never bumps the
 /// epoch, since its producer could not learn the new one.
-pub(super) fn encode_ok(
-    version: i16,
-    producer_id: i64,
-    producer_epoch: i16,
-) -> Result<Bytes, BrokerError> {
-    encode_response(version, codes::NONE, producer_id, producer_epoch)
+pub(super) fn ok_response(producer_id: i64, producer_epoch: i16) -> EndTxnResponse {
+    response(codes::NONE, producer_id, producer_epoch)
 }
 
-fn encode_response(
-    version: i16,
-    error_code: i16,
-    producer_id: i64,
-    producer_epoch: i16,
-) -> Result<Bytes, BrokerError> {
-    let resp = EndTxnResponse {
+fn response(error_code: i16, producer_id: i64, producer_epoch: i16) -> EndTxnResponse {
+    EndTxnResponse {
         throttle_time_ms: 0,
         error_code,
         producer_id,
         producer_epoch,
         ..Default::default()
-    };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
+    }
 }
 
 #[cfg(test)]
@@ -74,53 +50,35 @@ mod tests {
 
     use super::*;
 
-    fn decode_response(bytes: &Bytes, version: i16) -> EndTxnResponse {
-        crate::test_support::decode_response(bytes, version)
-    }
-
     #[test]
     fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
-        // (version, expected code on the wire)
+        // (version, error code, expected code)
         let cases = [
-            (0, codes::INVALID_PRODUCER_EPOCH),
-            (1, codes::INVALID_PRODUCER_EPOCH),
-            (2, codes::PRODUCER_FENCED),
-            (5, codes::PRODUCER_FENCED),
+            (0, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
+            (1, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
+            (2, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
+            (5, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
+            // Another code is untouched.
+            (
+                0,
+                codes::CONCURRENT_TRANSACTIONS,
+                codes::CONCURRENT_TRANSACTIONS,
+            ),
         ];
-        for (version, expected) in cases {
-            let bytes = encode_err(version, codes::PRODUCER_FENCED).expect("encode error");
-            assert!(
-                decode_response(&bytes, version).error_code == expected,
-                "v{version}"
-            );
+        for (version, error_code, expected) in cases {
+            let expected = EndTxnResponse {
+                throttle_time_ms: 0,
+                error_code: expected,
+                producer_id: -1,
+                producer_epoch: -1,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            };
+            assert!(err_response(version, error_code) == expected, "v{version}");
         }
-        // Another code is untouched.
-        let bytes = encode_err(0, codes::CONCURRENT_TRANSACTIONS).expect("encode error");
-        assert!(decode_response(&bytes, 0).error_code == codes::CONCURRENT_TRANSACTIONS);
     }
 
     #[test]
-    fn encode_err_leaves_producer_identity_at_error_sentinels() {
-        let bytes = encode_err(5, codes::NOT_COORDINATOR).expect("encode error");
-        assert!(!bytes.is_empty());
-        let resp = decode_response(&bytes, 5);
-
-        let expected = EndTxnResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NOT_COORDINATOR,
-            producer_id: -1,
-            producer_epoch: -1,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
-        assert!(resp == expected);
-    }
-
-    #[test]
-    fn encode_ok_returns_v5_producer_identity() {
-        let bytes = encode_ok(5, 42, 7).expect("encode ok");
-        assert!(!bytes.is_empty());
-        let resp = decode_response(&bytes, 5);
-
+    fn ok_response_carries_the_producer_identity() {
         let expected = EndTxnResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
@@ -128,6 +86,6 @@ mod tests {
             producer_epoch: 7,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
-        assert!(resp == expected);
+        assert!(ok_response(42, 7) == expected);
     }
 }

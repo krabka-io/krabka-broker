@@ -9,28 +9,26 @@
 //! `oldestVersion()..latestVersion()`. A request at a version outside the range
 //! does not decode, and the connection closes.
 
-use krabka_protocol::owned::{
-    add_raft_voter_request, api_versions_request, begin_quorum_epoch_request,
-    controller_registration_request, describe_cluster_request, describe_quorum_request,
-    end_quorum_epoch_request, fetch_request, fetch_snapshot_request, remove_raft_voter_request,
-    sasl_authenticate_request, sasl_handshake_request, update_raft_voter_request, vote_request,
-};
-
 use crate::config::ControllerApiVersion;
 
-/// One advertised range, taken whole from a generated request message. Same
-/// shape as the broker's KIP-919 Admin table in `crates/broker/src/controller_admin.rs`.
-macro_rules! api_version {
+/// One advertised controller-listener range, taken whole from the generated
+/// `krabka_protocol::owned::$request` message.
+///
+/// This table and the broker's KIP-919 Admin table in
+/// `crates/broker/src/controller_admin.rs` both build their entries with it.
+#[macro_export]
+macro_rules! controller_api_version {
     ($request:ident) => {
-        ControllerApiVersion {
-            api_key: $request::API_KEY,
-            min_version: $request::MIN_VERSION,
-            max_version: $request::MAX_VERSION,
-            released_max: crate::config::kafka_4_3_1_max($request::API_KEY),
-            flexible_min: $request::FLEXIBLE_MIN,
+        $crate::ControllerApiVersion {
+            api_key: ::krabka_protocol::owned::$request::API_KEY,
+            min_version: ::krabka_protocol::owned::$request::MIN_VERSION,
+            max_version: ::krabka_protocol::owned::$request::MAX_VERSION,
+            released_max: $crate::kafka_4_3_1_max(::krabka_protocol::owned::$request::API_KEY),
+            flexible_min: ::krabka_protocol::owned::$request::FLEXIBLE_MIN,
         }
     };
 }
+use crate::controller_api_version as api_version;
 
 /// Every API the controller listener serves itself, ordered by API key.
 ///
@@ -74,11 +72,19 @@ mod tests {
     use krabka_protocol::{
         Decode,
         owned::{
+            add_raft_voter_request, api_versions_request,
             api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
+            begin_quorum_epoch_request,
             begin_quorum_epoch_request::BeginQuorumEpochRequest,
+            controller_registration_request, describe_cluster_request, describe_quorum_request,
+            end_quorum_epoch_request,
             end_quorum_epoch_request::EndQuorumEpochRequest,
+            fetch_request,
             fetch_request::FetchRequest,
+            fetch_snapshot_request,
             fetch_snapshot_request::FetchSnapshotRequest,
+            remove_raft_voter_request, sasl_authenticate_request, sasl_handshake_request,
+            update_raft_voter_request, vote_request,
             vote_request::VoteRequest,
         },
     };

@@ -13,7 +13,7 @@ use krabka_security::SaslMechanism;
 use krabka_units::Time;
 
 use super::{
-    response::fail_authenticate_with,
+    response::{fail_authenticate_with, sasl_ok},
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 use crate::codes::ILLEGAL_SASL_STATE;
@@ -113,19 +113,13 @@ fn authenticate_plain<S: BuildHasher>(
         // PLAIN never auths via a delegation token.
         authenticated_via_token: false,
     };
-    SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::new(),
-        session_lifetime_ms,
-        ..Default::default()
-    }
+    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::AuthMethod;
 
     use super::*;
     use crate::network::auth::{
@@ -162,11 +156,7 @@ mod tests {
 
     fn alice_session() -> AuthenticatedSnapshot {
         AuthenticatedSnapshot {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: AuthMethod::SaslPlain,
-                groups: vec![],
-            },
+            principal: crate::test_support::sasl_principal("alice"),
             mechanism: SaslMechanism::Plain,
             expires_at_ms: Some(9_000),
             authenticated_via_token: false,
@@ -193,11 +183,7 @@ mod tests {
             (
                 "already authenticated as someone else",
                 ConnectionAuth::Authenticated {
-                    principal: Principal {
-                        name: "bob".to_string(),
-                        auth_method: AuthMethod::SaslPlain,
-                        groups: vec![],
-                    },
+                    principal: crate::test_support::sasl_principal("bob"),
                     mechanism: SaslMechanism::Plain,
                     expires_at_ms: None,
                     authenticated_via_token: false,

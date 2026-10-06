@@ -11,38 +11,28 @@ use krabka_protocol::owned::{
     alter_partition_request::{PartitionData as ReqPartitionData, TopicData as ReqTopicData},
     alter_partition_response,
 };
-use krabka_security::{AuthMethod, Principal};
 
 use super::{
-    test_support::{request_with_topics, seed_partition, wait_for_leader, wire_topic_id},
+    test_support::{request_with_topics, seed_partition, wire_topic_id},
     *,
 };
 use crate::test_support::{DenyAll, start_broker_with_authorizer as start_broker};
 
-crate::test_support::wire_helpers!(
-    AlterPartitionRequest,
-    AlterPartitionResponse,
-    client_id = "broker-client"
-);
+crate::test_support::context_helper!(client_id = "broker-client");
 
 #[tokio::test]
 async fn handle_denies_cluster_action_for_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
-    let req_bytes = encode_request(&request_with_topics(&broker, Vec::new()), version);
+    let req = request_with_topics(&broker, Vec::new());
 
-    let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+    let resp = super::handle(&broker, req, version, &ctx)
         .await
         .expect("handle");
-    let resp = decode_response(&resp, version);
 
     let expected = AlterPartitionResponse {
         throttle_time_ms: 0,
@@ -59,20 +49,15 @@ async fn leader_accepts_empty_alter_partition_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    crate::test_support::wait_for_controller_leader(&broker).await;
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
-    let req_bytes = encode_request(&request_with_topics(&broker, Vec::new()), version);
+    let req = request_with_topics(&broker, Vec::new());
 
-    let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+    let resp = super::handle(&broker, req, version, &ctx)
         .await
         .expect("handle");
-    let resp = decode_response(&resp, version);
 
     let expected = AlterPartitionResponse {
         throttle_time_ms: 0,
@@ -89,13 +74,9 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
     let version = 2;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = request_with_topics(
@@ -112,12 +93,9 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
             ..Default::default()
         }],
     );
-    let req_bytes = encode_request(&req, version);
-
-    let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+    let resp = super::handle(&broker, req, version, &ctx)
         .await
         .expect("handle");
-    let resp = decode_response(&resp, version);
 
     let expected = AlterPartitionResponse {
         throttle_time_ms: 0,
@@ -176,13 +154,9 @@ async fn topic_row_error_follows_version_and_topic_id() {
     ];
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
@@ -213,11 +187,15 @@ async fn topic_row_error_follows_version_and_topic_id() {
                 ..Default::default()
             }],
         );
-        let req_bytes = encode_request(&req, version);
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        actual.push((version, kind, decode_response(&resp, version)));
+        let resp = crate::test_support::dispatch_wire(
+            &broker,
+            krabka_protocol::owned::alter_partition_request::API_KEY,
+            version,
+            &req,
+            &ctx,
+        )
+        .await;
+        actual.push((version, kind, resp));
 
         let refused = |partition_index, error_code| RespPartitionData {
             partition_index,
@@ -273,13 +251,9 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let current = request_with_topics(&broker, Vec::new()).broker_epoch;
@@ -302,7 +276,7 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
                 }],
             )
         };
-        let resp = super::handle(&broker, version, 123, &encode_request(&req, version), &ctx)
+        let resp = super::handle(&broker, req, version, &ctx)
             .await
             .expect("handle");
         let expected = AlterPartitionResponse {
@@ -312,7 +286,7 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
         assert!(
-            decode_response(&resp, version) == expected,
+            resp == expected,
             "broker {broker_id} at epoch {broker_epoch}"
         );
     }

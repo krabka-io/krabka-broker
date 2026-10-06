@@ -20,16 +20,13 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use super::handle;
 use crate::{
     authorizer::{
         AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
     },
     broker::BrokerHandle,
     codes,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
-    },
+    test_support::{peer, principal, request_context, start_broker_no_audit_with},
 };
 
 /// An id that no topic in these tests has.
@@ -119,11 +116,7 @@ struct Fixture {
 }
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> Fixture {
-    let (broker, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await;
+    let (broker, dir) = start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await;
     let client = krabka_client_core::Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("metadata-resolution-test")
@@ -176,11 +169,14 @@ async fn metadata(
     let user = principal("describer");
     let address = peer();
     let ctx = request_context(&user, &address, "metadata-client");
-    let request_bytes = encode_request(request, version);
-    let response = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle metadata");
-    decode_response(&response, version)
+    crate::test_support::dispatch_wire(
+        &shared,
+        krabka_protocol::api_key::ApiKey::Metadata as i16,
+        version,
+        request,
+        &ctx,
+    )
+    .await
 }
 
 impl Fixture {

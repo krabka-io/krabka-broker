@@ -3,7 +3,9 @@
 //! the two controller scans build out of those answers. Nothing here does
 //! I/O, so the policy is unit-testable and model-checkable on its own.
 
-use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_metadata::{
+    LeaderEpoch, LeaderRecoveryState, MetadataRecord, PartitionRecord, PartitionRecoveryRecord,
+};
 use krabka_raft::NodeId;
 use krabka_verified::consensus::{
     FailoverAction, FailoverFacts, FailoverRecovery, LiveIsr, OutOfIsrFacts, failover_action,
@@ -23,6 +25,37 @@ pub(crate) struct FailoverPlan {
     /// report them: the death edge warns once, the per-tick sweep does not
     /// repeat that warning every second.
     pub unavailable: Vec<(String, i32)>,
+}
+
+/// Push the `PartitionRecord` that moves `pr` to `leader` and `isr` at the
+/// given epochs, every other field carried over from `pr`. When `recovering`,
+/// a `PartitionRecoveryRecord` marking the new leader `RECOVERING` follows it,
+/// which is what an unclean election writes.
+pub(crate) fn push_partition_change(
+    changes: &mut Vec<MetadataRecord>,
+    pr: &PartitionRecord,
+    leader: NodeId,
+    isr: Vec<NodeId>,
+    partition_epoch: i32,
+    leader_epoch: LeaderEpoch,
+    recovering: bool,
+) {
+    changes.push(MetadataRecord::V1Partition(PartitionRecord {
+        leader,
+        isr,
+        leader_epoch,
+        partition_epoch,
+        ..pr.clone()
+    }));
+    if recovering {
+        changes.push(MetadataRecord::V1PartitionRecovery(
+            PartitionRecoveryRecord {
+                topic: pr.topic.clone(),
+                partition: pr.partition,
+                state: LeaderRecoveryState::Recovering,
+            },
+        ));
+    }
 }
 
 /// The pure per-partition failover decision shared by the dead-broker scan

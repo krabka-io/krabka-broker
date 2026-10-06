@@ -18,11 +18,17 @@ pub(crate) mod ktls_probe;
 pub(crate) mod listener;
 pub(crate) mod request;
 
-pub(crate) fn response_header_v1(api_key: ApiKeyCode, body_flexible: bool) -> bool {
+/// Whether the response header for `api_key` carries the v1 empty
+/// tagged-fields byte after the correlation id.
+#[must_use]
+pub fn response_header_v1(api_key: ApiKeyCode, body_flexible: bool) -> bool {
     body_flexible && api_key != ApiKey::ApiVersions as i16
 }
 
-pub(crate) fn response_header_len(api_key: ApiKeyCode, body_flexible: bool) -> usize {
+/// Bytes the response header occupies for `api_key` at a flexible or
+/// non-flexible body.
+#[must_use]
+pub fn response_header_len(api_key: ApiKeyCode, body_flexible: bool) -> usize {
     if response_header_v1(api_key, body_flexible) {
         5
     } else {

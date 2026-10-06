@@ -21,78 +21,71 @@ const KEY_SHARE_ASSIGNMENT_INTERVAL_MS: &str = "share.assignment.interval.ms";
 /// Each `min_*` and `max_*` pair bounds the broker value beside it and the
 /// matching per-group override. The `[runtime]` applier checks Kafka's
 /// ranges and the order within each triple at startup.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ShareGroupConfig {
     /// Kafka's `group.share.session.timeout.ms`.
+    #[default(Duration::from_secs(45))]
     pub session_timeout: Duration,
     /// Kafka's `group.share.heartbeat.interval.ms`.
+    #[default(Duration::from_secs(5))]
     pub heartbeat_interval: Duration,
     /// Kafka's `group.share.assignment.interval.ms`: the least time between
     /// two target assignments of a group. Zero does not wait.
+    #[default(DEFAULT_ASSIGNMENT_INTERVAL)]
     pub assignment_interval: Duration,
     /// Kafka's `group.share.min.session.timeout.ms`.
+    #[default(Duration::from_secs(45))]
     pub min_session_timeout: Duration,
     /// Kafka's `group.share.max.session.timeout.ms`.
+    #[default(Duration::from_mins(1))]
     pub max_session_timeout: Duration,
     /// Kafka's `group.share.min.heartbeat.interval.ms`.
+    #[default(Duration::from_secs(5))]
     pub min_heartbeat_interval: Duration,
     /// Kafka's `group.share.max.heartbeat.interval.ms`.
+    #[default(Duration::from_secs(15))]
     pub max_heartbeat_interval: Duration,
     /// Kafka's `group.share.max.size`.
+    #[default(200)]
     pub max_size: usize,
     /// Kafka's `group.share.record.lock.duration.ms`.
+    #[default(Duration::from_secs(30))]
     pub record_lock_duration: Duration,
     /// Kafka's `group.share.min.record.lock.duration.ms`.
+    #[default(Duration::from_secs(15))]
     pub min_record_lock_duration: Duration,
     /// Kafka's `group.share.max.record.lock.duration.ms`.
+    #[default(Duration::from_mins(1))]
     pub max_record_lock_duration: Duration,
     /// Kafka's `group.share.delivery.count.limit`: the delivery count at
     /// which a record is archived.
+    #[default(5)]
     pub max_delivery_attempts: i16,
     /// Kafka's `group.share.min.delivery.count.limit`.
+    #[default(2)]
     pub min_delivery_count_limit: i16,
     /// Kafka's `group.share.max.delivery.count.limit`.
+    #[default(10)]
     pub max_delivery_count_limit: i16,
     /// Kafka's `group.share.partition.max.record.locks`: the most records a
     /// share partition holds in flight.
+    #[default(2000)]
     pub max_inflight_records: i32,
     /// Kafka's `group.share.min.partition.max.record.locks`.
+    #[default(100)]
     pub min_partition_max_record_locks: i32,
     /// Kafka's `group.share.max.partition.max.record.locks`.
+    #[default(4000)]
     pub max_partition_max_record_locks: i32,
+    #[default(Duration::from_secs(15))]
     pub backlog_poll_interval: Duration,
+    #[default(64)]
     pub actor_mailbox_capacity: usize,
     /// Kafka's internal `group.share.initialize.retry.interval.ms`: how long a
     /// partition may stay initializing before the group asks the persister to
     /// initialize it again.
+    #[default(Duration::from_secs(30))]
     pub initialize_retry_interval: Duration,
-}
-
-impl Default for ShareGroupConfig {
-    fn default() -> Self {
-        Self {
-            session_timeout: Duration::from_secs(45),
-            heartbeat_interval: Duration::from_secs(5),
-            assignment_interval: DEFAULT_ASSIGNMENT_INTERVAL,
-            min_session_timeout: Duration::from_secs(45),
-            max_session_timeout: Duration::from_mins(1),
-            min_heartbeat_interval: Duration::from_secs(5),
-            max_heartbeat_interval: Duration::from_secs(15),
-            max_size: 200,
-            record_lock_duration: Duration::from_secs(30),
-            min_record_lock_duration: Duration::from_secs(15),
-            max_record_lock_duration: Duration::from_mins(1),
-            max_delivery_attempts: 5,
-            min_delivery_count_limit: 2,
-            max_delivery_count_limit: 10,
-            max_inflight_records: 2000,
-            min_partition_max_record_locks: 100,
-            max_partition_max_record_locks: 4000,
-            backlog_poll_interval: Duration::from_secs(15),
-            actor_mailbox_capacity: 64,
-            initialize_retry_interval: Duration::from_secs(30),
-        }
-    }
 }
 
 impl ShareGroupConfig {

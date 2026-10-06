@@ -27,6 +27,9 @@ pub(crate) fn deleted_path(path: &Path) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+/// `now` in epoch milliseconds. An instant before the epoch reads as `0`, and
+/// one past `i64::MAX` milliseconds saturates there.
+#[must_use]
 pub fn now_ms(now: SystemTime) -> i64 {
     let millis = now
         .duration_since(std::time::UNIX_EPOCH)

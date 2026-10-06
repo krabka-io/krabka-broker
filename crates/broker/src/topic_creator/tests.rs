@@ -27,7 +27,8 @@ use krabka_raft::NodeId;
 
 use super::*;
 use crate::test_support::{
-    ControllerPeerAllowed, FakeMetadataSource, GrantsInPrincipalName, start_broker_with,
+    ControllerPeerAllowed, FakeMetadataSource, GrantsInPrincipalName, start_broker_no_audit,
+    start_broker_no_audit_with,
 };
 
 /// A retry timeout short enough that a test sees [`TopicCreatorError::Timeout`]
@@ -118,7 +119,7 @@ async fn create(
 /// second request for the same name gets Kafka's existence row.
 #[tokio::test]
 async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
-    let (handle, _dir) = start_broker_with(|cfg| cfg.audit_enabled = false).await;
+    let (handle, _dir) = start_broker_no_audit().await;
     let broker = handle.broker_arc_for_test();
     let creator = TopicCreator::new(&broker);
 
@@ -182,8 +183,7 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
 /// through it, and a principal that holds `Create` can.
 #[tokio::test]
 async fn the_controller_authorizes_the_forwarded_principal() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(ControllerPeerAllowed(GrantsInPrincipalName));
     })
     .await;
@@ -247,11 +247,8 @@ async fn the_controller_authorizes_the_forwarded_principal() {
 /// topic is created.
 #[tokio::test]
 async fn an_envelope_from_a_broker_without_cluster_action_is_refused() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsInPrincipalName)).await;
     let broker = handle.broker_arc_for_test();
     let creator = TopicCreator::new(&broker);
 
@@ -789,14 +786,15 @@ fn each_error_reads_as_kafka_reports_it() {
 }
 
 /// `ForwardedIdentity::of` takes the principal name, the client address and
-/// the client id of the request, and the correlation id it is given.
+/// the client id and the correlation id of the request.
 #[test]
 fn a_forwarded_identity_is_the_identity_of_the_request() {
     let principal = crate::test_support::principal("alice");
     let peer: SocketAddr = "10.1.2.3:50000".parse().expect("literal address");
-    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client")
+        .with_correlation_id(9);
 
-    let got = ForwardedIdentity::of(&ctx, 9);
+    let got = ForwardedIdentity::of(&ctx);
 
     assert!(
         got == ForwardedIdentity {

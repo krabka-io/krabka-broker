@@ -38,6 +38,7 @@ use std::collections::HashSet;
 
 use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, NodeId, PartitionRecord};
 
+use super::metadata::wire_id;
 use crate::broker::Broker;
 
 /// The brokers this node knows to be fenced or past their heartbeat deadline.
@@ -259,11 +260,6 @@ pub(crate) enum LeaderEndpointError {
     /// `LISTENER_NOT_FOUND` from `Metadata` v6 on, and `LEADER_NOT_AVAILABLE`
     /// before that.
     ListenerNotFound,
-}
-
-/// A node id as the wire carries it.
-fn wire_id(node: NodeId) -> i32 {
-    i32::try_from(node.0).unwrap_or(i32::MAX)
 }
 
 /// Whether the replica `replica` holds on `directory` is offline.

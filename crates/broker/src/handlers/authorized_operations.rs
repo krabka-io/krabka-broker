@@ -127,19 +127,15 @@ mod tests {
     use std::collections::HashSet;
 
     use assert2::assert;
-    use krabka_metadata::{AclEntry, MetadataRecord, PatternType, PermissionType, ResourceType};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_metadata::{AclEntry, MetadataRecord, PermissionType, ResourceType};
+    use krabka_security::Principal;
     use uuid::Uuid;
 
     use super::*;
     use crate::authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer};
 
     fn principal(name: &str) -> Principal {
-        Principal {
-            name: name.into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec![],
-        }
+        crate::test_support::sasl_principal(name)
     }
 
     fn addr() -> SocketAddr {
@@ -147,15 +143,7 @@ mod tests {
     }
 
     fn allow_acl(rt: ResourceType, op: AclOperation, name: &str, user: &str) -> AclEntry {
-        AclEntry {
-            resource_type: rt,
-            resource_name: name.into(),
-            pattern_type: PatternType::Literal,
-            principal: format!("User:{user}"),
-            host: "*".into(),
-            operation: op,
-            permission_type: PermissionType::Allow,
-        }
+        crate::test_support::allow_acl(rt, name, &format!("User:{user}"), op)
     }
 
     fn bit(op: AclOperation) -> i32 {

@@ -19,7 +19,10 @@ use super::{
         actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
     },
 };
-use crate::coordinator::{DeleteGroupError, GroupSnapshot};
+use crate::{
+    coordinator::{DeleteGroupError, GroupSnapshot},
+    task_util::ask,
+};
 
 impl GroupCoordinator {
     /// Snapshot every **live-classic** group for the wire `ListGroups` pass
@@ -42,14 +45,9 @@ impl GroupCoordinator {
             self.groups.iter().map(|e| e.value().clone()).collect();
         let mut out = Vec::with_capacity(handles.len());
         for h in handles {
-            let (tx, rx) = oneshot::channel();
             // `ClassicInspect` replies only for a classic-kind group; a
-            // consumer-kind group never sends, so `rx.await` errors and we skip.
-            if h.tx
-                .send(GroupActorMessage::ClassicInspect { reply: tx })
-                .await
-                .is_ok()
-                && let Ok(view) = rx.await
+            // consumer-kind group never sends, so the ask errors and we skip.
+            if let Ok(view) = ask(&h.tx, |reply| GroupActorMessage::ClassicInspect { reply }).await
             {
                 out.push(view.snapshot());
             }
@@ -67,13 +65,9 @@ impl GroupCoordinator {
     /// [`InspectAny`]: GroupActorMessage::InspectAny
     pub async fn describe_group(&self, group_id: &str) -> Option<GroupSnapshot> {
         let handle = self.find(group_id)?;
-        let (tx, rx) = oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::InspectAny { reply: tx })
+        ask(&handle.tx, |reply| GroupActorMessage::InspectAny { reply })
             .await
-            .ok()?;
-        rx.await.ok()
+            .ok()
     }
 
     /// Delete a **classic**, **consumer**, **streams** or **share** group.
@@ -100,13 +94,11 @@ impl GroupCoordinator {
         let handle = self.find(group_id).ok_or(DeleteGroupError::NotFound)?;
         // The actor serializes this check with Join/Leave so a concurrent join
         // cannot slip between the empty check and the tombstone append.
-        let (tx, rx) = oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicDelete { reply: tx })
-            .await
-            .map_err(|_| DeleteGroupError::NotFound)?;
-        rx.await.map_err(|_| DeleteGroupError::NotFound)??;
+        ask(&handle.tx, |reply| GroupActorMessage::ClassicDelete {
+            reply,
+        })
+        .await
+        .map_err(|_| DeleteGroupError::NotFound)??;
         self.groups.remove(group_id);
         self.group_types.remove(group_id);
         self.seeds.remove(group_id);
@@ -130,13 +122,11 @@ impl GroupCoordinator {
         let handle = self
             .find_streams(group_id)
             .ok_or(DeleteGroupError::NotFound)?;
-        let (tx, rx) = oneshot::channel();
-        handle
-            .tx
-            .send(streams::actor::StreamsGroupActorMessage::Describe { reply: tx })
-            .await
-            .map_err(|_| DeleteGroupError::NotFound)?;
-        let view = rx.await.map_err(|_| DeleteGroupError::NotFound)?;
+        let view = ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .map_err(|_| DeleteGroupError::NotFound)?;
         if !view.members.is_empty() {
             return Err(DeleteGroupError::NonEmpty);
         }
@@ -178,13 +168,9 @@ impl GroupCoordinator {
             return Err(DeleteGroupError::NotFound);
         }
         let handle = self.get_or_create_share(group_id);
-        let (tx, rx) = oneshot::channel();
-        handle
-            .tx
-            .send(ShareGroupActorMessage::Delete { reply: tx })
+        ask(&handle.tx, |reply| ShareGroupActorMessage::Delete { reply })
             .await
-            .map_err(|_| DeleteGroupError::NotFound)?;
-        rx.await.map_err(|_| DeleteGroupError::NotFound)??;
+            .map_err(|_| DeleteGroupError::NotFound)??;
         if self
             .share_groups
             .remove_if(group_id, |_, registered| Arc::ptr_eq(registered, &handle))

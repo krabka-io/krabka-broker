@@ -13,7 +13,7 @@
 
 use bytes::Bytes;
 
-pub use crate::network::codec::KafkaCodec;
+pub use crate::network::{codec::KafkaCodec, response_header_len, response_header_v1};
 use crate::{
     error::BrokerError,
     handlers::{ApiKeyCode, CorrelationId},
@@ -39,21 +39,6 @@ pub fn encode_response(
 #[must_use]
 pub fn codec(max_request_bytes: usize) -> KafkaCodec {
     crate::network::codec::codec(max_request_bytes)
-}
-
-/// Bytes the response header occupies for `api_key` at a flexible or
-/// non-flexible body, so a prototype can size the segment it writes ahead of
-/// the body.
-#[must_use]
-pub fn response_header_len(api_key: ApiKeyCode, body_flexible: bool) -> usize {
-    crate::network::response_header_len(api_key, body_flexible)
-}
-
-/// Whether the response header for `api_key` carries the v1 empty
-/// tagged-fields byte after the correlation id.
-#[must_use]
-pub fn response_header_v1(api_key: ApiKeyCode, body_flexible: bool) -> bool {
-    crate::network::response_header_v1(api_key, body_flexible)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ use crate::{
     compaction_rpc::{create_topic_with_configs, get_topic_id, produce_record},
 };
 
+mod kafka_wire;
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `compaction/` directory, which keeps the parts out of `tests/` where every
@@ -29,8 +30,9 @@ mod compaction_cluster;
 mod compaction_records;
 #[path = "compaction/compaction_rpc.rs"]
 mod compaction_rpc;
-#[path = "compaction/compaction_wire.rs"]
-mod compaction_wire;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-compaction-test";
 
 /// End-to-end compaction test:
 ///

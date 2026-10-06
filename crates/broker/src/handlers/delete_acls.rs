@@ -10,16 +10,18 @@
 //! `SECURITY_DISABLED`, the same answer its `DescribeAcls` counterpart gives.
 //!
 //! This file keeps the whole-request cluster gate and the per-filter loop.
-//! Filter decoding lives in `filter`, the response rows and the encoder in
-//! `response`, and the audit trail in `audit`.
+//! Filter decoding lives in `filter`, the response rows in `response`, and
+//! the audit trail in `audit`.
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_metadata::{AclEntry, MetadataRecord};
 use krabka_protocol::{
     ProtocolError,
-    owned::{delete_acls_request::DeleteAclsRequest, delete_acls_response::DeleteAclsFilterResult},
+    owned::{
+        delete_acls_request::DeleteAclsRequest,
+        delete_acls_response::{DeleteAclsFilterResult, DeleteAclsResponse},
+    },
 };
 
 mod audit;
@@ -34,20 +36,13 @@ mod tests;
 use self::{
     audit::{audit_deleted_acls, deleted_acl_resources},
     filter::{build_filter, exact_filter},
-    response::{
-        apply_submit_error, delete_acls_response, encode_response, filter_result,
-        matching_acl_result,
-    },
+    response::{apply_submit_error, delete_acls_response, filter_result, matching_acl_result},
 };
 use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
+    MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
     binding_filter::{AclBindingFilter, UnknownElement},
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes};
 
 /// The message of a cluster-alter refusal. Kafka's `AuthHelper` writes
 /// "Request <request> needs ALTER permission.", where `<request>` is the JVM
@@ -99,9 +94,9 @@ fn match_filter<'a>(
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteAclsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<DeleteAclsResponse, crate::error::BrokerError> {
     // Kafka's `DeleteAclsRequest` constructor refuses an `UNKNOWN` element in
     // any filter while the request parses, before any authorization, and the
     // broker closes the connection. The error return is that close.
@@ -117,17 +112,7 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Whole-request cluster-alter gate.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Alter,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let filter_results = filters
             .iter()
             .map(|_| {
@@ -138,7 +123,7 @@ pub(crate) async fn handle(
                 )
             })
             .collect();
-        return encode_response(&delete_acls_response(filter_results), api_version);
+        return Ok(delete_acls_response(filter_results));
     }
 
     // No authorizer: there is nothing to delete. Kafka builds this response
@@ -156,7 +141,7 @@ pub(crate) async fn handle(
                 )
             })
             .collect();
-        return encode_response(&delete_acls_response(filter_results), api_version);
+        return Ok(delete_acls_response(filter_results));
     }
 
     // Kafka's `AclControlManager.deleteAcls` matches every filter against the
@@ -188,7 +173,7 @@ pub(crate) async fn handle(
                 .iter()
                 .map(|_| filter_result(codes::INVALID_REQUEST, Some(message.clone()), Vec::new()))
                 .collect();
-            return encode_response(&delete_acls_response(filter_results), api_version);
+            return Ok(delete_acls_response(filter_results));
         };
         filter_results.push(filter_result(
             codes::NONE,
@@ -218,5 +203,5 @@ pub(crate) async fn handle(
         deleted_acl_resources(&filter_results),
     );
 
-    encode_response(&delete_acls_response(filter_results), api_version)
+    Ok(delete_acls_response(filter_results))
 }

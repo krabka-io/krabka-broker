@@ -211,8 +211,8 @@ fn per_run_chart(
             plot.add_trace(
                 Scatter::new(x, y)
                     .mode(Mode::Lines)
-                    .name(format!("{} {tag}", stack_name(stack)))
-                    .legend_group(stack_name(stack))
+                    .name(format!("{} {tag}", stack.as_str()))
+                    .legend_group(stack.as_str())
                     .show_legend(false)
                     .line(Line::new().color(faint_color).width(1.0)),
             );
@@ -232,8 +232,8 @@ fn per_run_chart(
             plot.add_trace(
                 Scatter::new(x, y)
                     .mode(Mode::Lines)
-                    .name(format!("{} (mean of {n})", stack_name(stack)))
-                    .legend_group(stack_name(stack))
+                    .name(format!("{} (mean of {n})", stack.as_str()))
+                    .legend_group(stack.as_str())
                     .line(Line::new().color(mean_color).width(3.0)),
             );
         }
@@ -307,11 +307,7 @@ fn timeseries_charts(ts: &[TsSeries]) -> String {
                 .map(|p| p.t_offset_ms.as_time().secs_f64())
                 .collect();
             let y: Vec<f64> = s.points.iter().map(|p| p.mean).collect();
-            plot.add_trace(
-                Scatter::new(x, y)
-                    .name(stack_name(s.stack))
-                    .mode(Mode::Lines),
-            );
+            plot.add_trace(Scatter::new(x, y).name(s.stack.as_str()).mode(Mode::Lines));
         }
         plot.set_layout(
             Layout::new()
@@ -326,13 +322,6 @@ fn timeseries_charts(ts: &[TsSeries]) -> String {
         out.push_str("</div>\n");
     }
     out
-}
-
-fn stack_name(s: Stack) -> &'static str {
-    match s {
-        Stack::Krabka => "krabka",
-        Stack::Kafka => "kafka",
-    }
 }
 
 /// The label a person reads for a time-series metric key. The keys are a closed

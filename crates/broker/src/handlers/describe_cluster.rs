@@ -17,18 +17,13 @@
 //! on `Cluster("kafka-cluster")`, the bitfield is `0` rather than absent --
 //! `Describe` gates only this field, not the rest of the response.
 
-use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_cluster_request::DescribeClusterRequest,
-        describe_cluster_response::{DescribeClusterBroker, DescribeClusterResponse},
-    },
+use krabka_metadata::ResourceType;
+use krabka_protocol::owned::{
+    describe_cluster_request::DescribeClusterRequest,
+    describe_cluster_response::{DescribeClusterBroker, DescribeClusterResponse},
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -65,20 +60,16 @@ fn wire_broker_id(node_id: u64) -> i32 {
     name = "handle_describe_cluster",
     level = "info",
     skip_all,
-    fields(api = "DescribeCluster", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeCluster", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: DescribeClusterRequest,
     version: crate::handlers::ApiVersion,
-    _correlation_id: crate::handlers::CorrelationId,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<DescribeClusterResponse, BrokerError> {
     let image = broker.controller.current_image();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeClusterRequest::decode(&mut cur, version)?;
 
     // KIP-919 endpoint-type check, matching Kafka's `AuthHelper` exactly. A
     // broker listener only ever serves `BROKER`; the requested type decides
@@ -95,7 +86,7 @@ pub(crate) async fn handle(
             ),
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
     if req.endpoint_type != ENDPOINT_TYPE_BROKER {
         // Anything other than BROKER or CONTROLLER is EndpointType.UNKNOWN.
@@ -112,7 +103,7 @@ pub(crate) async fn handle(
             error_message: Some(format!("Unsupported endpoint type {}", req.endpoint_type)),
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     // KIP-919: a broker listener serves only BROKERS. KIP-1073 excludes known
@@ -163,17 +154,10 @@ pub(crate) async fn handle(
     // response: without `Describe` the bitfield reads `0` even though the
     // principal may hold other Cluster operations.
     let cluster_authorized_operations = if req.include_cluster_authorized_operations {
-        let can_describe = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: krabka_metadata::ResourceType::Cluster,
-                resource_name: CLUSTER_RESOURCE_NAME,
-                operation: AclOperation::Describe,
-            },
-        ) == AuthorizationResult::Allow;
-        if can_describe {
+        if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx)
+        {
+            0
+        } else {
             authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &image,
@@ -182,14 +166,12 @@ pub(crate) async fn handle(
                 ResourceType::Cluster,
                 CLUSTER_RESOURCE_NAME,
             )
-        } else {
-            0
         }
     } else {
         i32::MIN
     };
 
-    let resp = DescribeClusterResponse {
+    Ok(DescribeClusterResponse {
         error_code: codes::NONE,
         error_message: None,
         // Echo the requested endpoint type (KIP-919). v0 has no such field; the
@@ -203,8 +185,7 @@ pub(crate) async fn handle(
         cluster_authorized_operations,
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 #[cfg(test)]
@@ -212,7 +193,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId};
+    use krabka_metadata::{AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord};
     use krabka_security::ListenerProtocol;
 
     use super::*;
@@ -223,12 +204,7 @@ mod tests {
 
     const VERSION: i16 = 2;
 
-    crate::test_support::wire_helpers!(
-        DescribeClusterRequest,
-        DescribeClusterResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -246,23 +222,17 @@ mod tests {
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(42),
                     broker_epoch: -1,
-                    incarnation_id: uuid::Uuid::nil(),
                     host: "legacy-host".into(),
                     port: 19092,
                     rack: Some("rack-a".into()),
-                    log_dirs: vec![],
                     endpoints: vec![BrokerEndpoint {
                         name: "PLAINTEXT".into(),
                         host: "broker-a".into(),
                         port: 29092,
                         protocol: ListenerProtocol::Plaintext,
                     }],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(42)
                 },
             )])
             .await
@@ -284,12 +254,10 @@ mod tests {
         let p = principal("alice");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&request(false));
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+        let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         // `start_broker` self-registers as broker 1 with a dynamic
         // 127.0.0.1 host/port, so the broker list is compared by content
@@ -342,12 +310,10 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&request(false));
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+        let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         assert!(
             (
@@ -441,15 +407,9 @@ mod tests {
                 ..Default::default()
             };
 
-            let bytes = handle(
-                &broker,
-                case.version,
-                123,
-                &crate::test_support::encode_request(&req, case.version),
-                &ctx,
-            )
-            .await
-            .expect("handle");
+            let got = handle(&broker, req, case.version, &ctx)
+                .await
+                .expect("handle");
 
             let expected = DescribeClusterResponse {
                 throttle_time_ms: 0,
@@ -462,8 +422,6 @@ mod tests {
                 cluster_authorized_operations: i32::MIN,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             };
-            let got: DescribeClusterResponse =
-                crate::test_support::decode_response(&bytes, case.version);
             assert!(got == expected, "{}", case.name);
             broker_handle.shutdown().await;
         }
@@ -484,12 +442,10 @@ mod tests {
         let p = principal("describer");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&request(false));
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+        let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         assert!(resp.cluster_id.as_str() == "AQIDBAUGBwgJCgsMDQ4PEA");
         broker_handle.shutdown().await;
@@ -509,10 +465,9 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(&broker, VERSION, 123, &encode_request(&request(true)), &ctx)
+        let resp = handle(&broker, request(true), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         let expected = authorized_operations_bits(
             authorizer.as_ref(),
@@ -543,15 +498,12 @@ mod tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                krabka_metadata::AclEntry {
-                    resource_type: ResourceType::Cluster,
-                    resource_name: CLUSTER_RESOURCE_NAME.into(),
-                    pattern_type: krabka_metadata::PatternType::Literal,
-                    principal: "User:alice".into(),
-                    host: "*".into(),
-                    operation: AclOperation::AlterConfigs,
-                    permission_type: krabka_metadata::PermissionType::Allow,
-                },
+                crate::test_support::allow_acl(
+                    ResourceType::Cluster,
+                    CLUSTER_RESOURCE_NAME,
+                    "User:alice",
+                    AclOperation::AlterConfigs,
+                ),
             )])
             .await
             .expect("seed ACL");
@@ -560,10 +512,9 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(&broker, VERSION, 123, &encode_request(&request(true)), &ctx)
+        let resp = handle(&broker, request(true), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         assert!(resp.error_code == codes::NONE);
         assert!(resp.cluster_authorized_operations == 0);
@@ -589,30 +540,16 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
-            &broker,
-            VERSION,
-            123,
-            &encode_request(&request(false)),
-            &ctx,
-        )
-        .await
-        .expect("exclude fenced broker");
-        let response = decode_response(&bytes);
+        let response = handle(&broker, request(false), VERSION, &ctx)
+            .await
+            .expect("exclude fenced broker");
         assert!(response.brokers.iter().all(|row| row.broker_id != 42));
 
         let mut include_fenced = request(false);
         include_fenced.include_fenced_brokers = true;
-        let bytes = handle(
-            &broker,
-            VERSION,
-            123,
-            &encode_request(&include_fenced),
-            &ctx,
-        )
-        .await
-        .expect("include fenced broker");
-        let response = decode_response(&bytes);
+        let response = handle(&broker, include_fenced, VERSION, &ctx)
+            .await
+            .expect("include fenced broker");
         let fenced = response
             .brokers
             .iter()
@@ -625,16 +562,9 @@ mod tests {
 
     fn registration(node_id: u64, listeners: &[&str]) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(node_id),
             broker_epoch: -1,
-            incarnation_id: uuid::Uuid::nil(),
             host: "legacy-host".into(),
             port: 19092,
-            rack: None,
-            log_dirs: vec![],
             endpoints: listeners
                 .iter()
                 .enumerate()
@@ -645,7 +575,7 @@ mod tests {
                     protocol: ListenerProtocol::Plaintext,
                 })
                 .collect(),
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node_id)
         }
     }
 
@@ -701,16 +631,9 @@ mod tests {
                 false,
                 listener,
             );
-            let bytes = handle(
-                &broker,
-                VERSION,
-                123,
-                &encode_request(&request(false)),
-                &ctx,
-            )
-            .await
-            .expect("handle");
-            let mut response = decode_response(&bytes);
+            let mut response = handle(&broker, request(false), VERSION, &ctx)
+                .await
+                .expect("handle");
             // The test broker's own row carries an ephemeral port; the seeded
             // rows are compared whole.
             let lists_self = response.brokers.iter().any(|row| row.broker_id == 1);

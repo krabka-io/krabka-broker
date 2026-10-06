@@ -109,23 +109,15 @@ mod tests {
 
     fn broker(id: u64, rack: Option<&str>) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(id),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
             host: format!("broker-{id}"),
-            port: 9092,
             rack: rack.map(str::to_string),
-            log_dirs: vec![],
             endpoints: vec![BrokerEndpoint {
                 name: "INTERNAL".into(),
                 host: format!("broker-{id}"),
                 port: 19092,
                 protocol: ListenerProtocol::Plaintext,
             }],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(id)
         }
     }
 }

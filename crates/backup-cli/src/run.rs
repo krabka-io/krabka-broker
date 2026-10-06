@@ -93,7 +93,7 @@ async fn capture_secured(
     signing: &CaptureSigningArgs,
     archive: &ArchiveArgs,
 ) -> Result<String, BackupError> {
-    let store = archive.open()?;
+    let store = Archive::open(archive)?;
     let id = capture_id(now_ms());
     let mut artifacts: Vec<Artifact> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
@@ -488,7 +488,7 @@ async fn upload(
 ///
 /// Returns the archive's own error when the listing or a manifest read fails.
 pub async fn list(archive: &ArchiveArgs) -> Result<Vec<String>, BackupError> {
-    let store = archive.open()?;
+    let store = Archive::open(archive)?;
     let ids = store.child_directories(CAPTURE_ROOT).await?;
     if ids.is_empty() {
         println!("no captures under {CAPTURE_ROOT}");
@@ -517,7 +517,7 @@ pub async fn list(archive: &ArchiveArgs) -> Result<Vec<String>, BackupError> {
 /// bytes the manifest recorded, and the archive's own error when the capture
 /// cannot be read at all.
 pub async fn verify(capture: &str, archive: &ArchiveArgs) -> Result<(), BackupError> {
-    let store = archive.open()?;
+    let store = Archive::open(archive)?;
     let id = resolve_capture(&store, capture).await?;
     let manifest = read_manifest(&store, &id).await?;
 
@@ -599,7 +599,7 @@ async fn restore_offsets_secured(
     dry_run: bool,
     archive: &ArchiveArgs,
 ) -> Result<usize, BackupError> {
-    let store = archive.open()?;
+    let store = Archive::open(archive)?;
     let id = resolve_capture(&store, capture).await?;
     let manifest = read_manifest(&store, &id).await?;
     let recorded = manifest.artifact(GROUP_OFFSETS).ok_or_else(|| {
@@ -959,7 +959,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let public_key = root.path().join("capture.pub");
         std::fs::write(&public_key, signer.public_key()).unwrap();
-        let archive = archive_args(root.path()).open().unwrap();
+        let archive = Archive::open(&archive_args(root.path())).unwrap();
         let id = "0000000000000042";
         archive
             .put(&capture_key(id, DISKLESS_WAL_INDEX), capture_bytes.clone())
@@ -1011,7 +1011,7 @@ mod tests {
             .await
             .expect("capture the node");
 
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let manifest: Manifest = serde_json::from_slice(
             &store
                 .get(&capture_key(&id, MANIFEST))
@@ -1045,7 +1045,7 @@ mod tests {
             .await
             .expect("a capture that found one input succeeds");
 
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let manifest: Manifest = serde_json::from_slice(
             &store
                 .get(&capture_key(&id, MANIFEST))
@@ -1120,7 +1120,7 @@ mod tests {
             .expect("capture the node");
         // A second capture id that sorts after the first, written by hand so
         // the two do not depend on the clock ticking between them.
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let second = "9999999999999999";
         write_offsets_capture(&store, second, &offsets_json(), &offsets_json()).await;
 
@@ -1131,7 +1131,7 @@ mod tests {
     async fn list_reports_a_capture_whose_manifest_cannot_be_read_and_keeps_going() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         store
             .put(&capture_key("0000000000000001", MANIFEST), b"{".to_vec())
             .await
@@ -1210,7 +1210,7 @@ mod tests {
     async fn a_dry_run_reports_every_offset_and_commits_nothing() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let offsets = offsets_json();
         write_offsets_capture(&store, "0000000000000001", &offsets, &offsets).await;
 
@@ -1244,7 +1244,7 @@ mod tests {
     async fn offsets_that_do_not_match_their_digest_are_never_committed() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         write_offsets_capture(&store, "0000000000000001", b"{}", &offsets_json()).await;
 
         let error = restore_offsets("latest", &closed_address(), true, &args)
@@ -1257,7 +1257,7 @@ mod tests {
     async fn offsets_that_are_not_the_captured_shape_name_the_object_that_holds_them() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let bytes = b"[]";
         write_offsets_capture(&store, "0000000000000001", bytes, bytes).await;
 
@@ -1272,7 +1272,7 @@ mod tests {
     async fn a_commit_reports_the_cluster_it_could_not_reach() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let offsets = offsets_json();
         write_offsets_capture(&store, "0000000000000001", &offsets, &offsets).await;
         let address = closed_address();
@@ -1289,7 +1289,7 @@ mod tests {
     async fn a_capture_that_holds_no_offsets_commits_nothing_and_asks_the_cluster_nothing() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        let store = args.open().expect("open the archive");
+        let store = Archive::open(&args).expect("open the archive");
         let empty = serde_json::to_vec(&GroupOffsetsFile::default()).expect("encode the offsets");
         write_offsets_capture(&store, "0000000000000001", &empty, &empty).await;
 

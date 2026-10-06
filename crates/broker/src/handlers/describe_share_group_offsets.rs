@@ -13,14 +13,10 @@
 //! names none; `rows` builds the topic and partition rows themselves; and
 //! `end_offsets` asks each partition leader for the end offset of the lag.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_share_group_offsets_request::DescribeShareGroupOffsetsRequest,
-        describe_share_group_offsets_response::{
-            DescribeShareGroupOffsetsResponse, DescribeShareGroupOffsetsResponseGroup,
-        },
+use krabka_protocol::owned::{
+    describe_share_group_offsets_request::DescribeShareGroupOffsetsRequest,
+    describe_share_group_offsets_response::{
+        DescribeShareGroupOffsetsResponse, DescribeShareGroupOffsetsResponseGroup,
     },
 };
 
@@ -41,21 +37,17 @@ use crate::{broker::Broker, codes, error::BrokerError};
     name = "handle_describe_share_group_offsets",
     level = "info",
     skip_all,
-    fields(api = "DescribeShareGroupOffsets", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeShareGroupOffsets", version),
+    err
 )]
 // cargo-mutants: share-coordinator response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeShareGroupOffsetsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeShareGroupOffsetsRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeShareGroupOffsetsResponse, BrokerError> {
     // Feature gate: share groups are on from a finalized `share.version` of 1,
     // and below it the RPC is unsupported. The response has no top-level error
     // code, so mark every requested group with UNSUPPORTED_VERSION.
@@ -74,7 +66,7 @@ pub(crate) async fn handle(
             groups,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     let ng_opt = Some(broker.group_coordinator.clone());
@@ -91,5 +83,5 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }

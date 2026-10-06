@@ -19,6 +19,9 @@ use object_store as object_store_api;
 #[cfg(all(feature = "object-store-013", not(target_family = "wasm")))]
 pub mod v013;
 
+#[cfg(feature = "clap")]
+mod archive_args;
+
 mod build;
 mod config;
 mod error;
@@ -32,6 +35,10 @@ mod unavailable;
 #[cfg(not(target_family = "wasm"))]
 mod worm;
 
+#[cfg(feature = "clap")]
+pub use archive_args::{
+    ArchiveArgs, ArchiveArgsError, DEFAULT_S3_REGION, normalize_prefix, prefixed_key,
+};
 pub use build::build_object_store;
 pub use config::{
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_RETRIES, DEFAULT_MULTIPART_CHUNK_SIZE,

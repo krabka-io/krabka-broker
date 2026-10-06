@@ -10,12 +10,15 @@ use krabka_remote_storage::{
 use krabka_units::{bytes, millis};
 
 use super::*;
-use crate::remote_log_manager::{
-    ArchiveMode, copy_eligible, now_ms,
-    test_support::{
-        FakeWormArchive, batch, leading_partition_over, rolled_tiered_partition_with_config,
-        synth_export, tier, tp,
+use crate::{
+    remote_log_manager::{
+        ArchiveMode, copy_eligible,
+        test_support::{
+            FakeWormArchive, batch, leading_partition_over, rolled_tiered_partition_with_config,
+            synth_export, tier, tp,
+        },
     },
+    time_util::now_ms,
 };
 
 // The sealed segments of `log` as `(base, last)` offset ranges.

@@ -3,9 +3,7 @@
 //! topic and its overrides, and they build the request-side resource and
 //! per-key config structures that each scope handler consumes.
 
-use krabka_metadata::{
-    BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId, TopicConfigRecord,
-};
+use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord};
 use krabka_protocol::owned::incremental_alter_configs_request::{
     AlterConfigsResource, AlterableConfig,
 };
@@ -15,20 +13,7 @@ use super::{OP_DELETE, OP_SET, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC};
 pub(super) fn make_image_with_broker(node_id: NodeId) -> MetadataImage {
     let mut img = MetadataImage::new(uuid::Uuid::nil());
     img.apply(&MetadataRecord::V1BrokerRegistration(
-        BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id,
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
-            host: "127.0.0.1".into(),
-            port: 9092,
-            rack: None,
-            log_dirs: vec![],
-            endpoints: vec![],
-            features: std::collections::BTreeMap::new(),
-        },
+        crate::test_support::broker_registration(node_id.0),
     ));
     img
 }

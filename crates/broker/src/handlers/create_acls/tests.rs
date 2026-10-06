@@ -22,7 +22,7 @@ use crate::{
     codes,
     handlers::create_acls::test_support::{
         OPERATION_READ, OPERATION_WRITE, VERSION, all_acls, configured_authorizer, creation,
-        decode_response, request, test_context,
+        request, test_context,
     },
     test_support::{
         DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
@@ -56,8 +56,7 @@ async fn handle_stores_long_resource_names_and_principals() {
         creation("r", &long_principal, OPERATION_READ),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -65,14 +64,13 @@ async fn handle_stores_long_resource_names_and_principals() {
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
-    let stored = |resource_name: &str, principal: &str| AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: resource_name.into(),
-        pattern_type: PatternType::Literal,
-        principal: principal.into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
+    let stored = |resource_name: &str, principal: &str| {
+        crate::test_support::allow_acl(
+            ResourceType::Topic,
+            resource_name,
+            principal,
+            AclOperation::Read,
+        )
     };
     let mut acls = all_acls(&broker_handle);
     acls.sort_by_key(|acl| std::cmp::Reverse(acl.resource_name.len()));
@@ -92,8 +90,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
         creation("topic-b", "User:carol", OPERATION_WRITE),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let denied = AclCreationResult {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
@@ -124,8 +121,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
         invalid,
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -142,15 +138,12 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
     assert!(resp == expected);
 
     let acls = all_acls(&broker_handle);
-    let expected_acls = vec![AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "topic-a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
-    }];
+    let expected_acls = vec![crate::test_support::allow_acl(
+        ResourceType::Topic,
+        "topic-a",
+        "User:alice",
+        AclOperation::Read,
+    )];
     assert!(acls == expected_acls);
     broker_handle.shutdown().await;
 }
@@ -171,8 +164,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
         creation("topic-b", "User:bob", OPERATION_WRITE),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let disabled = AclCreationResult {
         error_code: codes::SECURITY_DISABLED,
@@ -192,8 +184,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 /// A broker with `unstable.feature.versions.enable`, the mode in which
 /// `CreateAcls` applies Kafka trunk's host validation.
 async fn start_trunk_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = configured_authorizer();
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
     })
@@ -220,10 +211,9 @@ async fn handle_stores_any_host_by_default() {
         })
         .collect();
 
-    let resp = handle(&broker, request(creations), &ctx, VERSION)
+    let resp = handle(&broker, request(creations), VERSION, &ctx)
         .await
         .expect("handle");
-    let resp = decode_response(&resp);
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -265,8 +255,7 @@ async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
     cidr_creation.host = "10.0.0.0/8".into();
     let req = request(vec![cidr_creation]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -309,8 +298,7 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
     cidr_creation.host = "10.0.0.0/8".into();
     let req = request(vec![cidr_creation]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -345,8 +333,7 @@ async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
         any_operation,
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let failed = AclCreationResult {
         error_code: codes::UNKNOWN_SERVER_ERROR,
@@ -377,7 +364,7 @@ async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
     unknown_permission.permission_type = 0;
     let req = request(vec![unknown_permission]);
 
-    let result = handle(&broker, req, &ctx, VERSION).await;
+    let result = handle(&broker, req, VERSION, &ctx).await;
 
     assert!(let Err(crate::error::BrokerError::Protocol(_)) = result);
     assert!(all_acls(&broker_handle).is_empty());
@@ -400,8 +387,7 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
         creation("topic-a", "Group:ops", OPERATION_READ),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -418,15 +404,12 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
-    let expected_acls = vec![AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "topic-a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "Group:ops".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
-    }];
+    let expected_acls = vec![crate::test_support::allow_acl(
+        ResourceType::Topic,
+        "topic-a",
+        "Group:ops",
+        AclOperation::Read,
+    )];
     assert!(all_acls(&broker_handle) == expected_acls);
     broker_handle.shutdown().await;
 }
@@ -493,10 +476,9 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let resp = handle(&broker, request(creations), &ctx, VERSION)
+        let resp = handle(&broker, request(creations), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = CreateAclsResponse {
             throttle_time_ms: 0,
@@ -524,8 +506,7 @@ async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     cidr_creation.host = "10.0.0.0/8".into();
     let req = request(vec![cidr_creation]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
@@ -551,14 +532,13 @@ async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
 /// tens of billions of comparisons on an async worker.
 #[test]
 fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
-    let acl = |n: usize| AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: format!("topic-{n}"),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
+    let acl = |n: usize| {
+        crate::test_support::allow_acl(
+            ResourceType::Topic,
+            &format!("topic-{n}"),
+            "User:alice",
+            AclOperation::Read,
+        )
     };
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     for n in 0..2_000 {

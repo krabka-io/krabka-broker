@@ -1,7 +1,7 @@
 //! The object-store TOML shapes: `[remote_storage.s3]`,
 //! `[remote_storage.gcs]`, and `[remote_storage.worm]`.
 //!
-//! The two backend tables carry credential material, so each hand-writes a
+//! The two backend tables carry credential material, so each derives a
 //! redacting `Debug`. The WORM table sits beside them because write-once mode
 //! layers over whichever of the two backends is selected and cannot be used
 //! with the local filesystem backend.
@@ -12,7 +12,8 @@ use serde::Deserialize;
 
 /// TOML shape of `[remote_storage.s3]`. Maps to
 /// [`krabka_remote_storage::S3Config`].
-#[derive(Clone, Deserialize, JsonSchema, PartialEq)]
+#[krabka_macros::human_units]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, derive_more::Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageS3Config {
     /// S3 bucket name.
@@ -26,9 +27,11 @@ pub struct FileRemoteStorageS3Config {
     pub endpoint: Option<String>,
     /// Explicit access key id. Falls back to the AWS credential chain
     /// (env vars, instance profile, …) when omitted.
+    #[debug("{:?}", access_key_id.as_ref().map(|_| "***"))]
     pub access_key_id: Option<String>,
     /// Explicit secret access key. Falls back to the AWS credential chain
     /// when omitted.
+    #[debug("{:?}", secret_access_key.as_ref().map(|_| "***"))]
     pub secret_access_key: Option<String>,
     /// Allow plaintext HTTP (off-by-default; required by `MinIO` running
     /// without TLS).
@@ -66,47 +69,15 @@ pub struct FileRemoteStorageS3Config {
     /// its retries. When `None`,
     /// [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it
     /// under 5 minutes: retries reuse the original request's credentials.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub retry_timeout: Option<Time>,
     /// Ceiling on one HTTP request, connect phase included. When `None`,
     /// [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This
     /// is the bound on a store that accepts the connection and then
     /// answers nothing.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub request_timeout: Option<Time>,
     /// Ceiling on the connect phase alone. When `None`,
     /// [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connect_timeout: Option<Time>,
-}
-
-impl std::fmt::Debug for FileRemoteStorageS3Config {
-    /// Redacts the credential fields so a stray `{:?}` / tracing call never
-    /// leaks them. Mirrors the hand-written `Debug` on
-    /// [`krabka_remote_storage::S3Config`].
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***");
-        f.debug_struct("FileRemoteStorageS3Config")
-            .field("bucket", &self.bucket)
-            .field("region", &self.region)
-            .field("prefix", &self.prefix)
-            .field("endpoint", &self.endpoint)
-            .field("access_key_id", &redact(&self.access_key_id))
-            .field("secret_access_key", &redact(&self.secret_access_key))
-            .field("allow_http", &self.allow_http)
-            .field("multipart_threshold", &self.multipart_threshold)
-            .field("multipart_chunk_size", &self.multipart_chunk_size)
-            .field("conditional_put", &self.conditional_put)
-            .field("checksum_sha256", &self.checksum_sha256)
-            .field("max_retries", &self.max_retries)
-            .field("retry_timeout", &self.retry_timeout)
-            .field("request_timeout", &self.request_timeout)
-            .field("connect_timeout", &self.connect_timeout)
-            .finish()
-    }
 }
 
 /// TOML shape of `[remote_storage.gcs]`. Maps to
@@ -116,7 +87,8 @@ impl std::fmt::Debug for FileRemoteStorageS3Config {
 /// `service_account_key`, `application_credentials_path`) selects GKE
 /// Workload Identity / Application Default Credentials (keyless) — the
 /// primary production path.
-#[derive(Clone, Deserialize, JsonSchema, PartialEq)]
+#[krabka_macros::human_units]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, derive_more::Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageGcsConfig {
     /// GCS bucket name.
@@ -126,12 +98,15 @@ pub struct FileRemoteStorageGcsConfig {
     pub prefix: Option<String>,
     /// Path to a service-account JSON key file. Omit (along with the
     /// other credential fields) to use Workload Identity / ADC.
+    #[debug("{:?}", service_account_path.as_ref().map(|_| "***"))]
     pub service_account_path: Option<String>,
     /// Inline service-account JSON key. Omit (along with the other
     /// credential fields) to use Workload Identity / ADC.
+    #[debug("{:?}", service_account_key.as_ref().map(|_| "***"))]
     pub service_account_key: Option<String>,
     /// Path to an Application Default Credentials JSON file. Omit (along
     /// with the other credential fields) to use Workload Identity / ADC.
+    #[debug("{:?}", application_credentials_path.as_ref().map(|_| "***"))]
     pub application_credentials_path: Option<String>,
     /// Optional custom GCS API base URL (for emulators / fakes).
     pub endpoint: Option<String>,
@@ -158,48 +133,15 @@ pub struct FileRemoteStorageGcsConfig {
     /// its retries. When `None`,
     /// [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it
     /// under 5 minutes: retries reuse the original request's credentials.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub retry_timeout: Option<Time>,
     /// Ceiling on one HTTP request, connect phase included. When `None`,
     /// [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This
     /// is the bound on a store that accepts the connection and then
     /// answers nothing.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub request_timeout: Option<Time>,
     /// Ceiling on the connect phase alone. When `None`,
     /// [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connect_timeout: Option<Time>,
-}
-
-impl std::fmt::Debug for FileRemoteStorageGcsConfig {
-    /// Redacts the credential fields so a stray `{:?}` / tracing call never
-    /// leaks them. Mirrors the hand-written `Debug` on
-    /// [`krabka_remote_storage::GcsConfig`].
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***");
-        f.debug_struct("FileRemoteStorageGcsConfig")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
-            .field("service_account_path", &redact(&self.service_account_path))
-            .field("service_account_key", &redact(&self.service_account_key))
-            .field(
-                "application_credentials_path",
-                &redact(&self.application_credentials_path),
-            )
-            .field("endpoint", &self.endpoint)
-            .field("allow_http", &self.allow_http)
-            .field("multipart_threshold", &self.multipart_threshold)
-            .field("multipart_chunk_size", &self.multipart_chunk_size)
-            .field("max_retries", &self.max_retries)
-            .field("retry_timeout", &self.retry_timeout)
-            .field("request_timeout", &self.request_timeout)
-            .field("connect_timeout", &self.connect_timeout)
-            .finish()
-    }
 }
 
 /// TOML shape of `[remote_storage.worm]`. Maps to

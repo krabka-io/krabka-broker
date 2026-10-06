@@ -80,14 +80,14 @@ pub enum Command {
         signing: CaptureSigningArgs,
 
         /// Where the capture goes.
-        #[command(flatten)]
+        #[command(flatten, next_help_heading = "Archive")]
         archive: ArchiveArgs,
     },
 
     /// List the captures the archive holds.
     List {
         /// Where the captures are.
-        #[command(flatten)]
+        #[command(flatten, next_help_heading = "Archive")]
         archive: ArchiveArgs,
     },
 
@@ -98,7 +98,7 @@ pub enum Command {
         capture: String,
 
         /// Where the captures are.
-        #[command(flatten)]
+        #[command(flatten, next_help_heading = "Archive")]
         archive: ArchiveArgs,
     },
 
@@ -130,7 +130,7 @@ pub enum Command {
         trust: CaptureTrustArgs,
 
         /// Where the captures are.
-        #[command(flatten)]
+        #[command(flatten, next_help_heading = "Archive")]
         archive: ArchiveArgs,
     },
 }
@@ -172,6 +172,23 @@ mod tests {
         check!(bootstrap_server == Some("broker-1:9092".to_owned()));
         check!(archive.s3_bucket == Some("krabka-tier".to_owned()));
         check!(archive.prefix == Some("prod/".to_owned()));
+    }
+
+    #[test]
+    fn every_subcommand_shows_the_archive_flags_under_one_heading() {
+        use clap::CommandFactory as _;
+
+        let mut command = Cli::command();
+        for name in ["capture", "list", "verify", "restore-offsets"] {
+            let help = command
+                .find_subcommand_mut(name)
+                .expect("subcommand")
+                .render_long_help()
+                .to_string();
+            let heading = help.find("\nArchive:\n").expect("an Archive heading");
+            check!(help[heading..].contains("--archive-local"), "{name}");
+            check!(help[heading..].contains("--archive-prefix"), "{name}");
+        }
     }
 
     #[test]

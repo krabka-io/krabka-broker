@@ -15,7 +15,7 @@ use krabka_protocol::{
 };
 
 use super::*;
-use crate::{broker::Broker, codes};
+use crate::codes;
 
 const API_VERSIONS_V3: i16 = 3;
 const API_VERSIONS_V5: i16 = 5;
@@ -55,34 +55,7 @@ fn decode_response(version: i16, bytes: &Bytes) -> ApiVersionsResponse {
 /// request quota, which no broker in this module configures, so every response
 /// below reports `throttle_time_ms = 0`.
 fn anonymous_principal() -> krabka_security::Principal {
-    krabka_security::Principal {
-        name: "ANONYMOUS".to_string(),
-        auth_method: krabka_security::AuthMethod::Anonymous,
-        groups: vec![],
-    }
-}
-
-async fn start_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|_cfg| {}).await
-}
-
-async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    crate::test_support::principal("ANONYMOUS")
 }
 
 /// The advertised rows whose ranges are a deliberate choice, pinned whole.
@@ -245,7 +218,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
             };
             let mut req_bytes = BytesMut::with_capacity(req.encoded_len(version));
             req.encode(&mut req_bytes, version).expect("encode");
-            let bytes = handle(&broker, version, 7, &req_bytes, &context)
+            let bytes = handle(&broker, version, &req_bytes, &context)
                 .await
                 .expect("ApiVersions handler");
             let resp = decode_response(version, &bytes);
@@ -299,7 +272,7 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
 
 #[tokio::test]
 async fn handle_rejects_each_invalid_v3_client_info_field() {
-    let (broker_handle, _dir) = start_broker().await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = anonymous_principal();
     let peer = crate::test_support::peer();
@@ -307,7 +280,7 @@ async fn handle_rejects_each_invalid_v3_client_info_field() {
 
     for (name, version) in [("", "1.0.0"), ("krabka-test", "")] {
         let req = request(name, version);
-        let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+        let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
             .await
             .expect("ApiVersions handler");
         let resp = decode_response(API_VERSIONS_V3, &bytes);
@@ -320,7 +293,7 @@ async fn handle_rejects_each_invalid_v3_client_info_field() {
 
 #[tokio::test]
 async fn handle_accepts_legacy_request_without_client_info() {
-    let (broker_handle, _dir) = start_broker().await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = anonymous_principal();
     let peer = crate::test_support::peer();
@@ -330,7 +303,7 @@ async fn handle_accepts_legacy_request_without_client_info() {
     req.encode(&mut req_bytes, 0)
         .expect("encode legacy ApiVersionsRequest");
 
-    let bytes = handle(&broker, 0, 7, &req_bytes, &context)
+    let bytes = handle(&broker, 0, &req_bytes, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(0, &bytes);
@@ -343,12 +316,12 @@ async fn handle_accepts_legacy_request_without_client_info() {
 
 #[tokio::test]
 async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
-    let (broker_handle, _dir) = start_broker().await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = anonymous_principal();
     let peer = crate::test_support::peer();
     let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -380,7 +353,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     assert!(metadata_offset >= before_topics + 10);
 
     let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(API_VERSIONS_V3, &bytes);
@@ -466,7 +439,7 @@ async fn handle_applies_kip1242_routing_checks() {
         ),
     ] {
         let request = routing_request(request_cluster_id, request_node_id);
-        let bytes = handle(&broker, API_VERSIONS_V5, 7, &request, &context)
+        let bytes = handle(&broker, API_VERSIONS_V5, &request, &context)
             .await
             .expect("ApiVersions v5 handler");
         let response = decode_response(API_VERSIONS_V5, &bytes);
@@ -494,12 +467,12 @@ async fn handle_applies_kip1242_routing_checks() {
 async fn handle_reports_and_records_a_request_quota_throttle() {
     use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
 
-    let (broker_handle, _dir) = start_broker().await;
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = anonymous_principal();
     let peer = crate::test_support::peer();
     let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
 
     broker
         .controller
@@ -525,7 +498,7 @@ async fn handle_reports_and_records_a_request_quota_throttle() {
         .await;
 
     let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(API_VERSIONS_V3, &bytes);

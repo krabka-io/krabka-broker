@@ -9,18 +9,18 @@
 //! read.
 //!
 //! This file keeps the whole-request cluster gate and the per-binding loop.
-//! Binding validation lives in `validate`, the result rows and the encoder in
-//! `response`, and the audit trail in `audit`.
+//! Binding validation lives in `validate`, the result rows in `response`, and
+//! the audit trail in `audit`.
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataImage, MetadataRecord, PatternType, PermissionType,
     ResourceType,
 };
 use krabka_protocol::owned::{
-    create_acls_request::CreateAclsRequest, create_acls_response::AclCreationResult,
+    create_acls_request::CreateAclsRequest,
+    create_acls_response::{AclCreationResult, CreateAclsResponse},
 };
 
 mod audit;
@@ -34,20 +34,11 @@ mod tests;
 
 use self::{
     audit::{audit_created_acls, created_acl_resources},
-    response::{
-        acl_error_result, acl_success_result, apply_submit_error, create_acls_response,
-        encode_response,
-    },
+    response::{acl_error_result, acl_success_result, apply_submit_error, create_acls_response},
     validate::{HostCheck, has_filter_only_element, has_unknown_element, validate},
 };
-use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
-};
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use super::acl_wire::{MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE};
+use crate::{broker::Broker, codes};
 
 /// The message Kafka's controller gives the `PolicyViolationException` that
 /// `EventHandlerExceptionInfo` makes of a `BoundedListTooLongException`.
@@ -110,9 +101,9 @@ fn count_new_acls(image: &MetadataImage, to_submit: &[(usize, MetadataRecord)]) 
 pub(crate) async fn handle(
     broker: &Broker,
     req: CreateAclsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<CreateAclsResponse, crate::error::BrokerError> {
     // Kafka's `CreateAclsRequest.validate` refuses a wire `UNKNOWN` element
     // while it parses the request, before authorization, and the socket
     // server closes the connection with no response. A handler error closes
@@ -126,23 +117,13 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Whole-request cluster-alter gate.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Alter,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let results = req
             .creations
             .iter()
             .map(|_| acl_error_result(codes::CLUSTER_AUTHORIZATION_FAILED, "create-acls denied"))
             .collect();
-        return encode_response(&create_acls_response(results), api_version);
+        return Ok(create_acls_response(results));
     }
 
     // No authorizer: refuse every creation rather than durably storing
@@ -156,7 +137,7 @@ pub(crate) async fn handle(
             .iter()
             .map(|_| acl_error_result(codes::SECURITY_DISABLED, NO_AUTHORIZER_EXCEPTION_MESSAGE))
             .collect();
-        return encode_response(&create_acls_response(results), api_version);
+        return Ok(create_acls_response(results));
     }
 
     // An `ANY` or `MATCH` element fails Kafka's binding construction for the
@@ -171,7 +152,7 @@ pub(crate) async fn handle(
                 ..Default::default()
             })
             .collect();
-        return encode_response(&create_acls_response(results), api_version);
+        return Ok(create_acls_response(results));
     }
 
     // Kafka 4.3.1 has no host check: any host is stored as text. Trunk's
@@ -223,7 +204,7 @@ pub(crate) async fn handle(
             .iter()
             .map(|_| acl_error_result(codes::POLICY_VIOLATION, EXCESSIVE_BATCH_MESSAGE))
             .collect();
-        return encode_response(&create_acls_response(results), api_version);
+        return Ok(create_acls_response(results));
     }
 
     if !to_submit.is_empty() {
@@ -243,5 +224,5 @@ pub(crate) async fn handle(
         created_acl_resources(&req, &results, &to_submit),
     );
 
-    encode_response(&create_acls_response(results), api_version)
+    Ok(create_acls_response(results))
 }

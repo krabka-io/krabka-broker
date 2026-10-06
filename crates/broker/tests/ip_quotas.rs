@@ -16,10 +16,12 @@
 // `.rs` file would become another test binary.
 #[path = "ip_quotas/cluster.rs"]
 mod cluster;
+mod kafka_wire;
 #[path = "ip_quotas/quota_admin.rs"]
 mod quota_admin;
-#[path = "ip_quotas/wire.rs"]
-mod wire;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-ip-quota-test";
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -32,7 +34,6 @@ use crate::{
         start_single_broker_sasl_plaintext_with_users,
     },
     quota_admin::{drive_alter_client_quotas_sasl, drive_describe_client_quotas_sasl},
-    wire::round_trip,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,19 +167,22 @@ async fn closes_the_second_connection_from_loopback(entity_name: &str) {
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
 
     let mut first = connect_from([127, 0, 0, 1]).await;
-    let served = round_trip(&mut first, 18, 0, 1, false, &api_versions()).await;
+    let served =
+        kafka_wire::round_trip(&mut first, 18, 0, 1, CLIENT_ID, false, &api_versions()).await;
     assert!(served.is_ok(), "first connection is served: {served:?}");
 
     let mut throttled = connect_from([127, 0, 0, 1]).await;
     let body = api_versions();
-    let throttled_task =
-        tokio::spawn(async move { round_trip(&mut throttled, 18, 0, 2, false, &body).await });
+    let throttled_task = tokio::spawn(async move {
+        kafka_wire::round_trip(&mut throttled, 18, 0, 2, CLIENT_ID, false, &body).await
+    });
     // Let the accept loop take the throttled connection before the next one.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let started = std::time::Instant::now();
     let mut other = connect_from([127, 0, 0, 2]).await;
-    let other_served = round_trip(&mut other, 18, 0, 3, false, &api_versions()).await;
+    let other_served =
+        kafka_wire::round_trip(&mut other, 18, 0, 3, CLIENT_ID, false, &api_versions()).await;
     let other_elapsed = started.elapsed();
     assert!(
         other_served.is_ok(),
@@ -246,7 +250,7 @@ async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
     // Connection 1: within the per-IP cap (0 -> 1). A successful round-trip
     // proves the broker accepted it; keep the stream open to hold the slot.
     let mut c1 = TcpStream::connect(addr).await.expect("connect c1");
-    round_trip(&mut c1, 18, 0, 1, false, &av_body)
+    kafka_wire::round_trip(&mut c1, 18, 0, 1, CLIENT_ID, false, &av_body)
         .await
         .expect("c1 ApiVersions succeeds (within cap)");
 
@@ -254,7 +258,7 @@ async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
     // the socket then immediately drops it (no handler spawned), so the
     // request round-trip fails (peer closed the connection).
     let mut c2 = TcpStream::connect(addr).await.expect("tcp connect c2");
-    let c2_result = round_trip(&mut c2, 18, 0, 1, false, &av_body).await;
+    let c2_result = kafka_wire::round_trip(&mut c2, 18, 0, 1, CLIENT_ID, false, &av_body).await;
     assert!(
         c2_result.is_err(),
         "c2 must be refused while c1 holds the only per-IP slot, got {c2_result:?}"
@@ -266,7 +270,10 @@ async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let mut c3 = TcpStream::connect(addr).await.expect("connect c3");
-        if round_trip(&mut c3, 18, 0, 1, false, &av_body).await.is_ok() {
+        if kafka_wire::round_trip(&mut c3, 18, 0, 1, CLIENT_ID, false, &av_body)
+            .await
+            .is_ok()
+        {
             break;
         }
         assert!(

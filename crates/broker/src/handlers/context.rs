@@ -5,6 +5,8 @@ use std::net::SocketAddr;
 
 use krabka_security::Principal;
 
+use super::CorrelationId;
+
 /// Per-request connection metadata. Constructed once per frame in
 /// `network::dispatch` from the authenticated `ConnectionAuth`, the
 /// accept-time peer `SocketAddr`, and the frame's `client_id` header.
@@ -17,6 +19,11 @@ pub(crate) struct RequestContext<'a> {
     /// an empty one to the user levels), so the quota paths read this field
     /// as is. Every other reader treats a null id as an empty one.
     pub client_id: Option<&'a str>,
+    /// The request header's `correlation_id`. A handler that sends a request
+    /// on the client's behalf, such as a KIP-590 `Envelope` for topic
+    /// auto-creation, names the client's request with it. It is zero unless
+    /// the dispatch loop set it with [`RequestContext::with_correlation_id`].
+    pub correlation_id: CorrelationId,
     /// Unique identifier for the live network connection. Share sessions use
     /// it to release acquisitions when the connection closes.
     pub connection_id: &'a str,
@@ -88,6 +95,7 @@ impl<'a> RequestContext<'a> {
             principal,
             peer,
             client_id: client_id.into(),
+            correlation_id: 0,
             connection_id,
             sendfile_capable,
             connection_listener_name,
@@ -96,6 +104,13 @@ impl<'a> RequestContext<'a> {
             request_size: 0,
             pre_authentication: false,
         }
+    }
+
+    /// Records the correlation id of the request this context serves.
+    #[must_use]
+    pub(crate) fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+        self.correlation_id = correlation_id;
+        self
     }
 
     /// Marks the request as one that arrived before the connection finished
@@ -243,7 +258,10 @@ mod tests {
         assert!(ctx.connection_listener_name == "SASL_SSL");
         assert!(ctx.client_host() == "/127.0.0.1");
         assert!(ctx.request_size == 0);
-        assert!(ctx.with_request_size(8_300).request_size == 8_300);
+        assert!(ctx.correlation_id == 0);
+        let ctx = ctx.with_request_size(8_300).with_correlation_id(42);
+        assert!(ctx.request_size == 8_300);
+        assert!(ctx.correlation_id == 42);
     }
 
     /// A null client id and an empty one are different requests to Kafka's

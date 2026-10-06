@@ -109,18 +109,11 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
             "a broker registers",
             vec![MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(3),
                     broker_epoch: 3,
                     incarnation_id: Uuid::from_u128(3),
                     host: "broker-3".into(),
-                    port: 9092,
                     rack: Some("rack-c".into()),
-                    log_dirs: vec![],
-                    endpoints: vec![],
-                    features: BTreeMap::new(),
+                    ..crate::test_support::broker_registration(3)
                 },
             )],
             vec![],
@@ -138,15 +131,12 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
 }
 
 fn describe_acl(topic: &str) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-        resource_type: krabka_metadata::ResourceType::Topic,
-        resource_name: topic.into(),
-        pattern_type: krabka_metadata::PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: krabka_metadata::AclOperation::Describe,
-        permission_type: krabka_metadata::PermissionType::Allow,
-    })
+    MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+        krabka_metadata::ResourceType::Topic,
+        topic,
+        "User:alice",
+        krabka_metadata::AclOperation::Describe,
+    ))
 }
 
 /// A created topic and a changed ACL can change what a regular expression

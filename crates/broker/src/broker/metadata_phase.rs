@@ -110,7 +110,6 @@ fn prepare_initial_voters(
         &config.controller_quorum_voters,
         config.node_id,
         config.directory_id,
-        config.controller_listen_addr,
     )
 }
 

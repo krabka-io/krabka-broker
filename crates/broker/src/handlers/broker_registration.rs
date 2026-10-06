@@ -2,47 +2,36 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
-use krabka_metadata::{
-    AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, ResourceType,
-};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        broker_registration_request::{BrokerRegistrationRequest, Listener},
-        broker_registration_response::BrokerRegistrationResponse,
-    },
+use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId};
+use krabka_protocol::owned::{
+    broker_registration_request::{BrokerRegistrationRequest, Listener},
+    broker_registration_response::BrokerRegistrationResponse,
 };
 use krabka_raft::RaftError;
 use krabka_security::ListenerProtocol;
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{RequestContext, forward_to_controller::is_active_controller},
+};
 
 pub(crate) async fn handle(
     broker: &Broker,
+    req: BrokerRegistrationRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = BrokerRegistrationRequest::decode(&mut cur, version)?;
+) -> Result<BrokerRegistrationResponse, BrokerError> {
     let image = broker.controller.current_image();
 
     // Every listener runs the `ClusterAction` gate, the controller listener
     // included, as Kafka's `ControllerApis.handleBrokerRegistration` does.
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        AclOperation::ClusterAction,
-    ) {
-        return response(version, codes::CLUSTER_AUTHORIZATION_FAILED, -1);
+    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return Ok(response(codes::CLUSTER_AUTHORIZATION_FAILED, -1));
     }
-    if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
-        return response(version, codes::NOT_CONTROLLER, -1);
+    if !is_active_controller(broker) {
+        return Ok(response(codes::NOT_CONTROLLER, -1));
     }
     // Kafka's controller decides one registration at a time on its event
     // thread. Hold the registration turn from the session check to the
@@ -53,12 +42,12 @@ pub(crate) async fn handle(
 
     let node_id = match u64::try_from(req.broker_id) {
         Ok(id) => NodeId(id),
-        Err(_) => return response(version, codes::INVALID_REGISTRATION, -1),
+        Err(_) => return Ok(response(codes::INVALID_REGISTRATION, -1)),
     };
     // The checks run in the order of `ClusterControlManager.registerBroker`,
     // so a request with more than one fault gets Kafka's error code.
     if !crate::cluster_id::matches(&req.cluster_id, image.cluster_id()) {
-        return response(version, codes::INCONSISTENT_CLUSTER_ID, -1);
+        return Ok(response(codes::INCONSISTENT_CLUSTER_ID, -1));
     }
     let incarnation_id = uuid::Uuid::from_bytes(req.incarnation_id.0);
     let existing = image.broker(node_id);
@@ -69,23 +58,23 @@ pub(crate) async fn handle(
         && existing.incarnation_id != incarnation_id
         && broker.liveness.has_valid_session(node_id.0).await
     {
-        return response(version, codes::DUPLICATE_BROKER_REGISTRATION, -1);
+        return Ok(response(codes::DUPLICATE_BROKER_REGISTRATION, -1));
     }
     if req.is_migrating_zk_broker {
-        return response(version, codes::BROKER_ID_NOT_REGISTERED, -1);
+        return Ok(response(codes::BROKER_ID_NOT_REGISTERED, -1));
     }
     let directory_assignment = image.finalized_metadata_version().is_some_and(|level| {
         level >= krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
     });
     if directory_assignment && let Err(code) = validate_log_dirs(&req, &image, node_id) {
-        return response(version, code, -1);
+        return Ok(response(code, -1));
     }
     let endpoints = match decode_listeners(&req.listeners) {
         Ok(endpoints) => endpoints,
-        Err(code) => return response(version, code, -1),
+        Err(code) => return Ok(response(code, -1)),
     };
     if let Err(code) = validate_features(&req, &image) {
-        return response(version, code, -1);
+        return Ok(response(code, -1));
     }
 
     let first = &endpoints[0];
@@ -139,9 +128,9 @@ pub(crate) async fn handle(
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(record)])
             .await
         {
-            return response(version, raft_error_code(&error), -1);
+            return Ok(response(raft_error_code(&error), -1));
         }
-        return registered_response(broker, version, node_id, incarnation_id);
+        return Ok(registered_response(broker, node_id, incarnation_id));
     }
     let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
     // KIP-966: a broker that cannot prove it stopped gracefully may have lost
@@ -176,7 +165,7 @@ pub(crate) async fn handle(
         .submit_change(registration_records(restart.changes, record))
         .await
     {
-        return response(version, raft_error_code(&error), -1);
+        return Ok(response(raft_error_code(&error), -1));
     }
     // The session of the previous incarnation, if there was one, belongs to
     // a process that is gone. `ClusterControlManager.registerBroker` removes
@@ -184,7 +173,7 @@ pub(crate) async fn handle(
     // the registration turn, so no heartbeat of the new process can come
     // before it.
     broker.liveness.replace_incarnation(node_id.0).await;
-    let answer = registered_response(broker, version, node_id, incarnation_id);
+    let answer = registered_response(broker, node_id, incarnation_id);
     drop(turn);
     // KIP-966: a partition whose topic opted into an offset-aware recovery
     // strategy is handed to the Unclean Recovery Manager, the same way the
@@ -205,17 +194,16 @@ pub(crate) async fn handle(
             .await;
     }
 
-    answer
+    Ok(answer)
 }
 
 /// The answer to an accepted registration: the epoch the image now holds for
 /// `node_id`, if the registration it holds is this incarnation's.
 fn registered_response(
     broker: &Broker,
-    version: i16,
     node_id: NodeId,
     incarnation_id: uuid::Uuid,
-) -> Result<Bytes, BrokerError> {
+) -> BrokerRegistrationResponse {
     let epoch = broker
         .controller
         .current_image()
@@ -223,7 +211,6 @@ fn registered_response(
         .filter(|registration| registration.incarnation_id == incarnation_id)
         .map_or(-1, |registration| registration.broker_epoch);
     response(
-        version,
         if epoch < 0 {
             codes::UNKNOWN_SERVER_ERROR
         } else {
@@ -384,15 +371,12 @@ fn raft_error_code(error: &RaftError) -> i16 {
     }
 }
 
-fn response(version: i16, error_code: i16, broker_epoch: i64) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &BrokerRegistrationResponse {
-            error_code,
-            broker_epoch,
-            ..Default::default()
-        },
-        version,
-    )
+fn response(error_code: i16, broker_epoch: i64) -> BrokerRegistrationResponse {
+    BrokerRegistrationResponse {
+        error_code,
+        broker_epoch,
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -531,18 +515,11 @@ mod tests {
         for (node, directory) in [(1, 500), (2, 600)] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(node),
                     broker_epoch: 10,
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
                     host: "broker".into(),
-                    port: 9092,
-                    rack: None,
-                    endpoints: vec![],
                     log_dirs: vec![uuid::Uuid::from_u128(directory)],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node)
                 },
             ));
         }
@@ -584,15 +561,13 @@ mod wire_tests {
         TopicConfigRecord, TopicRecord,
     };
     use krabka_protocol::owned::broker_registration_request::Feature;
-    use krabka_security::{AuthMethod, ListenerProtocol, Principal};
+    use krabka_security::ListenerProtocol;
 
     use super::*;
     use crate::{
         config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
-        test_support::{
-            decode_response, encode_request, request_context, start_broker_with_authorizer,
-        },
+        test_support::{request_context, start_broker_with_authorizer},
     };
 
     const TOPIC: &str = "orders";
@@ -634,17 +609,11 @@ mod wire_tests {
                 level: 1,
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: REGISTERED,
                 // A new registration carries no epoch; the controller stamps
                 // the offset it commits at.
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(0xdead),
                 host: "broker-2".into(),
-                port: 9092,
-                rack: None,
                 endpoints: vec![BrokerEndpoint {
                     name: "PLAINTEXT".into(),
                     host: "broker-2".into(),
@@ -653,6 +622,7 @@ mod wire_tests {
                 }],
                 log_dirs: vec![uuid::Uuid::from_u128(1011)],
                 features: krabka_metadata::supported_feature_ranges(),
+                ..crate::test_support::broker_registration(REGISTERED.0)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),
@@ -710,7 +680,7 @@ mod wire_tests {
             start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
+        while !is_active_controller(&broker) {
             assert!(
                 std::time::Instant::now() <= deadline,
                 "broker did not become controller leader"
@@ -759,23 +729,19 @@ mod wire_tests {
             previous_broker_epoch,
             ..Default::default()
         };
-        let principal = Principal {
-            name: "broker".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("broker");
         let peer = "127.0.0.1:9092".parse().expect("peer address");
         let ctx = request_context(&principal, &peer, "broker-client");
-        let bytes = super::handle(
+        // Through the dispatch registry: `previous_broker_epoch` only rides
+        // the wire from version 3.
+        let response: BrokerRegistrationResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::api_key::ApiKey::BrokerRegistration as i16,
             version,
-            1,
-            &encode_request(&request, version),
+            &request,
             &ctx,
         )
-        .await
-        .expect("BrokerRegistration");
-        let response: BrokerRegistrationResponse = decode_response(&bytes, version);
+        .await;
         assert!(
             response.error_code == 0,
             "registration was refused: {response:?}"

@@ -20,6 +20,15 @@ fn code_name(code: i16) -> String {
     format!("error {code}")
 }
 
+/// An error code and the broker's message, if it sent one.
+pub(crate) fn described_error(code: i16, message: Option<&str>) -> String {
+    let name = code_name(code);
+    match message {
+        Some(m) => format!("{name}: {m}"),
+        None => name,
+    }
+}
+
 /// One line per altered group.
 pub(crate) fn report_alter(
     response: &krabka_protocol::krabka::barrier::AlterBarrierGroupsResponse,
@@ -30,13 +39,9 @@ pub(crate) fn report_alter(
             println!("{}\tok", result.group);
         } else {
             eprintln!(
-                "{}\t{}{}",
+                "{}\t{}",
                 result.group,
-                code_name(result.error_code),
-                result
-                    .error_message
-                    .as_ref()
-                    .map_or_else(String::new, |m| format!(": {m}"))
+                described_error(result.error_code, result.error_message.as_deref())
             );
             exit = EXIT_REFUSED;
         }
@@ -89,12 +94,8 @@ pub(crate) fn report_trigger(
 ) -> i32 {
     if response.error_code != 0 {
         eprintln!(
-            "{}{}",
-            code_name(response.error_code),
-            response
-                .error_message
-                .as_ref()
-                .map_or_else(String::new, |m| format!(": {m}"))
+            "{}",
+            described_error(response.error_code, response.error_message.as_deref())
         );
         return EXIT_REFUSED;
     }
@@ -123,12 +124,8 @@ pub(crate) fn report_list(
 ) -> i32 {
     if response.error_code != 0 {
         eprintln!(
-            "{}{}",
-            code_name(response.error_code),
-            response
-                .error_message
-                .as_ref()
-                .map_or_else(String::new, |m| format!(": {m}"))
+            "{}",
+            described_error(response.error_code, response.error_message.as_deref())
         );
         return EXIT_REFUSED;
     }

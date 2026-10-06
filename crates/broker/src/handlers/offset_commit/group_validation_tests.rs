@@ -17,7 +17,7 @@ use krabka_protocol::owned::{
     },
 };
 
-use super::{WireUuid, handle};
+use super::WireUuid;
 use crate::{
     authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::{Broker, BrokerHandle},
@@ -34,7 +34,7 @@ use crate::{
         },
     },
     test_support::{
-        decode_response, dispatch_context, encode_request, peer, principal, request_context,
+        dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with_authorizer_no_audit,
     },
 };
@@ -162,16 +162,14 @@ async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> (OffsetCommitRe
     let user = principal("consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "consumer-client");
-    let bytes = handle(
+    let response = crate::test_support::dispatch_wire(
         &shared,
+        krabka_protocol::owned::offset_commit_request::API_KEY,
         case.version,
-        7,
-        &encode_request(&request, case.version),
+        &request,
         &ctx,
     )
-    .await
-    .expect("handle offset commit");
-    let response = decode_response(&bytes, case.version);
+    .await;
     (response, shared.group_coordinator.find(&group_id).is_some())
 }
 
@@ -348,10 +346,14 @@ async fn topic_read_is_checked_before_the_group() {
             topics,
             ..Default::default()
         };
-        let bytes = handle(&shared, 9, 7, &encode_request(&request, 9), &ctx)
-            .await
-            .expect("handle offset commit");
-        let response: OffsetCommitResponse = decode_response(&bytes, 9);
+        let response: OffsetCommitResponse = crate::test_support::dispatch_wire(
+            &shared,
+            krabka_protocol::owned::offset_commit_request::API_KEY,
+            9,
+            &request,
+            &ctx,
+        )
+        .await;
         actual.push((
             group_id,
             response,
@@ -397,10 +399,14 @@ async fn oversized_metadata_is_refused_through_the_handler() {
     let user = principal("consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "consumer-client");
-    let bytes = handle(&shared, 9, 7, &encode_request(&request, 9), &ctx)
-        .await
-        .expect("handle offset commit");
-    let response: OffsetCommitResponse = decode_response(&bytes, 9);
+    let response: OffsetCommitResponse = crate::test_support::dispatch_wire(
+        &shared,
+        krabka_protocol::owned::offset_commit_request::API_KEY,
+        9,
+        &request,
+        &ctx,
+    )
+    .await;
 
     let actor = shared
         .group_coordinator
@@ -622,16 +628,14 @@ async fn consumer_group_commit_follows_kip_1251() {
             }],
             ..Default::default()
         };
-        let bytes = handle(
+        let response: OffsetCommitResponse = crate::test_support::dispatch_wire(
             &shared,
+            krabka_protocol::owned::offset_commit_request::API_KEY,
             row.version,
-            7,
-            &encode_request(&request, row.version),
+            &request,
             &ctx,
         )
-        .await
-        .expect("handle offset commit");
-        let response: OffsetCommitResponse = decode_response(&bytes, row.version);
+        .await;
         actual.push((row.member_id, row.epoch, row.version, response));
         expected.push((
             row.member_id,

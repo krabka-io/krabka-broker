@@ -14,8 +14,7 @@
 //! These tests are gated to non-Windows to match the multi-broker test
 //! convention established by the existing integration suites.
 //!
-//! The binary root carries only the module tree. `scram_wire` holds the framing
-//! and the SASL/PLAIN handshake, `scram_cluster` boots the broker and seeds the
+//! The binary root carries the module tree and the client id. `scram_cluster` boots the broker and seeds the
 //! metadata records, `scram_driver` drives `api_key` 50, and the two remaining
 //! children hold the response-row tests and the authorization tests.
 
@@ -23,6 +22,7 @@
 // resolves against `tests/`. `#[path]` re-bases each declaration onto the
 // sibling `describe_user_scram_credentials/` directory, which keeps the parts
 // out of `tests/`, where every `.rs` file would become another test binary.
+mod kafka_wire;
 #[path = "describe_user_scram_credentials/scram_authorization.rs"]
 mod scram_authorization;
 #[path = "describe_user_scram_credentials/scram_cluster.rs"]
@@ -31,5 +31,6 @@ mod scram_cluster;
 mod scram_describe;
 #[path = "describe_user_scram_credentials/scram_driver.rs"]
 mod scram_driver;
-#[path = "describe_user_scram_credentials/scram_wire.rs"]
-mod scram_wire;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-scram-desc-test";

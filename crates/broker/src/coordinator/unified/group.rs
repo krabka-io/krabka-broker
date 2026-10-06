@@ -91,7 +91,7 @@ pub struct CoordinatorGroup {
 /// A resolved producer keeps its (empty) entry, because the watermark is what
 /// rejects the late mark. That is one `i64` per producer that has ever
 /// committed transactional offsets to this group.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 struct ProducerTxnOffsets {
     keys: HashSet<(String, i32)>,
     /// Keys a `TxnOffsetCommit` of this producer is about to append, before
@@ -105,17 +105,8 @@ struct ProducerTxnOffsets {
     /// Offsets-log position of the newest marker resolved for this producer,
     /// or `-1` when no marker has been. Log offsets start at zero, so `-1`
     /// accepts every mark.
+    #[default(-1)]
     resolved_through: i64,
-}
-
-impl Default for ProducerTxnOffsets {
-    fn default() -> Self {
-        Self {
-            keys: HashSet::new(),
-            reserved: HashSet::new(),
-            resolved_through: -1,
-        }
-    }
 }
 
 /// A group's offset state as `OffsetFetch` needs to see it: the stable

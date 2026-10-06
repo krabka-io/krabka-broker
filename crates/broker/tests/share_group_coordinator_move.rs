@@ -99,6 +99,29 @@ fn heartbeat(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatRequest {
     }
 }
 
+/// Send `request` until the coordinator has loaded the group's partition.
+///
+/// `FindCoordinator` names a broker once it leads the partition, which can be
+/// before it has replayed it, and the coordinator answers
+/// `COORDINATOR_LOAD_IN_PROGRESS` until then.
+async fn heartbeat_once_loaded(
+    client: &Client,
+    request: ShareGroupHeartbeatRequest,
+) -> ShareGroupHeartbeatResponse {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        let response = client
+            .send(request.clone())
+            .await
+            .expect("ShareGroupHeartbeat");
+        if response.error_code != COORDINATOR_LOAD_IN_PROGRESS || Instant::now() >= deadline {
+            return response;
+        }
+        // intentional: the client retries a coordinator that is loading.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn position_of(cluster: &Cluster, node_id: u64) -> usize {
     cluster
         .iter()
@@ -132,10 +155,7 @@ async fn a_join_that_does_not_commit_is_not_answered() {
     stopped.crash_for_test().await;
 
     let member = client(&cluster[position_of(&cluster, coordinator)].0).await;
-    let joined = member
-        .send(heartbeat("member-1", 0))
-        .await
-        .expect("ShareGroupHeartbeat");
+    let joined = heartbeat_once_loaded(&member, heartbeat("member-1", 0)).await;
     member.close();
 
     assert!(
@@ -164,10 +184,7 @@ async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
 
     let position = position_of(&cluster, coordinator);
     let member = client(&cluster[position].0).await;
-    let joined = member
-        .send(heartbeat("member-1", 0))
-        .await
-        .expect("ShareGroupHeartbeat");
+    let joined = heartbeat_once_loaded(&member, heartbeat("member-1", 0)).await;
     member.close();
     assert!(joined.error_code == 0, "{joined:?}");
     assert!(joined.member_epoch > 0, "{joined:?}");
@@ -181,20 +198,7 @@ async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
     let next = coordinator_of(&survivor, Some(coordinator)).await;
     survivor.close();
     let member = client(&cluster[position_of(&cluster, next)].0).await;
-    let deadline = Instant::now() + SETTLE;
-    let resumed = loop {
-        let response = member
-            .send(heartbeat("member-1", joined.member_epoch))
-            .await
-            .expect("ShareGroupHeartbeat");
-        // The new coordinator answers `COORDINATOR_LOAD_IN_PROGRESS` while
-        // it replays the partition.
-        if response.error_code != COORDINATOR_LOAD_IN_PROGRESS || Instant::now() >= deadline {
-            break response;
-        }
-        // intentional: the client retries a coordinator that is loading.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let resumed = heartbeat_once_loaded(&member, heartbeat("member-1", joined.member_epoch)).await;
     member.close();
 
     check!(resumed.error_code == 0, "{resumed:?}");

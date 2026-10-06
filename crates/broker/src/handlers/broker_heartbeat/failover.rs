@@ -170,18 +170,11 @@ mod tests {
     /// The registration record a broker publishes for `node_id` over `dirs`.
     fn registration(node_id: u64, dirs: &[Uuid]) -> krabka_metadata::BrokerRegistrationRecord {
         krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_audit::NodeId(node_id),
             broker_epoch: 11,
             incarnation_id: Uuid::from_u128(u128::from(node_id)),
             host: format!("broker-{node_id}"),
-            port: 9092,
-            rack: None,
-            endpoints: vec![],
             log_dirs: dirs.to_vec(),
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node_id)
         }
     }
 

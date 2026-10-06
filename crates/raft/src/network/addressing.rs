@@ -9,13 +9,7 @@ use krabka_ids::{ApiKey, ApiVersion};
 use krabka_metadata::voters::VoterSet;
 
 use crate::{
-    kraft::{
-        transport::{
-            api_key,
-            wire::{FETCH_SNAPSHOT_VERSION, FETCH_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
-        },
-        types::NodeId,
-    },
+    kraft::{transport::PeerApi, types::NodeId},
     types::controller_endpoint_addr,
 };
 
@@ -35,18 +29,13 @@ pub(super) fn controller_addr(voters: &VoterSet, id: NodeId) -> Option<String> {
 /// negotiates down from it when the peer advertises less (`negotiation`), so
 /// the version on the header and the version in the bytes cannot drift apart.
 pub(crate) fn api_version_for(key: ApiKey) -> ApiVersion {
-    ApiVersion(match key {
-        ApiKey(api_key::VOTE) => VOTE_VERSION,
-        ApiKey(api_key::BEGIN_QUORUM_EPOCH | api_key::END_QUORUM_EPOCH) => QUORUM_EPOCH_VERSION,
-        ApiKey(api_key::FETCH_SNAPSHOT) => FETCH_SNAPSHOT_VERSION,
-        ApiKey(api_key::FETCH) => FETCH_VERSION,
-        _ => 0,
-    })
+    ApiVersion(PeerApi::from_api_key(key.get()).map_or(0, PeerApi::version))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kraft::transport::api_key;
 
     #[test]
     fn controller_addr_prefers_controller_endpoint_and_reports_unknown_voter() {

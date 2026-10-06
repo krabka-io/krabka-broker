@@ -28,9 +28,9 @@
 //! a stuck cluster reports in seconds instead of hitting CI's 600s kill, which
 //! is reported as TIMEOUT with no cause.
 
-use std::{future::Future, sync::OnceLock, time::Duration};
+use std::{future::Future, time::Duration};
 
-use tokio::sync::Mutex;
+use support::cluster_lock;
 
 mod support;
 
@@ -83,14 +83,6 @@ const N_RECORDS: i32 = 5;
 /// Generous enough that a loaded runner does not fail a healthy cluster, short
 /// enough that a broken one reports in seconds rather than at CI's kill.
 const STEP_TIMEOUT: Duration = Duration::from_secs(45);
-
-/// Serialize the whole test binary. Each test boots a three-node loopback
-/// cluster with short raft timings; two at once starve the election. The
-/// rationale is `replication.rs::cluster_lock`'s.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 async fn within<F: Future>(what: &str, future: F) -> F::Output {
     tokio::time::timeout(STEP_TIMEOUT, future)

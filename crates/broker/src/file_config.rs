@@ -70,9 +70,10 @@ pub use self::{
 /// A `Time`, `ByteSize`, or `Ratio` field is a human-readable string in the
 /// TOML file, so its JSON Schema is `type: string`. That alone loses the unit,
 /// and the generated reference page has a units column. Each marker type here
-/// keeps the string type and adds a `format` that names the unit. A field
-/// opts in with `#[schemars(with = "Option<crate::file_config::schema_units::Duration>")]`
-/// beside its `serde(with = "...human::option_time")` attribute.
+/// keeps the string type and adds a `format` that names the unit.
+/// `#[krabka_macros::human_units]` on a config struct points each
+/// `Option<Time>`, `Option<ByteSize>` and `Option<Ratio>` field at its marker
+/// here and at its `krabka_units::serde_units::human` codec.
 pub mod schema_units {
     use std::borrow::Cow;
 
@@ -186,6 +187,7 @@ pub enum FileConfigError {
 /// Top-level shape of `broker.toml`. `serde(deny_unknown_fields)` is
 /// off — new fields may be added and old binaries should warn rather
 /// than refuse to start.
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileConfig {
     /// Operational runtime policy. Present values replace the current broker
@@ -227,30 +229,20 @@ pub struct FileConfig {
     pub stretch: Option<FileStretchConfig>,
     /// How often this broker sends `BrokerHeartbeat` to the controller leader.
     /// Absent leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub heartbeat_interval: Option<Time>,
     /// Controller-side session timeout for broker heartbeats. Absent leaves the
     /// `BrokerConfig` default intact.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub heartbeat_timeout: Option<Time>,
     /// Maximum follower lag before the leader proposes ISR shrink. Absent
     /// leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub replica_lag_time_max: Option<Time>,
     /// Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`.
     /// It is the follower fetch watchdog, and 1.5x of it is the leader's
     /// check-quorum window: a leader that has not been fetched from by a
     /// majority of the voters within that window resigns its epoch. Absent
     /// leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_election_timeout: Option<Time>,
     /// Controller heartbeat interval. Absent leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_heartbeat_interval: Option<Time>,
     /// Name of the listener that carries inter-broker traffic — raft,
     /// replication, and heartbeats. Kafka's `inter.broker.listener.name`. It
@@ -274,8 +266,6 @@ pub struct FileConfig {
     /// the `BrokerConfig` default of ten minutes, which is Kafka's 600000. A
     /// `[[listeners]]` entry may carry its own `connections_max_idle`, which
     /// wins for that listener.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_idle: Option<Time>,
 
     /// KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL
@@ -286,8 +276,6 @@ pub struct FileConfig {
     /// delegation-token session expires at the earlier of its credential's
     /// expiry and this window. A `[[listeners]]` entry may carry its own
     /// `connections_max_reauth`, which wins for that listener.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_reauth: Option<Time>,
 
     /// KIP-595 static controller quorum voter set. Each entry is

@@ -1,14 +1,14 @@
 //! The tool's command line: the `clap` types and the argument conversions.
 //!
 //! `Cli` and `Command` spell every flag each barrier subcommand takes, and
-//! `parse_time` and `as_millis_i64` are the two halves of the one conversion
+//! `parse_time` and `Time::millis_i64` are the two halves of the one conversion
 //! the wire forces: an operator writes a duration in whatever unit reads best,
 //! and the barrier apis carry milliseconds. Parsing is separate from sending
 //! so a test can prove a command line reaches the right shape without a
 //! broker.
 
 use clap::{Parser, Subcommand};
-use krabka_units::{Time, convert::TimeExt};
+use krabka_units::Time;
 
 /// The tool's command line.
 ///
@@ -115,17 +115,10 @@ fn parse_time(raw: &str) -> Result<Time, String> {
     krabka_units::parse::time(raw).map_err(|e| e.to_string())
 }
 
-/// A time as the whole milliseconds the wire carries.
-///
-/// The barrier apis spell every duration as milliseconds, so this is where a
-/// typed `Time` stops being one.
-pub(crate) fn as_millis_i64(time: Time) -> i64 {
-    time.millis_i64()
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
+    use krabka_units::convert::TimeExt as _;
 
     use super::*;
 
@@ -150,7 +143,10 @@ mod tests {
             ("", None),
         ];
         for (raw, expected) in cases {
-            check!(parse_time(raw).ok().map(as_millis_i64) == expected, "{raw}");
+            check!(
+                parse_time(raw).ok().map(Time::millis_i64) == expected,
+                "{raw}"
+            );
         }
     }
 

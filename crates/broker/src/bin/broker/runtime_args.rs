@@ -3,28 +3,27 @@
 //! Every flag here overlays a field of `RuntimeFileConfig`, and the group is
 //! large enough to keep apart from the rest of the command line.
 
-use krabka_broker::config_value::{
-    PositiveCount, PositiveI16, PositiveI32, PositiveI64, parse_positive_count, parse_positive_i16,
-    parse_positive_i32, parse_positive_i64,
+use krabka_broker::{
+    config_value::{PositiveCount, PositiveI16, PositiveI32, PositiveI64},
+    coordinator::unified::streams::config::StreamsAssignorKind,
 };
 use krabka_client_core::{
     ClientFrameMax, ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
 };
 use krabka_units::{ByteSize, Ratio, Time};
 
-fn parse_streams_assignor(
-    value: &str,
-) -> Result<krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind, String> {
-    use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
-    match value {
-        "auto" => Ok(StreamsAssignorKind::Auto),
-        "sticky" => Ok(StreamsAssignorKind::Sticky),
-        "highly-available" => Ok(StreamsAssignorKind::HighlyAvailable),
-        _ => Err("expected `auto`, `sticky`, or `highly-available`".into()),
-    }
+fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
+    StreamsAssignorKind::from_config_name(value)
+        .ok_or_else(|| "expected `auto`, `sticky`, or `highly-available`".into())
 }
 
-#[derive(Debug, clap::Args)]
+/// A field without an `#[arg(...)]` gets `--field-name`, `KRABKA_FIELD_NAME`
+/// and the value parser of its type from `#[krabka_env]`, and every field not
+/// marked `skip` is copied onto the same-named `RuntimeFileConfig` field by
+/// `copy_into`. The `krabka-macros` crate documentation lists both.
+#[krabka_macros::krabka_env]
+#[derive(Debug, clap::Args, krabka_macros::RuntimeOverlay)]
+#[overlay(target = krabka_broker::file_config::RuntimeFileConfig)]
 pub struct RuntimeArgs {
     #[arg(
         long,
@@ -32,6 +31,7 @@ pub struct RuntimeArgs {
         default_value_t = DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
         value_parser = parse_client_dispatch_queue_capacity
     )]
+    #[overlay(skip)]
     pub client_dispatch_queue_capacity: usize,
     #[arg(
         long,
@@ -39,222 +39,140 @@ pub struct RuntimeArgs {
         default_value = "100MiB",
         value_parser = parse_client_frame_max
     )]
+    #[overlay(skip)]
     pub client_frame_max: ByteSize,
-    #[arg(long, env = "KRABKA_STARTUP_LEADER_WAIT_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub startup_leader_wait_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_SELF_REGISTRATION_BACKOFF_MIN", value_parser = krabka_units::parse::positive_time)]
     pub self_registration_backoff_min: Option<Time>,
-    #[arg(long, env = "KRABKA_SELF_REGISTRATION_BACKOFF_MAX", value_parser = krabka_units::parse::positive_time)]
     pub self_registration_backoff_max: Option<Time>,
-    #[arg(long, env = "KRABKA_OBSERVER_POLL_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub observer_poll_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_AUDIT_SPOOL_REPLAY_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub audit_spool_replay_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_AUDIT_STATS_POLL_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub audit_stats_poll_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_AUDIT_PARTITION_WAIT_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub audit_partition_wait_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_LIVENESS_TICK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub liveness_tick_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_GAUGE_POLL_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub gauge_poll_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_ISR_SCAN_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub isr_scan_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_CLEANER_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub cleaner_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_LOG_RETENTION_CHECK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub log_retention_check_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_FUTURE_LOG_MOVE_RETRY_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub future_log_move_retry_backoff: Option<Time>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_EVICTION_TICK", value_parser = krabka_units::parse::positive_time)]
     pub client_metrics_eviction_tick: Option<Time>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_STALE_FLOOR", value_parser = krabka_units::parse::positive_time)]
     pub client_metrics_stale_floor: Option<Time>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_DEFAULT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub client_metrics_default_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_TELEMETRY_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub client_metrics_telemetry_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_PROM_SNAPSHOT_TTL", value_parser = krabka_units::parse::positive_time)]
     pub client_metrics_prom_snapshot_ttl: Option<Time>,
-    #[arg(long, env = "KRABKA_RLMM_RECONCILE_TICK", value_parser = krabka_units::parse::positive_time)]
     pub rlmm_reconcile_tick: Option<Time>,
-    #[arg(long, env = "KRABKA_RLMM_BOOTSTRAP_BACKOFF_INITIAL", value_parser = krabka_units::parse::positive_time)]
     pub rlmm_bootstrap_backoff_initial: Option<Time>,
-    #[arg(long, env = "KRABKA_RLMM_BOOTSTRAP_BACKOFF_MAX", value_parser = krabka_units::parse::positive_time)]
     pub rlmm_bootstrap_backoff_max: Option<Time>,
-    #[arg(long, env = "KRABKA_CONNECTION_CREATION_THROTTLE_MAX", value_parser = krabka_units::parse::positive_time)]
     pub connection_creation_throttle_max: Option<Time>,
-    #[arg(long, env = "KRABKA_OPA_HTTP_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub opa_http_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_OAUTH_JWKS_HTTP_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub oauth_jwks_http_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_AUTO_JOIN_RETRY_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub auto_join_retry_backoff: Option<Time>,
-    #[arg(long, env = "KRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub auto_join_voter_request_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_FETCH_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub replication_fetch_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_REPLICATION_FETCH_MAX_WAIT", value_parser = krabka_units::parse::positive_time)]
     pub replication_fetch_max_wait: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_FETCH_MIN", value_parser = krabka_units::parse::positive_byte_size)]
     pub replication_fetch_min: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_REPLICATION_THROTTLE_EXHAUSTED_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub replication_throttle_exhausted_backoff: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_SEND_ERROR_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub replication_send_error_backoff: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_UNKNOWN_TOPIC_RETRY_DELAY", value_parser = krabka_units::parse::positive_time)]
     pub replication_unknown_topic_retry_delay: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_EPOCH_FENCE_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub replication_epoch_fence_backoff: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_UNEXPECTED_ERROR_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub replication_unexpected_error_backoff: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_RECONNECT_INITIAL_DELAY", value_parser = krabka_units::parse::positive_time)]
     pub replication_reconnect_initial_delay: Option<Time>,
-    #[arg(long, env = "KRABKA_REPLICATION_RECONNECT_DELAY_CAP", value_parser = krabka_units::parse::positive_time)]
     pub replication_reconnect_delay_cap: Option<Time>,
-    #[arg(long, env = "KRABKA_COORDINATOR_SESSION_EXPIRY_TICK", value_parser = krabka_units::parse::positive_time)]
     pub coordinator_session_expiry_tick: Option<Time>,
-    #[arg(long, env = "KRABKA_COORDINATOR_SHUTDOWN_ACK_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub coordinator_shutdown_ack_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub consumer_group_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub consumer_group_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub consumer_group_min_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub consumer_group_max_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub consumer_group_min_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub consumer_group_max_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub consumer_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = krabka_units::parse::non_negative_time)]
     pub classic_group_initial_rebalance_delay: Option<Time>,
-    #[arg(long, env = "KRABKA_CLASSIC_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub classic_group_min_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_CLASSIC_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub classic_group_max_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_CLASSIC_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub classic_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_SYNC_GROUP_FOLLOWER_WAIT", value_parser = krabka_units::parse::positive_time)]
     pub sync_group_follower_wait: Option<Time>,
-    #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_AGGRESSIVE_DEADLINE", value_parser = krabka_units::parse::positive_time)]
     pub unclean_recovery_aggressive_deadline: Option<Time>,
-    #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_BALANCED_DEADLINE", value_parser = krabka_units::parse::positive_time)]
     pub unclean_recovery_balanced_deadline: Option<Time>,
-    #[arg(long, env = "KRABKA_OPERATOR_RECOVERY_DEADLINE", value_parser = krabka_units::parse::positive_time)]
     pub operator_recovery_deadline: Option<Time>,
-    #[arg(long, env = "KRABKA_QUOTA_THROTTLE_MAX", value_parser = krabka_units::parse::positive_time)]
     pub quota_throttle_max: Option<Time>,
-    #[arg(long, env = "KRABKA_QUOTA_WINDOW", value_parser = krabka_units::parse::positive_time)]
     pub quota_window: Option<Time>,
-    #[arg(long, env = "KRABKA_CONTROLLER_MUTATION_QUOTA_WINDOW", value_parser = krabka_units::parse::positive_time)]
     pub controller_mutation_quota_window: Option<Time>,
-    #[arg(long, env = "KRABKA_SELF_REGISTRATION_MAX_ATTEMPTS", value_parser = clap::value_parser!(u32).range(1..))]
     pub self_registration_max_attempts: Option<u32>,
-    #[arg(long, env = "KRABKA_OBSERVER_FETCH_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub observer_fetch_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_AUDIT_EVENT_QUEUE_CAPACITY", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub audit_event_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_AUDIT_TAIL_WINDOW_OFFSETS", value_parser = parse_positive_i64)]
+    #[overlay(refined)]
     pub audit_tail_window_offsets: Option<PositiveI64>,
-    #[arg(long, env = "KRABKA_AUDIT_TAIL_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub audit_tail_read_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_STALE_PUSH_INTERVALS", value_parser = clap::value_parser!(u32).range(1..))]
     pub client_metrics_stale_push_intervals: Option<u32>,
-    #[arg(long, env = "KRABKA_CLIENT_METRICS_OTLP_QUEUE_CAPACITY", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub client_metrics_otlp_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_COORDINATOR_ACTOR_MAILBOX_CAPACITY", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub coordinator_actor_mailbox_capacity: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub diskless_wal_local_replica_count: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_DISKLESS_WAL_FLUSH_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub diskless_wal_flush_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
     pub diskless_wal_flush_max_size: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_DISKLESS_WAL_HOT_TAIL_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
     pub diskless_wal_hot_tail_max_size: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
     pub diskless_wal_trim_safety_lag: Option<i64>,
-    #[arg(long, env = "KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub diskless_wal_index_projection_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_QUEUE_CAPACITY", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub unclean_recovery_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_LOAD_BUFFER_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
     pub share_coordinator_load_buffer_size: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SHARE_SESSION_CACHE_MAX_WHEN_UNLIMITED", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub share_session_cache_max_when_unlimited: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_LOG_READ_BUFFER_CAP", value_parser = krabka_units::parse::positive_byte_size)]
     pub log_read_buffer_cap: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_LOG_TIMESTAMP_SCAN_WINDOW", value_parser = krabka_units::parse::positive_byte_size)]
     pub log_timestamp_scan_window: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY", value_parser = krabka_units::parse::positive_time)]
     pub log_delivery_clock_uncertainty: Option<Time>,
     #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
     pub message_max_bytes: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SOCKET_REQUEST_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_request_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SASL_SERVER_MAX_RECEIVE", value_parser = krabka_units::parse::positive_byte_size)]
     pub sasl_server_max_receive: Option<ByteSize>,
     #[arg(long, env = "KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY", value_parser = krabka_units::parse::non_negative_time)]
     pub connection_failed_authentication_delay: Option<Time>,
-    #[arg(long, env = "KRABKA_QUEUED_MAX_REQUESTS", value_parser = parse_positive_count)]
-    pub queued_max_requests: Option<usize>,
-    #[arg(long, env = "KRABKA_QUEUED_MAX_REQUEST_BYTES", value_parser = krabka_units::parse::positive_byte_size)]
+    #[overlay(refined)]
+    pub queued_max_requests: Option<PositiveCount>,
     pub queued_max_request_bytes: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SENDFILE_MIN", value_parser = krabka_units::parse::positive_byte_size)]
     pub sendfile_min: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SOCKET_SEND_BUFFER", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_send_buffer: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SOCKET_RECEIVE_BUFFER", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_receive_buffer: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_MAX_REQUEST_PARTITION_SIZE_LIMIT", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub max_request_partition_size_limit: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_MAX_RATIO", value_parser = krabka_units::parse::positive_ratio)]
     pub record_decompression_max_ratio: Option<Ratio>,
-    #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", value_parser = krabka_units::parse::positive_byte_size)]
     pub record_decompression_output_floor: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING", value_parser = krabka_units::parse::positive_byte_size)]
     pub record_decompression_output_ceiling: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_INTER_BROKER_SERVER_NAME")]
+    #[overlay(clone)]
     pub inter_broker_server_name: Option<String>,
-    #[arg(long, env = "KRABKA_PRODUCER_ID_EXPIRATION", value_parser = krabka_units::parse::positive_time)]
     pub producer_id_expiration: Option<Time>,
-    #[arg(long, env = "KRABKA_PRODUCER_ID_EXPIRATION_SCAN_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub producer_id_expiration_scan_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_MAX_PRODUCE_GROUP", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub max_produce_group: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_PARTITION_WRITER_QUEUE_DEPTH", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub partition_writer_queue_depth: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_DEFAULT_MIN_INSYNC_REPLICAS", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub default_min_insync_replicas: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_DEFAULT_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[overlay(refined)]
     pub default_replication_factor: Option<PositiveI16>,
-    #[arg(long, env = "KRABKA_FUTURE_LOG_MOVE_READ_CHUNK", value_parser = krabka_units::parse::positive_byte_size)]
     pub future_log_move_read_chunk: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SHARE_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub share_state_num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_SHARE_STATE_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[overlay(refined)]
     pub share_state_replication_factor: Option<PositiveI16>,
     #[arg(long, env = "KRABKA_SHARE_STATE_SEGMENT_BYTES", value_parser = parse_kafka_int_byte_size)]
     pub share_state_segment_bytes: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_SHARE_STATE_MIN_ISR", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub share_state_min_isr: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_SHARE_SNAPSHOT_UPDATE_RECORDS_PER_SNAPSHOT", value_parser = clap::value_parser!(u32).range(0..=500))]
     pub share_snapshot_update_records_per_snapshot: Option<u32>,
-    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_WRITE_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_coordinator_write_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_STATE_PRUNE_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_state_prune_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_COLD_PARTITION_SNAPSHOT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_cold_partition_snapshot_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_STATE_COMPRESSION_CODEC")]
     pub share_state_compression_codec: Option<i32>,
-    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_THREADS")]
     pub share_coordinator_threads: Option<i32>,
     #[arg(
         long,
@@ -262,80 +180,52 @@ pub struct RuntimeArgs {
         allow_negative_numbers = true
     )]
     pub share_coordinator_append_linger_ms: Option<i32>,
-    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_CACHED_BUFFER_MAX_BYTES", value_parser = krabka_units::parse::positive_byte_size)]
     pub share_coordinator_cached_buffer_max_bytes: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_OFFSETS_TOPIC_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub offsets_topic_num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[overlay(refined)]
     pub offsets_topic_replication_factor: Option<PositiveI16>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_SEGMENT_BYTES", value_parser = parse_kafka_int_byte_size)]
     pub offsets_topic_segment_bytes: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_OFFSETS_RETENTION", value_parser = krabka_units::parse::positive_time)]
     pub offsets_retention: Option<Time>,
-    #[arg(long, env = "KRABKA_OFFSETS_RETENTION_CHECK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub offsets_retention_check_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_TRANSACTION_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub transaction_state_num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_TRANSACTION_RECOVERY_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub transaction_recovery_read_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_TRANSACTION_STATE_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[overlay(refined)]
     pub transaction_state_replication_factor: Option<PositiveI16>,
     #[arg(long, env = "KRABKA_TRANSACTION_STATE_SEGMENT_BYTES", value_parser = parse_kafka_int_byte_size)]
     pub transaction_state_segment_bytes: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_TRANSACTION_STATE_MIN_ISR", value_parser = parse_positive_i32)]
+    #[overlay(refined)]
     pub transaction_state_min_isr: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub transaction_max_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_TRANSACTION_PARTITION_VERIFICATION_ENABLE", action = clap::ArgAction::Set)]
     pub transaction_partition_verification_enable: Option<bool>,
 
-    #[arg(long, env = "KRABKA_SHARE_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_group_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_group_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_group_min_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_group_max_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_group_min_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_group_max_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub share_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
     pub share_group_record_lock_duration: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
     pub share_group_min_record_lock_duration: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
     pub share_group_max_record_lock_duration: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_DELIVERY_COUNT_LIMIT")]
     pub share_group_delivery_count_limit: Option<i16>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_DELIVERY_COUNT_LIMIT")]
     pub share_group_min_delivery_count_limit: Option<i16>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_DELIVERY_COUNT_LIMIT")]
     pub share_group_max_delivery_count_limit: Option<i16>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_PARTITION_MAX_RECORD_LOCKS")]
     pub share_group_partition_max_record_locks: Option<i32>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_PARTITION_MAX_RECORD_LOCKS")]
     pub share_group_min_partition_max_record_locks: Option<i32>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_PARTITION_MAX_RECORD_LOCKS")]
     pub share_group_max_partition_max_record_locks: Option<i32>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_ENABLE", action = clap::ArgAction::Set)]
     pub streams_group_enable: Option<bool>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_min_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_max_session_timeout: Option<Time>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_min_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_max_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[overlay(refined)]
     pub streams_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
     pub streams_group_num_standby_replicas: Option<i32>,
@@ -344,16 +234,15 @@ pub struct RuntimeArgs {
         env = "KRABKA_STREAMS_GROUP_RACK_AWARE_ASSIGNMENT_TAGS",
         value_delimiter = ','
     )]
+    #[overlay(clone)]
     pub streams_group_rack_aware_assignment_tags: Option<Vec<String>>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_WARMUP_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
     pub streams_group_num_warmup_replicas: Option<i32>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_ACCEPTABLE_RECOVERY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
     pub streams_group_acceptable_recovery_lag: Option<i64>,
-    #[arg(long, env = "KRABKA_STREAMS_GROUP_TASK_OFFSET_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub streams_group_task_offset_interval: Option<Time>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_ASSIGNOR", value_parser = parse_streams_assignor)]
-    pub streams_group_assignor:
-        Option<krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind>,
+    #[overlay(skip)]
+    pub streams_group_assignor: Option<StreamsAssignorKind>,
 }
 
 fn parse_client_dispatch_queue_capacity(value: &str) -> Result<usize, String> {
@@ -393,10 +282,234 @@ fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use clap::Parser as _;
+    use clap::{Args as _, Parser as _};
     use krabka_units::convert::ByteSizeExt;
 
+    use super::RuntimeArgs;
     use crate::{cli::Args, test_support::env_guard};
+
+    /// The values each flag is offered in [`runtime_flags_keep_their_shape`].
+    /// Between them they tell every value parser the group uses apart: zero
+    /// against positive durations and sizes, the `i16`, `i32` and Kafka `INT`
+    /// byte ceilings, signed against unsigned, and the `u32` ranges.
+    const PROBES: [&str; 13] = [
+        "0",
+        "1",
+        "-1",
+        "1.5",
+        "40000",
+        "3000000000",
+        "0ms",
+        "1ms",
+        "0B",
+        "1B",
+        "3GiB",
+        "true",
+        "auto",
+    ];
+
+    /// One line per flag: its long name, its environment variable, its help
+    /// text, and which of [`PROBES`] its value parser accepts (`+`) or
+    /// refuses (`-`).
+    fn runtime_flag_shapes() -> String {
+        let command = RuntimeArgs::augment_args(clap::Command::new("runtime"));
+        command
+            .get_arguments()
+            .map(|arg| {
+                let long = arg.get_long().unwrap_or_default();
+                let env = arg
+                    .get_env()
+                    .map(|env| env.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let help = arg.get_help().map(ToString::to_string);
+                let accepted = PROBES
+                    .iter()
+                    .map(|probe| {
+                        let flag = format!("--{long}={probe}");
+                        if command
+                            .clone()
+                            .try_get_matches_from(["runtime", flag.as_str()])
+                            .is_ok()
+                        {
+                            '+'
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect::<String>();
+                format!("{long} {env} {help:?} {accepted}")
+            })
+            .flat_map(|line| [line, "\n".to_owned()])
+            .collect()
+    }
+
+    /// Every runtime flag keeps its long name, environment variable, help
+    /// text and value domain.
+    #[test]
+    fn runtime_flags_keep_their_shape() {
+        let _guard = env_guard();
+
+        check!(runtime_flag_shapes() == RUNTIME_FLAG_SHAPES);
+    }
+
+    /// The output of [`runtime_flag_shapes`] before `#[krabka_env]` took over
+    /// the flags' attributes.
+    const RUNTIME_FLAG_SHAPES: &str = "\
+        client-dispatch-queue-capacity KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY None -+--++-------\n\
+        client-frame-max KRABKA_BROKER_CLIENT_FRAME_MAX None ---------+---\n\
+        startup-leader-wait-timeout KRABKA_STARTUP_LEADER_WAIT_TIMEOUT None -------+-----\n\
+        self-registration-backoff-min KRABKA_SELF_REGISTRATION_BACKOFF_MIN None -------+-----\n\
+        self-registration-backoff-max KRABKA_SELF_REGISTRATION_BACKOFF_MAX None -------+-----\n\
+        observer-poll-interval KRABKA_OBSERVER_POLL_INTERVAL None -------+-----\n\
+        audit-spool-replay-interval KRABKA_AUDIT_SPOOL_REPLAY_INTERVAL None -------+-----\n\
+        audit-stats-poll-interval KRABKA_AUDIT_STATS_POLL_INTERVAL None -------+-----\n\
+        audit-partition-wait-timeout KRABKA_AUDIT_PARTITION_WAIT_TIMEOUT None -------+-----\n\
+        liveness-tick-interval KRABKA_LIVENESS_TICK_INTERVAL None -------+-----\n\
+        gauge-poll-interval KRABKA_GAUGE_POLL_INTERVAL None -------+-----\n\
+        isr-scan-interval KRABKA_ISR_SCAN_INTERVAL None -------+-----\n\
+        cleaner-interval KRABKA_CLEANER_INTERVAL None -------+-----\n\
+        log-retention-check-interval KRABKA_LOG_RETENTION_CHECK_INTERVAL None -------+-----\n\
+        future-log-move-retry-backoff KRABKA_FUTURE_LOG_MOVE_RETRY_BACKOFF None -------+-----\n\
+        client-metrics-eviction-tick KRABKA_CLIENT_METRICS_EVICTION_TICK None -------+-----\n\
+        client-metrics-stale-floor KRABKA_CLIENT_METRICS_STALE_FLOOR None -------+-----\n\
+        client-metrics-default-interval KRABKA_CLIENT_METRICS_DEFAULT_INTERVAL None -------+-----\n\
+        client-metrics-telemetry-max KRABKA_CLIENT_METRICS_TELEMETRY_MAX None ---------++--\n\
+        client-metrics-prom-snapshot-ttl KRABKA_CLIENT_METRICS_PROM_SNAPSHOT_TTL None -------+-----\n\
+        rlmm-reconcile-tick KRABKA_RLMM_RECONCILE_TICK None -------+-----\n\
+        rlmm-bootstrap-backoff-initial KRABKA_RLMM_BOOTSTRAP_BACKOFF_INITIAL None -------+-----\n\
+        rlmm-bootstrap-backoff-max KRABKA_RLMM_BOOTSTRAP_BACKOFF_MAX None -------+-----\n\
+        connection-creation-throttle-max KRABKA_CONNECTION_CREATION_THROTTLE_MAX None -------+-----\n\
+        opa-http-timeout KRABKA_OPA_HTTP_TIMEOUT None -------+-----\n\
+        oauth-jwks-http-timeout KRABKA_OAUTH_JWKS_HTTP_TIMEOUT None -------+-----\n\
+        auto-join-retry-backoff KRABKA_AUTO_JOIN_RETRY_BACKOFF None -------+-----\n\
+        auto-join-voter-request-timeout KRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT None -------+-----\n\
+        replication-fetch-max KRABKA_REPLICATION_FETCH_MAX None ---------++--\n\
+        replication-fetch-max-wait KRABKA_REPLICATION_FETCH_MAX_WAIT None -------+-----\n\
+        replication-fetch-min KRABKA_REPLICATION_FETCH_MIN None ---------++--\n\
+        replication-throttle-exhausted-backoff KRABKA_REPLICATION_THROTTLE_EXHAUSTED_BACKOFF None -------+-----\n\
+        replication-send-error-backoff KRABKA_REPLICATION_SEND_ERROR_BACKOFF None -------+-----\n\
+        replication-unknown-topic-retry-delay KRABKA_REPLICATION_UNKNOWN_TOPIC_RETRY_DELAY None -------+-----\n\
+        replication-epoch-fence-backoff KRABKA_REPLICATION_EPOCH_FENCE_BACKOFF None -------+-----\n\
+        replication-unexpected-error-backoff KRABKA_REPLICATION_UNEXPECTED_ERROR_BACKOFF None -------+-----\n\
+        replication-reconnect-initial-delay KRABKA_REPLICATION_RECONNECT_INITIAL_DELAY None -------+-----\n\
+        replication-reconnect-delay-cap KRABKA_REPLICATION_RECONNECT_DELAY_CAP None -------+-----\n\
+        coordinator-session-expiry-tick KRABKA_COORDINATOR_SESSION_EXPIRY_TICK None -------+-----\n\
+        coordinator-shutdown-ack-timeout KRABKA_COORDINATOR_SHUTDOWN_ACK_TIMEOUT None -------+-----\n\
+        consumer-group-session-timeout KRABKA_CONSUMER_GROUP_SESSION_TIMEOUT None -------+-----\n\
+        consumer-group-heartbeat-interval KRABKA_CONSUMER_GROUP_HEARTBEAT_INTERVAL None -------+-----\n\
+        consumer-group-min-session-timeout KRABKA_CONSUMER_GROUP_MIN_SESSION_TIMEOUT None -------+-----\n\
+        consumer-group-max-session-timeout KRABKA_CONSUMER_GROUP_MAX_SESSION_TIMEOUT None -------+-----\n\
+        consumer-group-min-heartbeat-interval KRABKA_CONSUMER_GROUP_MIN_HEARTBEAT_INTERVAL None -------+-----\n\
+        consumer-group-max-heartbeat-interval KRABKA_CONSUMER_GROUP_MAX_HEARTBEAT_INTERVAL None -------+-----\n\
+        consumer-group-max-size KRABKA_CONSUMER_GROUP_MAX_SIZE None -+--++-------\n\
+        classic-group-initial-rebalance-delay KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY None +-----++-----\n\
+        classic-group-min-session-timeout KRABKA_CLASSIC_GROUP_MIN_SESSION_TIMEOUT None -------+-----\n\
+        classic-group-max-session-timeout KRABKA_CLASSIC_GROUP_MAX_SESSION_TIMEOUT None -------+-----\n\
+        classic-group-max-size KRABKA_CLASSIC_GROUP_MAX_SIZE None -+--++-------\n\
+        sync-group-follower-wait KRABKA_SYNC_GROUP_FOLLOWER_WAIT None -------+-----\n\
+        unclean-recovery-aggressive-deadline KRABKA_UNCLEAN_RECOVERY_AGGRESSIVE_DEADLINE None -------+-----\n\
+        unclean-recovery-balanced-deadline KRABKA_UNCLEAN_RECOVERY_BALANCED_DEADLINE None -------+-----\n\
+        operator-recovery-deadline KRABKA_OPERATOR_RECOVERY_DEADLINE None -------+-----\n\
+        quota-throttle-max KRABKA_QUOTA_THROTTLE_MAX None -------+-----\n\
+        quota-window KRABKA_QUOTA_WINDOW None -------+-----\n\
+        controller-mutation-quota-window KRABKA_CONTROLLER_MUTATION_QUOTA_WINDOW None -------+-----\n\
+        self-registration-max-attempts KRABKA_SELF_REGISTRATION_MAX_ATTEMPTS None -+--++-------\n\
+        observer-fetch-max KRABKA_OBSERVER_FETCH_MAX None ---------++--\n\
+        audit-event-queue-capacity KRABKA_AUDIT_EVENT_QUEUE_CAPACITY None -+--++-------\n\
+        audit-tail-window-offsets KRABKA_AUDIT_TAIL_WINDOW_OFFSETS None -+--++-------\n\
+        audit-tail-read-max KRABKA_AUDIT_TAIL_READ_MAX None ---------++--\n\
+        client-metrics-stale-push-intervals KRABKA_CLIENT_METRICS_STALE_PUSH_INTERVALS None -+--++-------\n\
+        client-metrics-otlp-queue-capacity KRABKA_CLIENT_METRICS_OTLP_QUEUE_CAPACITY None -+--++-------\n\
+        coordinator-actor-mailbox-capacity KRABKA_COORDINATOR_ACTOR_MAILBOX_CAPACITY None -+--++-------\n\
+        diskless-wal-local-replica-count KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT None -+--++-------\n\
+        diskless-wal-flush-interval KRABKA_DISKLESS_WAL_FLUSH_INTERVAL None -------+-----\n\
+        diskless-wal-flush-max-size KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE None ---------++--\n\
+        diskless-wal-hot-tail-max-size KRABKA_DISKLESS_WAL_HOT_TAIL_MAX_SIZE None ---------++--\n\
+        diskless-wal-trim-safety-lag KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG None ++--++-------\n\
+        diskless-wal-index-projection-timeout KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT None -------+-----\n\
+        unclean-recovery-queue-capacity KRABKA_UNCLEAN_RECOVERY_QUEUE_CAPACITY None -+--++-------\n\
+        share-coordinator-load-buffer-size KRABKA_SHARE_COORDINATOR_LOAD_BUFFER_SIZE None ---------++--\n\
+        share-session-cache-max-when-unlimited KRABKA_SHARE_SESSION_CACHE_MAX_WHEN_UNLIMITED None -+--++-------\n\
+        log-read-buffer-cap KRABKA_LOG_READ_BUFFER_CAP None ---------++--\n\
+        log-timestamp-scan-window KRABKA_LOG_TIMESTAMP_SCAN_WINDOW None ---------++--\n\
+        log-delivery-clock-uncertainty KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY None -------+-----\n\
+        message-max-bytes KRABKA_MESSAGE_MAX_BYTES None +-------++---\n\
+        socket-request-max KRABKA_SOCKET_REQUEST_MAX None ---------++--\n\
+        sasl-server-max-receive KRABKA_SASL_SERVER_MAX_RECEIVE None ---------++--\n\
+        connection-failed-authentication-delay KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY None +-----++-----\n\
+        queued-max-requests KRABKA_QUEUED_MAX_REQUESTS None -+--++-------\n\
+        queued-max-request-bytes KRABKA_QUEUED_MAX_REQUEST_BYTES None ---------++--\n\
+        sendfile-min KRABKA_SENDFILE_MIN None ---------++--\n\
+        socket-send-buffer KRABKA_SOCKET_SEND_BUFFER None ---------++--\n\
+        socket-receive-buffer KRABKA_SOCKET_RECEIVE_BUFFER None ---------++--\n\
+        max-request-partition-size-limit KRABKA_MAX_REQUEST_PARTITION_SIZE_LIMIT None -+--+--------\n\
+        record-decompression-max-ratio KRABKA_RECORD_DECOMPRESSION_MAX_RATIO None -+-+++-------\n\
+        record-decompression-output-floor KRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR None ---------++--\n\
+        record-decompression-output-ceiling KRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING None ---------++--\n\
+        inter-broker-server-name KRABKA_INTER_BROKER_SERVER_NAME None +++++++++++++\n\
+        producer-id-expiration KRABKA_PRODUCER_ID_EXPIRATION None -------+-----\n\
+        producer-id-expiration-scan-interval KRABKA_PRODUCER_ID_EXPIRATION_SCAN_INTERVAL None -------+-----\n\
+        max-produce-group KRABKA_MAX_PRODUCE_GROUP None -+--++-------\n\
+        partition-writer-queue-depth KRABKA_PARTITION_WRITER_QUEUE_DEPTH None -+--++-------\n\
+        default-min-insync-replicas KRABKA_DEFAULT_MIN_INSYNC_REPLICAS None -+--+--------\n\
+        num-partitions KRABKA_NUM_PARTITIONS None -+--+--------\n\
+        default-replication-factor KRABKA_DEFAULT_REPLICATION_FACTOR None -+-----------\n\
+        future-log-move-read-chunk KRABKA_FUTURE_LOG_MOVE_READ_CHUNK None ---------++--\n\
+        share-state-num-partitions KRABKA_SHARE_STATE_NUM_PARTITIONS None -+--+--------\n\
+        share-state-replication-factor KRABKA_SHARE_STATE_REPLICATION_FACTOR None -+-----------\n\
+        share-state-segment-bytes KRABKA_SHARE_STATE_SEGMENT_BYTES None +-------++---\n\
+        share-state-min-isr KRABKA_SHARE_STATE_MIN_ISR None -+--+--------\n\
+        share-snapshot-update-records-per-snapshot KRABKA_SHARE_SNAPSHOT_UPDATE_RECORDS_PER_SNAPSHOT None ++-----------\n\
+        share-coordinator-write-timeout KRABKA_SHARE_COORDINATOR_WRITE_TIMEOUT None -------+-----\n\
+        share-state-prune-interval KRABKA_SHARE_STATE_PRUNE_INTERVAL None -------+-----\n\
+        share-cold-partition-snapshot-interval KRABKA_SHARE_COLD_PARTITION_SNAPSHOT_INTERVAL None -------+-----\n\
+        share-state-compression-codec KRABKA_SHARE_STATE_COMPRESSION_CODEC None +++-+--------\n\
+        share-coordinator-threads KRABKA_SHARE_COORDINATOR_THREADS None +++-+--------\n\
+        share-coordinator-append-linger-ms KRABKA_SHARE_COORDINATOR_APPEND_LINGER_MS None +++-+--------\n\
+        share-coordinator-cached-buffer-max-bytes KRABKA_SHARE_COORDINATOR_CACHED_BUFFER_MAX_BYTES None ---------++--\n\
+        offsets-topic-num-partitions KRABKA_OFFSETS_TOPIC_NUM_PARTITIONS None -+--+--------\n\
+        offsets-topic-replication-factor KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR None -+-----------\n\
+        offsets-topic-segment-bytes KRABKA_OFFSETS_TOPIC_SEGMENT_BYTES None +-------++---\n\
+        offsets-retention KRABKA_OFFSETS_RETENTION None -------+-----\n\
+        offsets-retention-check-interval KRABKA_OFFSETS_RETENTION_CHECK_INTERVAL None -------+-----\n\
+        transaction-state-num-partitions KRABKA_TRANSACTION_STATE_NUM_PARTITIONS None -+--+--------\n\
+        transaction-recovery-read-max KRABKA_TRANSACTION_RECOVERY_READ_MAX None ---------++--\n\
+        transaction-state-replication-factor KRABKA_TRANSACTION_STATE_REPLICATION_FACTOR None -+-----------\n\
+        transaction-state-segment-bytes KRABKA_TRANSACTION_STATE_SEGMENT_BYTES None +-------++---\n\
+        transaction-state-min-isr KRABKA_TRANSACTION_STATE_MIN_ISR None -+--+--------\n\
+        transaction-max-timeout KRABKA_TRANSACTION_MAX_TIMEOUT None -------+-----\n\
+        transaction-partition-verification-enable KRABKA_TRANSACTION_PARTITION_VERIFICATION_ENABLE None -----------+-\n\
+        share-group-session-timeout KRABKA_SHARE_GROUP_SESSION_TIMEOUT None -------+-----\n\
+        share-group-heartbeat-interval KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL None -------+-----\n\
+        share-group-min-session-timeout KRABKA_SHARE_GROUP_MIN_SESSION_TIMEOUT None -------+-----\n\
+        share-group-max-session-timeout KRABKA_SHARE_GROUP_MAX_SESSION_TIMEOUT None -------+-----\n\
+        share-group-min-heartbeat-interval KRABKA_SHARE_GROUP_MIN_HEARTBEAT_INTERVAL None -------+-----\n\
+        share-group-max-heartbeat-interval KRABKA_SHARE_GROUP_MAX_HEARTBEAT_INTERVAL None -------+-----\n\
+        share-group-max-size KRABKA_SHARE_GROUP_MAX_SIZE None -+--++-------\n\
+        share-group-record-lock-duration KRABKA_SHARE_GROUP_RECORD_LOCK_DURATION None -------+-----\n\
+        share-group-min-record-lock-duration KRABKA_SHARE_GROUP_MIN_RECORD_LOCK_DURATION None -------+-----\n\
+        share-group-max-record-lock-duration KRABKA_SHARE_GROUP_MAX_RECORD_LOCK_DURATION None -------+-----\n\
+        share-group-delivery-count-limit KRABKA_SHARE_GROUP_DELIVERY_COUNT_LIMIT None +++----------\n\
+        share-group-min-delivery-count-limit KRABKA_SHARE_GROUP_MIN_DELIVERY_COUNT_LIMIT None +++----------\n\
+        share-group-max-delivery-count-limit KRABKA_SHARE_GROUP_MAX_DELIVERY_COUNT_LIMIT None +++----------\n\
+        share-group-partition-max-record-locks KRABKA_SHARE_GROUP_PARTITION_MAX_RECORD_LOCKS None +++-+--------\n\
+        share-group-min-partition-max-record-locks KRABKA_SHARE_GROUP_MIN_PARTITION_MAX_RECORD_LOCKS None +++-+--------\n\
+        share-group-max-partition-max-record-locks KRABKA_SHARE_GROUP_MAX_PARTITION_MAX_RECORD_LOCKS None +++-+--------\n\
+        streams-group-enable KRABKA_STREAMS_GROUP_ENABLE None -----------+-\n\
+        streams-group-session-timeout KRABKA_STREAMS_GROUP_SESSION_TIMEOUT None -------+-----\n\
+        streams-group-heartbeat-interval KRABKA_STREAMS_GROUP_HEARTBEAT_INTERVAL None -------+-----\n\
+        streams-group-min-session-timeout KRABKA_STREAMS_GROUP_MIN_SESSION_TIMEOUT None -------+-----\n\
+        streams-group-max-session-timeout KRABKA_STREAMS_GROUP_MAX_SESSION_TIMEOUT None -------+-----\n\
+        streams-group-min-heartbeat-interval KRABKA_STREAMS_GROUP_MIN_HEARTBEAT_INTERVAL None -------+-----\n\
+        streams-group-max-heartbeat-interval KRABKA_STREAMS_GROUP_MAX_HEARTBEAT_INTERVAL None -------+-----\n\
+        streams-group-max-size KRABKA_STREAMS_GROUP_MAX_SIZE None -+--++-------\n\
+        streams-group-num-standby-replicas KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS None ++--+--------\n\
+        streams-group-rack-aware-assignment-tags KRABKA_STREAMS_GROUP_RACK_AWARE_ASSIGNMENT_TAGS None +++++++++++++\n\
+        streams-group-num-warmup-replicas KRABKA_STREAMS_GROUP_NUM_WARMUP_REPLICAS None ++--+--------\n\
+        streams-group-acceptable-recovery-lag KRABKA_STREAMS_GROUP_ACCEPTABLE_RECOVERY_LAG None ++--++-------\n\
+        streams-group-task-offset-interval KRABKA_STREAMS_GROUP_TASK_OFFSET_INTERVAL None -------+-----\n\
+        streams-group-assignor KRABKA_STREAMS_GROUP_ASSIGNOR None ------------+\n\
+";
 
     /// `--message-max-bytes` takes exactly the values Kafka's `INT` with
     /// `atLeast(0)` takes.

@@ -110,7 +110,12 @@ pub(super) async fn describe_group(
     // members, instead of disclosing the topic names via the topology.
     if let Some(topology) = view.topology.as_ref() {
         let required = topic_authz::required_topics(topology);
-        if topic_authz::describe_denied(broker, image, ctx, &required) {
+        if crate::handlers::any_topic_describe_denied(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            &required,
+        ) {
             return DescribedGroup {
                 group_id: gid.to_owned(),
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,

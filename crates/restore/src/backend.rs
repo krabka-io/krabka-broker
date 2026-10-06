@@ -7,15 +7,12 @@
 use std::sync::Arc;
 
 use krabka_object_store::{
-    GcsConfig, ObjectOps, ObjectStoreClient, ObjectStoreConfig, S3Config, build_object_store,
+    ObjectOps, ObjectStoreClient, ObjectStoreConfig, build_object_store, normalize_prefix,
+    prefixed_key,
 };
 use object_store::path::Path;
 
 use crate::{args::RestoreArgs, error::RestoreError};
-
-/// Region used when `--archive-s3-region` is absent. AWS requires a region,
-/// and `MinIO` and R2 accept this one as a placeholder.
-const DEFAULT_S3_REGION: &str = "us-east-1";
 
 /// A read handle on the archive, with the operator's key prefix applied.
 ///
@@ -52,10 +49,7 @@ impl ArchiveStore {
     /// The absolute object key for a path relative to the archive root.
     #[must_use]
     pub fn key(&self, relative: &str) -> Path {
-        match &self.prefix {
-            Some(prefix) => Path::from(format!("{prefix}/{relative}")),
-            None => Path::from(relative),
-        }
+        prefixed_key(self.prefix.as_deref(), relative)
     }
 
     /// The prefix to list the archive root under.
@@ -92,7 +86,7 @@ pub fn open_archive(args: &RestoreArgs) -> Result<ArchiveStore, RestoreError> {
     Ok(ArchiveStore {
         client: ObjectStoreClient::new(store.clone()),
         store,
-        prefix: normalize_prefix(args.archive.prefix.as_deref()),
+        prefix: args.archive.location.normalized_prefix(),
     })
 }
 
@@ -107,51 +101,10 @@ pub fn open_archive(args: &RestoreArgs) -> Result<ArchiveStore, RestoreError> {
 /// The argument parser makes exactly one of them required, so this reports a
 /// caller that built [`RestoreArgs`] by hand.
 pub fn object_store_config(args: &RestoreArgs) -> Result<ObjectStoreConfig, RestoreError> {
-    let archive = &args.archive;
-    if let Some(root) = &archive.local {
-        return Ok(ObjectStoreConfig::Local { root: root.clone() });
-    }
-    if let Some(bucket) = &archive.s3_bucket {
-        return Ok(ObjectStoreConfig::S3(S3Config {
-            bucket: bucket.clone(),
-            prefix: None,
-            region: archive
-                .s3_region
-                .clone()
-                .unwrap_or_else(|| DEFAULT_S3_REGION.to_owned()),
-            endpoint: archive.s3_endpoint.clone(),
-            access_key_id: archive.s3_access_key_id.clone(),
-            secret_access_key: archive.s3_secret_access_key.clone(),
-            allow_http: archive.s3_allow_http,
-            ..S3Config::default()
-        }));
-    }
-    if let Some(bucket) = &archive.gcs_bucket {
-        return Ok(ObjectStoreConfig::Gcs(GcsConfig {
-            bucket: bucket.clone(),
-            prefix: None,
-            service_account_path: archive.gcs_service_account_path.clone(),
-            endpoint: archive.gcs_endpoint.clone(),
-            allow_http: archive.gcs_allow_http,
-            ..GcsConfig::default()
-        }));
-    }
-    Err(RestoreError::InvalidArgument(
-        "no archive source: pass one of --archive-local, --archive-s3-bucket, \
-         or --archive-gcs-bucket"
-            .to_owned(),
-    ))
-}
-
-/// Trim the separators an operator copies out of a console URL, so
-/// `/tier/`, `tier`, and `tier/` all address the same archive root.
-fn normalize_prefix(prefix: Option<&str>) -> Option<String> {
-    let trimmed = prefix?.trim().trim_matches('/');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
+    args.archive
+        .location
+        .to_config()
+        .map_err(|error| RestoreError::InvalidArgument(error.to_string()))
 }
 
 #[cfg(test)]
@@ -167,15 +120,8 @@ mod tests {
         crate::Cli::parse_from(argv).args
     }
 
-    #[test]
-    fn a_local_archive_maps_to_the_local_backend() {
-        let config =
-            object_store_config(&args_from(&["--archive-local", "/archive"])).expect("config");
-        check!(
-            matches!(config, ObjectStoreConfig::Local { root } if root == std::path::Path::new("/archive"))
-        );
-    }
-
+    /// The mapping itself is pinned in `krabka-object-store`; this checks the
+    /// flags reach it through restore's own command line.
     #[test]
     fn s3_flags_map_onto_the_s3_config() {
         let config = object_store_config(&args_from(&[
@@ -206,63 +152,13 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_s3_region_falls_back_to_the_placeholder() {
-        let config =
-            object_store_config(&args_from(&["--archive-s3-bucket", "backups"])).expect("config");
-        let ObjectStoreConfig::S3(s3) = config else {
-            panic!("expected an S3 config");
-        };
-        check!(s3.region == DEFAULT_S3_REGION);
-        check!(!s3.allow_http);
-    }
-
-    #[test]
-    fn gcs_flags_map_onto_the_gcs_config() {
-        let config = object_store_config(&args_from(&[
-            "--archive-gcs-bucket",
-            "backups",
-            "--archive-gcs-service-account-path",
-            "/etc/sa.json",
-            "--archive-gcs-endpoint",
-            "http://fake-gcs:4443",
-            "--archive-gcs-allow-http",
-        ]))
-        .expect("config");
-        let ObjectStoreConfig::Gcs(gcs) = config else {
-            panic!("expected a GCS config");
-        };
-        check!(
-            gcs == GcsConfig {
-                bucket: "backups".to_owned(),
-                service_account_path: Some("/etc/sa.json".to_owned()),
-                endpoint: Some("http://fake-gcs:4443".to_owned()),
-                allow_http: true,
-                ..GcsConfig::default()
-            }
-        );
-    }
-
-    #[test]
     fn a_hand_built_args_without_a_backend_is_rejected() {
         let mut args = args_from(&["--archive-local", "/archive"]);
-        args.archive.local = None;
+        args.archive.location.local = None;
         check!(matches!(
             object_store_config(&args),
             Err(RestoreError::InvalidArgument(_))
         ));
-    }
-
-    #[test]
-    fn prefixes_normalize_to_one_spelling() {
-        for spelling in ["tier", "/tier", "tier/", "/tier/", " /tier/ "] {
-            check!(
-                normalize_prefix(Some(spelling)) == Some("tier".to_owned()),
-                "{spelling:?}"
-            );
-        }
-        for empty in [None, Some(""), Some("/"), Some("   "), Some("///")] {
-            check!(normalize_prefix(empty).is_none(), "{empty:?}");
-        }
     }
 
     #[test]

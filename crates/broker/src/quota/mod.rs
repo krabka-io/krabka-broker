@@ -20,6 +20,7 @@ pub use buckets::QuotaBuckets;
 pub use controller_mutation::consume_controller_mutation_quota;
 pub(crate) use controller_mutation::{ControllerMutationQuota, QuotaRequest};
 pub use ip_names::{IpNames, parse_ip_literal};
+pub(crate) use lookup::entity_field;
 pub use lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key};
 pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;
@@ -31,8 +32,9 @@ pub use refresh::run;
 
 /// Result of consuming a client quota, carrying the delay and the resolved
 /// entity identity (`user` and `client_id`) that the match was charged to (#418).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, derive_more::Deref)]
 pub struct QuotaDelay {
+    #[deref]
     pub delay: Time,
     pub user: Option<String>,
     pub client_id: Option<String>,
@@ -42,11 +44,7 @@ impl QuotaDelay {
     /// No throttle, charged to nobody.
     #[must_use]
     pub fn zero() -> Self {
-        Self {
-            delay: <Time as TimeExt>::ZERO,
-            user: None,
-            client_id: None,
-        }
+        Self::new(<Time as TimeExt>::ZERO, None, None)
     }
 
     /// A throttle of `delay`, charged to the principal and client id whose
@@ -58,13 +56,6 @@ impl QuotaDelay {
             user,
             client_id,
         }
-    }
-}
-
-impl std::ops::Deref for QuotaDelay {
-    type Target = Time;
-    fn deref(&self) -> &Self::Target {
-        &self.delay
     }
 }
 
@@ -141,14 +132,8 @@ fn consume_configured_quota(
         return QuotaDelay::zero();
     }
     let token_rate = token_rate(rate);
-    let user = entity_key
-        .iter()
-        .find(|(k, _)| k == "user")
-        .and_then(|(_, v)| v.clone());
-    let client_id = entity_key
-        .iter()
-        .find(|(k, _)| k == "client-id")
-        .and_then(|(_, v)| v.clone());
+    let user = entity_field(&entity_key, "user");
+    let client_id = entity_field(&entity_key, "client-id");
 
     let bucket = request
         .buckets

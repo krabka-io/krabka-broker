@@ -11,14 +11,13 @@
 //! it elects again for such a partition when a broker unfences, which is what
 //! Kafka's `handleBrokerUnfenced` does over `partitionsWithNoLeader`.
 
-use krabka_metadata::{
-    LeaderRecoveryState, MetadataImage, MetadataRecord, PartitionRecord, PartitionRecoveryRecord,
-};
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
 use tracing::warn;
 
 use super::policy::{
-    FailoverDecision, FailoverPlan, elect_leaderless_one, failover_one, unclean_restart_one,
+    FailoverDecision, FailoverPlan, elect_leaderless_one, failover_one, push_partition_change,
+    unclean_restart_one,
 };
 use crate::{
     config_keys::{
@@ -82,12 +81,7 @@ pub(crate) async fn compute_failover_changes(
     let mut unavailable: Vec<(String, i32)> = Vec::new();
     // Snapshot the alive set once (single lock) rather than taking the
     // liveness lock per ISR/replica entry inside the scan below.
-    let alive: std::collections::HashSet<NodeId> = liveness
-        .alive_snapshot()
-        .await
-        .into_iter()
-        .map(NodeId)
-        .collect();
+    let alive = liveness.alive_node_ids().await;
     // Witness nodes never lead a partition. Build the set once, next to the
     // alive snapshot, so the scan stays one walk over the image.
     let witnesses = witness_node_ids(image);
@@ -158,27 +152,15 @@ pub(crate) async fn compute_failover_changes(
                     unclean,
                     "failover: re-electing partition leader (triggered by dead broker)"
                 );
-                changes.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
+                push_partition_change(
+                    &mut changes,
+                    pr,
                     leader,
-                    replicas: pr.replicas.clone(),
                     isr,
-                    leader_epoch: new_leader_epoch,
-                    adding_replicas: pr.adding_replicas.clone(),
-                    removing_replicas: pr.removing_replicas.clone(),
-                    directories: pr.directories.clone(),
                     partition_epoch,
-                }));
-                if unclean {
-                    changes.push(MetadataRecord::V1PartitionRecovery(
-                        PartitionRecoveryRecord {
-                            topic: pr.topic.clone(),
-                            partition: pr.partition,
-                            state: LeaderRecoveryState::Recovering,
-                        },
-                    ));
-                }
+                    new_leader_epoch,
+                    unclean,
+                );
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 let Some((partition_epoch, leader_epoch)) =
@@ -196,18 +178,15 @@ pub(crate) async fn compute_failover_changes(
                     unavailable.push((pr.topic.clone(), pr.partition));
                     continue;
                 };
-                changes.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
-                    leader: pr.leader,
-                    replicas: pr.replicas.clone(),
+                push_partition_change(
+                    &mut changes,
+                    pr,
+                    pr.leader,
                     isr,
-                    leader_epoch,
-                    adding_replicas: pr.adding_replicas.clone(),
-                    removing_replicas: pr.removing_replicas.clone(),
-                    directories: pr.directories.clone(),
                     partition_epoch,
-                }));
+                    leader_epoch,
+                    false,
+                );
             }
             FailoverDecision::Recover(strategy) => {
                 // KIP-966: defer to the offset-aware Unclean Recovery Manager —
@@ -257,12 +236,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
 ) -> FailoverPlan {
     let mut changes: Vec<MetadataRecord> = Vec::new();
     let mut recoveries: Vec<(String, i32, RecoveryStrategy)> = Vec::new();
-    let alive: std::collections::HashSet<NodeId> = liveness
-        .alive_snapshot()
-        .await
-        .into_iter()
-        .map(NodeId)
-        .collect();
+    let alive = liveness.alive_node_ids().await;
     let witnesses = witness_node_ids(image);
     let mut elr = ScanElr::default();
     let mut publisher = ElrPublisher::new(image);
@@ -315,27 +289,15 @@ pub(crate) async fn compute_offline_dir_failover_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                changes.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
+                push_partition_change(
+                    &mut changes,
+                    pr,
                     leader,
-                    replicas: pr.replicas.clone(),
                     isr,
-                    leader_epoch,
-                    adding_replicas: pr.adding_replicas.clone(),
-                    removing_replicas: pr.removing_replicas.clone(),
-                    directories: pr.directories.clone(),
                     partition_epoch,
-                }));
-                if unclean {
-                    changes.push(MetadataRecord::V1PartitionRecovery(
-                        PartitionRecoveryRecord {
-                            topic: pr.topic.clone(),
-                            partition: pr.partition,
-                            state: LeaderRecoveryState::Recovering,
-                        },
-                    ));
-                }
+                    leader_epoch,
+                    unclean,
+                );
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 let Some((partition_epoch, leader_epoch)) =
@@ -352,18 +314,15 @@ pub(crate) async fn compute_offline_dir_failover_changes(
                     );
                     continue;
                 };
-                changes.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
-                    leader: pr.leader,
-                    replicas: pr.replicas.clone(),
+                push_partition_change(
+                    &mut changes,
+                    pr,
+                    pr.leader,
                     isr,
-                    leader_epoch,
-                    adding_replicas: pr.adding_replicas.clone(),
-                    removing_replicas: pr.removing_replicas.clone(),
-                    directories: pr.directories.clone(),
                     partition_epoch,
-                }));
+                    leader_epoch,
+                    false,
+                );
             }
             FailoverDecision::Recover(strategy) => {
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
@@ -427,12 +386,7 @@ pub(crate) async fn compute_unclean_restart_changes(
     let mut changes = crate::elr::withdraw_elr_membership(image, returning);
     let mut recoveries: Vec<(String, i32, RecoveryStrategy)> = Vec::new();
     let mut unavailable: Vec<(String, i32)> = Vec::new();
-    let alive: std::collections::HashSet<NodeId> = liveness
-        .alive_snapshot()
-        .await
-        .into_iter()
-        .map(NodeId)
-        .collect();
+    let alive = liveness.alive_node_ids().await;
     let witnesses = witness_node_ids(image);
     let mut elr = ScanElr::default();
     // The ISR removals below are the candidate set the next eligibility is
@@ -494,27 +448,15 @@ pub(crate) async fn compute_unclean_restart_changes(
                     unclean,
                     "unclean restart: re-electing partition leader"
                 );
-                changes.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
+                push_partition_change(
+                    &mut changes,
+                    pr,
                     leader,
-                    replicas: pr.replicas.clone(),
                     isr,
-                    leader_epoch: new_leader_epoch,
-                    adding_replicas: pr.adding_replicas.clone(),
-                    removing_replicas: pr.removing_replicas.clone(),
-                    directories: pr.directories.clone(),
                     partition_epoch,
-                }));
-                if unclean {
-                    changes.push(MetadataRecord::V1PartitionRecovery(
-                        PartitionRecoveryRecord {
-                            topic: pr.topic.clone(),
-                            partition: pr.partition,
-                            state: LeaderRecoveryState::Recovering,
-                        },
-                    ));
-                }
+                    new_leader_epoch,
+                    unclean,
+                );
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 let Some((partition_epoch, leader_epoch)) =
@@ -540,18 +482,15 @@ pub(crate) async fn compute_unclean_restart_changes(
                     new_isr = ?isr,
                     "unclean restart: dropping returning broker from ISR"
                 );
-                changes.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
-                    leader: pr.leader,
-                    replicas: pr.replicas.clone(),
+                push_partition_change(
+                    &mut changes,
+                    pr,
+                    pr.leader,
                     isr,
-                    leader_epoch,
-                    adding_replicas: pr.adding_replicas.clone(),
-                    removing_replicas: pr.removing_replicas.clone(),
-                    directories: pr.directories.clone(),
                     partition_epoch,
-                }));
+                    leader_epoch,
+                    false,
+                );
             }
             FailoverDecision::Recover(strategy) => {
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
@@ -596,12 +535,7 @@ pub(crate) async fn compute_unfence_changes(
     liveness: &ControllerLivenessState,
     metrics: &crate::metrics::BrokerMetrics,
 ) -> Vec<MetadataRecord> {
-    let mut alive: std::collections::HashSet<NodeId> = liveness
-        .alive_snapshot()
-        .await
-        .into_iter()
-        .map(NodeId)
-        .collect();
+    let mut alive = liveness.alive_node_ids().await;
     // The registry still holds the unfencing broker fenced.
     alive.insert(unfenced);
     let witnesses = witness_node_ids(image);
@@ -656,27 +590,15 @@ pub(crate) async fn compute_unfence_changes(
             unclean,
             "unfence: electing a leader for a partition with none"
         );
-        changes.push(MetadataRecord::V1Partition(PartitionRecord {
-            topic: pr.topic.clone(),
-            partition: pr.partition,
+        push_partition_change(
+            &mut changes,
+            pr,
             leader,
-            replicas: pr.replicas.clone(),
             isr,
-            leader_epoch,
-            adding_replicas: pr.adding_replicas.clone(),
-            removing_replicas: pr.removing_replicas.clone(),
-            directories: pr.directories.clone(),
             partition_epoch,
-        }));
-        if unclean {
-            changes.push(MetadataRecord::V1PartitionRecovery(
-                PartitionRecoveryRecord {
-                    topic: pr.topic.clone(),
-                    partition: pr.partition,
-                    state: LeaderRecoveryState::Recovering,
-                },
-            ));
-        }
+            leader_epoch,
+            unclean,
+        );
     }
     // A leader is what clears the last-known ELR, and the election it comes
     // from settles the eligible set.

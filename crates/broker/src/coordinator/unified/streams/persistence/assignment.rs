@@ -125,10 +125,11 @@ impl StreamsGroupTargetAssignmentMemberValue {
 /// Key v22 value: a member's current in-flight task assignment, with the
 /// reconciliation epochs and state, and the tasks of each role pending
 /// revocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub member_epoch: i32,
     pub previous_member_epoch: i32,
+    #[default(StreamsMemberWireState::Stable)]
     pub state: StreamsMemberWireState,
     pub active: BTreeMap<String, Vec<i32>>,
     pub standby: BTreeMap<String, Vec<i32>>,
@@ -136,22 +137,6 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub active_pending_revocation: BTreeMap<String, Vec<i32>>,
     pub standby_pending_revocation: BTreeMap<String, Vec<i32>>,
     pub warmup_pending_revocation: BTreeMap<String, Vec<i32>>,
-}
-
-impl Default for StreamsGroupCurrentMemberAssignmentValue {
-    fn default() -> Self {
-        Self {
-            member_epoch: 0,
-            previous_member_epoch: 0,
-            state: StreamsMemberWireState::Stable,
-            active: BTreeMap::new(),
-            standby: BTreeMap::new(),
-            warmup: BTreeMap::new(),
-            active_pending_revocation: BTreeMap::new(),
-            standby_pending_revocation: BTreeMap::new(),
-            warmup_pending_revocation: BTreeMap::new(),
-        }
-    }
 }
 
 impl StreamsGroupCurrentMemberAssignmentValue {

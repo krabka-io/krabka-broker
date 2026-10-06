@@ -25,7 +25,12 @@ use krabka_protocol::{
 };
 use krabka_raft::{reconfig::RemoveVoter, voter_requests};
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorResponse as _, cluster_alter_denied},
+};
 
 #[tracing::instrument(
     name = "handle_remove_raft_voter",
@@ -37,7 +42,6 @@ use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_d
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -47,13 +51,10 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_resp(
+        return respond(
             version,
-            &RemoveRaftVoterResponse {
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("remove-raft-voter denied".into()),
-                ..Default::default()
-            },
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            Some("remove-raft-voter denied".into()),
         );
     }
 
@@ -73,26 +74,16 @@ pub(crate) async fn handle(
         // `validateLeaderOnlyRequest` with only the error code set, so the
         // nullable message stays at the generated empty-string default, not
         // null and not `Errors.message()`.
-        return encode_resp(
+        return respond(
             version,
-            &RemoveRaftVoterResponse {
-                error_code: voter_requests::NOT_LEADER_OR_FOLLOWER,
-                error_message: Some(String::new()),
-                ..Default::default()
-            },
+            voter_requests::NOT_LEADER_OR_FOLLOWER,
+            Some(String::new()),
         );
     };
     if let Some((error_code, error_message)) =
         voter_requests::remove_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
     {
-        return encode_resp(
-            version,
-            &RemoveRaftVoterResponse {
-                error_code,
-                error_message,
-                ..Default::default()
-            },
-        );
+        return respond(version, error_code, error_message);
     }
 
     let id = u64::try_from(req.voter_id).unwrap_or_default();
@@ -118,18 +109,19 @@ pub(crate) async fn handle(
         );
     }
 
-    encode_resp(
-        version,
-        &RemoveRaftVoterResponse {
-            error_code,
-            error_message,
-            ..Default::default()
-        },
-    )
+    respond(version, error_code, error_message)
 }
 
-fn encode_resp(version: i16, resp: &RemoveRaftVoterResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
+/// Encodes a response that carries only `error_code` and `error_message`.
+fn respond(
+    version: i16,
+    error_code: i16,
+    error_message: Option<String>,
+) -> Result<Bytes, BrokerError> {
+    crate::handlers::encode_response(
+        &RemoveRaftVoterResponse::error(error_code, error_message),
+        version,
+    )
 }
 
 #[cfg(test)]
@@ -138,7 +130,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_protocol::primitives::uuid::Uuid as ProtoUuid;
-    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -173,7 +164,7 @@ mod tests {
                 error_message: Some("cannot remove the last voter".into()),
                 ..Default::default()
             };
-            let bytes = encode_resp(version, &resp).expect("encode");
+            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
             let mut cur: &[u8] = &bytes;
             let decoded = RemoveRaftVoterResponse::decode(&mut cur, version).expect("decode");
             assert!(
@@ -196,16 +187,12 @@ mod tests {
         let version = krabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("alice");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req_bytes = encode_request(&request(2), version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -221,18 +208,14 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(-7);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);

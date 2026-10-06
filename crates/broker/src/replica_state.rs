@@ -1144,16 +1144,9 @@ mod tests {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 fenced,
                 in_controlled_shutdown,
-                cordoned_log_dirs: None,
-                node_id: NodeId(node),
                 broker_epoch,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "localhost".to_string(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(node)
             })
         };
         let record = |replicas: &[u64]| PartitionRecord {

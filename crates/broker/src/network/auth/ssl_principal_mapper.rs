@@ -194,17 +194,10 @@ fn split_rule(body: &str) -> Option<(&str, &str, &str)> {
 ///
 /// The default is Kafka's default value for the property, the single rule
 /// `DEFAULT`, which maps every DN to itself.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub struct SslPrincipalMapper {
+    #[default(vec![Rule::Default])]
     rules: Vec<Rule>,
-}
-
-impl Default for SslPrincipalMapper {
-    fn default() -> Self {
-        Self {
-            rules: vec![Rule::Default],
-        }
-    }
 }
 
 impl SslPrincipalMapper {

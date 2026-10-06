@@ -16,20 +16,13 @@ use crate::{
 pub const CHECKPOINT_DOMAIN: &[u8] = b"krabka-audit-ckpt-v1\0";
 
 /// File-backed Ed25519 signer that reads a PKCS#8 v2 DER key.
+#[derive(derive_more::Debug)]
 pub struct FileEd25519Signer {
     key_id: String,
+    #[debug(skip)]
     key_pair: Ed25519KeyPair,
+    #[debug(skip)]
     public_key: Vec<u8>,
-}
-
-impl std::fmt::Debug for FileEd25519Signer {
-    // cargo-mutants: Debug formatting is not behaviorally tested.
-    #[cfg_attr(test, mutants::skip)]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FileEd25519Signer")
-            .field("key_id", &self.key_id)
-            .finish_non_exhaustive()
-    }
 }
 
 impl FileEd25519Signer {

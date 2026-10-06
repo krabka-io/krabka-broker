@@ -47,7 +47,7 @@ use crate::{
     codes,
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        request_context, start_broker_with,
+        request_context, start_broker_no_audit_with,
     },
 };
 
@@ -326,8 +326,7 @@ fn read(start_offset: i64) -> Response {
 
 #[tokio::test]
 async fn share_state_rpcs_need_cluster_action() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
             GrantsInPrincipalName,
         ));

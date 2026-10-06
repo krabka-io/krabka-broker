@@ -20,10 +20,12 @@
 //! keeps the blast radius small and leaves the auth test file, over 1500
 //! lines, untouched.
 
+mod kafka_wire;
+
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
 use krabka_protocol::{
     Decode, Encode,
@@ -37,10 +39,10 @@ use krabka_protocol::{
     },
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-bootstrap-test";
 
 /// Formats `log_dir`, seeding one SCRAM credential.
 ///
@@ -162,7 +164,8 @@ async fn drive_sasl_scram_session(
     av_req
         .encode(&mut av_body, 0)
         .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
-    let av_resp_bytes = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
+    let av_resp_bytes =
+        kafka_wire::round_trip(&mut stream, 18, 0, 1, CLIENT_ID, false, &av_body).await?;
     let mut cur: &[u8] = &av_resp_bytes;
     let _av_resp = ApiVersionsResponse::decode(&mut cur, 0)
         .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
@@ -176,7 +179,8 @@ async fn drive_sasl_scram_session(
     sh_req
         .encode(&mut sh_body, 1)
         .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &sh_body).await?;
+    let sh_resp_bytes =
+        kafka_wire::round_trip(&mut stream, 17, 1, 2, CLIENT_ID, false, &sh_body).await?;
     let mut cur: &[u8] = &sh_resp_bytes;
     let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
         .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
@@ -205,7 +209,7 @@ async fn drive_sasl_scram_session(
         .encode(&mut scram_body_first, 2)
         .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) encode: {e}")))?;
     let scram_first_response_bytes =
-        round_trip(&mut stream, 36, 2, 3, true, &scram_body_first).await?;
+        kafka_wire::round_trip(&mut stream, 36, 2, 3, CLIENT_ID, true, &scram_body_first).await?;
     let mut cur: &[u8] = &scram_first_response_bytes;
     let scram_first_response = SaslAuthenticateResponse::decode(&mut cur, 2)
         .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) decode: {e}")))?;
@@ -230,7 +234,7 @@ async fn drive_sasl_scram_session(
         .encode(&mut scram_body_final, 2)
         .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) encode: {e}")))?;
     let scram_final_response_bytes =
-        round_trip(&mut stream, 36, 2, 4, true, &scram_body_final).await?;
+        kafka_wire::round_trip(&mut stream, 36, 2, 4, CLIENT_ID, true, &scram_body_final).await?;
     let mut cur: &[u8] = &scram_final_response_bytes;
     let scram_final_response = SaslAuthenticateResponse::decode(&mut cur, 2)
         .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) decode: {e}")))?;
@@ -251,7 +255,8 @@ async fn drive_sasl_scram_session(
     md_req
         .encode(&mut md_body, 12)
         .map_err(|e| io::Error::other(format!("Metadata encode: {e}")))?;
-    let md_resp_bytes = round_trip(&mut stream, 3, 12, 5, true, &md_body).await?;
+    let md_resp_bytes =
+        kafka_wire::round_trip(&mut stream, 3, 12, 5, CLIENT_ID, true, &md_body).await?;
     let mut cur: &[u8] = &md_resp_bytes;
     let md_resp = MetadataResponse::decode(&mut cur, 12)
         .map_err(|e| io::Error::other(format!("Metadata decode: {e}")))?;
@@ -260,51 +265,4 @@ async fn drive_sasl_scram_session(
     }
 
     Ok(())
-}
-
-/// Encodes a `RequestHeader v1`, or v2 when `flexible` is set, appends the
-/// body, and writes the length-prefixed frame. It then reads one response
-/// frame and strips the `ResponseHeader`.
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-bootstrap-test";
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0); // empty header tagged-fields
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame size fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _resp_corr_id = cur.get_i32();
-    let uses_v1_header = flexible && api_key != 18;
-    if uses_v1_header {
-        if cur.is_empty() {
-            return Err(io::Error::other(
-                "flexible response missing tagged-fields byte",
-            ));
-        }
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
 }

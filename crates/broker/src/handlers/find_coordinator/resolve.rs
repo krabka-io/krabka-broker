@@ -9,7 +9,7 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_protocol::owned::find_coordinator_response::Coordinator;
 
-use crate::{broker::Broker, codes, handlers::parse_advertised_host_port as parse_host_port};
+use crate::{broker::Broker, codes, host_port::parse_advertised_host_port};
 
 /// What a coordinator lookup resolves against: one metadata image, the brokers
 /// that are fenced or dead in it, and the listener the request arrived on.
@@ -63,7 +63,7 @@ pub(super) fn resolve_partition_coordinator(
         return unavailable_coordinator(key);
     }
     let (host, port) = if leader == target.local_node {
-        let (host, port) = parse_host_port(target.advertised);
+        let (host, port) = parse_advertised_host_port(target.advertised);
         (host, i32::from(port))
     } else {
         let Some(endpoint) = registration

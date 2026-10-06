@@ -39,7 +39,7 @@ use crate::{
     },
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        request_context, start_broker_with,
+        request_context, start_broker_no_audit_with,
     },
 };
 
@@ -86,8 +86,7 @@ async fn seed_topic(broker: &crate::broker::Broker, name: &str) {
 /// Starts a broker that grants what the principal name says, waits until its
 /// group and transaction coordinators serve, and seeds topic `a`.
 async fn start_seeded_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
             GrantsInPrincipalName,
         ));
@@ -477,8 +476,7 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
         primitives::uuid::Uuid as WireUuid,
     };
 
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(DeniesReadOnB);
         cfg.transaction_state_num_partitions = 1;
         cfg.transaction_state_replication_factor = 1;
@@ -699,16 +697,14 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
             }],
             ..Default::default()
         };
-        let bytes = super::handle(
+        let response: TxnOffsetCommitResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::owned::txn_offset_commit_request::API_KEY,
             version,
-            1,
-            &encode_request(&request, version),
+            &request,
             &ctx,
         )
-        .await
-        .expect("handle");
-        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        .await;
         check!(
             response.topics[0].partitions[0].error_code == want,
             "version {version}"
@@ -826,16 +822,14 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
             }],
             ..Default::default()
         };
-        let bytes = super::handle(
+        let response: TxnOffsetCommitResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::owned::txn_offset_commit_request::API_KEY,
             version,
-            1,
-            &encode_request(&request, version),
+            &request,
             &ctx,
         )
-        .await
-        .expect("handle");
-        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        .await;
         actual.push((version, epoch, response.topics[0].partitions[0].error_code));
     }
     check!(actual == rows);
@@ -1065,8 +1059,7 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
 async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
     // (unstable api versions on, the topic id the offset records)
     for (unstable, recorded) in [(false, false), (true, true)] {
-        let (handle, _dir) = start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (handle, _dir) = start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
                 GrantsInPrincipalName,
             ));

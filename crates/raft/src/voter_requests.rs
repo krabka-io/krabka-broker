@@ -307,21 +307,15 @@ pub fn update_voter_current_leader(quorum: &QuorumStateSnapshot) -> CurrentLeade
 
 /// The voter operation a request asked for, which its refusal names as Kafka's
 /// `AddVoterHandler` and `RemoveVoterHandler` do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(as_str = gerund)]
 pub enum VoterOperation {
+    #[enum_str(name = "adding")]
     Add,
+    #[enum_str(name = "removing")]
     Remove,
+    #[enum_str(name = "updating")]
     Update,
-}
-
-impl VoterOperation {
-    fn gerund(self) -> &'static str {
-        match self {
-            Self::Add => "adding",
-            Self::Remove => "removing",
-            Self::Update => "updating",
-        }
-    }
 }
 
 /// The code and message of a reconfiguration's outcome, for the voter

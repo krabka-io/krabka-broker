@@ -186,7 +186,7 @@ mod tests {
     use super::*;
     use crate::server::{
         api_versions::api_versions_response_body,
-        test_support::{test_engine_with_voters, voter},
+        test_support::{decoded, test_engine_with_voters, voter},
     };
 
     /// The controller registrations of a case: each node id and its
@@ -453,8 +453,7 @@ mod tests {
                 unstable: crate::UnstableApiVersions::Disabled,
             },
         );
-        let mut cur = &av[..];
-        let avr = ApiVersionsResponse::decode(&mut cur, 4).unwrap();
+        let avr = decoded::<ApiVersionsResponse>(&av, 4);
         check!(avr.api_keys.iter().any(|k| k.api_key == 60));
     }
 }

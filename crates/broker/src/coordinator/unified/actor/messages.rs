@@ -265,9 +265,10 @@ impl TxnOffsetReservation {
 
 /// Structured `JoinGroup` result for the handler, which encodes it for the
 /// wire version. It mirrors the fields of `JoinGroupResponse`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct JoinResult {
     pub error_code: ErrorCode,
+    #[default(-1)]
     pub generation_id: i32,
     pub protocol_type: Option<String>,
     pub protocol_name: Option<String>,
@@ -281,20 +282,6 @@ pub struct JoinResult {
 
 /// The defaults of Kafka's `JoinGroupResponseData`, generation `-1` included,
 /// so an error reply carries the same fields Kafka's does.
-impl Default for JoinResult {
-    fn default() -> Self {
-        Self {
-            error_code: 0,
-            generation_id: -1,
-            protocol_type: None,
-            protocol_name: None,
-            leader: String::new(),
-            skip_assignment: false,
-            member_id: String::new(),
-            members: Vec::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinResultMember {

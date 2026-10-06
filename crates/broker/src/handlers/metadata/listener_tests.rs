@@ -8,8 +8,6 @@
 //! `LISTENER_NOT_FOUND`. The tests compare the responses as a client decodes
 //! them.
 
-use std::collections::BTreeMap;
-
 use assert2::assert;
 use krabka_metadata::{
     BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, NodeId, PartitionRecord,
@@ -17,7 +15,6 @@ use krabka_metadata::{
 };
 use krabka_protocol::owned::{
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
-    describe_topic_partitions_response::DescribeTopicPartitionsResponse,
     metadata_request::{MetadataRequest, MetadataRequestTopic},
     metadata_response::{MetadataResponse, MetadataResponseBroker},
 };
@@ -26,9 +23,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     handlers::RequestContext,
-    test_support::{
-        decode_response, encode_request, fence_remote_broker, peer, principal, start_broker_with,
-    },
+    test_support::{fence_remote_broker, peer, principal, start_broker_no_audit},
 };
 
 const TOPIC: &str = "led";
@@ -41,12 +36,7 @@ fn registration(
     listeners: &[(&str, &str, u16)],
 ) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(node_id),
         broker_epoch: -1,
-        incarnation_id: uuid::Uuid::nil(),
         host: "legacy-host".into(),
         port: 1,
         rack: rack.map(str::to_owned),
@@ -59,8 +49,7 @@ fn registration(
                 protocol: krabka_security::ListenerProtocol::Plaintext,
             })
             .collect(),
-        log_dirs: vec![],
-        features: BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 
@@ -93,7 +82,7 @@ fn partition(index: i32, replicas: &[u64]) -> MetadataRecord {
 /// Topic `led` has four partitions, led by 2, 9 (no registration), 4 and 2,
 /// where the last one also holds the fenced broker 3.
 async fn cluster() -> (BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_with(|cfg| cfg.audit_enabled = false).await;
+    let (handle, dir) = start_broker_no_audit().await;
     let broker = handle.broker_arc_for_test();
     broker
         .controller
@@ -137,10 +126,14 @@ async fn metadata(
     let broker = handle.broker_arc_for_test();
     let (user, address) = (principal("describer"), peer());
     let ctx = RequestContext::new(&user, &address, "metadata-client", "conn", false, listener);
-    let bytes = super::handle(&broker, version, 7, &encode_request(request, version), &ctx)
-        .await
-        .expect("handle metadata");
-    decode_response(&bytes, version)
+    crate::test_support::dispatch_wire(
+        &broker,
+        krabka_protocol::api_key::ApiKey::Metadata as i16,
+        version,
+        request,
+        &ctx,
+    )
+    .await
 }
 
 fn topic_request() -> MetadataRequest {
@@ -321,16 +314,9 @@ async fn describe_topic_partitions_answers_no_leader_for_a_leader_without_the_li
         ..Default::default()
     };
 
-    let bytes = crate::handlers::describe_topic_partitions::handle(
-        &broker,
-        0,
-        7,
-        &encode_request(&request, 0),
-        &ctx,
-    )
-    .await
-    .expect("handle describe topic partitions");
-    let response: DescribeTopicPartitionsResponse = decode_response(&bytes, 0);
+    let response = crate::handlers::describe_topic_partitions::handle(&broker, request, 0, &ctx)
+        .await
+        .expect("handle describe topic partitions");
 
     let rows: Vec<_> = response.topics[0]
         .partitions

@@ -58,6 +58,7 @@ impl From<&FileOperatorKey> for OperatorKeyEntry {
 /// an absent one retains it. `deny_unknown_fields` so a misspelled
 /// `require_signature` is rejected at parse time rather than leaving the
 /// broker on the opposite policy to the one the operator wrote.
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileFreezeConfig {
@@ -75,8 +76,6 @@ pub struct FileFreezeConfig {
     /// How far a signed freeze record's timestamp may sit from the
     /// controller's clock. Default
     /// [`crate::config::DEFAULT_FREEZE_SIGNATURE_MAX_SKEW`].
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub signature_max_skew: Option<Time>,
 }
 
@@ -86,6 +85,7 @@ pub struct FileFreezeConfig {
 /// Every field is `Option`, so `approvers = []` and `signed_actions = []` are
 /// each a written choice and are distinct from omitting the key.
 /// `deny_unknown_fields` so a misspelled key is rejected at parse time.
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileBreakGlassConfig {
@@ -99,8 +99,6 @@ pub struct FileBreakGlassConfig {
     pub required_approvals: Option<usize>,
     /// How long a proposal stays usable. Default
     /// [`crate::config::DEFAULT_BREAK_GLASS_PROPOSAL_TTL`].
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub proposal_ttl: Option<Time>,
     /// Actions whose approvals must also carry a detached operator signature.
     /// Omitted inside a present `[break_glass]` section selects

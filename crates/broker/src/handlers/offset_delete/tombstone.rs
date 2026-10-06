@@ -50,15 +50,6 @@ fn operation_error_code(code: i16) -> i16 {
     }
 }
 
-pub(super) fn now_ms() -> i64 {
-    i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis()),
-    )
-    .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::check;

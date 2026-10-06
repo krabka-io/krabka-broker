@@ -11,7 +11,7 @@ use krabka_metadata::{
 use tokio::sync::oneshot;
 
 use super::{
-    CommitWaiter, Engine,
+    CommitWaiter, Engine, KraftController,
     offsets::{
         assigned_record_offset, hwm_reaches_waiter, leader_alone_is_majority,
         submit_waiter_need_offset, validate_append_result,
@@ -24,21 +24,6 @@ use crate::{
 };
 
 impl Engine {
-    /// Epoch milliseconds. Delegation-token deadlines are wall-clock by
-    /// definition, and so is the create-time stamped on every batch the leader
-    /// appends: `Engine::now` is monotonic from this process's own start, and
-    /// a snapshot header timestamp has to mean the same instant on every node
-    /// that reads it.
-    pub(super) fn wall_clock_ms() -> i64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| {
-                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-            })
-    }
-
     fn token_generation_matches(
         expected: &DelegationTokenRecord,
         replacement: &DelegationTokenRecord,
@@ -141,7 +126,7 @@ impl Engine {
         }
 
         let uncommitted_tail = self.log.hwm() < self.log.log_end_offset();
-        let now_ms = Self::wall_clock_ms();
+        let now_ms = KraftController::wall_clock_ms();
         let mut scratch = self.image.clone();
         let mut records = Vec::with_capacity(mutations.len());
         for mutation in mutations {
@@ -670,7 +655,10 @@ impl Engine {
                 return;
             }
         };
-        let base = match self.log.append(&mut batch, Self::wall_clock_ms()) {
+        let base = match self
+            .log
+            .append(&mut batch, KraftController::wall_clock_ms())
+        {
             Ok(off) => off,
             Err(e) => {
                 let _ = reply.send(Err(e));
@@ -730,7 +718,10 @@ impl Engine {
             }
         };
         let expected_base = self.log.log_end_offset();
-        let base = match self.log.append(&mut batch, Self::wall_clock_ms()) {
+        let base = match self
+            .log
+            .append(&mut batch, KraftController::wall_clock_ms())
+        {
             Ok(off) => off,
             Err(e) => {
                 tracing::error!(?e, "kraft: test append failed");
@@ -917,7 +908,7 @@ mod tests {
 
     #[test]
     fn wall_clock_ms_is_real_timestamp() {
-        assert2::check!(Engine::wall_clock_ms() > 1_700_000_000_000);
+        assert2::check!(KraftController::wall_clock_ms() > 1_700_000_000_000);
     }
 
     #[test]

@@ -11,10 +11,12 @@
 //! It is gated to non-Windows. The broker handle's `metrics_addr()` is for
 //! Linux and macOS by convention, which matches the other integration tests.
 
-use std::{io, time::Duration};
+mod kafka_wire;
+
+use std::time::Duration;
 
 use assert2::{assert, check};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::PartitionLabel};
 use krabka_protocol::{
     Decode, Encode,
@@ -37,42 +39,8 @@ const FETCH_VERSION: i16 = 12;
 const PRODUCE_VERSION: i16 = 9;
 const CREATE_TOPICS_VERSION: i16 = 7;
 
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-metrics-test";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0);
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    if flexible {
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
-}
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-metrics-test";
 
 async fn create_topic(addr: std::net::SocketAddr) {
     create_topic_named(addr, TOPIC).await;
@@ -92,9 +60,17 @@ async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION).unwrap();
-    let resp = round_trip(&mut stream, 19, CREATE_TOPICS_VERSION, 1, true, &body)
-        .await
-        .unwrap();
+    let resp = kafka_wire::round_trip(
+        &mut stream,
+        19,
+        CREATE_TOPICS_VERSION,
+        1,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .unwrap();
     let mut cur: &[u8] = &resp;
     let r = CreateTopicsResponse::decode(&mut cur, CREATE_TOPICS_VERSION).unwrap();
     assert!(r.topics[0].error_code == 0, "create: {:?}", r.topics[0]);
@@ -134,7 +110,7 @@ async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> 
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = round_trip(&mut stream, 0, PRODUCE_VERSION, 1, true, &body)
+    let resp = kafka_wire::round_trip(&mut stream, 0, PRODUCE_VERSION, 1, CLIENT_ID, true, &body)
         .await
         .unwrap();
     let mut cur: &[u8] = &resp;
@@ -169,7 +145,7 @@ async fn fetch_one(addr: std::net::SocketAddr) {
     let mut body = BytesMut::new();
     req.encode(&mut body, FETCH_VERSION).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = round_trip(&mut stream, 1, FETCH_VERSION, 1, true, &body)
+    let resp = kafka_wire::round_trip(&mut stream, 1, FETCH_VERSION, 1, CLIENT_ID, true, &body)
         .await
         .unwrap();
     let mut cur: &[u8] = &resp;

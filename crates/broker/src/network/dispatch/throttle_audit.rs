@@ -139,245 +139,46 @@ fn position<R: Encode>(
 
 type Probe = fn(ApiVersion) -> ThrottlePosition;
 
-/// An API whose response type has a `throttle_time_ms` field.
-macro_rules! probe {
-    ($module:ident, $response:ident) => {
-        (krabka_protocol::owned::$module::API_KEY, {
-            fn probe(version: ApiVersion) -> ThrottlePosition {
-                use krabka_protocol::owned::$module as schema;
-
-                let response = schema::$response {
-                    throttle_time_ms: SENTINEL,
-                    ..Default::default()
-                };
-                position(&response, version, &schema::default_json(version))
-            }
-            probe as Probe
-        })
-    };
-}
-
-/// An API whose response schema has no `ThrottleTimeMs` at any version. The
-/// arm cannot set the sentinel, so the probe can only answer
-/// [`ThrottlePosition::Absent`] or -- if a schema update grows the field --
-/// [`ThrottlePosition::Buried`], which then fails the divergence test.
-macro_rules! no_throttle_probe {
-    ($module:ident, $response:ident) => {
-        (krabka_protocol::owned::$module::API_KEY, {
-            fn probe(version: ApiVersion) -> ThrottlePosition {
-                use krabka_protocol::owned::$module as schema;
-
-                let response = schema::$response::default();
-                position(&response, version, &schema::default_json(version))
-            }
-            probe as Probe
-        })
-    };
-}
-
-/// Produce v0-v2 and Fetch v0-v3 are encoded from the `kafka_3_6_2` flavors,
-/// mirroring `handlers::produce` and `handlers::fetch::encode_fetch_response`.
-macro_rules! legacy_split_probe {
-    ($module:ident, $response:ident, $canonical_from:literal) => {
-        (krabka_protocol::owned::$module::API_KEY, {
-            fn probe(version: ApiVersion) -> ThrottlePosition {
-                use krabka_protocol::{
-                    kafka_3_6_2::owned::$module as legacy, owned::$module as schema,
-                };
-
-                if version < $canonical_from {
-                    let response = legacy::$response {
-                        throttle_time_ms: SENTINEL,
-                        ..Default::default()
-                    };
-                    position(&response, version, &legacy::default_json(version))
-                } else {
-                    let response = schema::$response {
-                        throttle_time_ms: SENTINEL,
-                        ..Default::default()
-                    };
-                    position(&response, version, &schema::default_json(version))
-                }
-            }
-            probe as Probe
-        })
-    };
-}
-
 /// One probe per advertised `api_key`, keyed by the generated `API_KEY`
 /// constant so an entry cannot drift onto the wrong API.
+///
+/// * `throttled`: the response type has a `throttle_time_ms` field, which the
+///   probe sets to [`SENTINEL`].
+/// * `unthrottled`: the response schema has no `ThrottleTimeMs` at any
+///   version. The probe cannot set the sentinel, so it can only answer
+///   [`ThrottlePosition::Absent`] or -- if a schema update grows the field --
+///   [`ThrottlePosition::Buried`], which then fails the divergence test.
+/// * `legacy_split: Api = N`: below version `N` the response is encoded from
+///   the `kafka_3_6_2` flavor, mirroring `handlers::produce` and
+///   `handlers::fetch::encode_fetch_response`.
 fn probes() -> BTreeMap<ApiKeyCode, Probe> {
-    [
-        legacy_split_probe!(produce_response, ProduceResponse, 3),
-        legacy_split_probe!(fetch_response, FetchResponse, 4),
-        probe!(list_offsets_response, ListOffsetsResponse),
-        probe!(metadata_response, MetadataResponse),
-        probe!(offset_commit_response, OffsetCommitResponse),
-        probe!(offset_fetch_response, OffsetFetchResponse),
-        probe!(find_coordinator_response, FindCoordinatorResponse),
-        probe!(join_group_response, JoinGroupResponse),
-        probe!(heartbeat_response, HeartbeatResponse),
-        probe!(leave_group_response, LeaveGroupResponse),
-        probe!(sync_group_response, SyncGroupResponse),
-        probe!(describe_groups_response, DescribeGroupsResponse),
-        probe!(list_groups_response, ListGroupsResponse),
-        no_throttle_probe!(sasl_handshake_response, SaslHandshakeResponse),
-        probe!(api_versions_response, ApiVersionsResponse),
-        probe!(create_topics_response, CreateTopicsResponse),
-        probe!(delete_topics_response, DeleteTopicsResponse),
-        probe!(delete_records_response, DeleteRecordsResponse),
-        probe!(init_producer_id_response, InitProducerIdResponse),
-        probe!(
-            offset_for_leader_epoch_response,
-            OffsetForLeaderEpochResponse
-        ),
-        probe!(add_partitions_to_txn_response, AddPartitionsToTxnResponse),
-        probe!(add_offsets_to_txn_response, AddOffsetsToTxnResponse),
-        probe!(end_txn_response, EndTxnResponse),
-        no_throttle_probe!(write_txn_markers_response, WriteTxnMarkersResponse),
-        probe!(txn_offset_commit_response, TxnOffsetCommitResponse),
-        probe!(describe_acls_response, DescribeAclsResponse),
-        probe!(create_acls_response, CreateAclsResponse),
-        probe!(delete_acls_response, DeleteAclsResponse),
-        probe!(describe_configs_response, DescribeConfigsResponse),
-        probe!(alter_configs_response, AlterConfigsResponse),
-        probe!(alter_replica_log_dirs_response, AlterReplicaLogDirsResponse),
-        probe!(describe_log_dirs_response, DescribeLogDirsResponse),
-        no_throttle_probe!(sasl_authenticate_response, SaslAuthenticateResponse),
-        probe!(create_partitions_response, CreatePartitionsResponse),
-        probe!(
-            create_delegation_token_response,
-            CreateDelegationTokenResponse
-        ),
-        probe!(
-            renew_delegation_token_response,
-            RenewDelegationTokenResponse
-        ),
-        probe!(
-            expire_delegation_token_response,
-            ExpireDelegationTokenResponse
-        ),
-        probe!(
-            describe_delegation_token_response,
-            DescribeDelegationTokenResponse
-        ),
-        probe!(delete_groups_response, DeleteGroupsResponse),
-        probe!(elect_leaders_response, ElectLeadersResponse),
-        probe!(
-            incremental_alter_configs_response,
-            IncrementalAlterConfigsResponse
-        ),
-        probe!(
-            alter_partition_reassignments_response,
-            AlterPartitionReassignmentsResponse
-        ),
-        probe!(
-            list_partition_reassignments_response,
-            ListPartitionReassignmentsResponse
-        ),
-        probe!(offset_delete_response, OffsetDeleteResponse),
-        probe!(
-            describe_client_quotas_response,
-            DescribeClientQuotasResponse
-        ),
-        probe!(alter_client_quotas_response, AlterClientQuotasResponse),
-        probe!(
-            describe_user_scram_credentials_response,
-            DescribeUserScramCredentialsResponse
-        ),
-        probe!(
-            alter_user_scram_credentials_response,
-            AlterUserScramCredentialsResponse
-        ),
-        no_throttle_probe!(describe_quorum_response, DescribeQuorumResponse),
-        probe!(alter_partition_response, AlterPartitionResponse),
-        probe!(update_features_response, UpdateFeaturesResponse),
-        probe!(fetch_snapshot_response, FetchSnapshotResponse),
-        probe!(describe_cluster_response, DescribeClusterResponse),
-        probe!(describe_producers_response, DescribeProducersResponse),
-        probe!(broker_registration_response, BrokerRegistrationResponse),
-        probe!(broker_heartbeat_response, BrokerHeartbeatResponse),
-        probe!(unregister_broker_response, UnregisterBrokerResponse),
-        probe!(describe_transactions_response, DescribeTransactionsResponse),
-        probe!(list_transactions_response, ListTransactionsResponse),
-        probe!(allocate_producer_ids_response, AllocateProducerIdsResponse),
-        probe!(
-            consumer_group_heartbeat_response,
-            ConsumerGroupHeartbeatResponse
-        ),
-        probe!(
-            consumer_group_describe_response,
-            ConsumerGroupDescribeResponse
-        ),
-        probe!(
-            controller_registration_response,
-            ControllerRegistrationResponse
-        ),
-        probe!(
-            get_telemetry_subscriptions_response,
-            GetTelemetrySubscriptionsResponse
-        ),
-        probe!(push_telemetry_response, PushTelemetryResponse),
-        probe!(
-            assign_replicas_to_dirs_response,
-            AssignReplicasToDirsResponse
-        ),
-        probe!(list_config_resources_response, ListConfigResourcesResponse),
-        probe!(
-            describe_topic_partitions_response,
-            DescribeTopicPartitionsResponse
-        ),
-        probe!(share_group_heartbeat_response, ShareGroupHeartbeatResponse),
-        probe!(share_group_describe_response, ShareGroupDescribeResponse),
-        probe!(share_fetch_response, ShareFetchResponse),
-        probe!(share_acknowledge_response, ShareAcknowledgeResponse),
-        probe!(add_raft_voter_response, AddRaftVoterResponse),
-        probe!(remove_raft_voter_response, RemoveRaftVoterResponse),
-        probe!(update_raft_voter_response, UpdateRaftVoterResponse),
-        no_throttle_probe!(
-            initialize_share_group_state_response,
-            InitializeShareGroupStateResponse
-        ),
-        no_throttle_probe!(read_share_group_state_response, ReadShareGroupStateResponse),
-        no_throttle_probe!(
-            write_share_group_state_response,
-            WriteShareGroupStateResponse
-        ),
-        no_throttle_probe!(
-            delete_share_group_state_response,
-            DeleteShareGroupStateResponse
-        ),
-        no_throttle_probe!(
-            read_share_group_state_summary_response,
-            ReadShareGroupStateSummaryResponse
-        ),
-        probe!(
-            streams_group_heartbeat_response,
-            StreamsGroupHeartbeatResponse
-        ),
-        probe!(
-            streams_group_describe_response,
-            StreamsGroupDescribeResponse
-        ),
-        probe!(
-            describe_share_group_offsets_response,
-            DescribeShareGroupOffsetsResponse
-        ),
-        probe!(
-            alter_share_group_offsets_response,
-            AlterShareGroupOffsetsResponse
-        ),
-        probe!(
-            delete_share_group_offsets_response,
-            DeleteShareGroupOffsetsResponse
-        ),
-        probe!(
-            streams_group_topology_description_update_response,
-            StreamsGroupTopologyDescriptionUpdateResponse
-        ),
-        probe!(unregister_controller_response, UnregisterControllerResponse),
-        no_throttle_probe!(get_replica_log_info_response, GetReplicaLogInfoResponse),
-    ]
+    krabka_macros::throttle_probes! {
+        throttled:
+            ListOffsets, Metadata, OffsetCommit, OffsetFetch, FindCoordinator, JoinGroup, Heartbeat,
+            LeaveGroup, SyncGroup, DescribeGroups, ListGroups, ApiVersions, CreateTopics,
+            DeleteTopics, DeleteRecords, InitProducerId, OffsetForLeaderEpoch, AddPartitionsToTxn,
+            AddOffsetsToTxn, EndTxn, TxnOffsetCommit, DescribeAcls, CreateAcls, DeleteAcls,
+            DescribeConfigs, AlterConfigs, AlterReplicaLogDirs, DescribeLogDirs, CreatePartitions,
+            CreateDelegationToken, RenewDelegationToken, ExpireDelegationToken,
+            DescribeDelegationToken, DeleteGroups, ElectLeaders, IncrementalAlterConfigs,
+            AlterPartitionReassignments, ListPartitionReassignments, OffsetDelete,
+            DescribeClientQuotas, AlterClientQuotas, DescribeUserScramCredentials,
+            AlterUserScramCredentials, AlterPartition, UpdateFeatures, FetchSnapshot,
+            DescribeCluster, DescribeProducers, BrokerRegistration, BrokerHeartbeat,
+            UnregisterBroker, DescribeTransactions, ListTransactions, AllocateProducerIds,
+            ConsumerGroupHeartbeat, ConsumerGroupDescribe, ControllerRegistration,
+            GetTelemetrySubscriptions, PushTelemetry, AssignReplicasToDirs, ListConfigResources,
+            DescribeTopicPartitions, ShareGroupHeartbeat, ShareGroupDescribe, ShareFetch,
+            ShareAcknowledge, AddRaftVoter, RemoveRaftVoter, UpdateRaftVoter, StreamsGroupHeartbeat,
+            StreamsGroupDescribe, DescribeShareGroupOffsets, AlterShareGroupOffsets,
+            DeleteShareGroupOffsets, StreamsGroupTopologyDescriptionUpdate, UnregisterController;
+        unthrottled:
+            SaslHandshake, WriteTxnMarkers, SaslAuthenticate, DescribeQuorum,
+            InitializeShareGroupState, ReadShareGroupState, WriteShareGroupState,
+            DeleteShareGroupState, ReadShareGroupStateSummary, GetReplicaLogInfo;
+        legacy_split:
+            Produce = 3, Fetch = 4;
+    }
     .into_iter()
     .collect()
 }

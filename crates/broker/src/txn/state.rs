@@ -5,7 +5,10 @@ use krabka_log::ProducerId;
 
 /// Transaction state machine. It mirrors Apache Kafka's classic transaction
 /// states (KIP-98), extended for KIP-1319 v2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `as_str` is the state's name as Kafka's `TransactionState` spells it on the
+/// wire, the string `DescribeTransactions` and `ListTransactions` report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
 pub enum TxnState {
     Empty,
     Ongoing,

@@ -30,14 +30,14 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
     share_partition::state::RecordState::{self, Acquired, Available},
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -46,8 +46,7 @@ const VERSION: i16 = 2;
 const ACCEPT: i8 = 1;
 
 async fn start(session_max: usize) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(move |cfg| {
-        cfg.audit_enabled = false;
+    start_broker_no_audit_with(move |cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_session_cache_max_when_unlimited = session_max;
     })
@@ -121,7 +120,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, partition: i32) {
     let ctx = request_context(&user, &address, "producer-client");
     let bytes = encode_request(&request, PRODUCE_VERSION);
     let response =
-        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, 7, &bytes, bytes.clone(), &ctx)
+        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, &bytes, bytes.clone(), &ctx)
             .await
             .expect("handle produce");
     let response: ProduceResponse = decode_response(&response, PRODUCE_VERSION);
@@ -214,9 +213,15 @@ async fn share_fetch(broker: &BrokerHandle, fetch: &Fetch<'_>) -> ShareFetchResp
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let bytes = encode_request(&request, VERSION);
-    let response = handle(&shared, VERSION, 7, &bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        VERSION,
+        &bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     decode_response(&response, VERSION)
 }
 
@@ -393,8 +398,7 @@ async fn group_share_settings_override_the_broker_defaults() {
     // The broker's bound admits the record lock limit of 2 that the group
     // asks for, which is below Kafka's default minimum and would be capped to
     // it.
-    let (broker, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_session_cache_max_when_unlimited = 10_000;
         cfg.share_group.min_partition_max_record_locks = 2;
@@ -499,10 +503,10 @@ async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
         let user = principal("share-consumer");
         let address = peer();
         let ctx = request_context(&user, &address, "share-client");
-        let response = handle(
+        let response = crate::test_support::try_dispatch_context(
             &shared,
+            krabka_protocol::owned::share_fetch_request::API_KEY,
             version,
-            7,
             &encode_request(&request, version),
             &ctx,
         )
@@ -560,10 +564,10 @@ async fn fetch_with_limits(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let started = Instant::now();
-    let response = handle(
+    let response = crate::test_support::try_dispatch_context(
         &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
         VERSION,
-        7,
         &encode_request(&request, VERSION),
         &ctx,
     )

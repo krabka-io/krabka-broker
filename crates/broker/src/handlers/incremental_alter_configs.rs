@@ -26,15 +26,11 @@
 //! resource type has its own submodule that owns the key whitelist, the value
 //! validation, and the metadata record that it stages.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        incremental_alter_configs_request::{AlterConfigsResource, IncrementalAlterConfigsRequest},
-        incremental_alter_configs_response::{
-            AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
-        },
+use krabka_protocol::owned::{
+    incremental_alter_configs_request::{AlterConfigsResource, IncrementalAlterConfigsRequest},
+    incremental_alter_configs_response::{
+        AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
     },
 };
 use krabka_raft::RaftError;
@@ -52,18 +48,16 @@ use self::{
     client_metrics_scope::handle_client_metrics_scoped, group_scope::handle_group_scoped,
     topic_scope::topic_config_record,
 };
+use super::alter_configs::duplicate_resource_flags;
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     error::BrokerError,
+    handlers::describe_configs::{
+        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+    },
 };
-
-const RESOURCE_TYPE_TOPIC: i8 = 2;
-const RESOURCE_TYPE_BROKER: i8 = 4;
-const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
-const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
-const RESOURCE_TYPE_GROUP: i8 = 32;
 const OP_SET: i8 = 0;
 const OP_DELETE: i8 = 1;
 const OP_APPEND: i8 = 2;
@@ -73,24 +67,20 @@ const OP_SUBTRACT: i8 = 3;
     name = "handle_incremental_alter_configs",
     level = "info",
     skip_all,
-    fields(api = "IncrementalAlterConfigs", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "IncrementalAlterConfigs", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: IncrementalAlterConfigsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = IncrementalAlterConfigsRequest::decode(&mut cur, version)?;
-
+) -> Result<IncrementalAlterConfigsResponse, BrokerError> {
     let image = broker.controller.current_image();
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
     let validate_only = req.validate_only;
     let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
-    let duplicate_flags = duplicate_resource_flags(&req.resources);
+    let duplicate_flags = resource_duplicate_flags(&req.resources);
 
     for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
         // The keys, never the values: a config value can be a password or a
@@ -126,62 +116,35 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
-/// Kafka's `ConfigAdminManager.preprocess` rejects a request that names the
-/// same `(resource_type, resource_name)` pair more than once, on every row
-/// that names it. This computes that flag for each resource in request order.
-fn duplicate_resource_flags(resources: &[AlterConfigsResource]) -> Vec<bool> {
-    let mut counts: std::collections::HashMap<(i8, &str), usize> = std::collections::HashMap::new();
-    for resource in resources {
-        *counts
-            .entry((resource.resource_type, resource.resource_name.as_str()))
-            .or_insert(0) += 1;
-    }
-    resources
-        .iter()
-        .map(|resource| counts[&(resource.resource_type, resource.resource_name.as_str())] > 1)
-        .collect()
+/// Flags each resource named more than once in the request. See
+/// [`duplicate_resource_flags`].
+fn resource_duplicate_flags(resources: &[AlterConfigsResource]) -> Vec<bool> {
+    duplicate_resource_flags(
+        resources
+            .iter()
+            .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
+    )
 }
 
-/// Kafka's `ConfigAdminManager.preprocess` shape checks, which run before any
-/// authorization: a resource named twice, a key named twice within one
-/// resource, and a null value on any operation but DELETE.
+/// Kafka's `ConfigAdminManager.preprocess` shape checks, with a null value
+/// legal on DELETE only. See
+/// [`super::alter_configs::validate_resource_shape`].
 fn validate_resource_shape(
     resource: &AlterConfigsResource,
     is_duplicate: bool,
 ) -> Result<(), (i16, String)> {
-    if is_duplicate {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Each resource must appear at most once.".into(),
-        ));
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    if resource
-        .configs
-        .iter()
-        .any(|config| !seen.insert(config.name.as_str()))
-    {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Error due to duplicate config keys".into(),
-        ));
-    }
-    let null_names: Vec<&str> = resource
-        .configs
-        .iter()
-        .filter(|config| config.config_operation != OP_DELETE && config.value.is_none())
-        .map(|config| config.name.as_str())
-        .collect();
-    if !null_names.is_empty() {
-        return Err((
-            codes::INVALID_REQUEST,
-            format!("Null value not supported for : {}", null_names.join(", ")),
-        ));
-    }
-    Ok(())
+    super::alter_configs::validate_resource_shape(
+        is_duplicate,
+        resource.configs.iter().map(|config| {
+            (
+                config.name.as_str(),
+                config.config_operation != OP_DELETE && config.value.is_none(),
+            )
+        }),
+    )
 }
 
 async fn process_resource(
@@ -237,17 +200,14 @@ async fn process_resource(
             return out;
         }
     };
-    let acl_result = broker.config.authorizer.authorize(
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
         image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: acl_type,
-            resource_name: acl_name,
-            operation: AclOperation::AlterConfigs,
-        },
-    );
-    if acl_result == AuthorizationResult::Deny {
+        ctx,
+        acl_type,
+        acl_name,
+        AclOperation::AlterConfigs,
+    ) {
         out.error_code = denied_code;
         out.error_message = Some(denied_message.into());
         return out;
@@ -449,7 +409,7 @@ mod tests {
             ),
         ];
         for (resources, want) in cases {
-            let flags = duplicate_resource_flags(&resources);
+            let flags = resource_duplicate_flags(&resources);
             let got: Vec<Result<(), (i16, String)>> = resources
                 .iter()
                 .zip(flags)

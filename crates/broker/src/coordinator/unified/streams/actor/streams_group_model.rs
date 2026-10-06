@@ -27,13 +27,16 @@ use super::{
     reconciliation::compute_and_install_target,
     records::{apply_seed, snapshot_seed},
 };
-use crate::coordinator::unified::streams::{
-    config::{StreamsAssignorKind, StreamsGroupConfig},
-    persistence::{StoredSubtopology, StreamsGroupTopologyValue},
-    state::{
-        INITIAL_EPOCH, OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
-        StreamsMemberAssignmentState, StreamsMemberState,
+use crate::{
+    coordinator::unified::streams::{
+        config::{StreamsAssignorKind, StreamsGroupConfig},
+        persistence::{StoredSubtopology, StreamsGroupTopologyValue},
+        state::{
+            INITIAL_EPOCH, OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
+            StreamsMemberAssignmentState, StreamsMemberState,
+        },
     },
+    model_check::run_bfs,
 };
 
 const SUBTOPOLOGY: &str = "s";
@@ -697,20 +700,12 @@ impl Model for StreamsModel {
 
 #[test]
 fn streams_group_reconciliation_model() {
-    let checker = StreamsModel
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[streams_group_reconciliation] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
+    let checker = run_bfs(
+        StreamsModel,
+        "streams_group_reconciliation",
+        MAX_DEPTH,
+        MAX_STATES,
     );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert2::assert!(checker.state_count() < MAX_STATES, "state cap hit");
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == PINNED_UNIQUE_STATES,

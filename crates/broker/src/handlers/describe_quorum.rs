@@ -22,24 +22,27 @@
 //! a request that arrives there directly (#814, #1034) -- one
 //! implementation on both listeners.
 //!
-//! The authorization gate lives in `authz`, the envelope wrap/unwrap in
-//! `forward`. This file holds the wire entry point: the gate, the forward,
-//! and the local answer.
+//! The envelope wrap/unwrap lives in `forward`. This file holds the wire
+//! entry point: the shared `Cluster` `Describe` gate, the forward, and the
+//! local answer.
 
 use bytes::Bytes;
 use krabka_protocol::{
-    Decode, UnknownTaggedFields,
+    Decode,
     owned::{
-        describe_quorum_request::DescribeQuorumRequest,
+        describe_quorum_request::{API_KEY as DESCRIBE_QUORUM_API_KEY, DescribeQuorumRequest},
         describe_quorum_response::DescribeQuorumResponse,
     },
 };
 
-mod authz;
 mod forward;
 
-use self::authz::cluster_describe_denied;
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorResponse as _, cluster_describe_denied},
+};
 
 #[tracing::instrument(
     name = "handle_describe_quorum",
@@ -51,7 +54,6 @@ use crate::{broker::Broker, codes, error::BrokerError};
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -59,7 +61,7 @@ pub(crate) async fn handle(
 
     // Whole-request Cluster Describe gate. DescribeQuorum is
     // cluster-wide raft introspection — same gate as DescribeCluster.
-    if cluster_describe_denied(broker, &image, ctx) {
+    if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let resp = top_level_error_response(codes::CLUSTER_AUTHORIZATION_FAILED);
         return crate::handlers::encode_response(&resp, version);
     }
@@ -67,9 +69,16 @@ pub(crate) async fn handle(
     // Forward to the active controller whenever this node is not it (#392,
     // #1034): a broker-only observer always forwards; a combined/controller
     // node forwards only while it is not the leader. Wrapped in a KIP-590
-    // `Envelope` carrying this caller's own identity (`forward::build`), not
-    // this node's inter-broker one -- see the module doc and `forward`'s.
-    let envelope_body = forward::build(broker, req_bytes, version, ctx)?;
+    // `Envelope` carrying this caller's own identity
+    // (`forward_to_controller::build`), not this node's inter-broker one --
+    // see the module doc and `forward`'s.
+    let envelope_body = crate::handlers::forward_to_controller::build(
+        broker,
+        DESCRIBE_QUORUM_API_KEY,
+        req_bytes,
+        version,
+        ctx,
+    )?;
     if let Some(forwarded) = broker
         .controller
         .forward_raw(
@@ -133,13 +142,7 @@ pub(super) fn top_level_error_response(error_code: i16) -> DescribeQuorumRespons
         codes::NOT_LEADER_OR_FOLLOWER => NOT_LEADER_OR_FOLLOWER_MESSAGE,
         _ => "",
     };
-    DescribeQuorumResponse {
-        error_code,
-        error_message: Some(error_message.to_owned()),
-        topics: Vec::new(),
-        nodes: Vec::new(),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    DescribeQuorumResponse::error(error_code, Some(error_message.to_owned()))
 }
 
 #[cfg(test)]

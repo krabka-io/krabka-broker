@@ -36,19 +36,7 @@ use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopics
 
 mod support;
 
-use std::sync::OnceLock;
-
-use tokio::sync::Mutex;
-
-/// Serialize the multi-broker tests in this binary.
-///
-/// Each test boots a 3-node loopback cluster. Two tests at the same time
-/// exhaust the ephemeral ports and starve openraft election timing. The
-/// `cluster_lock` in `consumer_leader_routing.rs` has the same rationale.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
+use support::cluster_lock;
 
 async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i32) {
     let deadline = Instant::now() + Duration::from_secs(30);

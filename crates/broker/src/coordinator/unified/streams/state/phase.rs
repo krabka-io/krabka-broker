@@ -6,7 +6,10 @@
 //! state machine that sets it.
 
 /// The KIP-1071 group lifecycle state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Its `as_str` is the Kafka group-state string `DescribeGroups`,
+/// `ListGroups`, and the admin tools read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
 pub enum StreamsGroupStatePhase {
     /// No members.
     #[default]
@@ -21,21 +24,6 @@ pub enum StreamsGroupStatePhase {
     Reconciling,
     /// All members are at the assignment epoch with no pending revocations.
     Stable,
-}
-
-impl StreamsGroupStatePhase {
-    /// The Kafka group-state string this phase serializes to.
-    /// `DescribeGroups`, `ListGroups`, and the admin tools read it.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Empty => "Empty",
-            Self::NotReady => "NotReady",
-            Self::Assigning => "Assigning",
-            Self::Reconciling => "Reconciling",
-            Self::Stable => "Stable",
-        }
-    }
 }
 
 #[cfg(test)]

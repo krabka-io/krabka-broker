@@ -5,9 +5,10 @@
 //! the depth cap, the generated-state cap or the unique-state bound proves
 //! nothing, and the two must be tuned together.
 
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 use super::model::DpModel;
+use crate::model_check::run_bfs;
 
 const TARGET_STATE_COUNT: usize = 60_000_000;
 const MAX_UNIQUE_STATES: usize = 8_000_000;
@@ -36,23 +37,7 @@ pub(super) const PINNED_UNIQUE_STATES_ELR: usize = 898_023;
 pub(super) const PINNED_UNIQUE_STATES_DISKLESS: usize = 450;
 
 pub(super) fn run(model: DpModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < TARGET_STATE_COUNT,
-        "[{label}] truncated"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique bound exceeded ({})",

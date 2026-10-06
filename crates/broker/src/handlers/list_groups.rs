@@ -30,14 +30,9 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        list_groups_request::ListGroupsRequest,
-        list_groups_response::{ListGroupsResponse, ListedGroup},
-    },
+use krabka_protocol::owned::{
+    list_groups_request::ListGroupsRequest,
+    list_groups_response::{ListGroupsResponse, ListedGroup},
 };
 use tokio::sync::oneshot;
 
@@ -45,12 +40,13 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::unified::{
-        GroupType, actor::GroupActorMessage, classic_state::GroupState,
-        share::actor::ShareGroupActorMessage, streams::actor::StreamsGroupActorMessage,
+        GroupType, actor::GroupActorMessage, share::actor::ShareGroupActorMessage,
+        streams::actor::StreamsGroupActorMessage,
     },
     error::BrokerError,
     handlers::{
-        acl_denied, cluster_describe_denied, coordinator_routing::any_group_partition_loading,
+        cluster_describe_denied, coordinator_routing::any_group_partition_loading,
+        group_describe_denied,
     },
 };
 
@@ -74,18 +70,15 @@ const STREAMS_PROTOCOL_TYPE: &str = "streams";
     name = "handle_list_groups",
     level = "info",
     skip_all,
-    fields(api = "ListGroups", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ListGroups", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ListGroupsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ListGroupsRequest::decode(&mut cur, version)?;
+) -> Result<ListGroupsResponse, BrokerError> {
     // Kafka's `GroupCoordinatorService.listGroups` reads every local shard and
     // answers the load error of one that is still loading, with no groups.
     if any_group_partition_loading(broker) {
@@ -93,7 +86,7 @@ pub(crate) async fn handle(
             error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
     let candidates = collect_groups(broker).await;
 
@@ -104,24 +97,15 @@ pub(crate) async fn handle(
     // `Describe`, and a denied group is silently omitted.
     let cluster_describe = !cluster_describe_denied(authorizer, &image, ctx);
     let may_describe = |group_id: &str| {
-        cluster_describe
-            || !acl_denied(
-                authorizer,
-                &image,
-                ctx,
-                ResourceType::Group,
-                group_id,
-                AclOperation::Describe,
-            )
+        cluster_describe || !group_describe_denied(authorizer, &image, ctx, group_id)
     };
 
-    let resp = ListGroupsResponse {
+    Ok(ListGroupsResponse {
         error_code: codes::NONE,
         groups: filter_groups(candidates, &req, &may_describe),
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Every group the coordinator hosts, as Kafka's `asListedGroup` renders it,
@@ -150,7 +134,7 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
             // Kafka's `ClassicGroup.asListedGroup`: `protocolType.orElse("")`,
             // so a group that only commits offsets reports "".
             s.protocol_type.unwrap_or_default(),
-            state_to_str(s.state).into(),
+            s.state.as_str().into(),
             GROUP_TYPE_CLASSIC,
         );
         push_once(&mut groups, &mut emitted, group);
@@ -292,33 +276,22 @@ fn filter_groups(
         .collect()
 }
 
-fn state_to_str(s: GroupState) -> &'static str {
-    match s {
-        GroupState::Empty => "Empty",
-        GroupState::PreparingRebalance => "PreparingRebalance",
-        GroupState::CompletingRebalance => "CompletingRebalance",
-        GroupState::Stable => "Stable",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::MetadataRecord;
+    use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 
     use super::*;
-    use crate::test_support::{peer, principal};
+    use crate::{
+        coordinator::unified::classic_state::GroupState,
+        test_support::{peer, principal},
+    };
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
-    crate::test_support::wire_helpers!(
-        ListGroupsRequest,
-        ListGroupsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     fn group(group_id: &str, protocol_type: &str, state: &str, group_type: &str) -> ListedGroup {
         listed(
@@ -339,8 +312,7 @@ mod tests {
     /// consumer, share or streams group reports `Empty`.
     #[tokio::test]
     async fn handler_lists_each_kind_with_its_state_and_protocol_type() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         })
         .await;
@@ -353,12 +325,10 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&ListGroupsRequest::default());
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+        let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         let expected = ListGroupsResponse {
             throttle_time_ms: 0,
@@ -379,15 +349,12 @@ mod tests {
     }
 
     fn acl(resource_type: ResourceType, name: &str, user: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
             resource_type,
-            resource_name: name.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: format!("User:{user}"),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+            name,
+            &format!("User:{user}"),
+            AclOperation::Describe,
+        ))
     }
 
     /// Kafka's `handleListGroupsRequest`: cluster `Describe` lists every group
@@ -417,8 +384,7 @@ mod tests {
         ];
 
         for (user, acls, expected_groups) in rows {
-            let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-                cfg.audit_enabled = false;
+            let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
                 cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                     HashSet::from(["admin".to_string()]),
                 ));
@@ -437,12 +403,10 @@ mod tests {
             let p = principal(user);
             let peer = peer();
             let ctx = test_context(&p, &peer);
-            let req = encode_request(&ListGroupsRequest::default());
 
-            let bytes = handle(&broker, VERSION, 1, &req, &ctx)
+            let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
                 .await
                 .expect("handle");
-            let resp = decode_response(&bytes);
 
             let expected = ListGroupsResponse {
                 groups: expected_groups,
@@ -515,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn state_to_str_covers_all_classic_states() {
+    fn group_state_as_str_covers_all_classic_states() {
         let cases = [
             (GroupState::Empty, "Empty"),
             (GroupState::PreparingRebalance, "PreparingRebalance"),
@@ -523,7 +487,7 @@ mod tests {
             (GroupState::Stable, "Stable"),
         ];
         for (state, want) in cases {
-            assert!(state_to_str(state) == want, "{state:?}");
+            assert!(state.as_str() == want, "{state:?}");
         }
     }
 }

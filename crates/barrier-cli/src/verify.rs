@@ -23,6 +23,8 @@ use krabka_protocol::{
     records::RecordBatch,
 };
 
+use crate::report::described_error;
+
 /// One offset that does not hold the marker the cut claims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mismatch {
@@ -133,12 +135,8 @@ async fn fetch_cut(
         .map_err(|e| format!("cannot read the cuts of {group}: {e}"))?;
     if response.error_code != 0 {
         return Err(format!(
-            "cannot read the cuts of {group}: error {}{}",
-            response.error_code,
-            response
-                .error_message
-                .as_ref()
-                .map_or_else(String::new, |m| format!(": {m}"))
+            "cannot read the cuts of {group}: {}",
+            described_error(response.error_code, response.error_message.as_deref())
         ));
     }
     response

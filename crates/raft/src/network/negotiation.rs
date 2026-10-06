@@ -25,7 +25,7 @@ use krabka_protocol::{
     },
 };
 
-use crate::{kraft::transport::api_key, network::addressing::api_version_for};
+use crate::{kraft::transport::PeerApi, network::addressing::api_version_for};
 
 /// The version to send `key` at: the engine's version, or the peer's maximum
 /// when the peer advertises a range that ends below it. A peer that
@@ -42,13 +42,12 @@ pub(crate) fn negotiated_version(key: i16, peer_range: Option<(i16, i16)>) -> i1
 /// Re-encodes a request body for `key` from version `from` to version `to`.
 /// `None` when the body does not decode at `from` or does not encode at `to`.
 pub(crate) fn convert_request(key: i16, body: &[u8], from: i16, to: i16) -> Option<Bytes> {
-    match key {
-        api_key::FETCH => convert::<FetchRequest>(body, from, to),
-        api_key::VOTE => convert::<VoteRequest>(body, from, to),
-        api_key::BEGIN_QUORUM_EPOCH => convert::<BeginQuorumEpochRequest>(body, from, to),
-        api_key::END_QUORUM_EPOCH => convert_end_quorum_epoch(body, from, to),
-        api_key::FETCH_SNAPSHOT => convert::<FetchSnapshotRequest>(body, from, to),
-        _ => None,
+    match PeerApi::from_api_key(key)? {
+        PeerApi::Fetch => convert::<FetchRequest>(body, from, to),
+        PeerApi::Vote => convert::<VoteRequest>(body, from, to),
+        PeerApi::BeginQuorumEpoch => convert::<BeginQuorumEpochRequest>(body, from, to),
+        PeerApi::EndQuorumEpoch => convert_end_quorum_epoch(body, from, to),
+        PeerApi::FetchSnapshot => convert::<FetchSnapshotRequest>(body, from, to),
     }
 }
 
@@ -80,13 +79,12 @@ fn convert_end_quorum_epoch(body: &[u8], from: i16, to: i16) -> Option<Bytes> {
 /// Re-encodes a response body for `key` from version `from` to version `to`.
 /// `None` when the body does not decode at `from` or does not encode at `to`.
 pub(crate) fn convert_response(key: i16, body: &[u8], from: i16, to: i16) -> Option<Bytes> {
-    match key {
-        api_key::FETCH => convert::<FetchResponse>(body, from, to),
-        api_key::VOTE => convert::<VoteResponse>(body, from, to),
-        api_key::BEGIN_QUORUM_EPOCH => convert::<BeginQuorumEpochResponse>(body, from, to),
-        api_key::END_QUORUM_EPOCH => convert::<EndQuorumEpochResponse>(body, from, to),
-        api_key::FETCH_SNAPSHOT => convert::<FetchSnapshotResponse>(body, from, to),
-        _ => None,
+    match PeerApi::from_api_key(key)? {
+        PeerApi::Fetch => convert::<FetchResponse>(body, from, to),
+        PeerApi::Vote => convert::<VoteResponse>(body, from, to),
+        PeerApi::BeginQuorumEpoch => convert::<BeginQuorumEpochResponse>(body, from, to),
+        PeerApi::EndQuorumEpoch => convert::<EndQuorumEpochResponse>(body, from, to),
+        PeerApi::FetchSnapshot => convert::<FetchSnapshotResponse>(body, from, to),
     }
 }
 
@@ -107,7 +105,10 @@ mod tests {
     use krabka_protocol::owned::fetch_request::{self as fetch_req};
 
     use super::*;
-    use crate::kraft::transport::wire::{FETCH_VERSION, VOTE_VERSION};
+    use crate::kraft::transport::{
+        api_key,
+        wire::{FETCH_VERSION, VOTE_VERSION},
+    };
 
     /// A peer whose range ends below the engine's version gets its maximum;
     /// any other peer gets the engine's version.

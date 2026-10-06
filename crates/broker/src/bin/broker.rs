@@ -8,11 +8,9 @@
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-// `copy_plain_runtime!` and `copy_refined_runtime!` are textually scoped, and
-// this file is a binary crate root, where `mod cli;` would name `src/bin/cli.rs`
-// and Cargo would compile that file as a second binary. Every child therefore
-// carries an explicit path, and the macro module precedes the module that
-// expands its macros.
+// This file is a binary crate root, where `mod cli;` would name
+// `src/bin/cli.rs` and Cargo would compile that file as a second binary. Every
+// child therefore carries an explicit path.
 #[path = "broker/bootstrap.rs"]
 mod bootstrap;
 #[path = "broker/cli.rs"]
@@ -21,9 +19,6 @@ mod cli;
 mod config;
 #[path = "broker/runtime_args.rs"]
 mod runtime_args;
-#[macro_use]
-#[path = "broker/runtime_macros.rs"]
-mod runtime_macros;
 #[path = "broker/runtime_overlay.rs"]
 mod runtime_overlay;
 #[path = "broker/signals.rs"]

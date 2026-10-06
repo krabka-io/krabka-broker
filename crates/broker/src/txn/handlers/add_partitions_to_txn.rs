@@ -43,14 +43,15 @@
 //! caller learns that it is unauthorized, or that it reached the wrong broker,
 //! before it learns anything about the topic's freeze state.
 
-use bytes::Bytes;
-use krabka_protocol::{Decode, owned::add_partitions_to_txn_request::AddPartitionsToTxnRequest};
+use krabka_protocol::owned::{
+    add_partitions_to_txn_request::AddPartitionsToTxnRequest,
+    add_partitions_to_txn_response::AddPartitionsToTxnResponse,
+};
 
 mod authz;
 mod registration;
 mod results;
 mod versions;
-mod wire;
 mod write_freeze;
 
 #[cfg(test)]
@@ -65,34 +66,28 @@ use crate::{broker::Broker, error::BrokerError};
     name = "handle_add_partitions_to_txn",
     level = "info",
     skip_all,
-    fields(api = "AddPartitionsToTxn", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "AddPartitionsToTxn", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: AddPartitionsToTxnRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<AddPartitionsToTxnResponse, BrokerError> {
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
     let authorizer = broker.config.authorizer.as_ref();
-    let mut cur: &[u8] = req_bytes;
-    let req = AddPartitionsToTxnRequest::decode(&mut cur, version)?;
 
     // Versions 4 and later come only from brokers. A deny is
     // `AddPartitionsToTxnRequest.getErrorResponse`: the top-level error code.
     if version >= 4
         && crate::handlers::cluster_action_denied(authorizer, &controller.current_image(), ctx)
     {
-        return wire::encode_response(
-            &krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse {
-                error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            },
-            version,
-        );
+        return Ok(AddPartitionsToTxnResponse {
+            error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+            ..Default::default()
+        });
     }
 
     // Refresh leader-partition view from the current metadata image
@@ -110,9 +105,9 @@ pub(crate) async fn handle(
         peer: ctx.peer,
         config: &broker.config,
     };
-    if version >= 4 {
+    Ok(if version >= 4 {
         handle_v4(&dependencies, version, &req).await
     } else {
         handle_v3(&dependencies, version, &req).await
-    }
+    })
 }

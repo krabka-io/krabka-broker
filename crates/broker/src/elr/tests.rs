@@ -7,7 +7,7 @@
 //! through the real `DescribeTopicPartitions` handler, which is the path
 //! `kafka-topics --describe` takes.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
 use assert2::assert;
 use krabka_metadata::{
@@ -18,24 +18,19 @@ use krabka_protocol::owned::{
     alter_partition_request::{
         AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
     },
-    alter_partition_response::AlterPartitionResponse,
     broker_registration_request::{BrokerRegistrationRequest, Feature, Listener},
     broker_registration_response::BrokerRegistrationResponse,
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
-    describe_topic_partitions_response::{
-        DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
-    },
+    describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
 };
-use krabka_security::{AuthMethod, Principal};
+use krabka_security::Principal;
 
 use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
     broker::Broker,
     codes,
     config_keys::MIN_INSYNC_REPLICAS,
-    test_support::{
-        decode_response, encode_request, request_context, start_broker_with_authorizer,
-    },
+    test_support::{request_context, start_broker_with_authorizer},
 };
 
 const TOPIC: &str = "orders";
@@ -123,38 +118,12 @@ fn plaintext_endpoints(port: u16) -> Vec<krabka_metadata::BrokerEndpoint> {
 /// new rather than as one that has come back.
 fn registration_record(incarnation: u128) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(3),
         broker_epoch: -1,
         incarnation_id: uuid::Uuid::from_u128(incarnation),
-        host: "127.0.0.1".into(),
         port: 9094,
-        rack: None,
         endpoints: plaintext_endpoints(9094),
-        log_dirs: vec![],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(3)
     })
-}
-
-async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|node| node == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
 }
 
 /// Broker 3 is fenced, and its process has stopped: its heartbeat session is
@@ -166,11 +135,7 @@ async fn mark_broker_3_unavailable(broker: &Broker) {
 }
 
 fn principal() -> Principal {
-    Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    }
+    crate::test_support::principal("replica")
 }
 
 fn peer() -> SocketAddr {
@@ -189,20 +154,13 @@ async fn activate_followers(broker: &Broker) {
                 .iter()
                 .map(|&node| {
                     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                        fenced: false,
-                        in_controlled_shutdown: false,
-                        cordoned_log_dirs: None,
-                        node_id: NodeId(node),
                         broker_epoch: -1,
                         incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
-                        host: "127.0.0.1".into(),
                         port: 9092 + u16::try_from(node).expect("a small node id"),
-                        rack: None,
                         endpoints: plaintext_endpoints(
                             9092 + u16::try_from(node).expect("a small node id"),
                         ),
-                        log_dirs: vec![],
-                        features: std::collections::BTreeMap::new(),
+                        ..crate::test_support::broker_registration(node)
                     })
                 })
                 .collect(),
@@ -254,16 +212,9 @@ async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
         }],
         ..Default::default()
     };
-    let bytes = crate::handlers::alter_partition::handle(
-        broker,
-        ALTER_VERSION,
-        1,
-        &encode_request(&request, ALTER_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("AlterPartition");
-    let response: AlterPartitionResponse = decode_response(&bytes, ALTER_VERSION);
+    let response = crate::handlers::alter_partition::handle(broker, request, ALTER_VERSION, &ctx)
+        .await
+        .expect("AlterPartition");
 
     assert!(response.error_code == codes::NONE);
     assert!(
@@ -285,16 +236,10 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
         response_partition_limit: 2000,
         ..Default::default()
     };
-    let bytes = crate::handlers::describe_topic_partitions::handle(
-        broker,
-        DESCRIBE_VERSION,
-        2,
-        &encode_request(&request, DESCRIBE_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("DescribeTopicPartitions");
-    let response: DescribeTopicPartitionsResponse = decode_response(&bytes, DESCRIBE_VERSION);
+    let response =
+        crate::handlers::describe_topic_partitions::handle(broker, request, DESCRIBE_VERSION, &ctx)
+            .await
+            .expect("DescribeTopicPartitions");
 
     response
         .topics
@@ -380,16 +325,9 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerReg
     let principal = principal();
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
-    let bytes = crate::handlers::broker_registration::handle(
-        broker,
-        REGISTER_VERSION,
-        3,
-        &encode_request(&request, REGISTER_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("BrokerRegistration");
-    decode_response(&bytes, REGISTER_VERSION)
+    crate::handlers::broker_registration::handle(broker, request, REGISTER_VERSION, &ctx)
+        .await
+        .expect("BrokerRegistration")
 }
 
 /// The issue's acceptance path: shrink the ISR below `min.insync.replicas`
@@ -400,7 +338,7 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
     let (handle, _dir) =
         start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(seed_records())
@@ -428,7 +366,7 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
     let (handle, _dir) =
         start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(seed_records())
@@ -462,7 +400,7 @@ async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
     let (handle, _dir) =
         start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     let mut seed = seed_records();
     seed.push(registration_record(1));
     broker
@@ -511,7 +449,7 @@ async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
     let (handle, _dir) =
         start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     let mut seed = seed_records_with_min_isr("3");
     seed.push(registration_record(1));
     broker

@@ -103,7 +103,6 @@ async fn produce(broker: &BrokerHandle, topic: &str, records: RecordsPayload) ->
     let response_bytes = handle(
         &shared,
         VERSION,
-        7,
         &request_bytes,
         request_bytes.clone(),
         &ctx,

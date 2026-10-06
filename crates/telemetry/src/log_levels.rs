@@ -78,7 +78,13 @@ pub const VALID_LOG_LEVELS: [&str; 6] = ["DEBUG", "ERROR", "FATAL", "INFO", "TRA
 /// One level in Kafka's `BROKER_LOGGER` vocabulary.
 ///
 /// The order is the log4j2 one, least verbose first, so `Trace > Info`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// `kafka_name` is the uppercase name Kafka puts on the wire, and
+/// `from_kafka_name` parses a `BROKER_LOGGER` config value. Kafka tests the
+/// value against a `Set<String>` of uppercase names, so a lowercase `info` is
+/// rejected there and is rejected here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, krabka_macros::EnumStr)]
+#[enum_str(case = "UPPERCASE", as_str = kafka_name, parse = from_kafka_name)]
 pub enum LogLevel {
     /// Nothing krabka emits reaches this level, so it silences the target.
     Fatal,
@@ -95,36 +101,6 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    /// The name Kafka puts on the wire, uppercase.
-    #[must_use]
-    pub const fn kafka_name(self) -> &'static str {
-        match self {
-            Self::Fatal => "FATAL",
-            Self::Error => "ERROR",
-            Self::Warn => "WARN",
-            Self::Info => "INFO",
-            Self::Debug => "DEBUG",
-            Self::Trace => "TRACE",
-        }
-    }
-
-    /// Parse a `BROKER_LOGGER` config value.
-    ///
-    /// Kafka tests the value against a `Set<String>` of uppercase names, so a
-    /// lowercase `info` is rejected there and is rejected here.
-    #[must_use]
-    pub fn from_kafka_name(value: &str) -> Option<Self> {
-        match value {
-            "FATAL" => Some(Self::Fatal),
-            "ERROR" => Some(Self::Error),
-            "WARN" => Some(Self::Warn),
-            "INFO" => Some(Self::Info),
-            "DEBUG" => Some(Self::Debug),
-            "TRACE" => Some(Self::Trace),
-            _ => None,
-        }
-    }
-
     /// The `EnvFilter` level this renders as.
     const fn directive(self) -> &'static str {
         match self {

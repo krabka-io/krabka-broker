@@ -26,15 +26,13 @@ use krabka_protocol::{
 };
 use tokio::sync::oneshot;
 
-use super::handle;
 use crate::{
     authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::BrokerHandle,
     codes,
     coordinator::unified::actor::GroupActorMessage,
     test_support::{
-        DenyAll, decode_response, encode_request, peer, principal, request_context,
-        start_broker_with_authorizer_no_audit,
+        DenyAll, peer, principal, request_context, start_broker_with_authorizer_no_audit,
     },
 };
 
@@ -195,11 +193,14 @@ async fn drive(
     let user = principal("consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "consumer-client");
-    let request_bytes = encode_request(&request, case.version);
-    let response_bytes = handle(&shared, case.version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle offset commit");
-    let actual: OffsetCommitResponse = decode_response(&response_bytes, case.version);
+    let actual: OffsetCommitResponse = crate::test_support::dispatch_wire(
+        &shared,
+        krabka_protocol::owned::offset_commit_request::API_KEY,
+        case.version,
+        &request,
+        &ctx,
+    )
+    .await;
     let actual_keys = committed_keys(broker, &group).await;
 
     let id_only = case.version >= super::FIRST_TOPIC_ID_VERSION;
@@ -383,11 +384,14 @@ async fn refused_rows_precede_the_committed_row() {
     let user = principal("consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "consumer-client");
-    let request_bytes = encode_request(&request, VERSION);
-    let response_bytes = handle(&shared, VERSION, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle offset commit");
-    let actual: OffsetCommitResponse = decode_response(&response_bytes, VERSION);
+    let actual: OffsetCommitResponse = crate::test_support::dispatch_wire(
+        &shared,
+        krabka_protocol::owned::offset_commit_request::API_KEY,
+        VERSION,
+        &request,
+        &ctx,
+    )
+    .await;
 
     let answer = |topic_id, error_code| OffsetCommitResponseTopic {
         topic_id,
@@ -458,11 +462,14 @@ async fn unknown_partition_answers_on_its_own_row() {
             }],
             ..Default::default()
         };
-        let request_bytes = encode_request(&request, version);
-        let response_bytes = handle(&shared, version, 7, &request_bytes, &ctx)
-            .await
-            .expect("handle offset commit");
-        let response: OffsetCommitResponse = decode_response(&response_bytes, version);
+        let response: OffsetCommitResponse = crate::test_support::dispatch_wire(
+            &shared,
+            krabka_protocol::owned::offset_commit_request::API_KEY,
+            version,
+            &request,
+            &ctx,
+        )
+        .await;
         actual.push((version, response, committed_keys(&broker, &group).await));
         expected.push((
             version,

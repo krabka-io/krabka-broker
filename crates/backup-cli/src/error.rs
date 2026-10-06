@@ -51,6 +51,13 @@ pub const EXIT_INTEGRITY: i32 = 5;
 /// Exit code for a cluster that could not be reached, or that refused.
 pub const EXIT_CLUSTER: i32 = 6;
 
+/// A contradictory `--archive-*` flag set is a bad argument like any other.
+impl From<krabka_object_store::ArchiveArgsError> for BackupError {
+    fn from(error: krabka_object_store::ArchiveArgsError) -> Self {
+        Self::InvalidArgument(error.to_string())
+    }
+}
+
 impl BackupError {
     /// The process exit code this error reports.
     #[must_use]

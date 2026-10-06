@@ -79,7 +79,7 @@ pub(super) async fn reconcile_share_state(
         .map(|(name, topic_id)| (*topic_id, name.clone()))
         .collect();
 
-    let retry_ms = i64::try_from(config.initialize_retry_interval.as_millis()).unwrap_or(i64::MAX);
+    let retry_ms = crate::time_util::duration_millis(config.initialize_retry_interval);
     let to_init = partitions_to_initialize(state, &input, now_ms, retry_ms);
     let to_delete = deleted_topic_partitions(&state.initialized, &topic_names);
     if to_init.is_empty() && to_delete.is_empty() {

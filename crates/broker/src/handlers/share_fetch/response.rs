@@ -1,4 +1,4 @@
-//! Construction and encoding of the `ShareFetchResponse`, both the per-partition
+//! Construction of the `ShareFetchResponse`, both the per-partition
 //! rows and the top-level error shape.
 //!
 //! Kafka answers a `ShareFetch` with one row per requested partition, grouped
@@ -7,13 +7,12 @@
 //! feature-gate, session, or membership failure instead answers with a
 //! top-level error code and no rows at all.
 
-use bytes::Bytes;
 use krabka_protocol::owned::share_fetch_response::{
     LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
 };
 
 use super::pending::PendingPartition;
-use crate::{codes, error::BrokerError};
+use crate::codes;
 
 pub(super) fn partition_response(partition_index: i32) -> PartitionData {
     PartitionData {
@@ -62,13 +61,12 @@ pub(super) fn group_responses(pending: Vec<PendingPartition>) -> Vec<ShareFetcha
         .collect()
 }
 
-pub(super) fn encode_success_response(
-    version: i16,
+pub(super) fn success_response(
     lock_timeout_ms: i32,
     responses: Vec<ShareFetchableTopicResponse>,
     node_endpoints: Vec<NodeEndpoint>,
-) -> Result<Bytes, BrokerError> {
-    let response = ShareFetchResponse {
+) -> ShareFetchResponse {
+    ShareFetchResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         error_message: None,
@@ -76,51 +74,39 @@ pub(super) fn encode_success_response(
         responses,
         node_endpoints,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&response, version)
+    }
 }
 
-/// Encodes a `ShareFetchResponse` that carries a top-level error and no
+/// A `ShareFetchResponse` that carries a top-level error and no
 /// per-partition row. The error is a feature-gate, authorization, session, or
 /// membership failure.
 ///
 /// This is Kafka's `ShareFetchRequest.getErrorResponse`, which builds
 /// `ShareFetchResponse.of(error, throttleTimeMs, empty, List.of(), 0)`. So the
 /// acquisition lock timeout is 0 and not the configured one.
-pub(super) fn encode_error_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    let resp = ShareFetchResponse {
+pub(super) fn error_response(error_code: i16) -> ShareFetchResponse {
+    ShareFetchResponse {
         throttle_time_ms: 0,
         error_code,
         error_message: None,
         acquisition_lock_timeout_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
     use krabka_protocol::{
-        UnknownTaggedFields,
-        owned::share_fetch_response::{self, AcquiredRecords},
+        UnknownTaggedFields, owned::share_fetch_response::AcquiredRecords,
         primitives::uuid::Uuid as ProtoUuid,
     };
 
     use super::*;
 
-    fn decode_response(bytes: &Bytes) -> ShareFetchResponse {
-        crate::test_support::decode_response(bytes, share_fetch_response::MAX_VERSION)
-    }
-
     #[test]
-    fn encode_error_response_preserves_top_level_fields() {
-        let resp = encode_error_response(
-            share_fetch_response::MAX_VERSION,
-            codes::UNSUPPORTED_VERSION,
-        )
-        .expect("encode");
-        let resp = decode_response(&resp);
+    fn error_response_preserves_top_level_fields() {
+        let resp = error_response(codes::UNSUPPORTED_VERSION);
 
         let expected = ShareFetchResponse {
             throttle_time_ms: 0,

@@ -22,6 +22,7 @@ mod support;
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `partition_reassignment/` directory, which keeps the parts out of `tests/`
 // where every `.rs` file would become another test binary.
+mod kafka_wire;
 #[allow(dead_code)]
 #[path = "alter_replica_log_dirs/wire.rs"]
 mod log_dir_wire;

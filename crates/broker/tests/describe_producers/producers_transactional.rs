@@ -22,7 +22,7 @@ use crate::{
 async fn transactional_fields_follow_open_and_completed_transactions() {
     let p = support::start().await;
     create_topic(&p.client, "transactions", 1).await;
-    let topic_id = topic_id_for(&p, "transactions").await;
+    let topic_id = topic_id_for(&p.client, "transactions").await;
     let (pid, epoch) = init_transactional_producer(&p, "describe-producers-tid").await;
 
     let produce_response = p

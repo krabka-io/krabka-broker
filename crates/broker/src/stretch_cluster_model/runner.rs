@@ -5,9 +5,10 @@
 //! together.
 
 use assert2::assert;
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 use super::config::StretchModel;
+use crate::model_check::run_bfs;
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
@@ -31,26 +32,7 @@ pub(super) const PINNED_UNIQUE_STATES_RED_LEGACY_ELECT: usize = 5_724;
 pub(super) const PINNED_UNIQUE_STATES_RED_MIN_INSYNC_ONE: usize = 2_660;
 
 pub fn run(model: StretchModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert!(
-        checker.max_depth() < MAX_DEPTH,
-        "[{label}] hit depth cap {MAX_DEPTH}: depth-truncated, not exhaustive"
-    );
-    assert!(
-        checker.state_count() < MAX_STATES,
-        "[{label}] hit state cap {MAX_STATES}: truncated, not exhaustive"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert!(
         checker.unique_state_count() == pinned_unique_states,

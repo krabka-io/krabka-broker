@@ -544,18 +544,9 @@ mod tests {
             FakeMetadataSource::builder()
                 .records(&[MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
-                        node_id: krabka_raft::NodeId(7),
                         broker_epoch: 11,
-                        incarnation_id: uuid::Uuid::nil(),
                         host: "localhost".into(),
-                        port: 9092,
-                        rack: None,
-                        endpoints: vec![],
-                        log_dirs: vec![],
-                        fenced: false,
-                        in_controlled_shutdown: false,
-                        cordoned_log_dirs: None,
-                        features: std::collections::BTreeMap::new(),
+                        ..crate::test_support::broker_registration(7)
                     },
                 )])
                 .leader(Some(krabka_raft::NodeId(1)))

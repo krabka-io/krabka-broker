@@ -3,7 +3,7 @@
 //! start offset, delivery-complete count, or acquired-batch count reaches an
 //! expected value.
 
-use crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT};
+use crate::broker::BrokerHandle;
 
 impl BrokerHandle {
     /// Test-only: read the share-state summary
@@ -43,21 +43,14 @@ impl BrokerHandle {
         topic_id: uuid::Uuid,
         partition: i32,
     ) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if self
-                    .share_state_summary_for_test(group, topic_id, partition)
-                    .await
-                    .is_some()
-                {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+        let present = super::await_until(|| async {
+            self.share_state_summary_for_test(group, topic_id, partition)
+                .await
+                .is_some()
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            present,
             "share-state summary for {group}:{topic_id}:{partition} not present within 30s"
         );
     }
@@ -72,21 +65,14 @@ impl BrokerHandle {
         partition: i32,
         min: i64,
     ) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if let Some((_, _, spso, _)) = self
-                    .share_state_summary_for_test(group, topic_id, partition)
-                    .await
-                    && spso >= min
-                {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+        let reached = super::await_until(|| async {
+            self.share_state_summary_for_test(group, topic_id, partition)
+                .await
+                .is_some_and(|(_, _, spso, _)| spso >= min)
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            reached,
             "share SPSO for {group}:{topic_id}:{partition} did not reach {min} within 30s"
         );
     }
@@ -101,21 +87,14 @@ impl BrokerHandle {
         partition: i32,
         min: i32,
     ) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if let Some((_, _, _, dcc)) = self
-                    .share_state_summary_for_test(group, topic_id, partition)
-                    .await
-                    && dcc >= min
-                {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+        let reached = super::await_until(|| async {
+            self.share_state_summary_for_test(group, topic_id, partition)
+                .await
+                .is_some_and(|(_, _, _, dcc)| dcc >= min)
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            reached,
             "share dcc for {group}:{topic_id}:{partition} did not reach {min} within 30s"
         );
     }
@@ -132,24 +111,19 @@ impl BrokerHandle {
         partition: i32,
         n: i32,
     ) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if let Some(cell) = self
-                    .broker
-                    .share_partition_leaders
-                    .peek_for_test(group, topic_id, partition)
-                {
-                    let count = cell.lock().await.count_acquired_batches();
-                    if count == n {
-                        return;
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let reached = super::await_until(|| async {
+            match self
+                .broker
+                .share_partition_leaders
+                .peek_for_test(group, topic_id, partition)
+            {
+                Some(cell) => cell.lock().await.count_acquired_batches() == n,
+                None => false,
             }
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            reached,
             "share acquired-batch count for {group}:{topic_id}:{partition} did not reach {n} within 30s"
         );
     }

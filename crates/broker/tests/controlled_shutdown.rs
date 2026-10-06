@@ -13,10 +13,10 @@
 //! The test is gated to non-Windows to match the multi-broker convention established by the existing integration suites.`debug_assert!` races on the hosted Windows
 //! task scheduler are unrelated to the protocol under test.
 
-use std::{io, net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::BrokerHandle;
 use krabka_protocol::{
     Decode, Encode,
@@ -25,55 +25,16 @@ use krabka_protocol::{
         create_topics_response::CreateTopicsResponse,
     },
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
+mod kafka_wire;
 mod support;
 
 const CREATE_TOPICS_API_KEY: i16 = 19;
 const CREATE_TOPICS_VERSION: i16 = 7;
 
-/// Length-prefixed PLAINTEXT request/response over a single TCP
-/// stream. Mirrors the helper in `tests/elect_leaders.rs`.
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-controlled-shutdown-test";
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0);
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    if flexible {
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
-}
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-controlled-shutdown-test";
 
 async fn create_topic(addr: SocketAddr, name: &str, partitions: i32, rf: i16) {
     let req = CreateTopicsRequest {
@@ -90,11 +51,12 @@ async fn create_topic(addr: SocketAddr, name: &str, partitions: i32, rf: i16) {
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION)
         .expect("encode CreateTopics");
-    let resp_bytes = round_trip(
+    let resp_bytes = kafka_wire::round_trip(
         &mut stream,
         CREATE_TOPICS_API_KEY,
         CREATE_TOPICS_VERSION,
         1,
+        CLIENT_ID,
         true,
         &body,
     )

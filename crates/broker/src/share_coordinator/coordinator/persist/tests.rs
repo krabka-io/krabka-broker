@@ -263,7 +263,9 @@ async fn a_prune_trims_only_committed_snapshots() {
     let rows = [(true, Offset(1)), (false, Offset(0))];
     for (committed, log_start) in rows {
         let dir = tempdir().unwrap();
-        let (coord, part) = one_partition(dir.path(), Duration::from_millis(100));
+        // Long enough that the first snapshot commits on a loaded runner; the
+        // uncommitted row waits it out once.
+        let (coord, part) = one_partition(dir.path(), Duration::from_secs(2));
         coord.lead_all_partitions_for_test().await;
         let image = crate::share_coordinator::coordinator::test_support::image_with_topic(
             uuid::Uuid::from_bytes([3; 16]),

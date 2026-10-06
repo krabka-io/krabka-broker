@@ -17,37 +17,19 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_transactions_request::DescribeTransactionsRequest,
-        describe_transactions_response::{
-            DescribeTransactionsResponse, TopicData, TransactionState,
-        },
-    },
+use krabka_protocol::owned::{
+    describe_transactions_request::DescribeTransactionsRequest,
+    describe_transactions_response::{DescribeTransactionsResponse, TopicData, TransactionState},
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     error::BrokerError,
     txn::state::{TxnEntry, TxnState},
 };
-
-fn txn_state_str(s: TxnState) -> &'static str {
-    match s {
-        TxnState::Empty => "Empty",
-        TxnState::Ongoing => "Ongoing",
-        TxnState::PrepareCommit => "PrepareCommit",
-        TxnState::PrepareAbort => "PrepareAbort",
-        TxnState::CompleteCommit => "CompleteCommit",
-        TxnState::CompleteAbort => "CompleteAbort",
-        TxnState::Dead => "Dead",
-    }
-}
 
 /// Builds the `topics` list for one txn entry. It groups the entry's
 /// `(topic, partition)` set by topic name. Topics come out in alphabetical
@@ -94,7 +76,7 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     TransactionState {
         error_code: codes::NONE,
         transactional_id: entry.transactional_id.clone(),
-        transaction_state: txn_state_str(entry.state).to_string(),
+        transaction_state: entry.state.as_str().to_string(),
         transaction_timeout_ms: entry.txn_timeout_ms,
         transaction_start_time_ms: entry.start_ms,
         // Unwrap into the raw-`i64` wire field.
@@ -109,19 +91,15 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     name = "handle_describe_transactions",
     level = "info",
     skip_all,
-    fields(api = "DescribeTransactions", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeTransactions", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeTransactionsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeTransactionsRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeTransactionsResponse, BrokerError> {
     // Refresh leader-partition view from the current metadata image before
     // checking coordinator-ness, as EndTxn, AddPartitionsToTxn and
     // AddOffsetsToTxn do. Otherwise a stale `leader_partitions` cache can
@@ -138,17 +116,14 @@ pub(crate) async fn handle(
     let mut rows: Vec<TransactionState> = Vec::with_capacity(req.transactional_ids.len());
     for tid in &req.transactional_ids {
         // ACL gate: per-tid `Describe` on `TransactionalId`.
-        let allow = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::TransactionalId,
-                resource_name: tid.as_str(),
-                operation: AclOperation::Describe,
-            },
-        );
-        if allow == AuthorizationResult::Deny {
+        if crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::TransactionalId,
+            tid.as_str(),
+            AclOperation::Describe,
+        ) {
             rows.push(TransactionState {
                 error_code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
                 transactional_id: tid.clone(),
@@ -207,12 +182,11 @@ pub(crate) async fn handle(
         rows.push(row);
     }
 
-    let resp = DescribeTransactionsResponse {
+    Ok(DescribeTransactionsResponse {
         throttle_time_ms: 0,
         transaction_states: rows,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 #[cfg(test)]
@@ -264,11 +238,7 @@ mod tests {
         assert!(t == expected);
     }
 
-    crate::test_support::wire_helpers!(
-        DescribeTransactionsRequest,
-        DescribeTransactionsResponse,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     /// Kafka `TransactionCoordinator.handleDescribeTransactions` per requested
     /// id: `INVALID_REQUEST` for an empty id, the coordinator error of the id's
@@ -328,25 +298,19 @@ mod tests {
             })
             .expect("an id in an unled partition");
 
-        let request = encode_request(
-            &DescribeTransactionsRequest {
-                transactional_ids: vec![
-                    String::new(),
-                    empty_id.clone(),
-                    foreign_id.clone(),
-                    dead_id.to_string(),
-                    ongoing_id.to_string(),
-                ],
-                ..Default::default()
-            },
-            version,
-        );
-        let response: DescribeTransactionsResponse = decode_response(
-            &handle(&broker, version, 1, &request, &context)
-                .await
-                .expect("describe"),
-            version,
-        );
+        let request = DescribeTransactionsRequest {
+            transactional_ids: vec![
+                String::new(),
+                empty_id.clone(),
+                foreign_id.clone(),
+                dead_id.to_string(),
+                ongoing_id.to_string(),
+            ],
+            ..Default::default()
+        };
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("describe");
 
         let not_found = |tid: &str| TransactionState {
             error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
@@ -489,34 +453,25 @@ mod tests {
             broker
                 .controller
                 .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
-                    krabka_metadata::AclEntry {
-                        resource_type: krabka_metadata::ResourceType::TransactionalId,
-                        resource_name: tid.to_string(),
-                        pattern_type: krabka_metadata::PatternType::Literal,
-                        principal: format!("User:{user}"),
-                        host: "*".to_string(),
-                        operation: AclOperation::Describe,
-                        permission_type: krabka_metadata::PermissionType::Allow,
-                    },
+                    crate::test_support::allow_acl(
+                        krabka_metadata::ResourceType::TransactionalId,
+                        tid,
+                        &format!("User:{user}"),
+                        AclOperation::Describe,
+                    ),
                 )])
                 .await
                 .expect("commit transactional id acl");
 
             let principal = principal(user);
             let context = test_context(&principal, &peer);
-            let request = encode_request(
-                &DescribeTransactionsRequest {
-                    transactional_ids: vec![tid.to_string()],
-                    ..Default::default()
-                },
-                version,
-            );
-            let response: DescribeTransactionsResponse = decode_response(
-                &handle(&broker, version, 1, &request, &context)
-                    .await
-                    .expect("describe"),
-                version,
-            );
+            let request = DescribeTransactionsRequest {
+                transactional_ids: vec![tid.to_string()],
+                ..Default::default()
+            };
+            let response = handle(&broker, request, version, &context)
+                .await
+                .expect("describe");
 
             let expected = TransactionState {
                 error_code: codes::NONE,

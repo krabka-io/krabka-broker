@@ -3,16 +3,12 @@
 //! were created, and the KIP-219 throttle window recorded on the request
 //! context for the connection loop to enforce after the reply is written.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Encode,
-    owned::create_topics_response::{
-        CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
-    },
+use krabka_protocol::owned::create_topics_response::{
+    CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
 };
 use krabka_units::Time;
 
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes};
 
 pub(super) fn topic_error_result(
     name: String,
@@ -122,18 +118,13 @@ pub(super) fn audit_created_topics(
     }
 }
 
-pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
-}
-
 pub(super) fn finish_response(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     results: Vec<CreatableTopicResult>,
     validate_only: bool,
     delay: Time,
-    version: i16,
-) -> Result<Bytes, BrokerError> {
+) -> CreateTopicsResponse {
     audit_created_topics(
         broker.audit_log.as_ref(),
         context,
@@ -146,8 +137,7 @@ pub(super) fn finish_response(
     // carries the controller-mutation delay now; the dispatch loop raises it
     // when the request quota asks for more.
     context.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
-    let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
-    encode_response(&response, version)
+    create_topics_response(results, crate::quota::throttle_time_ms(delay))
 }
 
 #[cfg(test)]
@@ -157,14 +147,8 @@ mod tests {
     use super::*;
     use crate::test_support::{peer, principal};
 
-    // The context that `crate::test_support::wire_helpers!` builds for the
-    // handler tests. These two cases need the context but no wire codec.
-    fn test_context<'a>(
-        principal: &'a krabka_security::Principal,
-        peer: &'a std::net::SocketAddr,
-    ) -> crate::handlers::RequestContext<'a> {
-        crate::test_support::request_context(principal, peer, "admin-client")
-    }
+    // These two cases need the handler tests' context but no wire codec.
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     #[test]
     fn created_topic_resources_include_only_successful_topics() {

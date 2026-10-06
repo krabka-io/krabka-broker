@@ -513,29 +513,19 @@ mod tests {
     async fn call(broker: &crate::broker::Broker, rpc: GroupRpc) -> i16 {
         use krabka_protocol::owned::{
             delete_groups_request::DeleteGroupsRequest,
-            delete_groups_response::DeleteGroupsResponse,
             heartbeat_request::HeartbeatRequest,
-            heartbeat_response::HeartbeatResponse,
             join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-            join_group_response::JoinGroupResponse,
             leave_group_request::{LeaveGroupRequest, MemberIdentity},
-            leave_group_response::LeaveGroupResponse,
             list_groups_request::ListGroupsRequest,
-            list_groups_response::ListGroupsResponse,
             offset_commit_request::{
                 OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
             },
-            offset_commit_response::OffsetCommitResponse,
             offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestGroup},
-            offset_fetch_response::OffsetFetchResponse,
             txn_offset_commit_request::{
                 TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition,
                 TxnOffsetCommitRequestTopic,
             },
-            txn_offset_commit_response::TxnOffsetCommitResponse,
         };
-
-        use crate::test_support::{decode_response, encode_request};
 
         let principal = crate::test_support::principal("alice");
         let peer = crate::test_support::peer();
@@ -553,16 +543,10 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::join_group::handle(
-                    broker,
-                    9,
-                    1,
-                    &encode_request(&request, 9),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<JoinGroupResponse>(&bytes, 9).error_code
+                crate::handlers::join_group::handle(broker, request, 9, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::Heartbeat => {
                 let request = HeartbeatRequest {
@@ -571,16 +555,10 @@ mod tests {
                     generation_id: 1,
                     ..Default::default()
                 };
-                let bytes = crate::handlers::heartbeat::handle(
-                    broker,
-                    4,
-                    1,
-                    &encode_request(&request, 4),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<HeartbeatResponse>(&bytes, 4).error_code
+                crate::handlers::heartbeat::handle(broker, request, 4, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::LeaveGroup => {
                 let request = LeaveGroupRequest {
@@ -591,16 +569,10 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::leave_group::handle(
-                    broker,
-                    5,
-                    1,
-                    &encode_request(&request, 5),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<LeaveGroupResponse>(&bytes, 5).error_code
+                crate::handlers::leave_group::handle(broker, request, 5, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::OffsetCommit => {
                 let request = OffsetCommitRequest {
@@ -618,16 +590,11 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::offset_commit::handle(
-                    broker,
-                    8,
-                    1,
-                    &encode_request(&request, 8),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<OffsetCommitResponse>(&bytes, 8).topics[0].partitions[0]
+                crate::handlers::offset_commit::handle(broker, request, 8, &ctx)
+                    .await
+                    .unwrap()
+                    .topics[0]
+                    .partitions[0]
                     .error_code
             }
             GroupRpc::TxnOffsetCommit => {
@@ -649,16 +616,11 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::txn::handlers::txn_offset_commit::handle(
-                    broker,
-                    4,
-                    1,
-                    &encode_request(&request, 4),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<TxnOffsetCommitResponse>(&bytes, 4).topics[0].partitions[0]
+                crate::txn::handlers::txn_offset_commit::handle(broker, request, 4, &ctx)
+                    .await
+                    .unwrap()
+                    .topics[0]
+                    .partitions[0]
                     .error_code
             }
             GroupRpc::OffsetFetch => {
@@ -670,44 +632,28 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::offset_fetch::handle(
-                    broker,
-                    8,
-                    1,
-                    &encode_request(&request, 8),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<OffsetFetchResponse>(&bytes, 8).groups[0].error_code
+                crate::handlers::offset_fetch::handle(broker, request, 8, &ctx)
+                    .await
+                    .unwrap()
+                    .groups[0]
+                    .error_code
             }
             GroupRpc::ListGroups => {
-                let bytes = crate::handlers::list_groups::handle(
-                    broker,
-                    4,
-                    1,
-                    &encode_request(&ListGroupsRequest::default(), 4),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<ListGroupsResponse>(&bytes, 4).error_code
+                crate::handlers::list_groups::handle(broker, ListGroupsRequest::default(), 4, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::DeleteGroups => {
                 let request = DeleteGroupsRequest {
                     groups_names: vec!["g".into()],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::delete_groups::handle(
-                    broker,
-                    2,
-                    1,
-                    &encode_request(&request, 2),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<DeleteGroupsResponse>(&bytes, 2).results[0].error_code
+                crate::handlers::delete_groups::handle(broker, request, 2, &ctx)
+                    .await
+                    .unwrap()
+                    .results[0]
+                    .error_code
             }
         }
     }
@@ -730,8 +676,7 @@ mod tests {
     /// Once the partition is served the same group is served again.
     #[tokio::test]
     async fn group_rpcs_answer_load_in_progress_until_the_partition_is_served() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
             config.offsets_topic_replication_factor = 1;
         })
         .await;

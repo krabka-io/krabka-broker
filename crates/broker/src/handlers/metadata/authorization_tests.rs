@@ -22,15 +22,12 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use super::handle;
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::BrokerHandle,
     codes,
     handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
-    },
+    test_support::{peer, principal, request_context, start_broker_no_audit_with},
 };
 
 /// The principal whose grants each case sets.
@@ -101,8 +98,7 @@ struct Fixture {
 async fn start(auto_create_topics_enable: bool) -> Fixture {
     let grants = Arc::new(Grants::default());
     let authorizer: Arc<dyn Authorizer> = Arc::clone(&grants) as Arc<dyn Authorizer>;
-    let (broker, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = authorizer;
         cfg.auto_create_topics_enable = auto_create_topics_enable;
     })
@@ -147,10 +143,14 @@ impl Fixture {
         let user = principal(TESTER);
         let address = peer();
         let ctx = request_context(&user, &address, "metadata-client");
-        let bytes = handle(&shared, version, 7, &encode_request(request, version), &ctx)
-            .await
-            .expect("handle metadata");
-        decode_response(&bytes, version)
+        crate::test_support::dispatch_wire(
+            &shared,
+            krabka_protocol::api_key::ApiKey::Metadata as i16,
+            version,
+            request,
+            &ctx,
+        )
+        .await
     }
 
     /// The row an allow-all principal gets for [`EXISTING`] at `version`.

@@ -21,6 +21,8 @@
 mod acl_gates;
 mod admin_audit;
 mod coordinator_routing;
+#[cfg(test)]
+mod group_heartbeat_test_support;
 mod private_api_keys;
 mod record_strings;
 mod response_encoding;
@@ -29,12 +31,14 @@ mod wire_types;
 
 pub(crate) use self::{
     acl_gates::{
-        acl_denied, cluster_action_denied, cluster_alter_denied, cluster_describe_denied,
-        group_read_denied,
+        acl_denied, any_topic_describe_denied, cluster_action_denied, cluster_alter_denied,
+        cluster_describe_denied, denied_topics, group_describe_denied, group_read_denied,
+        requested_topic_name, subscribed_names_describe_denied,
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
     coordinator_routing::{
-        group_coordinator_error, group_partition_loading, parse_advertised_host_port,
+        group_coordinator_error, group_partition_loading, group_version_disabled,
+        share_group_not_found_message, streams_protocol_enabled,
     },
     private_api_keys::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
@@ -43,9 +47,9 @@ pub(crate) use self::{
         TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
     },
     record_strings::decode_group_request,
-    response_encoding::{encode_response, encode_response_with_context},
+    response_encoding::{ErrorCodeResponse, ErrorResponse, encode_response},
     submit_failure::submit_failure_code,
-    wire_types::{ApiKeyCode, ApiVersion, CorrelationId, ErrorCode},
+    wire_types::{ApiKeyCode, ApiVersion, CorrelationId},
 };
 
 pub(crate) mod context;
@@ -100,11 +104,11 @@ pub(crate) mod describe_quorum;
 // KIP-664 transaction introspection (api_key 65).
 pub(crate) mod describe_transactions;
 // KIP-966 paginated topic listing (api_key 75).
+// KIP-966: the eligible-leader-replica columns DescribeTopicPartitions
+// reports, read out of the metadata image.
 pub(crate) mod describe_topic_partitions;
 pub(crate) mod describe_user_scram_credentials;
 pub(crate) mod elect_leaders;
-// KIP-966: the eligible-leader-replica columns DescribeTopicPartitions
-// reports, read out of the metadata image.
 pub(crate) mod expire_delegation_token;
 pub(crate) mod fetch;
 pub(crate) mod fetch_downconvert;
@@ -125,8 +129,8 @@ pub(crate) mod leave_group;
 pub(crate) mod list_config_resources;
 pub(crate) mod list_groups;
 pub(crate) mod list_offsets;
-// KIP-664 transaction-summary admin RPC (api_key 66).
 pub(crate) mod list_partition_reassignments;
+// KIP-664 transaction-summary admin RPC (api_key 66).
 pub(crate) mod list_transactions;
 pub(crate) mod metadata;
 pub(crate) mod offline_replicas;

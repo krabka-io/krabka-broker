@@ -24,6 +24,7 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use krabka_log::Offset;
+use krabka_protocol::primitives::{fixed, string_bytes};
 
 use crate::error::BrokerError;
 
@@ -266,10 +267,7 @@ impl GroupMetadataValue {
     /// Returns [`BrokerError::Protocol`] when the group id is longer than
     /// 32767 bytes.
     pub fn encode_key(group_id: &str) -> Result<Bytes, BrokerError> {
-        let mut buf = BytesMut::new();
-        buf.put_i16(2);
-        put_string(&mut buf, group_id)?;
-        Ok(buf.freeze())
+        encode_string_key(2, &[group_id])
     }
 
     /// Encodes a `GroupMetadata` value, version 3.
@@ -357,88 +355,28 @@ impl GroupMetadataValue {
 // ── primitives (non-flexible Kafka encoding) ───────────────────────────────
 
 pub(crate) fn get_i16(buf: &mut &[u8]) -> Result<i16, BrokerError> {
-    if buf.remaining() < 2 {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("offsets buf < i16"),
-        ));
-    }
-    Ok(buf.get_i16())
+    Ok(fixed::get_i16(buf)?)
 }
 
 pub(crate) fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> {
-    if buf.remaining() < 4 {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("offsets buf < i32"),
-        ));
-    }
-    Ok(buf.get_i32())
+    Ok(fixed::get_i32(buf)?)
 }
 
 pub(crate) fn get_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> {
-    if buf.remaining() < 8 {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("offsets buf < i64"),
-        ));
-    }
-    Ok(buf.get_i64())
+    Ok(fixed::get_i64(buf)?)
 }
 
 pub(crate) fn get_string(buf: &mut &[u8]) -> Result<String, BrokerError> {
-    let len = get_i16(buf)?;
-    if len < 0 {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("STRING with negative length"),
-        ));
-    }
-    let n = usize::try_from(len).expect("non-negative i16 fits in usize");
-    if buf.remaining() < n {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("STRING shorter than declared"),
-        ));
-    }
-    let mut out = vec![0u8; n];
-    buf.copy_to_slice(&mut out);
-    String::from_utf8(out).map_err(|_| {
-        BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
-            "STRING not valid UTF-8",
-        ))
-    })
+    Ok(string_bytes::get_string_owned(buf)?)
 }
 
 pub(crate) fn get_nullable_string(buf: &mut &[u8]) -> Result<Option<String>, BrokerError> {
-    let len = get_i16(buf)?;
-    if len < 0 {
-        return Ok(None);
-    }
-    let n = usize::try_from(len).expect("non-negative i16 fits in usize");
-    if buf.remaining() < n {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("NULLABLE_STRING shorter than declared"),
-        ));
-    }
-    let mut out = vec![0u8; n];
-    buf.copy_to_slice(&mut out);
-    String::from_utf8(out).map(Some).map_err(|_| {
-        BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
-            "NULLABLE_STRING not valid UTF-8",
-        ))
-    })
+    Ok(string_bytes::get_nullable_string_owned(buf)?)
 }
 
+/// Reads a `BYTES` field, a null reading as empty.
 pub(crate) fn get_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
-    let len = get_i32(buf)?;
-    if len < 0 {
-        return Ok(Bytes::new());
-    }
-    let n = usize::try_from(len).expect("non-negative i32 fits in usize");
-    if buf.remaining() < n {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("BYTES shorter than declared"),
-        ));
-    }
-    let mut out = vec![0u8; n];
-    buf.copy_to_slice(&mut out);
-    Ok(Bytes::from(out))
+    Ok(string_bytes::get_nullable_bytes_owned(buf)?.unwrap_or_default())
 }
 
 /// The longest string, in bytes, that Kafka reads or writes: `Short.MAX_VALUE`,
@@ -468,6 +406,22 @@ pub(crate) fn put_string<B: BufMut>(buf: &mut B, s: &str) -> Result<(), BrokerEr
     Ok(())
 }
 
+/// Encodes a coordinator record key: `version` as an `INT16`, then each of
+/// `parts` as an `INT16`-length string.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a part is longer than `i16::MAX`
+/// bytes.
+pub(crate) fn encode_string_key(version: i16, parts: &[&str]) -> Result<Bytes, BrokerError> {
+    let mut buf = BytesMut::new();
+    buf.put_i16(version);
+    for part in parts {
+        put_string(&mut buf, part)?;
+    }
+    Ok(buf.freeze())
+}
+
 /// Writes `s` as a nullable string with an `INT16` length.
 ///
 /// # Errors
@@ -487,9 +441,7 @@ pub(crate) fn put_nullable_string<B: BufMut>(
 }
 
 pub(crate) fn put_bytes<B: BufMut>(buf: &mut B, b: &Bytes) {
-    let n = i32::try_from(b.len()).expect("bytes < 2GiB");
-    buf.put_i32(n);
-    buf.put_slice(b);
+    string_bytes::put_bytes(buf, b);
 }
 
 #[cfg(test)]

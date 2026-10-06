@@ -26,17 +26,13 @@
 //! `[break_glass]` names an approver set, so a stock cluster elects exactly as
 //! it does today.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     elect_leaders_request::ElectLeadersRequest,
     elect_leaders_response::{ElectLeadersResponse, ReplicaElectionResult},
 };
 
 use self::{
-    batch::ElectionBatch,
-    env::ElectionEnv,
-    partition::elect_one,
-    response::{encode_response, whole_request_error},
+    batch::ElectionBatch, env::ElectionEnv, partition::elect_one, response::whole_request_error,
     targets::resolve_targets,
 };
 use crate::{
@@ -76,14 +72,14 @@ const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request ElectLeaders needs ALTER per
 pub(crate) async fn handle(
     broker: &Broker,
     req: ElectLeadersRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<ElectLeadersResponse, crate::error::BrokerError> {
     let image = broker.controller.current_image();
     let denied = cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
     let election = match admit(&req, denied) {
         Ok(election) => election,
-        Err(refusal) => return encode_response(&refusal, api_version),
+        Err(refusal) => return Ok(refusal),
     };
 
     // Resolve target partition set:
@@ -209,13 +205,12 @@ pub(crate) async fn handle(
             .collect(),
     );
 
-    let resp = ElectLeadersResponse {
+    Ok(ElectLeadersResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         replica_election_results: by_topic,
         ..Default::default()
-    };
-    encode_response(&resp, api_version)
+    })
 }
 
 /// Admit a request, or answer the refusal of the whole of it.

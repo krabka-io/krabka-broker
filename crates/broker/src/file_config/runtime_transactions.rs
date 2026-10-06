@@ -5,7 +5,7 @@
 //! replication factors, and recovery reads, together with the transaction
 //! timeout bounds. `apply_barrier` covers the KFC-4 barrier group knobs.
 
-use krabka_units::{ByteSize, kibibytes};
+use krabka_units::{ByteSize, Time, convert::TimeExt, kibibytes};
 
 use super::{
     FileConfigError, RuntimeFileConfig,
@@ -21,32 +21,17 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_time_millis!(
-            runtime,
-            producer_id_expiration,
-            cfg.producer_id_expiration,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            producer_id_expiration_scan_interval,
-            cfg.producer_id_expiration_scan_interval
-        );
-        set_runtime_usize!(runtime, max_produce_group, cfg.max_produce_group);
-        set_runtime_usize!(
-            runtime,
-            partition_writer_queue_depth,
-            cfg.partition_writer_queue_depth
-        );
+        set_runtime! {
+            runtime => cfg;
+            whole_millis_i64_time: producer_id_expiration;
+            positive_time: producer_id_expiration_scan_interval;
+            positive_usize: max_produce_group, partition_writer_queue_depth;
+        }
         // A topic reports a static `min.insync.replicas` at
         // `STATIC_BROKER_CONFIG` when the operator named it, whatever the value.
         cfg.static_config_origins.log.min_insync_replicas |=
             runtime.default_min_insync_replicas.is_some();
-        set_runtime_i32!(
-            runtime,
-            default_min_insync_replicas,
-            cfg.default_min_insync_replicas
-        );
+        set_runtime! { runtime => cfg; positive_i32: default_min_insync_replicas; }
         // `DescribeConfigs` reports these two as `STATIC_BROKER_CONFIG` when
         // the operator named them, so the loader records the provenance.
         if let Some(value) = runtime.num_partitions {
@@ -59,32 +44,16 @@ impl RuntimeFileConfig {
                 .topic_creation
                 .default_replication_factor = true;
         }
-        set_runtime_size_bytes!(
-            runtime,
-            future_log_move_read_chunk,
-            cfg.future_log_move_read_chunk,
-            whole_bytes_usize
-        );
-        set_runtime_i32!(
-            runtime,
-            share_state_num_partitions,
-            cfg.share_coordinator.state_topic_num_partitions
-        );
-        if let Some(value) = runtime.share_state_replication_factor {
-            cfg.share_coordinator.state_topic_replication_factor =
-                positive_i16("share_state_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_usize: future_log_move_read_chunk;
+            positive_i32: share_state_num_partitions => share_coordinator.state_topic_num_partitions;
+            positive_i16: share_state_replication_factor
+                => share_coordinator.state_topic_replication_factor;
+            kafka_int_bytes: share_state_segment_bytes
+                => share_coordinator.state_topic_segment_bytes;
+            positive_i32: share_state_min_isr => share_coordinator.state_topic_min_isr;
         }
-        set_runtime_size_bytes!(
-            runtime,
-            share_state_segment_bytes,
-            cfg.share_coordinator.state_topic_segment_bytes,
-            kafka_int_bytes
-        );
-        set_runtime_i32!(
-            runtime,
-            share_state_min_isr,
-            cfg.share_coordinator.state_topic_min_isr
-        );
         // Kafka's `between(0, 500)`.
         if let Some(value) = runtime.share_snapshot_update_records_per_snapshot {
             if value > 500 {
@@ -96,27 +65,13 @@ impl RuntimeFileConfig {
             cfg.share_coordinator.snapshot_update_records_per_snapshot = value;
         }
         // Kafka's `atLeast(1)` milliseconds, as an `INT`.
-        for (name, value, target) in [
-            (
-                "share_coordinator_write_timeout",
-                runtime.share_coordinator_write_timeout,
-                &mut cfg.share_coordinator.write_timeout,
-            ),
-            (
-                "share_state_prune_interval",
-                runtime.share_state_prune_interval,
-                &mut cfg.share_coordinator.state_topic_prune_interval,
-            ),
-            (
-                "share_cold_partition_snapshot_interval",
-                runtime.share_cold_partition_snapshot_interval,
-                &mut cfg.share_coordinator.cold_partition_snapshot_interval,
-            ),
-        ] {
-            if let Some(value) = value {
-                *target =
-                    krabka_units::prelude::TimeExt::to_std(whole_millis_i32_time(name, value)?);
-            }
+        set_runtime! {
+            runtime => cfg;
+            whole_millis_i32_duration: share_coordinator_write_timeout
+                    => share_coordinator.write_timeout,
+                share_state_prune_interval => share_coordinator.state_topic_prune_interval,
+                share_cold_partition_snapshot_interval
+                    => share_coordinator.cold_partition_snapshot_interval;
         }
         // `CompressionType.forId` over Kafka's `INT` codec id.
         if let Some(value) = runtime.share_state_compression_codec {
@@ -151,28 +106,15 @@ impl RuntimeFileConfig {
                 }
             };
         }
-        // Kafka's `atLeast(512 * 1024)` over an `INT`.
-        set_runtime_size_bytes!(
-            runtime,
-            share_coordinator_cached_buffer_max_bytes,
-            cfg.share_coordinator.cached_buffer_max_bytes,
-            cached_buffer_max_bytes
-        );
-        set_runtime_i32!(
-            runtime,
-            offsets_topic_num_partitions,
-            cfg.offsets_topic_num_partitions
-        );
-        if let Some(value) = runtime.offsets_topic_replication_factor {
-            cfg.offsets_topic_replication_factor =
-                positive_i16("offsets_topic_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            // Kafka's `atLeast(512 * 1024)` over an `INT`.
+            cached_buffer_max_bytes: share_coordinator_cached_buffer_max_bytes
+                => share_coordinator.cached_buffer_max_bytes;
+            positive_i32: offsets_topic_num_partitions;
+            positive_i16: offsets_topic_replication_factor;
+            kafka_int_bytes: offsets_topic_segment_bytes;
         }
-        set_runtime_size_bytes!(
-            runtime,
-            offsets_topic_segment_bytes,
-            cfg.offsets_topic_segment_bytes,
-            kafka_int_bytes
-        );
         // These two carry the operator's intent, not just a value: `Some`
         // means the key was named, which is what `DescribeConfigs` reports as
         // `STATIC_BROKER_CONFIG`.
@@ -183,43 +125,16 @@ impl RuntimeFileConfig {
             cfg.offsets_retention_check_interval_override =
                 Some(positive_time("offsets_retention_check_interval", value)?);
         }
-        set_runtime_i32!(
-            runtime,
-            transaction_state_num_partitions,
-            cfg.transaction_state_num_partitions
-        );
-        set_runtime_size_bytes!(
-            runtime,
-            transaction_recovery_read_max,
-            cfg.transaction_recovery_read_max,
-            whole_bytes_usize
-        );
-        if let Some(value) = runtime.transaction_state_replication_factor {
-            cfg.transaction_state_replication_factor =
-                positive_i16("transaction_state_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            positive_i32: transaction_state_num_partitions;
+            whole_bytes_usize: transaction_recovery_read_max;
+            positive_i16: transaction_state_replication_factor;
+            kafka_int_bytes: transaction_state_segment_bytes;
+            positive_i32: transaction_state_min_isr;
+            whole_millis_i32_time: transaction_max_timeout;
+            plain: transaction_partition_verification_enable;
         }
-        set_runtime_size_bytes!(
-            runtime,
-            transaction_state_segment_bytes,
-            cfg.transaction_state_segment_bytes,
-            kafka_int_bytes
-        );
-        set_runtime_i32!(
-            runtime,
-            transaction_state_min_isr,
-            cfg.transaction_state_min_isr
-        );
-        set_runtime_time_millis!(
-            runtime,
-            transaction_max_timeout,
-            cfg.transaction_max_timeout,
-            positive_i32
-        );
-        set_runtime_plain!(
-            runtime,
-            transaction_partition_verification_enable,
-            cfg.transaction_partition_verification_enable
-        );
         Ok(())
     }
 
@@ -233,40 +148,15 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_i32!(
-            runtime,
-            barrier_state_num_partitions,
-            cfg.barrier_state_num_partitions
-        );
-        if let Some(value) = runtime.barrier_state_replication_factor {
-            cfg.barrier_state_replication_factor =
-                positive_i16("barrier_state_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            positive_i32: barrier_state_num_partitions;
+            positive_i16: barrier_state_replication_factor;
+            whole_millis_i64_time: barrier_min_injection_interval, barrier_injection_timeout;
+            whole_bytes_usize: barrier_recovery_read_max;
+            positive_i32: barrier_retained_cuts;
+            positive_usize: barrier_max_groups, barrier_max_topics_per_group;
         }
-        set_runtime_time_millis!(
-            runtime,
-            barrier_min_injection_interval,
-            cfg.barrier_min_injection_interval,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            barrier_injection_timeout,
-            cfg.barrier_injection_timeout,
-            positive_i64
-        );
-        set_runtime_size_bytes!(
-            runtime,
-            barrier_recovery_read_max,
-            cfg.barrier_recovery_read_max,
-            whole_bytes_usize
-        );
-        set_runtime_i32!(runtime, barrier_retained_cuts, cfg.barrier_retained_cuts);
-        set_runtime_usize!(runtime, barrier_max_groups, cfg.barrier_max_groups);
-        set_runtime_usize!(
-            runtime,
-            barrier_max_topics_per_group,
-            cfg.barrier_max_topics_per_group
-        );
         Ok(())
     }
 }
@@ -280,6 +170,15 @@ fn cached_buffer_max_bytes(name: &str, value: ByteSize) -> Result<ByteSize, File
     } else {
         Err(invalid_runtime_value(name, "must be at least 524288 bytes"))
     }
+}
+
+/// [`whole_millis_i32_time`] as the [`std::time::Duration`] the share
+/// coordinator's timers hold.
+fn whole_millis_i32_duration(
+    name: &str,
+    value: Time,
+) -> Result<std::time::Duration, FileConfigError> {
+    whole_millis_i32_time(name, value).map(TimeExt::to_std)
 }
 
 #[cfg(test)]

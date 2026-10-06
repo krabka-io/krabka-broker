@@ -32,11 +32,13 @@ use crate::throttle::TopicThrottle;
 /// The lag is unknown until a response has been applied, and an unknown lag is
 /// not in sync. An empty response leaves a known lag as it was, because Kafka
 /// recomputes it only when the response carried bytes.
-#[derive(Debug)]
+#[derive(Debug, krabka_macros::FieldDefaults)]
 pub(crate) struct ReplicaLag {
     /// The lag in offsets, never below zero, or [`Self::UNKNOWN`].
+    #[default(AtomicI64::new(Self::UNKNOWN))]
     lag: AtomicI64,
     /// The bytes appended since the lag was last computed.
+    #[default(AtomicU64::new(0))]
     appended: AtomicU64,
 }
 
@@ -63,15 +65,6 @@ impl ReplicaLag {
                 leader_high_watermark.saturating_sub(log_end_offset).max(0),
                 Release,
             );
-        }
-    }
-}
-
-impl Default for ReplicaLag {
-    fn default() -> Self {
-        Self {
-            lag: AtomicI64::new(Self::UNKNOWN),
-            appended: AtomicU64::new(0),
         }
     }
 }

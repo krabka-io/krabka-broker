@@ -2,7 +2,6 @@
 //! needs, so each of them drives the handler through the same request shape.
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
     list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
@@ -12,20 +11,11 @@ use krabka_protocol::owned::{
 use super::sentinels::UNKNOWN_EPOCH;
 use crate::codes;
 
-pub(super) fn encode_request(req: &ListOffsetsRequest, version: i16) -> Bytes {
-    crate::test_support::encode_request(req, version)
-}
-
-pub(super) fn decode_response(bytes: &Bytes, version: i16) -> ListOffsetsResponse {
-    crate::test_support::decode_response(bytes, version)
-}
-
-pub(super) fn test_context<'a>(
-    principal: &'a krabka_security::Principal,
-    peer: &'a std::net::SocketAddr,
-) -> crate::handlers::RequestContext<'a> {
-    crate::test_support::request_context(principal, peer, "admin-client")
-}
+crate::test_support::wire_helpers!(
+    pub(super) ListOffsetsRequest,
+    ListOffsetsResponse,
+    client_id = "admin-client"
+);
 
 pub(super) async fn client_for(broker: &crate::broker::BrokerHandle) -> krabka_client_core::Client {
     krabka_client_core::Client::builder()

@@ -12,7 +12,7 @@ use super::missing_topic_rows;
 use crate::{
     codes,
     coordinator::bootstrap::OFFSETS_TOPIC,
-    test_support::{peer, principal, request_context, start_broker_with},
+    test_support::{peer, principal, request_context, start_broker_no_audit_with},
 };
 
 fn row(error_code: i16, name: &str, is_internal: bool) -> MetadataResponseTopic {
@@ -32,8 +32,7 @@ fn row(error_code: i16, name: &str, is_internal: bool) -> MetadataResponseTopic 
 /// flight answers 3. `createTopics` answers 3 for the name that it sends.
 #[tokio::test]
 async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flight() {
-    let (handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (handle, _dir) = start_broker_no_audit_with(|config| {
         config.num_partitions = 1;
         config.offsets_topic_num_partitions = 7;
     })
@@ -44,7 +43,7 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     let ctx = request_context(&user, &address, "metadata-client");
 
     assert!(broker.auto_topic_creation.hold_for_test(OFFSETS_TOPIC));
-    let skipped = missing_topic_rows(&broker, &ctx, 1, &["bad name", OFFSETS_TOPIC], true);
+    let skipped = missing_topic_rows(&broker, &ctx, &["bad name", OFFSETS_TOPIC], true);
     check!(
         skipped
             == vec![
@@ -55,7 +54,7 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     check!(broker.auto_topic_creation.started() == 0);
     broker.auto_topic_creation.release_for_test(OFFSETS_TOPIC);
 
-    let created = missing_topic_rows(&broker, &ctx, 2, &[OFFSETS_TOPIC], true);
+    let created = missing_topic_rows(&broker, &ctx, &[OFFSETS_TOPIC], true);
     check!(created == vec![row(codes::UNKNOWN_TOPIC_OR_PARTITION, OFFSETS_TOPIC, true)]);
     check!(broker.auto_topic_creation.started() == 1);
     tokio::time::timeout(Duration::from_secs(30), async {

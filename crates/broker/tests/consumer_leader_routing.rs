@@ -38,20 +38,7 @@ use krabka_protocol::{
 
 mod support;
 
-use std::sync::OnceLock;
-
-use tokio::sync::Mutex;
-
-/// Serialize the multi-broker tests in this binary.
-///
-/// Each test boots a 3-node loopback cluster. Two tests at the same time
-/// exhaust the ephemeral ports and starve openraft election timing. The
-/// `cluster_lock` in `leader_epoch.rs` and `replication.rs` has the same
-/// rationale.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
+use support::cluster_lock;
 
 /// Produce one single-record batch to a partition on the broker that owns it.
 ///

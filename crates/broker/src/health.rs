@@ -91,7 +91,12 @@ pub fn metadata_progress(
 /// The one readiness condition that is not met, in the order the probe checks
 /// them. `Display` is the body of the 503, so it names the condition rather
 /// than saying only that something is wrong.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `condition` is the stable machine-readable name of the condition, the first
+/// token of the 503 body. An operator greps for this; the prose after it is
+/// for a human reading `kubectl describe`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", as_str = condition)]
 pub enum NotReady {
     /// Controlled shutdown is draining leadership.
     ShuttingDown,
@@ -110,22 +115,6 @@ pub enum NotReady {
         /// The bound this lag exceeded.
         max_lag: u64,
     },
-}
-
-impl NotReady {
-    /// Stable machine-readable name of the condition, the first token of the
-    /// 503 body. An operator greps for this; the prose after it is for a
-    /// human reading `kubectl describe`.
-    #[must_use]
-    pub fn condition(self) -> &'static str {
-        match self {
-            Self::ShuttingDown => "shutting_down",
-            Self::LogDirRecovery => "log_dir_recovery",
-            Self::ListenersBound => "listeners_bound",
-            Self::MetadataQuorumUnreached => "metadata_quorum_unreached",
-            Self::MetadataLag { .. } => "metadata_lag",
-        }
-    }
 }
 
 impl std::fmt::Display for NotReady {

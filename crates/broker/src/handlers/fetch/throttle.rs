@@ -267,14 +267,8 @@ fn consume_consumer_quota(
     if !rate.is_finite() || rate <= 0.0 {
         return (crate::quota::QuotaDelay::zero(), ConsumerCharge(None));
     }
-    let user = entity_key
-        .iter()
-        .find(|(k, _)| k == "user")
-        .and_then(|(_, v)| v.clone());
-    let client_id_opt = entity_key
-        .iter()
-        .find(|(k, _)| k == "client-id")
-        .and_then(|(_, v)| v.clone());
+    let user = crate::quota::entity_field(&entity_key, "user");
+    let client_id_opt = crate::quota::entity_field(&entity_key, "client-id");
     // Kafka holds the quota as a double (`ClientQuotaManager`), so the bucket
     // runs at the configured rate, fractional part included. Like the
     // producer path it records the whole response and turns the debt into the

@@ -20,9 +20,8 @@
 //! per-resource work lives in `resource`, and the record builders it
 //! dispatches to live in `topic_configs` and `broker_configs`.
 
-use bytes::Bytes;
 use krabka_protocol::{
-    Decode, UnknownTaggedFields,
+    UnknownTaggedFields,
     owned::{
         alter_configs_request::AlterConfigsRequest,
         alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
@@ -41,35 +40,37 @@ mod test_support;
 mod tests;
 
 use self::resource::process_resource;
-use crate::{broker::Broker, error::BrokerError};
-
-const RESOURCE_TYPE_TOPIC: i8 = 2;
-const RESOURCE_TYPE_BROKER: i8 = 4;
-const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
-const RESOURCE_TYPE_GROUP: i8 = 32;
+use crate::{
+    broker::Broker,
+    error::BrokerError,
+    handlers::describe_configs::{
+        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+    },
+};
 
 #[tracing::instrument(
     name = "handle_alter_configs",
     level = "info",
     skip_all,
-    fields(api = "AlterConfigs", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "AlterConfigs", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: AlterConfigsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = AlterConfigsRequest::decode(&mut cur, version)?;
-
+) -> Result<AlterConfigsResponse, BrokerError> {
     let image = broker.controller.current_image();
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
     let validate_only = req.validate_only;
     let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
-    let duplicate_flags = duplicate_resource_flags(&req.resources);
+    let duplicate_flags = duplicate_resource_flags(
+        req.resources
+            .iter()
+            .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
+    );
 
     for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
         let named = audit_resources_for(&resource, &image);
@@ -88,7 +89,7 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Names the audited resource and the keys the request changes on it.
@@ -185,19 +186,59 @@ fn changed_config_keys(
 /// that names it. This computes that flag for each resource in request order
 /// before any of them is authorized or processed, since the duplicate check
 /// has to see the whole request at once.
-fn duplicate_resource_flags(
-    resources: &[krabka_protocol::owned::alter_configs_request::AlterConfigsResource],
+///
+/// `resources` yields each row's `(resource_type, resource_name)` in request
+/// order. `AlterConfigs` and `IncrementalAlterConfigs` both call this.
+pub(super) fn duplicate_resource_flags<'a>(
+    resources: impl IntoIterator<Item = (i8, &'a str)>,
 ) -> Vec<bool> {
+    let keys: Vec<(i8, &str)> = resources.into_iter().collect();
     let mut counts: std::collections::HashMap<(i8, &str), usize> = std::collections::HashMap::new();
-    for resource in resources {
-        *counts
-            .entry((resource.resource_type, resource.resource_name.as_str()))
-            .or_insert(0) += 1;
+    for key in &keys {
+        *counts.entry(*key).or_insert(0) += 1;
     }
-    resources
+    keys.iter().map(|key| counts[key] > 1).collect()
+}
+
+/// Kafka's `ConfigAdminManager.preprocess` shape checks, which run before
+/// any authorization: a resource named more than once in the request, a
+/// config key named more than once within a resource, and a null value where
+/// the API does not allow one.
+///
+/// `configs` yields each config's `(name, null_not_allowed)`, where the flag
+/// is set when the config carries no value and the operation needs one.
+/// Legacy `AlterConfigs` never deletes by omitting a value, so every null is
+/// refused there. `IncrementalAlterConfigs` allows a null on DELETE only.
+pub(super) fn validate_resource_shape<'a>(
+    is_duplicate: bool,
+    configs: impl IntoIterator<Item = (&'a str, bool)>,
+) -> Result<(), (i16, String)> {
+    if is_duplicate {
+        return Err((
+            crate::codes::INVALID_REQUEST,
+            "Each resource must appear at most once.".into(),
+        ));
+    }
+    let configs: Vec<(&str, bool)> = configs.into_iter().collect();
+    let mut seen = std::collections::BTreeSet::new();
+    if configs.iter().any(|(name, _)| !seen.insert(*name)) {
+        return Err((
+            crate::codes::INVALID_REQUEST,
+            "Error due to duplicate config keys".into(),
+        ));
+    }
+    let null_names: Vec<&str> = configs
         .iter()
-        .map(|resource| counts[&(resource.resource_type, resource.resource_name.as_str())] > 1)
-        .collect()
+        .filter(|(_, null_not_allowed)| *null_not_allowed)
+        .map(|(name, _)| *name)
+        .collect();
+    if !null_names.is_empty() {
+        return Err((
+            crate::codes::INVALID_REQUEST,
+            format!("Null value not supported for : {}", null_names.join(", ")),
+        ));
+    }
+    Ok(())
 }
 
 /// The longest config value Kafka's controller writes: `Short.MAX_VALUE`
@@ -240,9 +281,9 @@ pub(super) fn config_resource_type(resource_type: i8) -> &'static str {
     match resource_type {
         RESOURCE_TYPE_TOPIC => "Topic",
         RESOURCE_TYPE_BROKER => "Broker",
-        8 => "BrokerLogger",
-        16 => "ClientMetrics",
-        32 => "Group",
+        RESOURCE_TYPE_BROKER_LOGGER => "BrokerLogger",
+        RESOURCE_TYPE_CLIENT_METRICS => "ClientMetrics",
+        RESOURCE_TYPE_GROUP => "Group",
         _ => "Unknown",
     }
 }

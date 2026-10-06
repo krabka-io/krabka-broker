@@ -3,9 +3,10 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 use super::config::ClassicModel;
+use crate::model_check::run_bfs;
 
 // Exhaustiveness is bounded on UNIQUE states (memory-proportional); the BFS's
 // generated count runs several times the unique count here (high branching:
@@ -28,23 +29,7 @@ pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 3_853;
 pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 482_874;
 
 pub(super) fn run(model: ClassicModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < TARGET_STATE_COUNT,
-        "[{label}] truncated at the state-count target — not exhaustive"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded ({})",

@@ -8,22 +8,17 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        share_group_describe_request::ShareGroupDescribeRequest,
-        share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
-    },
+use krabka_protocol::owned::{
+    share_group_describe_request::ShareGroupDescribeRequest,
+    share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
 };
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
-    coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
+    coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
     handlers::authorized_operations::authorized_operations_bits,
 };
@@ -37,19 +32,15 @@ const UNAUTHORIZED_TOPICS_MESSAGE: &str =
     name = "handle_share_group_describe",
     level = "info",
     skip_all,
-    fields(api = "ShareGroupDescribe", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ShareGroupDescribe", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ShareGroupDescribeRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ShareGroupDescribeRequest::decode(&mut cur, version)?;
-
+) -> Result<ShareGroupDescribeResponse, BrokerError> {
     // Kafka's `isShareGroupProtocolEnabled` gate comes before any ACL check,
     // and `getErrorResponse` answers every requested group. Share groups are
     // on from a finalized `share.version` of 1.
@@ -60,7 +51,7 @@ pub(crate) async fn handle(
             .iter()
             .map(|gid| error_row(gid, codes::UNSUPPORTED_VERSION, None))
             .collect();
-        return crate::handlers::encode_response(&response(groups), version);
+        return Ok(response(groups));
     }
 
     let authorizer = broker.config.authorizer.as_ref();
@@ -71,14 +62,7 @@ pub(crate) async fn handle(
     let mut invalid: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for gid in &req.group_ids {
-        if crate::handlers::acl_denied(
-            authorizer,
-            &image,
-            ctx,
-            ResourceType::Group,
-            gid,
-            AclOperation::Describe,
-        ) {
+        if crate::handlers::group_describe_denied(authorizer, &image, ctx, gid) {
             groups.push(error_row(gid, codes::GROUP_AUTHORIZATION_FAILED, None));
             continue;
         }
@@ -101,7 +85,10 @@ pub(crate) async fn handle(
             described.push(error_row(
                 gid,
                 codes::GROUP_ID_NOT_FOUND,
-                Some(not_found_message(coordinator, gid)),
+                Some(crate::handlers::share_group_not_found_message(
+                    coordinator,
+                    gid,
+                )),
             ));
             continue;
         };
@@ -150,18 +137,8 @@ pub(crate) async fn handle(
         .flat_map(|m| &m.assignment.topic_partitions)
         .map(|tp| tp.topic_name.as_str())
         .collect();
-    let denied: HashSet<String> = authorize_topics(
-        authorizer,
-        &*image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        assigned,
-    )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
-    .map(|(name, _)| name.to_owned())
-    .collect();
+    let denied =
+        crate::handlers::denied_topics(authorizer, &image, ctx, AclOperation::Describe, assigned);
     if !denied.is_empty() {
         for group in &mut groups {
             let hides_topic = group
@@ -179,7 +156,7 @@ pub(crate) async fn handle(
         }
     }
 
-    crate::handlers::encode_response(&response(groups), version)
+    Ok(response(groups))
 }
 
 fn response(groups: Vec<DescribedGroup>) -> ShareGroupDescribeResponse {
@@ -196,21 +173,6 @@ fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> 
         error_code,
         error_message,
         ..Default::default()
-    }
-}
-
-/// The `GROUP_ID_NOT_FOUND` message of Kafka's `GroupMetadataManager.shareGroup`
-/// lookup: a group of another type is not a share group, and anything else is
-/// not found. A classic or consumer group lives in the `groups` registry and a
-/// streams group keeps its offset home there too.
-fn not_found_message(coordinator: &GroupCoordinator, group_id: &str) -> String {
-    let other_type = coordinator.group_type(group_id).is_some()
-        || coordinator.find(group_id).is_some()
-        || coordinator.find_streams(group_id).is_some();
-    if other_type {
-        format!("Group {group_id} is not a share group.")
-    } else {
-        format!("Group {group_id} not found.")
     }
 }
 
@@ -233,12 +195,7 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        ShareGroupDescribeRequest,
-        ShareGroupDescribeResponse,
-        version = share_group_describe_response::MAX_VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     async fn start_broker(
         authorizer: Arc<dyn Authorizer>,
@@ -268,12 +225,9 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&request(&["g1", "g2"]));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, request(&["g1", "g2"]), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = ShareGroupDescribeResponse {
             throttle_time_ms: 0,
@@ -321,12 +275,9 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&request(&["g1"]));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, request(&["g1"]), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = ShareGroupDescribeResponse {
             throttle_time_ms: 0,
@@ -349,15 +300,12 @@ mod tests {
     }
 
     fn acl(resource_type: ResourceType, name: &str) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
             resource_type,
-            resource_name: name.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+            name,
+            "User:alice",
+            AclOperation::Describe,
+        ))
     }
 
     fn topic(name: &str, topic_id: uuid::Uuid, node: u64) -> Vec<krabka_metadata::MetadataRecord> {
@@ -487,9 +435,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, version, 1, &encode_request(&req), &ctx)
-            .await
-            .expect("handle");
+        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
         let expected = ShareGroupDescribeResponse {
             groups: vec![
@@ -536,7 +482,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert!(decode_response(&resp) == expected);
+        assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 
@@ -553,15 +499,9 @@ mod tests {
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
 
-        let resp = handle(
-            &broker,
-            version,
-            1,
-            &encode_request(&request(&["classic", ""])),
-            &ctx,
-        )
-        .await
-        .expect("handle");
+        let resp = handle(&broker, request(&["classic", ""]), version, &ctx)
+            .await
+            .expect("handle");
 
         let expected = ShareGroupDescribeResponse {
             groups: vec![
@@ -574,7 +514,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert!(decode_response(&resp) == expected);
+        assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 }

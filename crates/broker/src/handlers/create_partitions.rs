@@ -12,16 +12,12 @@
 //! This file holds the request loop. Each stage it walks through lives in its
 //! own submodule: `admission` for the duplicate and authorization preamble,
 //! `assignment` for the replica placement, `apply` for the metadata records
-//! and the local materialization, and `response` for the encoding and the
+//! and the local materialization, and `response` for the response and the
 //! throttle.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        create_partitions_request::CreatePartitionsRequest,
-        create_partitions_response::CreatePartitionsTopicResult,
-    },
+use krabka_protocol::owned::{
+    create_partitions_request::CreatePartitionsRequest,
+    create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
 };
 use krabka_raft::RaftError;
 
@@ -36,7 +32,7 @@ mod test_support;
 mod tests;
 
 use self::{
-    admission::{denied_topics, duplicate_names},
+    admission::duplicate_names,
     apply::{MaterializeContext, materialize_new_partitions, partition_records},
     assignment::resolve_new_partition_assignments,
     response::finish_response,
@@ -57,19 +53,15 @@ use crate::{
     name = "handle_create_partitions",
     level = "info",
     skip_all,
-    fields(api = "CreatePartitions", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "CreatePartitions", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: CreatePartitionsRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = CreatePartitionsRequest::decode(&mut cur, version)?;
-
+) -> Result<CreatePartitionsResponse, BrokerError> {
     let node_id = broker.config.node_id;
     let partitions_map = broker.partitions.clone();
     let producer_state = broker.producer_state.clone();
@@ -105,12 +97,12 @@ pub(crate) async fn handle(
         .map(|topic| topic.name.as_str())
         .filter(|name| !duplicates.iter().any(|duplicate| duplicate == name))
         .collect();
-    let denied_topics = denied_topics(
+    let denied_topics = crate::handlers::denied_topics(
         broker.config.authorizer.as_ref(),
         &image,
-        ctx.principal,
-        ctx.peer,
-        &names,
+        ctx,
+        krabka_metadata::AclOperation::Alter,
+        names.iter().copied(),
     );
     results.extend(
         names
@@ -309,7 +301,7 @@ pub(crate) async fn handle(
     // KIP-599: report the controller_mutation_rate throttle after response
     // assembly. It sets throttle_time_ms and records the window for the
     // connection loop's post-send mute (KIP-219).
-    finish_response(ctx, quota.delay(), results, version)
+    Ok(finish_response(ctx, quota.delay(), results))
 }
 
 /// Kafka's `ReplicationControlManager.createPartitions` checks on one

@@ -44,12 +44,7 @@ fn request(topic: &str, partitions: &[(i32, i64)]) -> DeleteRecordsRequest {
     }
 }
 
-crate::test_support::wire_helpers!(
-    DeleteRecordsRequest,
-    DeleteRecordsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -60,11 +55,9 @@ async fn drive(
     peer: &SocketAddr,
 ) -> DeleteRecordsResponse {
     let ctx = test_context(principal, peer);
-    let req_bytes = encode_request(req);
-    let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+    handle(broker, req.clone(), VERSION, &ctx)
         .await
-        .expect("handle");
-    decode_response(&bytes)
+        .expect("handle")
 }
 
 #[tokio::test]
@@ -176,7 +169,7 @@ async fn topic_with_configs_holding_a_pending_batch(
 ) {
     use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        create_topics_response::{self, CreateTopicsResponse},
+        create_topics_response,
     };
 
     let config = |key: &str| {
@@ -191,31 +184,27 @@ async fn topic_with_configs_holding_a_pending_batch(
             crate::config_keys::parse_cleanup_policy(policy).expect("a valid cleanup.policy")
         });
     let version = create_topics_response::MAX_VERSION;
-    let create = crate::test_support::encode_request(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: configs
-                    .iter()
-                    .map(|(name, value)| CreatableTopicConfig {
-                        name: (*name).to_owned(),
-                        value: Some((*value).to_owned()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
+    let create = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: topic.to_owned(),
+            num_partitions: 1,
+            replication_factor: 1,
+            configs: configs
+                .iter()
+                .map(|(name, value)| CreatableTopicConfig {
+                    name: (*name).to_owned(),
+                    value: Some((*value).to_owned()),
+                    ..Default::default()
+                })
+                .collect(),
             ..Default::default()
-        },
-        version,
-    );
-    let bytes = crate::handlers::create_topics::handle(broker, version, 1, &create, ctx)
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let created = crate::handlers::create_topics::handle(broker, create, version, ctx)
         .await
         .expect("CreateTopics");
-    let created: CreateTopicsResponse = crate::test_support::decode_response(&bytes, version);
     assert!(created.topics[0].error_code == codes::NONE, "{created:?}");
     broker_handle.wait_until_partition_present(topic, 0).await;
 
@@ -304,8 +293,7 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 
 #[tokio::test]
 async fn a_refused_trim_deletes_nothing() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.break_glass = gated_config();
     })
@@ -788,18 +776,8 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
     broker_handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: krabka_raft::NodeId(FOLLOWER),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(FOLLOWER)
             },
         ))
         .await
@@ -891,8 +869,7 @@ async fn delete_to(
 /// on a fenced broker is not live and does not hold the row.
 #[tokio::test]
 async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         // The follower never fetches on its own. Keep it in the ISR and alive
         // for the whole test, so only the fetches below move its state.

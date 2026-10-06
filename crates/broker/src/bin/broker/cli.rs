@@ -5,10 +5,13 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use base64::Engine as _;
 use clap::Parser;
+use krabka_raft::NodeId;
 use krabka_units::{ByteSize, Time};
+use uuid::Uuid;
 
 use crate::runtime_args::RuntimeArgs;
 
+#[krabka_macros::krabka_env]
 #[derive(Debug, Parser)]
 #[command(
     name = "krabka-broker",
@@ -110,7 +113,7 @@ pub struct Args {
     /// form -- what `Metadata` and `DescribeCluster` report (#1042) -- or
     /// `java.util.UUID`'s hyphenated form.
     #[arg(long, env = "KRABKA_CLUSTER_ID", value_parser = parse_cluster_id)]
-    pub cluster_id: Option<uuid::Uuid>,
+    pub cluster_id: Option<Uuid>,
 
     /// Bind address for the Prometheus `/metrics` HTTP endpoint.
     /// An empty string or `none` disables it. Default: `0.0.0.0:9404`.
@@ -167,7 +170,7 @@ pub struct Args {
         num_args = 0..,
         value_parser = krabka_broker::file_config::parse_quorum_voter
     )]
-    pub controller_quorum_voters: Vec<(krabka_raft::NodeId, String)>,
+    pub controller_quorum_voters: Vec<(NodeId, String)>,
 
     /// KIP-853: auto-join the quorum as a voter after the node catches up as
     /// an observer. This maps to Kafka's
@@ -180,51 +183,21 @@ pub struct Args {
     pub observer_lag_bound: Option<u64>,
 
     /// Broker heartbeat interval in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_HEARTBEAT_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub heartbeat_interval: Option<Time>,
 
     /// Broker heartbeat timeout in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_HEARTBEAT_TIMEOUT",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub heartbeat_timeout: Option<Time>,
 
     /// Follower lag timeout in milliseconds before ISR shrink.
-    #[arg(
-        long,
-        env = "KRABKA_REPLICA_LAG_TIME_MAX",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub replica_lag_time_max: Option<Time>,
 
     /// Controller election timeout in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLER_ELECTION_TIMEOUT",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub controller_election_timeout: Option<Time>,
 
     /// Controller heartbeat interval in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLER_HEARTBEAT_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub controller_heartbeat_interval: Option<Time>,
 
     /// Consecutive controller fetch misses tolerated before election.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLER_FETCH_MISS_LIMIT",
-        value_parser = clap::value_parser!(u32).range(1..)
-    )]
     pub controller_fetch_miss_limit: Option<u32>,
 
     /// Capacity of the metadata Raft command queue.
@@ -236,27 +209,12 @@ pub struct Args {
     pub metadata_raft_command_queue_capacity: Option<usize>,
 
     /// Per-read and per-snapshot-request metadata Raft byte budget.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_RAFT_FETCH_MAX",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_raft_fetch_max: Option<ByteSize>,
 
     /// Controlled-shutdown leadership drain timeout in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub controlled_shutdown_drain_timeout: Option<Time>,
 
     /// Maximum bytes between metadata-log snapshots.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_max_bytes_between_snapshots: Option<ByteSize>,
 
     /// Maximum time between metadata-log snapshots. `0s` disables the interval cap.
@@ -272,29 +230,14 @@ pub struct Args {
     pub metadata_snapshot_interval_records: Option<u64>,
 
     /// Maximum metadata snapshot size a follower will fetch.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_SNAPSHOT_FETCH_MAX",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_snapshot_fetch_max: Option<ByteSize>,
 
     /// Largest metadata-log segment (`metadata.log.segment.bytes`), from
     /// 8 MiB to 2147483647 bytes.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_LOG_SEGMENT_BYTES",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_log_segment_bytes: Option<ByteSize>,
 
     /// Longest time a metadata-log segment stays active
     /// (`metadata.log.segment.ms`).
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_LOG_SEGMENT_ROLL_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub metadata_log_segment_roll_interval: Option<Time>,
 
     /// Largest combined size of the metadata log and its snapshots
@@ -321,11 +264,6 @@ pub struct Args {
     pub txn_abort_cleanup_interval: Option<Time>,
 
     /// Transactional-id expiry (`transactional.id.expiration.ms`).
-    #[arg(
-        long,
-        env = "KRABKA_TXN_ID_EXPIRATION",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub txn_id_expiration: Option<Time>,
 
     /// Transactional-id expiry sweep cadence
@@ -335,11 +273,6 @@ pub struct Args {
     pub txn_id_expiration_cleanup_interval: Option<Time>,
 
     /// Auto preferred-replica election scan cadence.
-    #[arg(
-        long,
-        env = "KRABKA_LEADER_IMBALANCE_CHECK_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub leader_imbalance_check_interval: Option<Time>,
 
     /// TLS cert/key reload polling interval. `0s` disables the watcher.
@@ -359,19 +292,9 @@ pub struct Args {
     pub max_connections_per_ip: Option<usize>,
 
     /// Delegation-token maximum lifetime.
-    #[arg(
-        long,
-        env = "KRABKA_DELEGATION_TOKEN_MAX_LIFETIME",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub delegation_token_max_lifetime: Option<Time>,
 
     /// Delegation-token expiry sweep interval.
-    #[arg(
-        long,
-        env = "KRABKA_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub delegation_token_expiry_check_interval: Option<Time>,
 
     /// Delegation-token default renew period.
@@ -383,11 +306,6 @@ pub struct Args {
     pub delegation_token_default_renew_period: Option<Time>,
 
     /// `RemoteLogManager` copy/retention cadence in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_REMOTE_LOG_MANAGER_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub remote_log_manager_interval: Option<Time>,
 
     /// Delegation-token HMAC master key. Prefer secrets managers over shell history.
@@ -607,4 +525,156 @@ mod tests {
         assert!(args.controller_quorum_voters[0].0 == krabka_raft::NodeId(2));
         assert!(args.controller_quorum_voters[0].1 == &endpoint[2..]);
     }
+
+    /// The values each flag is offered in [`top_level_flags_keep_their_shape`].
+    /// Between them they tell every value parser `Args` uses apart: zero
+    /// against positive durations and sizes, signed against unsigned, `u32`
+    /// against `u64`, the metadata command-queue bound, and the address,
+    /// voter and cluster-id forms.
+    const PROBES: [&str; 17] = [
+        "0",
+        "1",
+        "-1",
+        "1.5",
+        "40000",
+        "3000000000",
+        "5000000000",
+        "0ms",
+        "1ms",
+        "0B",
+        "1B",
+        "3GiB",
+        "true",
+        "127.0.0.1:9092",
+        "h:9093",
+        "1@h:9093",
+        "AQIDBAUGBwgJCgsMDQ4PEA",
+    ];
+
+    /// One line per flag `Args` declares itself, leaving out the flattened
+    /// runtime and profiling groups: its long name, its environment variable,
+    /// its default values, and which of [`PROBES`] its value parser accepts
+    /// (`+`) or refuses (`-`).
+    fn top_level_flag_shapes() -> String {
+        use clap::{Args as _, CommandFactory as _};
+
+        let flattened = krabka_telemetry::profiling::ProfilingConfig::augment_args(
+            RuntimeArgs::augment_args(clap::Command::new("flattened")),
+        );
+        let command = Args::command();
+        command
+            .get_arguments()
+            .filter(|arg| {
+                flattened
+                    .get_arguments()
+                    .all(|inner| inner.get_id() != arg.get_id())
+            })
+            .map(|arg| {
+                let long = arg.get_long().unwrap_or_default();
+                let env = arg
+                    .get_env()
+                    .map(|env| env.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let defaults = arg
+                    .get_default_values()
+                    .iter()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let accepted = PROBES
+                    .iter()
+                    .map(|probe| {
+                        let flag = format!("--{long}={probe}");
+                        if command
+                            .clone()
+                            .try_get_matches_from(["krabka-broker", flag.as_str()])
+                            .is_ok()
+                        {
+                            '+'
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect::<String>();
+                format!("{long} {env} {defaults:?} {accepted}")
+            })
+            .flat_map(|line| [line, "\n".to_owned()])
+            .collect()
+    }
+
+    /// Every flag `Args` declares itself keeps its long name, environment
+    /// variable, defaults and value domain.
+    #[test]
+    fn top_level_flags_keep_their_shape() {
+        let _guard = env_guard();
+
+        assert!(top_level_flag_shapes() == TOP_LEVEL_FLAG_SHAPES);
+    }
+
+    /// The output of [`top_level_flag_shapes`], pinned before `#[krabka_env]`
+    /// took over any of the flags' attributes.
+    const TOP_LEVEL_FLAG_SHAPES: &str = "\
+        listen-addr  [\"127.0.0.1:9092\"] -------------+---\n\
+        controller-listen-addr KRABKA_CONTROLLER_LISTEN_ADDR [] -------------+---\n\
+        advertised-listener KRABKA_ADVERTISED_LISTENER [] +++++++++++++++++\n\
+        config-file  [] +++++++++++++++++\n\
+        print-config-schema  [] -----------------\n\
+        log-dir  [\"./krabka-data\"] +++++++++++++++++\n\
+        metadata-log-dir KRABKA_METADATA_LOG_DIR [] +++++++++++++++++\n\
+        extra-log-dirs KRABKA_EXTRA_LOG_DIRS [] +++++++++++++++++\n\
+        broker-id  [\"1\"] +++-+------------\n\
+        process-roles KRABKA_PROCESS_ROLES [] +++++++++++++++++\n\
+        cluster-id KRABKA_CLUSTER_ID [] ----------------+\n\
+        metrics-listen-addr KRABKA_METRICS_LISTEN_ADDR [\"0.0.0.0:9404\"] +++++++++++++++++\n\
+        health-listen-addr KRABKA_HEALTH_LISTEN_ADDR [\"0.0.0.0:9405\"] +++++++++++++++++\n\
+        readiness-max-metadata-lag KRABKA_READINESS_MAX_METADATA_LAG [] ++--+++----------\n\
+        partition-disk-scan-interval KRABKA_PARTITION_DISK_SCAN_INTERVAL [] +------++--------\n\
+        controller-bootstrap-servers KRABKA_CONTROLLER_BOOTSTRAP_SERVERS [] -------------+++-\n\
+        controller-quorum-voters KRABKA_CONTROLLER_QUORUM_VOTERS [] ---------------+-\n\
+        controller-auto-join KRABKA_CONTROLLER_AUTO_JOIN [] -----------------\n\
+        observer-lag-bound KRABKA_OBSERVER_LAG_BOUND [] ++--+++----------\n\
+        heartbeat-interval KRABKA_HEARTBEAT_INTERVAL [] --------+--------\n\
+        heartbeat-timeout KRABKA_HEARTBEAT_TIMEOUT [] --------+--------\n\
+        replica-lag-time-max KRABKA_REPLICA_LAG_TIME_MAX [] --------+--------\n\
+        controller-election-timeout KRABKA_CONTROLLER_ELECTION_TIMEOUT [] --------+--------\n\
+        controller-heartbeat-interval KRABKA_CONTROLLER_HEARTBEAT_INTERVAL [] --------+--------\n\
+        controller-fetch-miss-limit KRABKA_CONTROLLER_FETCH_MISS_LIMIT [] -+--++-----------\n\
+        metadata-raft-command-queue-capacity KRABKA_METADATA_RAFT_COMMAND_QUEUE_CAPACITY [] -+--+++----------\n\
+        metadata-raft-fetch-max KRABKA_METADATA_RAFT_FETCH_MAX [] ----------++-----\n\
+        controlled-shutdown-drain-timeout KRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT [] --------+--------\n\
+        metadata-max-bytes-between-snapshots KRABKA_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS [] ----------++-----\n\
+        metadata-max-snapshot-interval KRABKA_METADATA_MAX_SNAPSHOT_INTERVAL [] +------++--------\n\
+        metadata-snapshot-interval-records KRABKA_METADATA_SNAPSHOT_INTERVAL_RECORDS [] -+--+++----------\n\
+        metadata-snapshot-fetch-max KRABKA_METADATA_SNAPSHOT_FETCH_MAX [] ----------++-----\n\
+        metadata-log-segment-bytes KRABKA_METADATA_LOG_SEGMENT_BYTES [] ----------++-----\n\
+        metadata-log-segment-roll-interval KRABKA_METADATA_LOG_SEGMENT_ROLL_INTERVAL [] --------+--------\n\
+        metadata-max-retention-bytes KRABKA_METADATA_MAX_RETENTION_BYTES [] +--------+++-----\n\
+        metadata-max-retention KRABKA_METADATA_MAX_RETENTION [] +------++--------\n\
+        metadata-max-idle-interval KRABKA_METADATA_MAX_IDLE_INTERVAL [] +------++--------\n\
+        txn-abort-cleanup-interval KRABKA_TXN_ABORT_CLEANUP_INTERVAL [] +------++--------\n\
+        txn-id-expiration KRABKA_TXN_ID_EXPIRATION [] --------+--------\n\
+        txn-id-expiration-cleanup-interval KRABKA_TXN_ID_EXPIRATION_CLEANUP_INTERVAL [] +------++--------\n\
+        leader-imbalance-check-interval KRABKA_LEADER_IMBALANCE_CHECK_INTERVAL [] --------+--------\n\
+        tls-reload-interval KRABKA_TLS_RELOAD_INTERVAL [] +------++--------\n\
+        max-incremental-fetch-session-cache-slots KRABKA_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS [] ++--+++----------\n\
+        max-connections KRABKA_MAX_CONNECTIONS [] ++--+++----------\n\
+        max-connections-per-ip KRABKA_MAX_CONNECTIONS_PER_IP [] ++--+++----------\n\
+        delegation-token-max-lifetime KRABKA_DELEGATION_TOKEN_MAX_LIFETIME [] --------+--------\n\
+        delegation-token-expiry-check-interval KRABKA_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL [] --------+--------\n\
+        delegation-token-default-renew-period KRABKA_DELEGATION_TOKEN_RENEW_PERIOD [] --------+--------\n\
+        remote-log-manager-interval KRABKA_REMOTE_LOG_MANAGER_INTERVAL [] --------+--------\n\
+        delegation-token-secret-key KRABKA_DELEGATION_TOKEN_SECRET_KEY [] +++++++++++++++++\n\
+        otel-sdk-disabled OTEL_SDK_DISABLED [] +++++++++++++++++\n\
+        krabka-otlp-endpoint KRABKA_OTLP_ENDPOINT [] +++++++++++++++++\n\
+        otel-exporter-otlp-traces-endpoint OTEL_EXPORTER_OTLP_TRACES_ENDPOINT [] +++++++++++++++++\n\
+        otel-exporter-otlp-endpoint OTEL_EXPORTER_OTLP_ENDPOINT [] +++++++++++++++++\n\
+        krabka-otlp-enabled KRABKA_OTLP_ENABLED [] +++++++++++++++++\n\
+        krabka-otlp-protocol KRABKA_OTLP_PROTOCOL [] +++++++++++++++++\n\
+        otel-exporter-otlp-protocol OTEL_EXPORTER_OTLP_PROTOCOL [] +++++++++++++++++\n\
+        krabka-otlp-sample-ratio KRABKA_OTLP_SAMPLE_RATIO [] +++++++++++++++++\n\
+        otel-traces-sampler-arg OTEL_TRACES_SAMPLER_ARG [] +++++++++++++++++\n\
+        otel-service-name OTEL_SERVICE_NAME [] +++++++++++++++++\n\
+        krabka-otlp-timeout KRABKA_OTLP_TIMEOUT [] +------++--------\n\
+        otel-exporter-otlp-timeout-secs OTEL_EXPORTER_OTLP_TIMEOUT_SECS [] +++++++++++++++++\n\
+        krabka-otlp-heartbeat-interval KRABKA_OTLP_HEARTBEAT_INTERVAL [] +------++--------\n\
+";
 }

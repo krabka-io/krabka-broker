@@ -1,6 +1,5 @@
 //! The PLAINTEXT wire helpers that this suite drives `ElectLeaders` through:
-//! the length-prefixed request and response exchange, the typed `ElectLeaders`
-//! driver, and the `CreateTopics` call that materialises the partition whose
+//! the client id every request carries, the typed `ElectLeaders` driver, and the `CreateTopics` call that materialises the partition whose
 //! leader the tests then elect.
 //!
 //! The compatibility shim of the authorizer maps an empty `super_users` list
@@ -8,10 +7,10 @@
 //! `SASL_PLAINTEXT` flavours of the same two drivers live in `sasl`, next to
 //! the authorization test that is the only user of a SASL listener here.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -21,62 +20,14 @@ use krabka_protocol::{
         elect_leaders_response::ElectLeadersResponse,
     },
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
+
+use crate::kafka_wire;
 
 pub const ELECT_LEADERS_VERSION: i16 = 2;
 
-/// Runs one length-prefixed request and response exchange.
-///
-/// The exchange uses a **PLAINTEXT** connection. This function encodes a Kafka
-/// request header v1, which is non-flexible, or v2, which is flexible. It then
-/// writes the frame, reads one response frame, strips the response header, and
-/// returns the body bytes.
-pub async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-elect-test";
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0); // empty header tagged-fields byte
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _resp_corr_id = cur.get_i32();
-    let uses_v1_header = flexible && api_key != 18;
-    if uses_v1_header {
-        if cur.is_empty() {
-            return Err(io::Error::other(
-                "flexible response missing tagged-fields byte",
-            ));
-        }
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
-}
+/// The client id every request header in this suite carries.
+pub const CLIENT_ID: &str = "krabka-elect-test";
 
 /// Drives `ElectLeaders` over a fresh PLAINTEXT connection.
 ///
@@ -101,9 +52,17 @@ pub async fn drive_elect_all_partitions(
     let mut body = BytesMut::new();
     req.encode(&mut body, ELECT_LEADERS_VERSION)
         .expect("encode ElectLeaders");
-    let resp_bytes = round_trip(&mut stream, 43, ELECT_LEADERS_VERSION, 1, true, &body)
-        .await
-        .expect("ElectLeaders round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        43,
+        ELECT_LEADERS_VERSION,
+        1,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .expect("ElectLeaders round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp = ElectLeadersResponse::decode(&mut cur, ELECT_LEADERS_VERSION)
         .expect("decode ElectLeadersResponse");
@@ -146,9 +105,17 @@ pub async fn drive_elect_leaders(
     let mut body = BytesMut::new();
     req.encode(&mut body, ELECT_LEADERS_VERSION)
         .expect("encode ElectLeaders");
-    let resp_bytes = round_trip(&mut stream, 43, ELECT_LEADERS_VERSION, 1, true, &body)
-        .await
-        .expect("ElectLeaders round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        43,
+        ELECT_LEADERS_VERSION,
+        1,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .expect("ElectLeaders round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp = ElectLeadersResponse::decode(&mut cur, ELECT_LEADERS_VERSION)
         .expect("decode ElectLeadersResponse");
@@ -188,7 +155,7 @@ pub async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i3
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;

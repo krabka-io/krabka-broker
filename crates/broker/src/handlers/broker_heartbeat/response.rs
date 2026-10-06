@@ -1,24 +1,9 @@
-//! The `BrokerHeartbeatResponse` bodies the handler returns, and the encode
-//! step that turns one into wire bytes.
+//! The `BrokerHeartbeatResponse` bodies the handler returns.
 //!
 //! Every response the handler sends comes from one of these builders, so the
 //! default-valued fields stay in one place.
 
-use bytes::Bytes;
 use krabka_protocol::owned::broker_heartbeat_response::BrokerHeartbeatResponse;
-
-use crate::{codes, error::BrokerError};
-
-pub(super) fn not_controller_response() -> BrokerHeartbeatResponse {
-    error_response(codes::NOT_CONTROLLER)
-}
-
-pub(super) fn error_response(error_code: i16) -> BrokerHeartbeatResponse {
-    BrokerHeartbeatResponse {
-        error_code,
-        ..Default::default()
-    }
-}
 
 pub(super) fn success_response(
     is_caught_up: bool,
@@ -33,22 +18,12 @@ pub(super) fn success_response(
     }
 }
 
-pub(super) fn denied_response_body() -> BrokerHeartbeatResponse {
-    error_response(codes::CLUSTER_AUTHORIZATION_FAILED)
-}
-
-pub(super) fn encode_response(
-    version: i16,
-    resp: &BrokerHeartbeatResponse,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::{codes, handlers::ErrorCodeResponse as _};
 
     #[test]
     fn heartbeat_response_builders_preserve_non_default_fields() {
@@ -60,7 +35,7 @@ mod tests {
             should_shut_down: false,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
-        assert!(not_controller_response() == expected_not_controller);
+        assert!(BrokerHeartbeatResponse::error(codes::NOT_CONTROLLER) == expected_not_controller);
 
         let expected_success = BrokerHeartbeatResponse {
             throttle_time_ms: 0,
@@ -80,6 +55,8 @@ mod tests {
             should_shut_down: false,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
-        assert!(denied_response_body() == expected_denied);
+        assert!(
+            BrokerHeartbeatResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED) == expected_denied
+        );
     }
 }

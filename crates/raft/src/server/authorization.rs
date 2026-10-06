@@ -17,7 +17,7 @@ use krabka_protocol::{Decode, Encode, owned};
 use crate::{
     ClusterOperation,
     error::RaftError,
-    kraft::transport::api_key,
+    kraft::transport::{PeerApi, api_key},
     wire::{
         API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
         KrabkaMetadataFetchResponse, KrabkaSubmitChangeResponse,
@@ -52,12 +52,8 @@ const FETCH_TOP_LEVEL_ERROR_ONLY_VERSION: i16 = 13;
 /// `CLUSTER_ACTION`.
 pub(super) const fn required_operation(api_key: i16) -> Option<ClusterOperation> {
     match api_key {
-        api_key::FETCH
-        | api_key::VOTE
-        | api_key::BEGIN_QUORUM_EPOCH
-        | api_key::END_QUORUM_EPOCH
-        | api_key::FETCH_SNAPSHOT
-        | owned::controller_registration_request::API_KEY
+        peer if PeerApi::from_api_key(peer).is_some() => Some(ClusterOperation::ClusterAction),
+        owned::controller_registration_request::API_KEY
         | owned::update_raft_voter_request::API_KEY
         | owned::assign_replicas_to_dirs_request::API_KEY
         | API_KEY_SUBMIT_CHANGE
@@ -85,90 +81,51 @@ pub(super) const fn required_operation(api_key: i16) -> Option<ClusterOperation>
 pub(super) fn refusal(api_key: i16, version: i16, body: &[u8]) -> Result<Bytes, RaftError> {
     let mut out = BytesMut::new();
     let message = || Some(CLUSTER_AUTHORIZATION_FAILED_MESSAGE.to_string());
+    // A Kafka response whose `getErrorResponse` sets only `ErrorCode`, and
+    // `ErrorMessage` when the api has one.
+    macro_rules! refuse {
+        ($module:ident::$response:ident $(, $message:ident)?) => {
+            owned::$module::$response {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                $($message: message(),)?
+                ..Default::default()
+            }
+            .encode(&mut out, version)?
+        };
+    }
     match api_key {
         api_key::FETCH => fetch_refusal(version, body)?.encode(&mut out, version)?,
-        api_key::VOTE => {
-            owned::vote_response::VoteResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
+        api_key::VOTE => refuse!(vote_response::VoteResponse),
         api_key::BEGIN_QUORUM_EPOCH => {
-            owned::begin_quorum_epoch_response::BeginQuorumEpochResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
+            refuse!(begin_quorum_epoch_response::BeginQuorumEpochResponse);
         }
-        api_key::END_QUORUM_EPOCH => {
-            owned::end_quorum_epoch_response::EndQuorumEpochResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
-        api_key::FETCH_SNAPSHOT => {
-            owned::fetch_snapshot_response::FetchSnapshotResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
+        api_key::END_QUORUM_EPOCH => refuse!(end_quorum_epoch_response::EndQuorumEpochResponse),
+        api_key::FETCH_SNAPSHOT => refuse!(fetch_snapshot_response::FetchSnapshotResponse),
         owned::assign_replicas_to_dirs_request::API_KEY => {
-            owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
+            refuse!(assign_replicas_to_dirs_response::AssignReplicasToDirsResponse);
         }
-        owned::controller_registration_request::API_KEY => {
-            owned::controller_registration_response::ControllerRegistrationResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: message(),
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
+        owned::controller_registration_request::API_KEY => refuse!(
+            controller_registration_response::ControllerRegistrationResponse,
+            error_message
+        ),
         owned::update_raft_voter_request::API_KEY => {
-            owned::update_raft_voter_response::UpdateRaftVoterResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
+            refuse!(update_raft_voter_response::UpdateRaftVoterResponse);
         }
         owned::add_raft_voter_request::API_KEY => {
-            owned::add_raft_voter_response::AddRaftVoterResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: message(),
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
+            refuse!(add_raft_voter_response::AddRaftVoterResponse, error_message);
         }
-        owned::remove_raft_voter_request::API_KEY => {
-            owned::remove_raft_voter_response::RemoveRaftVoterResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: message(),
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
-        owned::describe_cluster_request::API_KEY => {
-            owned::describe_cluster_response::DescribeClusterResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: message(),
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
-        owned::describe_quorum_request::API_KEY => {
-            owned::describe_quorum_response::DescribeQuorumResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: message(),
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
+        owned::remove_raft_voter_request::API_KEY => refuse!(
+            remove_raft_voter_response::RemoveRaftVoterResponse,
+            error_message
+        ),
+        owned::describe_cluster_request::API_KEY => refuse!(
+            describe_cluster_response::DescribeClusterResponse,
+            error_message
+        ),
+        owned::describe_quorum_request::API_KEY => refuse!(
+            describe_quorum_response::DescribeQuorumResponse,
+            error_message
+        ),
         API_KEY_SUBMIT_CHANGE | API_KEY_DELEGATION_TOKEN_MUTATION => {
             let mut private = Vec::new();
             KrabkaSubmitChangeResponse {

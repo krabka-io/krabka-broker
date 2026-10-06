@@ -5,14 +5,11 @@
 //! service can parse and validate its profiling settings without building a
 //! router or binding a port.
 
-use std::str::FromStr;
-
 use clap::Args;
-use krabka_units::{Frequency, Time, convert::FrequencyExt as _, parse, per_sec, secs};
+use krabka_macros::RefinedNewtype;
+use krabka_units::{Time, parse, per_sec, secs};
 use refined_type::rule::GreaterI32;
 use thiserror::Error;
-
-type RefinedPositiveFrequency = GreaterI32<0>;
 
 /// Profiling configuration or admin-server failure.
 #[derive(Debug, Error)]
@@ -23,57 +20,28 @@ pub enum ProfilingError {
     Io(#[from] std::io::Error),
 }
 
-/// A positive, finite, whole-Hz sampling frequency accepted by `pprof`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ProfilingSampleFrequency {
-    frequency: Frequency,
-    hertz: i32,
-}
-
-impl ProfilingSampleFrequency {
-    /// Validate a profiling sampling frequency.
-    ///
-    /// # Errors
-    /// Returns an error unless the frequency is positive, finite, whole Hz,
-    /// and representable by `pprof`'s signed frequency input.
-    pub fn new(frequency: Frequency) -> Result<Self, String> {
-        let hertz = frequency.per_sec_f64();
-        if !hertz.is_finite() || hertz.fract() != 0.0 || hertz > f64::from(i32::MAX) {
-            return Err("profiling sample frequency must be finite whole Hz".to_string());
-        }
-        let hertz = i32::try_from(frequency.per_sec_u64())
-            .map_err(|_| "profiling sample frequency exceeds i32".to_string())?;
-        RefinedPositiveFrequency::new(hertz)
-            .map_err(|error| format!("profiling sample frequency: {error}"))?;
-        Ok(Self { frequency, hertz })
-    }
-
-    #[cfg(unix)]
-    pub(super) fn hertz(self) -> i32 {
-        self.hertz
-    }
-
-    /// Return the dimensioned sampling frequency.
-    #[must_use]
-    pub fn frequency(self) -> Frequency {
-        self.frequency
-    }
-}
-
-impl FromStr for ProfilingSampleFrequency {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::new(parse::frequency(value).map_err(|error| error.to_string())?)
-    }
-}
+/// A positive, finite, whole-Hz sampling frequency accepted by `pprof`, whose
+/// frequency input is a signed `int`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
+#[refined(
+    rule(GreaterI32<0>),
+    quantity = Frequency,
+    label = "profiling sample frequency",
+    getter = hertz,
+    quantity_getter = frequency,
+    default = per_sec(99),
+    from_str
+)]
+pub struct ProfilingSampleFrequency(i32);
 
 /// Process-local CPU and heap profiling policy.
-#[derive(Args, Clone, Debug, PartialEq)]
+#[derive(Args, Clone, Debug, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ProfilingConfig {
     #[arg(long, env = "KRABKA_PROFILING_CPU_DEFAULT_DURATION", default_value = "30s", value_parser = parse::positive_time)]
+    #[default(secs(30))]
     pub profiling_cpu_default_duration: Time,
     #[arg(long, env = "KRABKA_PROFILING_CPU_MAX_DURATION", default_value = "60s", value_parser = parse::positive_time)]
+    #[default(secs(60))]
     pub profiling_cpu_max_duration: Time,
     #[arg(
         long,
@@ -82,8 +50,10 @@ pub struct ProfilingConfig {
     )]
     pub profiling_cpu_sample_frequency: ProfilingSampleFrequency,
     #[arg(long, env = "KRABKA_PROFILING_HEAP_DEFAULT_DURATION", default_value = "5s", value_parser = parse::positive_time)]
+    #[default(secs(5))]
     pub profiling_heap_default_duration: Time,
     #[arg(long, env = "KRABKA_PROFILING_HEAP_MAX_DURATION", default_value = "30s", value_parser = parse::positive_time)]
+    #[default(secs(30))]
     pub profiling_heap_max_duration: Time,
     #[arg(
         long,
@@ -91,6 +61,12 @@ pub struct ProfilingConfig {
         default_value = "libc,libgcc,pthread,vdso",
         value_delimiter = ','
     )]
+    #[default(vec![
+        "libc".to_string(),
+        "libgcc".to_string(),
+        "pthread".to_string(),
+        "vdso".to_string(),
+    ])]
     pub profiling_native_frame_blocklist: Vec<String>,
 }
 
@@ -114,31 +90,11 @@ impl ProfilingConfig {
     }
 }
 
-impl Default for ProfilingConfig {
-    fn default() -> Self {
-        Self {
-            profiling_cpu_default_duration: secs(30),
-            profiling_cpu_max_duration: secs(60),
-            profiling_cpu_sample_frequency: ProfilingSampleFrequency {
-                frequency: per_sec(99),
-                hertz: 99,
-            },
-            profiling_heap_default_duration: secs(5),
-            profiling_heap_max_duration: secs(30),
-            profiling_native_frame_blocklist: vec![
-                "libc".to_string(),
-                "libgcc".to_string(),
-                "pthread".to_string(),
-                "vdso".to_string(),
-            ],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
     use clap::Parser;
+    use krabka_units::{Frequency, convert::FrequencyExt as _};
 
     use super::*;
 

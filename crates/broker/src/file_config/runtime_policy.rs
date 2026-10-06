@@ -21,26 +21,15 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        // Zero is a valid `partition_disk_scan_interval`: it disables the
-        // scanner, so this one is not routed through the positive-only macro.
-        if let Some(value) = runtime.partition_disk_scan_interval {
-            cfg.partition_disk_scan_interval =
-                nonnegative_time("partition_disk_scan_interval", value)?;
+        set_runtime! {
+            runtime => cfg;
+            // Zero is a valid `partition_disk_scan_interval`: it disables the
+            // scanner, so this one is not held to `positive_time`.
+            nonnegative_time: partition_disk_scan_interval;
+            plain: observer_lag_bound;
+            positive_time: heartbeat_interval, heartbeat_timeout, replica_lag_time_max,
+                controller_election_timeout, controller_heartbeat_interval;
         }
-        set_runtime_plain!(runtime, observer_lag_bound, cfg.observer_lag_bound);
-        set_runtime_time_millis!(runtime, heartbeat_interval, cfg.heartbeat_interval);
-        set_runtime_time_millis!(runtime, heartbeat_timeout, cfg.heartbeat_timeout);
-        set_runtime_time_millis!(runtime, replica_lag_time_max, cfg.replica_lag_time_max);
-        set_runtime_time_millis!(
-            runtime,
-            controller_election_timeout,
-            cfg.controller_election_timeout
-        );
-        set_runtime_time_millis!(
-            runtime,
-            controller_heartbeat_interval,
-            cfg.controller_heartbeat_interval
-        );
         if runtime.controller_heartbeat_interval.is_some() {
             cfg.controller_heartbeat_interval_explicit = true;
         }
@@ -60,38 +49,22 @@ impl RuntimeFileConfig {
         if let Some(value) = runtime.controlled_shutdown_drain_timeout {
             positive_time("controlled_shutdown_drain_timeout", value)?;
         }
-        set_runtime_size_bytes!(
-            runtime,
-            metadata_max_bytes_between_snapshots,
-            cfg.metadata_max_bytes_between_snapshots,
-            whole_bytes_u64
-        );
-        // Zero disables the time-based snapshot cap, so it bypasses the
-        // positive-only macro. The engine reads this cap in whole
-        // milliseconds (Kafka's own `metadata.log.max.snapshot.interval.ms`
-        // is an INT of milliseconds), so a sub-millisecond nonzero value must
-        // be rejected here rather than silently truncating to 0 and reading
-        // as disabled.
-        if let Some(value) = runtime.metadata_max_snapshot_interval {
-            cfg.metadata_max_snapshot_interval =
-                disableable_millis_i32_time("metadata_max_snapshot_interval", value)?;
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_u64: metadata_max_bytes_between_snapshots;
+            // Zero disables the time-based snapshot cap, so it is not held to
+            // `positive_time`. The engine reads this cap in whole
+            // milliseconds (Kafka's own `metadata.log.max.snapshot.interval.ms`
+            // is an INT of milliseconds), so a sub-millisecond nonzero value
+            // must be rejected here rather than silently truncating to 0 and
+            // reading as disabled.
+            disableable_millis_i32_time: metadata_max_snapshot_interval;
+            positive_u64: metadata_snapshot_interval_records;
+            metadata_snapshot_fetch_max: metadata_snapshot_fetch_max;
         }
-        set_runtime_positive_u64!(
-            runtime,
-            metadata_snapshot_interval_records,
-            cfg.metadata_snapshot_interval_records
-        );
-        set_runtime_size_bytes!(
-            runtime,
-            metadata_snapshot_fetch_max,
-            cfg.metadata_snapshot_fetch_max,
-            metadata_snapshot_fetch_max
-        );
         runtime.apply_metadata_log(&mut cfg.metadata_log)?;
-        // Zero disables the reaper, so it bypasses the positive-only macro.
-        if let Some(value) = runtime.txn_abort_cleanup_interval {
-            cfg.txn_abort_cleanup_interval = nonnegative_time("txn_abort_cleanup_interval", value)?;
-        }
+        // Zero disables the reaper, so it is not held to `positive_time`.
+        set_runtime! { runtime => cfg; nonnegative_time: txn_abort_cleanup_interval; }
         // Both KIP-98 expiry knobs are `ConfigDef.Type::INT` in Kafka and
         // `DescribeConfigs` reports them as such, so neither may hold a value
         // wider than an `i32` of milliseconds. The expiry itself must run, as
@@ -109,46 +82,18 @@ impl RuntimeFileConfig {
                 disableable_millis_i32_time("txn_id_expiration_cleanup_interval", value)?;
             cfg.static_config_origins.txn_id_expiration_cleanup_interval = true;
         }
-        set_runtime_time_secs!(
-            runtime,
-            leader_imbalance_check_interval,
-            cfg.leader_imbalance_check_interval
-        );
-        // Zero disables the periodic TLS watcher, so it bypasses the
-        // positive-only macro.
-        if let Some(value) = runtime.tls_reload_interval {
-            cfg.tls_reload_interval = nonnegative_time("tls_reload_interval", value)?;
+        set_runtime! {
+            runtime => cfg;
+            positive_time: leader_imbalance_check_interval;
+            // Zero disables the periodic TLS watcher, so it is not held to
+            // `positive_time`.
+            nonnegative_time: tls_reload_interval;
+            plain: max_incremental_fetch_session_cache_slots, max_connections,
+                max_connections_per_ip;
+            whole_millis_i64_time: delegation_token_max_lifetime,
+                delegation_token_expiry_check_interval, delegation_token_default_renew_period;
+            positive_time: remote_log_manager_interval;
         }
-        set_runtime_plain!(
-            runtime,
-            max_incremental_fetch_session_cache_slots,
-            cfg.max_incremental_fetch_session_cache_slots
-        );
-        set_runtime_plain!(runtime, max_connections, cfg.max_connections);
-        set_runtime_plain!(runtime, max_connections_per_ip, cfg.max_connections_per_ip);
-        set_runtime_time_millis!(
-            runtime,
-            delegation_token_max_lifetime,
-            cfg.delegation_token_max_lifetime,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            delegation_token_expiry_check_interval,
-            cfg.delegation_token_expiry_check_interval,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            delegation_token_default_renew_period,
-            cfg.delegation_token_default_renew_period,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            remote_log_manager_interval,
-            cfg.remote_log_manager_interval
-        );
         Ok(())
     }
 
@@ -169,18 +114,11 @@ impl RuntimeFileConfig {
         metadata_log: &mut krabka_raft::MetadataLogConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_size_bytes!(
-            runtime,
-            metadata_log_segment_bytes,
-            metadata_log.segment_size,
-            metadata_log_segment_bytes
-        );
-        set_runtime_time_millis!(
-            runtime,
-            metadata_log_segment_roll_interval,
-            metadata_log.segment_roll_interval,
-            positive_i64
-        );
+        set_runtime! {
+            runtime => metadata_log;
+            metadata_log_segment_bytes: metadata_log_segment_bytes => segment_size;
+            whole_millis_i64_time: metadata_log_segment_roll_interval => segment_roll_interval;
+        }
         if let Some(value) = runtime.metadata_max_retention_bytes {
             metadata_log.max_retention_size =
                 Some(kafka_long_bytes("metadata_max_retention_bytes", value)?);

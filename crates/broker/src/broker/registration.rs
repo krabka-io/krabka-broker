@@ -11,9 +11,7 @@ use std::sync::Arc;
 
 use krabka_units::convert::TimeExt as _;
 
-use crate::{
-    broker::endpoints::parse_advertised_host_port, config::BrokerConfig, error::BrokerError,
-};
+use crate::{config::BrokerConfig, error::BrokerError, host_port::parse_advertised_host_port};
 
 fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerRegistrationRecord {
     let (host, port) = parse_advertised_host_port(&config.advertised_listener);

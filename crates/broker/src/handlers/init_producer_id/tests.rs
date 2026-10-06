@@ -17,34 +17,18 @@ use krabka_units::secs;
 use super::*;
 use crate::{
     authorizer::SimpleAclAuthorizer,
-    test_support::{peer, principal, start_broker_with, start_broker_with_authorizer_no_audit},
+    test_support::{
+        peer, principal, start_broker_no_audit, start_broker_no_audit_with,
+        start_broker_with_authorizer_no_audit,
+    },
     txn::state::TxnState,
 };
-
-async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|node| node == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
 
 /// Waits for the controller, and checks the cluster finalized `TV_2`, the
 /// highest `transaction.version` Kafka defines, which a self-bootstrapped
 /// broker finalizes. KIP-939 needs no higher level.
 async fn wait_for_transaction_version_2(broker_handle: &crate::broker::BrokerHandle) {
-    wait_for_leader(&broker_handle.broker_arc_for_test()).await;
+    crate::test_support::wait_for_controller_leader(&broker_handle.broker_arc_for_test()).await;
     broker_handle
         .wait_for_image(|image| {
             image.finalized_feature(
@@ -87,17 +71,9 @@ async fn check_timeout_answers(
             enable2_pc: enable_2pc,
             ..Default::default()
         };
-        let response = handle(
-            broker,
-            version,
-            2,
-            &crate::test_support::encode_request(&request, version),
-            context,
-        )
-        .await
-        .expect("initialize transactional producer");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(broker, request, version, context)
+            .await
+            .expect("initialize transactional producer");
         match expected {
             Ok(expected_ms) => {
                 assert!(
@@ -134,8 +110,7 @@ async fn check_timeout_answers(
 
 #[tokio::test]
 async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.transaction_state_num_partitions = 7;
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
@@ -160,17 +135,10 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         coordinator_keys: tids.iter().map(ToString::to_string).collect(),
         ..Default::default()
     };
-    let find_response = crate::handlers::find_coordinator::handle(
-        &broker,
-        find_version,
-        1,
-        &crate::test_support::encode_request(&find_request, find_version),
-        &context,
-    )
-    .await
-    .expect("find transaction coordinators");
-    let find_response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
-        crate::test_support::decode_response(&find_response, find_version);
+    let find_response =
+        crate::handlers::find_coordinator::handle(&broker, find_request, find_version, &context)
+            .await
+            .expect("find transaction coordinators");
     assert!(
         find_response
             .coordinators
@@ -206,32 +174,16 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         keep_prepared_txn: true,
         ..Default::default()
     };
-    let recovery_response = handle(
-        &broker,
-        version,
-        3,
-        &crate::test_support::encode_request(&recovery_request, version),
-        &context,
-    )
-    .await
-    .expect("recover prepared transaction");
-    let recovery_response: InitProducerIdResponse =
-        crate::test_support::decode_response(&recovery_response, version);
+    let recovery_response = handle(&broker, recovery_request.clone(), version, &context)
+        .await
+        .expect("recover prepared transaction");
     assert!(recovery_response.error_code == codes::NONE);
     assert!(recovery_response.ongoing_txn_producer_id == ongoing_pid.get());
     assert!(recovery_response.ongoing_txn_producer_epoch == ongoing_epoch);
 
-    let second_recovery_response = handle(
-        &broker,
-        version,
-        4,
-        &crate::test_support::encode_request(&recovery_request, version),
-        &context,
-    )
-    .await
-    .expect("recover prepared transaction again");
-    let second_recovery_response: InitProducerIdResponse =
-        crate::test_support::decode_response(&second_recovery_response, version);
+    let second_recovery_response = handle(&broker, recovery_request, version, &context)
+        .await
+        .expect("recover prepared transaction again");
     assert!(second_recovery_response.error_code == codes::NONE);
     assert!(second_recovery_response.producer_id == recovery_response.producer_id);
     assert!(second_recovery_response.producer_epoch == recovery_response.producer_epoch + 1);
@@ -246,20 +198,22 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         committed: true,
         ..Default::default()
     };
-    let fenced_end_response = crate::txn::handlers::end_txn::handle(
-        &broker,
-        end_version,
-        5,
-        &crate::test_support::encode_request(&fenced_end_request, end_version),
-        &context,
-    )
-    .await
-    .expect("reject fenced recovery client");
-    let fenced_end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
-        crate::test_support::decode_response(&fenced_end_response, end_version);
+    let fenced_end_response =
+        crate::txn::handlers::end_txn::handle(&broker, fenced_end_request, end_version, &context)
+            .await
+            .expect("reject fenced recovery client");
     // Kafka `endTransaction` fences a stale identity with PRODUCER_FENCED at
     // `EndTxn` v2 and above.
-    assert!(fenced_end_response.error_code == codes::PRODUCER_FENCED);
+    assert!(
+        fenced_end_response
+            == krabka_protocol::owned::end_txn_response::EndTxnResponse {
+                throttle_time_ms: 0,
+                error_code: codes::PRODUCER_FENCED,
+                producer_id: -1,
+                producer_epoch: -1,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }
+    );
 
     let end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
         transactional_id: tids[2].to_string(),
@@ -268,32 +222,25 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         committed: true,
         ..Default::default()
     };
-    let end_response = crate::txn::handlers::end_txn::handle(
-        &broker,
-        end_version,
-        6,
-        &crate::test_support::encode_request(&end_request, end_version),
-        &context,
-    )
-    .await
-    .expect("complete recovered transaction");
-    let end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
-        crate::test_support::decode_response(&end_response, end_version);
-    assert!(end_response.error_code == codes::NONE);
-    assert!(end_response.producer_id == second_recovery_response.producer_id);
-    assert!(end_response.producer_epoch == second_recovery_response.producer_epoch + 1);
+    let end_response =
+        crate::txn::handlers::end_txn::handle(&broker, end_request.clone(), end_version, &context)
+            .await
+            .expect("complete recovered transaction");
+    assert!(
+        end_response
+            == krabka_protocol::owned::end_txn_response::EndTxnResponse {
+                throttle_time_ms: 0,
+                error_code: codes::NONE,
+                producer_id: second_recovery_response.producer_id,
+                producer_epoch: second_recovery_response.producer_epoch + 1,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }
+    );
 
-    let retry_response = crate::txn::handlers::end_txn::handle(
-        &broker,
-        end_version,
-        7,
-        &crate::test_support::encode_request(&end_request, end_version),
-        &context,
-    )
-    .await
-    .expect("retry recovered transaction completion");
-    let retry_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
-        crate::test_support::decode_response(&retry_response, end_version);
+    let retry_response =
+        crate::txn::handlers::end_txn::handle(&broker, end_request, end_version, &context)
+            .await
+            .expect("retry recovered transaction completion");
     assert!(retry_response == end_response);
     let completed = broker
         .txn_coordinator
@@ -351,8 +298,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
         (true, Enabled, true, false, refused(codes::NOT_COORDINATOR)),
         (true, Enabled, false, true, refused(codes::NOT_COORDINATOR)),
     ] {
-        let (broker_handle, _dir) = start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
             config.features.transaction_two_phase_commit_enable = two_phase_commit;
             config.features.unstable_api_versions = unstable;
         })
@@ -371,17 +317,9 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
             keep_prepared_txn,
             ..Default::default()
         };
-        let response = handle(
-            &broker,
-            version,
-            1,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("answer the KIP-939 request");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("answer the KIP-939 request");
         assert!(
             response == want,
             "config {two_phase_commit}, {unstable:?}, enable2Pc {enable_2pc}, \
@@ -393,8 +331,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
 
 #[tokio::test]
 async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.transaction_state_num_partitions = 7;
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
@@ -417,17 +354,10 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
         coordinator_keys: vec![tid.to_string()],
         ..Default::default()
     };
-    let response = crate::handlers::find_coordinator::handle(
-        &broker,
-        find_version,
-        1,
-        &crate::test_support::encode_request(&find_request, find_version),
-        &context,
-    )
-    .await
-    .expect("find transaction coordinator");
-    let response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, find_version);
+    let response =
+        crate::handlers::find_coordinator::handle(&broker, find_request, find_version, &context)
+            .await
+            .expect("find transaction coordinator");
     assert!(response.coordinators[0].error_code == codes::NONE);
 
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
@@ -436,16 +366,9 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
         transaction_timeout_ms: 500,
         ..Default::default()
     };
-    let response = handle(
-        &broker,
-        version,
-        2,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("initialize finite-timeout transaction");
-    let response: InitProducerIdResponse = crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("initialize finite-timeout transaction");
     assert!(response.error_code == codes::NONE);
 
     let finite = broker
@@ -469,16 +392,9 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
         keep_prepared_txn: true,
         ..Default::default()
     };
-    let response = handle(
-        &broker,
-        version,
-        3,
-        &crate::test_support::encode_request(&recovery_request, version),
-        &context,
-    )
-    .await
-    .expect("recover finite-timeout transaction without enable2Pc");
-    let response: InitProducerIdResponse = crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, recovery_request, version, &context)
+        .await
+        .expect("recover finite-timeout transaction without enable2Pc");
     assert!(response.error_code == codes::NONE);
     assert!(response.ongoing_txn_producer_id == finite_pid.get());
     assert!(response.ongoing_txn_producer_epoch == finite_epoch);
@@ -491,11 +407,8 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
 /// id answers `INVALID_TRANSACTION_TIMEOUT` too.
 #[tokio::test]
 async fn the_timeout_check_runs_before_the_coordinator_check() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-        config.transaction_max_timeout = secs(8);
-    })
-    .await;
+    let (broker_handle, _dir) =
+        start_broker_no_audit_with(|config| config.transaction_max_timeout = secs(8)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_version_2(&broker_handle).await;
     let principal = principal("admin");
@@ -524,17 +437,9 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
             transaction_timeout_ms: requested_ms,
             ..Default::default()
         };
-        let response = handle(
-            &broker,
-            version,
-            2,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("initialize transactional producer");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("initialize transactional producer");
         assert!(
             response
                 == InitProducerIdResponse {
@@ -554,10 +459,7 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
 /// `INVALID_PRODUCER_EPOCH` in place of `PRODUCER_FENCED`.
 #[tokio::test]
 async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epoch() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-    })
-    .await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_version_2(&broker_handle).await;
     broker_handle
@@ -574,38 +476,26 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
         coordinator_keys: vec![tid.to_string()],
         ..Default::default()
     };
-    let found = crate::handlers::find_coordinator::handle(
-        &broker,
-        find_version,
-        1,
-        &crate::test_support::encode_request(&find_request, find_version),
-        &context,
-    )
-    .await
-    .expect("find the transaction coordinator");
-    let found: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
-        crate::test_support::decode_response(&found, find_version);
+    let found =
+        crate::handlers::find_coordinator::handle(&broker, find_request, find_version, &context)
+            .await
+            .expect("find the transaction coordinator");
     assert!(found.coordinators[0].error_code == codes::NONE);
     // An entry to be fenced against.
     let created = handle(
         &broker,
+        InitProducerIdRequest {
+            transactional_id: Some(tid.to_string()),
+            transaction_timeout_ms: 60_000,
+            producer_id: -1,
+            producer_epoch: -1,
+            ..Default::default()
+        },
         max,
-        1,
-        &crate::test_support::encode_request(
-            &InitProducerIdRequest {
-                transactional_id: Some(tid.to_string()),
-                transaction_timeout_ms: 60_000,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            },
-            max,
-        ),
         &context,
     )
     .await
     .expect("create the transaction entry");
-    let created: InitProducerIdResponse = crate::test_support::decode_response(&created, max);
     assert!(created.error_code == codes::NONE, "{created:?}");
     let zombie = (created.producer_id + 1_000, created.producer_epoch);
 
@@ -671,17 +561,9 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
             producer_epoch,
             ..Default::default()
         };
-        let response = handle(
-            &broker,
-            version,
-            2,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("initialize transactional producer");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("initialize transactional producer");
         expected.push((
             name,
             InitProducerIdResponse {
@@ -855,17 +737,9 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
             transaction_timeout_ms: 60_000,
             ..Default::default()
         };
-        let response = handle(
-            &broker,
-            version,
-            1,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("handle InitProducerId");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("handle InitProducerId");
 
         expected.push((case.label, case.expected_error));
         actual.push((case.label, response.error_code));
@@ -914,8 +788,7 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
     ];
 
     for case in cases {
-        let (broker_handle, _dir) = start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
             config.transaction_state_num_partitions = 7;
             config.transaction_max_timeout = secs(8);
             config.features.transaction_two_phase_commit_enable = true;
@@ -971,15 +844,12 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             };
         let find_response = crate::handlers::find_coordinator::handle(
             &broker,
+            find_request,
             find_version,
-            1,
-            &crate::test_support::encode_request(&find_request, find_version),
             &context,
         )
         .await
         .expect("find transaction coordinator");
-        let find_response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
-            crate::test_support::decode_response(&find_response, find_version);
         assert!(
             find_response.coordinators[0].error_code == codes::NONE,
             "{}",
@@ -994,17 +864,9 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             keep_prepared_txn: case.keep_prepared_txn,
             ..Default::default()
         };
-        let response = handle(
-            &broker,
-            version,
-            2,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("handle InitProducerId");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("handle InitProducerId");
 
         match case.expected_error {
             Some(code) => assert!(response.error_code == code, "{}", case.label),
@@ -1026,12 +888,9 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
 /// retries; the broker keeps the connection.
 #[tokio::test]
 async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-    })
-    .await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
@@ -1046,17 +905,10 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
         coordinator_keys: vec![tid.to_string()],
         ..Default::default()
     };
-    let find_response = crate::handlers::find_coordinator::handle(
-        &broker,
-        find_version,
-        1,
-        &crate::test_support::encode_request(&find_request, find_version),
-        &context,
-    )
-    .await
-    .expect("find transaction coordinator");
-    let find_response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
-        crate::test_support::decode_response(&find_response, find_version);
+    let find_response =
+        crate::handlers::find_coordinator::handle(&broker, find_request, find_version, &context)
+            .await
+            .expect("find transaction coordinator");
     assert!(
         find_response
             .coordinators
@@ -1096,17 +948,9 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
             producer_epoch: -1,
             ..Default::default()
         };
-        let response = handle(
-            &broker,
-            version,
-            3,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("answered, not a closed connection");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("answered, not a closed connection");
         assert!(
             response
                 == InitProducerIdResponse {

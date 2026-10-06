@@ -120,7 +120,7 @@ mod tests {
 
     use assert2::check;
     use krabka_metadata::{AclOperation, ResourceType};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{
@@ -129,11 +129,7 @@ mod tests {
     };
 
     fn request_principal() -> Principal {
-        Principal {
-            name: "anonymous".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: vec![],
-        }
+        crate::test_support::principal("anonymous")
     }
 
     fn denied_label() -> crate::metrics::AuthorizationDeniedLabel {

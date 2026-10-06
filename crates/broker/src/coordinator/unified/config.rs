@@ -10,7 +10,8 @@ use super::assignor::{Assignor, RangeAssignor, UniformAssignor};
 /// group conversion. The default is `Bidirectional`, which matches Apache
 /// Kafka 4.0, verified empirically against
 /// `mirror.gcr.io/apache/kafka:4.0.0`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase", parse)]
 pub enum ConsumerGroupMigrationPolicy {
     /// No conversion in either direction.
     Disabled,
@@ -35,33 +36,20 @@ impl ConsumerGroupMigrationPolicy {
     pub fn allows_downgrade(self) -> bool {
         matches!(self, Self::Downgrade | Self::Bidirectional)
     }
-
-    /// The Kafka config string for this policy.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Upgrade => "upgrade",
-            Self::Downgrade => "downgrade",
-            Self::Bidirectional => "bidirectional",
-        }
-    }
 }
 
 impl FromStr for ConsumerGroupMigrationPolicy {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "disabled" => Ok(Self::Disabled),
-            "upgrade" => Ok(Self::Upgrade),
-            "downgrade" => Ok(Self::Downgrade),
-            "bidirectional" => Ok(Self::Bidirectional),
-            other => Err(format!("invalid group.consumer.migration.policy: {other}")),
-        }
+        let lower = s.to_ascii_lowercase();
+        Self::parse(&lower)
+            .ok_or_else(|| format!("invalid group.consumer.migration.policy: {lower}"))
     }
 }
 
-#[derive(Clone)]
+// `Debug` elides the timer (the `Timer` trait object is not `Debug`) so the
+// enclosing `#[derive(Debug)]` `GroupCoordinator` still derives.
+#[derive(Clone, derive_more::Debug)]
 pub struct NextGenConfig {
     /// Comma-separated list. "consumer" enables KIP-848. Default
     /// "classic,consumer".
@@ -108,49 +96,8 @@ pub struct NextGenConfig {
     /// Production uses `time_util::system_timer`, which is real time. Tests
     /// inject the timer of a [`qubit_clock::ManualMonotonicClock`] so the tick
     /// fires on a controlled manual timeline instead of wall-clock time.
+    #[debug(skip)]
     pub timer: Arc<dyn Timer>,
-}
-
-// Manual `Debug` (the `Timer` trait object is not `Debug`): print every
-// operator-relevant field and elide the timer. Kept so the enclosing
-// `#[derive(Debug)]` `GroupCoordinator` still derives.
-impl std::fmt::Debug for NextGenConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NextGenConfig")
-            .field("rebalance_protocols", &self.rebalance_protocols)
-            .field("session_timeout", &self.session_timeout)
-            .field("heartbeat_interval", &self.heartbeat_interval)
-            .field("assignment_interval", &self.assignment_interval)
-            .field("regex_refresh_interval", &self.regex_refresh_interval)
-            .field(
-                "regex_refresh_min_interval",
-                &self.regex_refresh_min_interval,
-            )
-            .field("min_session_timeout", &self.min_session_timeout)
-            .field("max_session_timeout", &self.max_session_timeout)
-            .field("min_heartbeat_interval", &self.min_heartbeat_interval)
-            .field("max_heartbeat_interval", &self.max_heartbeat_interval)
-            .field("session_expiry_tick", &self.session_expiry_tick)
-            .field("actor_mailbox_capacity", &self.actor_mailbox_capacity)
-            .field("shutdown_ack_timeout", &self.shutdown_ack_timeout)
-            .field(
-                "classic_initial_rebalance_delay",
-                &self.classic_initial_rebalance_delay,
-            )
-            .field(
-                "classic_min_session_timeout",
-                &self.classic_min_session_timeout,
-            )
-            .field(
-                "classic_max_session_timeout",
-                &self.classic_max_session_timeout,
-            )
-            .field("classic_max_size", &self.classic_max_size)
-            .field("assignors", &self.assignors)
-            .field("max_size", &self.max_size)
-            .field("migration_policy", &self.migration_policy)
-            .finish_non_exhaustive()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

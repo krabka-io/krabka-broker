@@ -24,7 +24,7 @@ use krabka_protocol::{
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
-use crate::tuple_quota_wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster setup helpers (copied from client_quotas.rs)
@@ -80,12 +80,12 @@ pub(crate) async fn create_topic_as_admin(
         timeout_ms: 5_000,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, "admin", password)
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "admin", password)
         .await
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;

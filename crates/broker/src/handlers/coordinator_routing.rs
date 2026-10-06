@@ -1,4 +1,5 @@
-//! The two lookups that tell a client where a coordinator is.
+//! The lookups that tell a client where a coordinator is, and the protocol
+//! gates a group RPC passes before it reaches one.
 //!
 //! A group RPC first asks whether this broker leads the group's offsets
 //! partition, and `FindCoordinator` then reports the host and port of the
@@ -60,16 +61,53 @@ pub(crate) fn any_group_partition_loading(broker: &crate::broker::Broker) -> boo
             .any(|record| coordinator.is_loading(record.partition, record.leader_epoch))
 }
 
-pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
-    if let Some(host_port) = crate::host_port::parse_host_port(addr) {
-        return host_port;
-    }
-    tracing::warn!(
-        addr,
-        "advertised_listener not host:port; falling back to localhost:9092"
-    );
-    (
-        crate::host_port::DEFAULT_KAFKA_HOST.into(),
-        crate::host_port::DEFAULT_KAFKA_PORT,
+/// Minimum finalized `streams.version` feature level at which the broker
+/// serves the KIP-1071 streams RPCs.
+const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
+
+/// `true` when the KIP-1071 streams protocol is on: the `streams_group.enable`
+/// config kill-switch allows it and `image` finalizes `streams.version >= 1`
+/// (early access, default-disabled).
+pub(crate) fn streams_protocol_enabled(
+    broker: &crate::broker::Broker,
+    image: &krabka_metadata::MetadataImage,
+) -> bool {
+    broker.config.streams_group.enable
+        && crate::features::feature_enabled(
+            image,
+            crate::features::STREAMS_VERSION,
+            STREAMS_VERSION_MIN_LEVEL,
+        )
+}
+
+/// Minimum finalized `group.version` at which the broker serves the KIP-848
+/// consumer group RPCs.
+const NEXT_GEN_MIN_GROUP_VERSION: i16 = 1;
+
+/// `true` while `image` does not finalize `group.version >= 1`, the KIP-848
+/// gate of `ConsumerGroupHeartbeat` and `ConsumerGroupDescribe`.
+pub(crate) fn group_version_disabled(image: &krabka_metadata::MetadataImage) -> bool {
+    !crate::features::feature_enabled(
+        image,
+        krabka_metadata::group_version::GROUP_VERSION_FEATURE,
+        NEXT_GEN_MIN_GROUP_VERSION,
     )
+}
+
+/// The `GROUP_ID_NOT_FOUND` message of Kafka's `GroupMetadataManager.shareGroup`
+/// lookup: a group of another type is not a share group, and anything else is
+/// not found. A classic or consumer group lives in the `groups` registry and a
+/// streams group keeps its offset home there too.
+pub(crate) fn share_group_not_found_message(
+    coordinator: &crate::coordinator::GroupCoordinator,
+    group_id: &str,
+) -> String {
+    let other_type = coordinator.group_type(group_id).is_some()
+        || coordinator.find(group_id).is_some()
+        || coordinator.find_streams(group_id).is_some();
+    if other_type {
+        format!("Group {group_id} is not a share group.")
+    } else {
+        format!("Group {group_id} not found.")
+    }
 }

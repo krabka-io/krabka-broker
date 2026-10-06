@@ -11,7 +11,7 @@ use krabka_units::prelude::TimeExt as _;
 use tokio::time::Instant;
 
 use super::{
-    Engine,
+    Engine, KraftController,
     offsets::{leader_alone_is_majority, validate_append_result},
     records::{metadata_record_batch, noop_record_value},
 };
@@ -52,7 +52,9 @@ impl Engine {
         let leader_epoch = self.core.quorum_state().leader_epoch;
         let mut batch = metadata_record_batch(leader_epoch, &[noop_record_value()?])?;
         let expected_base = self.log.log_end_offset();
-        let base = self.log.append(&mut batch, Self::wall_clock_ms())?;
+        let base = self
+            .log
+            .append(&mut batch, KraftController::wall_clock_ms())?;
         validate_append_result("no-op", expected_base, base, self.log.log_end_offset())?;
         if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
             self.advance_and_apply(self.log.log_end_offset());

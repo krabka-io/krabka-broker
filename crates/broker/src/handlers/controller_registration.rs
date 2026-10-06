@@ -7,49 +7,36 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use bytes::Bytes;
-use krabka_metadata::{
-    AclOperation, BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId,
-    ResourceType,
-};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        controller_registration_request::ControllerRegistrationRequest,
-        controller_registration_response::ControllerRegistrationResponse,
-    },
+use krabka_metadata::{BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId};
+use krabka_protocol::owned::{
+    controller_registration_request::ControllerRegistrationRequest,
+    controller_registration_response::ControllerRegistrationResponse,
 };
 use krabka_raft::RaftError;
 use krabka_security::ListenerProtocol;
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{RequestContext, forward_to_controller::is_active_controller},
+};
 
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ControllerRegistrationRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = ControllerRegistrationRequest::decode(&mut cur, version)?;
+) -> Result<ControllerRegistrationResponse, BrokerError> {
     let image = broker.controller.current_image();
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        AclOperation::ClusterAction,
-    ) {
-        return response(
-            version,
+    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return Ok(response(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             Some("cluster action denied".into()),
-        );
+        ));
     }
-    if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
-        return response(version, codes::NOT_CONTROLLER, None);
+    if !is_active_controller(broker) {
+        return Ok(response(codes::NOT_CONTROLLER, None));
     }
     // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
     // bootstrap records commit there is no finalized level, and Kafka's
@@ -59,30 +46,28 @@ pub(crate) async fn handle(
         .finalized_metadata_version()
         .is_none_or(|level| level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL)
     {
-        return response(
-            version,
+        return Ok(response(
             codes::UNSUPPORTED_VERSION,
             Some(
                 "The current MetadataVersion is too old to support controller registrations."
                     .into(),
             ),
-        );
+        ));
     }
 
     let node_id = match u64::try_from(req.controller_id) {
         Ok(id) => NodeId(id),
         Err(_) => {
-            return response(
-                version,
+            return Ok(response(
                 codes::INVALID_REGISTRATION,
                 Some("controller id must be non-negative".into()),
-            );
+            ));
         }
     };
 
     let endpoints = match decode_listeners(&req.listeners) {
         Ok(endpoints) => endpoints,
-        Err(message) => return response(version, codes::INVALID_REGISTRATION, Some(message)),
+        Err(message) => return Ok(response(codes::INVALID_REGISTRATION, Some(message))),
     };
     let features = req
         .features
@@ -98,11 +83,10 @@ pub(crate) async fn handle(
         .iter()
         .any(|(name, (min, max))| name.is_empty() || min > max)
     {
-        return response(
-            version,
+        return Ok(response(
             codes::INVALID_REGISTRATION,
             Some("invalid controller feature range".into()),
-        );
+        ));
     }
 
     let record = ControllerRegistrationRecord {
@@ -115,28 +99,24 @@ pub(crate) async fn handle(
         features,
     };
     if image.controller(node_id) == Some(&record) {
-        return success(version);
+        return Ok(success());
     }
-    match broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1ControllerRegistration(record)])
-        .await
-    {
-        Ok(_) => success(version),
-        Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-            response(version, codes::NOT_CONTROLLER, None)
-        }
-        Err(RaftError::Metadata(error)) => response(
-            version,
-            codes::INVALID_REGISTRATION,
-            Some(error.to_string()),
-        ),
-        Err(error) => response(
-            version,
-            codes::UNKNOWN_SERVER_ERROR,
-            Some(error.to_string()),
-        ),
-    }
+    Ok(
+        match broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1ControllerRegistration(record)])
+            .await
+        {
+            Ok(_) => success(),
+            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
+                response(codes::NOT_CONTROLLER, None)
+            }
+            Err(RaftError::Metadata(error)) => {
+                response(codes::INVALID_REGISTRATION, Some(error.to_string()))
+            }
+            Err(error) => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+        },
+    )
 }
 
 fn decode_listeners(
@@ -178,24 +158,17 @@ fn decode_listeners(
 /// Kafka's `ControllerApis.handleControllerRegistration` answers success with a
 /// bare `ControllerRegistrationResponseData`, so `ErrorMessage` goes out as the
 /// generated default: the empty string, not null.
-fn success(version: i16) -> Result<Bytes, BrokerError> {
-    response(version, 0, Some(String::new()))
+fn success() -> ControllerRegistrationResponse {
+    response(0, Some(String::new()))
 }
 
-fn response(
-    version: i16,
-    error_code: i16,
-    error_message: Option<String>,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &ControllerRegistrationResponse {
-            throttle_time_ms: 0,
-            error_code,
-            error_message,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        },
-        version,
-    )
+fn response(error_code: i16, error_message: Option<String>) -> ControllerRegistrationResponse {
+    ControllerRegistrationResponse {
+        throttle_time_ms: 0,
+        error_code,
+        error_message,
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    }
 }
 
 #[cfg(test)]
@@ -204,11 +177,7 @@ mod tests {
 
     use super::*;
 
-    crate::test_support::wire_helpers!(
-        ControllerRegistrationRequest,
-        ControllerRegistrationResponse,
-        client_id = "controller"
-    );
+    crate::test_support::context_helper!(client_id = "controller");
 
     #[test]
     fn controller_listener_validation_is_strict() {
@@ -229,18 +198,12 @@ mod tests {
     async fn a_controller_that_is_not_a_voter_registers() {
         use std::{net::SocketAddr, sync::Arc};
 
-        use krabka_security::{AuthMethod, Principal};
-
         let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer(Arc::new(
             crate::authorizer::AllowAllAuthorizer,
         ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "controller".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("controller");
         let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let version = krabka_protocol::owned::controller_registration_request::MAX_VERSION;
@@ -251,23 +214,20 @@ mod tests {
             security_protocol: 0,
             ..Default::default()
         };
-        let body = encode_request(
-            &ControllerRegistrationRequest {
-                controller_id: 7,
-                incarnation_id: krabka_protocol::primitives::uuid::Uuid([7; 16]),
-                zk_migration_ready: true,
-                listeners: vec![listener],
-                ..Default::default()
-            },
-            version,
-        );
+        let req = ControllerRegistrationRequest {
+            controller_id: 7,
+            incarnation_id: krabka_protocol::primitives::uuid::Uuid([7; 16]),
+            zk_migration_ready: true,
+            listeners: vec![listener],
+            ..Default::default()
+        };
 
-        let answer = handle(&broker, version, 1, &body, &ctx)
+        let answer = handle(&broker, req, version, &ctx)
             .await
             .expect("an answer");
 
         assert2::check!(
-            decode_response(&answer, version)
+            answer
                 == ControllerRegistrationResponse {
                     throttle_time_ms: 0,
                     error_code: 0,

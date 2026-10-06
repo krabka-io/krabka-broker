@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use bytes::Bytes;
 use krabka_raft::{
     ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
-    ControllerAdminRouter, ControllerApiVersion, RaftError,
+    ControllerAdminRouter, ControllerApiVersion, RaftError, controller_api_version as api_version,
 };
 
 use crate::{
@@ -25,18 +25,6 @@ const ENVELOPE_API_KEY: ApiKeyCode = krabka_protocol::owned::envelope_request::A
 /// inside an `Envelope`. A handler that answers differently on the controller
 /// listener, as Kafka's `ControllerApis` does, reads it.
 pub(crate) const CONTROLLER_ADMIN_CONNECTION_ID: &str = "controller-admin";
-
-macro_rules! api_version {
-    ($request:ident) => {
-        ControllerApiVersion {
-            api_key: krabka_protocol::owned::$request::API_KEY,
-            min_version: krabka_protocol::owned::$request::MIN_VERSION,
-            max_version: krabka_protocol::owned::$request::MAX_VERSION,
-            released_max: krabka_raft::kafka_4_3_1_max(krabka_protocol::owned::$request::API_KEY),
-            flexible_min: krabka_protocol::owned::$request::FLEXIBLE_MIN,
-        }
-    };
-}
 
 /// The Kafka 4.x controller-listener surface, in `api_key` order.
 ///
@@ -271,8 +259,9 @@ async fn invoke_registered_handler(
                 CONTROLLER_ADMIN_CONNECTION_ID,
                 false,
                 "CONTROLLER",
-            );
-            handler(broker, api_version, correlation_id, body, &context).await
+            )
+            .with_correlation_id(correlation_id);
+            handler(broker, api_version, body, &context).await
         }
         DispatchKind::Auth(handler) => {
             let auth = ConnectionAuth::Authenticated {

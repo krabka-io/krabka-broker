@@ -49,64 +49,39 @@ pub fn metadata_partition_dir(metadata_log_dir: &Path) -> PathBuf {
 
 /// How the metadata log rolls its segments and when it gives up the prefix
 /// that a snapshot covers. The defaults are Kafka's.
-#[derive(Clone, Copy, PartialEq)]
+///
+/// Quantities render in the operator form (`1GiB`, `7d`), as the rest of
+/// `ControllerConfig`'s `Debug` does.
+#[derive(Clone, Copy, PartialEq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct MetadataLogConfig {
     /// `metadata.log.segment.bytes`: the active segment rolls before an
     /// append that would take it past this size.
+    #[debug("{:?}", segment_size.human().to_string())]
+    #[default(DEFAULT_METADATA_LOG_SEGMENT_SIZE)]
     pub segment_size: ByteSize,
     /// `metadata.log.segment.ms`: the active segment rolls before an append
     /// that comes this long after the segment's first record.
+    #[debug("{:?}", segment_roll_interval.human().to_string())]
+    #[default(DEFAULT_METADATA_LOG_SEGMENT_ROLL_INTERVAL)]
     pub segment_roll_interval: Time,
     /// `metadata.max.retention.bytes`: once the log and its snapshots together
     /// are larger than this, the oldest snapshot goes and the log start moves
     /// up to the next one. `None` is Kafka's negative value, which keeps every
     /// snapshot whatever the size.
+    #[debug("{:?}", max_retention_size.map(|size| size.human().to_string()))]
+    #[default(Some(DEFAULT_METADATA_MAX_RETENTION_SIZE))]
     pub max_retention_size: Option<ByteSize>,
     /// `metadata.max.retention.ms`: a snapshot whose last record is older than
     /// this goes, and the log start moves up to the next one. `None` is
     /// Kafka's negative value, which keeps every snapshot whatever its age.
+    #[debug("{:?}", max_retention.map(|time| time.human().to_string()))]
+    #[default(Some(DEFAULT_METADATA_MAX_RETENTION))]
     pub max_retention: Option<Time>,
     /// `metadata.max.idle.interval.ms` (KIP-835): how often the leader appends
     /// a `NoOpRecord`. Zero appends none.
+    #[debug("{:?}", max_idle_interval.human().to_string())]
+    #[default(DEFAULT_METADATA_MAX_IDLE_INTERVAL)]
     pub max_idle_interval: Time,
-}
-
-impl Default for MetadataLogConfig {
-    fn default() -> Self {
-        Self {
-            segment_size: DEFAULT_METADATA_LOG_SEGMENT_SIZE,
-            segment_roll_interval: DEFAULT_METADATA_LOG_SEGMENT_ROLL_INTERVAL,
-            max_retention_size: Some(DEFAULT_METADATA_MAX_RETENTION_SIZE),
-            max_retention: Some(DEFAULT_METADATA_MAX_RETENTION),
-            max_idle_interval: DEFAULT_METADATA_MAX_IDLE_INTERVAL,
-        }
-    }
-}
-
-impl std::fmt::Debug for MetadataLogConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Quantities render in the operator form (`1GiB`, `7d`), as the rest
-        // of `ControllerConfig`'s `Debug` does.
-        f.debug_struct("MetadataLogConfig")
-            .field("segment_size", &self.segment_size.human().to_string())
-            .field(
-                "segment_roll_interval",
-                &self.segment_roll_interval.human().to_string(),
-            )
-            .field(
-                "max_retention_size",
-                &self.max_retention_size.map(|size| size.human().to_string()),
-            )
-            .field(
-                "max_retention",
-                &self.max_retention.map(|time| time.human().to_string()),
-            )
-            .field(
-                "max_idle_interval",
-                &self.max_idle_interval.human().to_string(),
-            )
-            .finish()
-    }
 }
 
 #[cfg(test)]

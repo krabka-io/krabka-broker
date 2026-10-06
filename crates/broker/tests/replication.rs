@@ -8,8 +8,6 @@
 // Test-file pragmatism: casts turn 1-based `i` into broker ids.
 // Hoisting these into named helpers would obscure the per-test narrative.
 
-use std::sync::OnceLock;
-
 use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -19,7 +17,7 @@ use krabka_protocol::{
     },
     records::{Record, RecordBatch},
 };
-use tokio::sync::Mutex;
+use support::cluster_lock;
 
 mod support;
 
@@ -32,15 +30,6 @@ mod compaction_replicas;
 mod describe_producers_replicas;
 #[path = "replication/idempotent_failover.rs"]
 mod idempotent_failover;
-
-/// Test-binary-wide serialization. Each test in this file spins up a
-/// 3-broker cluster on loopback. Concurrent runs exhaust the
-/// loopback ephemeral ports and starve the openraft election timing.
-/// This is the same reason as for `quorum.rs::cluster_lock`.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replication_factor_three_propagates_to_all_followers() {

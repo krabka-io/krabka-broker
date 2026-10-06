@@ -13,7 +13,7 @@ use crate::{
     error::RaftError,
     kraft::{
         KraftController,
-        transport::{Inbound, api_key},
+        transport::{Inbound, PeerApi},
     },
     wire::{API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
 };
@@ -23,17 +23,11 @@ use crate::{
 /// Admin router is not bound yet: private `SubmitChange` is used during broker
 /// self-registration.
 pub(super) fn is_native_raft_api(api_key: i16) -> bool {
-    matches!(
-        api_key,
-        api_key::FETCH
-            | api_key::VOTE
-            | api_key::BEGIN_QUORUM_EPOCH
-            | api_key::END_QUORUM_EPOCH
-            | api_key::FETCH_SNAPSHOT
-            | API_KEY_SUBMIT_CHANGE
-            | API_KEY_METADATA_FETCH
-            | API_KEY_DELEGATION_TOKEN_MUTATION
-    )
+    PeerApi::from_api_key(api_key).is_some()
+        || matches!(
+            api_key,
+            API_KEY_SUBMIT_CHANGE | API_KEY_METADATA_FETCH | API_KEY_DELEGATION_TOKEN_MUTATION
+        )
 }
 
 /// Route an inbound RPC body to the engine and produce the response body.
@@ -70,47 +64,14 @@ pub(super) async fn dispatch_with_router(
     {
         return Ok(resp);
     }
+    if let Some(api) = PeerApi::from_api_key(api_key_n.get()) {
+        let (reply, rx) = oneshot::channel();
+        engine
+            .deliver(Inbound::new(api, body, version, reply))
+            .await?;
+        return rx.await.map_err(|_| RaftError::Shutdown);
+    }
     match api_key_n {
-        ApiKey(api_key::FETCH) => {
-            deliver_inbound(engine, |reply| Inbound::Fetch {
-                req: body,
-                version,
-                reply,
-            })
-            .await
-        }
-        ApiKey(api_key::VOTE) => {
-            deliver_inbound(engine, |reply| Inbound::Vote {
-                req: body,
-                version,
-                reply,
-            })
-            .await
-        }
-        ApiKey(api_key::BEGIN_QUORUM_EPOCH) => {
-            deliver_inbound(engine, |reply| Inbound::BeginQuorumEpoch {
-                req: body,
-                version,
-                reply,
-            })
-            .await
-        }
-        ApiKey(api_key::END_QUORUM_EPOCH) => {
-            deliver_inbound(engine, |reply| Inbound::EndQuorumEpoch {
-                req: body,
-                version,
-                reply,
-            })
-            .await
-        }
-        ApiKey(api_key::FETCH_SNAPSHOT) => {
-            deliver_inbound(engine, |reply| Inbound::FetchSnapshot {
-                req: body,
-                version,
-                reply,
-            })
-            .await
-        }
         ApiKey(API_KEY_SUBMIT_CHANGE) => dispatch_submit_change(&body, engine).await,
         ApiKey(API_KEY_METADATA_FETCH) => dispatch_metadata_fetch(&body, engine).await,
         ApiKey(API_KEY_DELEGATION_TOKEN_MUTATION) => {
@@ -120,16 +81,6 @@ pub(super) async fn dispatch_with_router(
             krabka_protocol::ProtocolError::InvalidValue("unknown controller api key"),
         )),
     }
-}
-
-/// Deliver an [`Inbound`] to the engine and await the encoded response body.
-async fn deliver_inbound<F>(engine: &KraftController, make: F) -> Result<Bytes, RaftError>
-where
-    F: FnOnce(oneshot::Sender<Bytes>) -> Inbound,
-{
-    let (reply, rx) = oneshot::channel();
-    engine.deliver(make(reply)).await?;
-    rx.await.map_err(|_| RaftError::Shutdown)
 }
 
 #[cfg(test)]
@@ -142,9 +93,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::server::{
-        api_versions::table::CONTROLLER_LISTENER_APIS,
-        test_support::{single_voter_engine, wait_for_leader},
+    use crate::{
+        kraft::transport::api_key,
+        server::{
+            api_versions::table::CONTROLLER_LISTENER_APIS,
+            test_support::{encoded, single_voter_engine, wait_for_leader},
+        },
     };
 
     #[test]
@@ -281,13 +235,6 @@ mod tests {
         .await
         .expect("end dispatch");
         assert2::assert!(!end_resp.is_empty());
-    }
-
-    /// Encodes `message` at `version`.
-    fn encoded(message: &impl krabka_protocol::Encode, version: i16) -> Bytes {
-        let mut body = bytes::BytesMut::new();
-        message.encode(&mut body, version).expect("encode request");
-        body.freeze()
     }
 
     /// Whether `body` decodes whole as a `T` at `version`.

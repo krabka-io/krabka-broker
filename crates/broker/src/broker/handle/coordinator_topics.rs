@@ -21,10 +21,6 @@ use krabka_metadata::MetadataImage;
 
 use crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT};
 
-/// The poll interval of the helpers below. The coordinators' load state has
-/// no change-notification channel.
-const POLL: std::time::Duration = std::time::Duration::from_millis(25);
-
 /// The partitions of `topic` that `node` leads, or `None` while `topic` is
 /// absent or one of its first `partitions` partitions has no leader.
 fn led_partitions(
@@ -56,31 +52,24 @@ impl BrokerHandle {
     pub async fn wait_until_group_coordinator_ready(&self) {
         let topic = crate::coordinator::bootstrap::OFFSETS_TOPIC;
         let partitions = self.broker.config.offsets_topic_num_partitions;
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let image = self.broker.controller.current_image();
-                if let Some(led) =
-                    led_partitions(&image, topic, partitions, self.broker.config.node_id)
-                {
-                    let loading = led.into_iter().any(|partition| {
-                        image.partition(topic, partition).is_none_or(|record| {
-                            self.broker
-                                .group_coordinator
-                                .is_loading(partition, record.leader_epoch)
-                        })
-                    });
-                    if !loading {
-                        return;
-                    }
-                } else {
-                    self.broker.auto_topic_creation.request(topic);
-                }
-                tokio::time::sleep(POLL).await;
-            }
+        let ready = super::await_until(|| async {
+            let image = self.broker.controller.current_image();
+            let Some(led) = led_partitions(&image, topic, partitions, self.broker.config.node_id)
+            else {
+                self.broker.auto_topic_creation.request(topic);
+                return false;
+            };
+            !led.into_iter().any(|partition| {
+                image.partition(topic, partition).is_none_or(|record| {
+                    self.broker
+                        .group_coordinator
+                        .is_loading(partition, record.leader_epoch)
+                })
+            })
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            ready,
             "the group coordinator was not ready within {TEST_AWAITER_TIMEOUT:?}"
         );
     }
@@ -94,33 +83,27 @@ impl BrokerHandle {
     pub async fn wait_until_transaction_coordinator_ready(&self) {
         let topic = crate::txn::bootstrap::TOPIC;
         let partitions = self.broker.config.transaction_state_num_partitions;
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let image = self.broker.controller.current_image();
-                if let Some(led) =
-                    led_partitions(&image, topic, partitions, self.broker.config.node_id)
-                {
-                    let mut loaded = true;
-                    for partition in led {
-                        loaded &= self
-                            .broker
-                            .txn_coordinator
-                            .load_status(PartitionIndex(partition))
-                            .await
-                            == Some(crate::txn::coordinator::leadership::LoadStatus::Loaded);
-                    }
-                    if loaded {
-                        return;
-                    }
-                } else {
-                    self.broker.auto_topic_creation.request(topic);
-                }
-                tokio::time::sleep(POLL).await;
+        let ready = super::await_until(|| async {
+            let image = self.broker.controller.current_image();
+            let Some(led) = led_partitions(&image, topic, partitions, self.broker.config.node_id)
+            else {
+                self.broker.auto_topic_creation.request(topic);
+                return false;
+            };
+            let mut loaded = true;
+            for partition in led {
+                loaded &= self
+                    .broker
+                    .txn_coordinator
+                    .load_status(PartitionIndex(partition))
+                    .await
+                    == Some(crate::txn::coordinator::leadership::LoadStatus::Loaded);
             }
+            loaded
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            ready,
             "the transaction coordinator was not ready within {TEST_AWAITER_TIMEOUT:?}"
         );
     }
@@ -141,39 +124,33 @@ impl BrokerHandle {
             .config
             .share_coordinator
             .state_topic_num_partitions;
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let image = self.broker.controller.current_image();
-                if let Some(led) =
-                    led_partitions(&image, topic, partitions, self.broker.config.node_id)
-                {
-                    self.broker
-                        .share_coordinator
-                        .refresh_leader_partitions(&image)
-                        .await
-                        .finished()
-                        .await;
-                    let mut active = true;
-                    for partition in led {
-                        active &= self
-                            .broker
-                            .share_coordinator
-                            .load_status(PartitionIndex(partition))
-                            .await
-                            == Some(crate::share_coordinator::coordinator::LoadStatus::Active);
-                    }
-                    if active {
-                        return;
-                    }
-                } else {
-                    self.broker.auto_topic_creation.request(topic);
-                }
-                tokio::time::sleep(POLL).await;
+        let ready = super::await_until(|| async {
+            let image = self.broker.controller.current_image();
+            let Some(led) = led_partitions(&image, topic, partitions, self.broker.config.node_id)
+            else {
+                self.broker.auto_topic_creation.request(topic);
+                return false;
+            };
+            self.broker
+                .share_coordinator
+                .refresh_leader_partitions(&image)
+                .await
+                .finished()
+                .await;
+            let mut active = true;
+            for partition in led {
+                active &= self
+                    .broker
+                    .share_coordinator
+                    .load_status(PartitionIndex(partition))
+                    .await
+                    == Some(crate::share_coordinator::coordinator::LoadStatus::Active);
             }
+            active
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            ready,
             "the share coordinator was not ready within {TEST_AWAITER_TIMEOUT:?}"
         );
     }

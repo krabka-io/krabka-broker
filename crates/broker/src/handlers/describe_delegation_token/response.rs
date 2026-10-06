@@ -44,13 +44,6 @@ pub(super) fn describe_token(
     }
 }
 
-pub(super) fn err_response(code: i16) -> DescribeDelegationTokenResponse {
-    DescribeDelegationTokenResponse {
-        error_code: code,
-        ..Default::default()
-    }
-}
-
 /// Kafka's `ownersListEmpty` response: `error_code = NONE` with no tokens,
 /// for a present-but-empty `owners` filter.
 pub(super) fn empty_response() -> DescribeDelegationTokenResponse {

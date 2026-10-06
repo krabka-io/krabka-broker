@@ -6,8 +6,6 @@
 //! The writer and the verifier must use these functions. Never reimplement the
 //! formula.
 
-use std::fmt::Write as _;
-
 use sha2::{Digest, Sha256};
 
 /// Chain head before the writer writes the first record.
@@ -24,19 +22,11 @@ pub fn chain_hash(prev: &[u8; 32], seq: u64, value: &[u8]) -> [u8; 32] {
 }
 
 /// Running per-broker chain state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub struct ChainState {
     next_seq: u64,
+    #[default(GENESIS_HEAD)]
     head: [u8; 32],
-}
-
-impl Default for ChainState {
-    fn default() -> Self {
-        Self {
-            next_seq: 0,
-            head: GENESIS_HEAD,
-        }
-    }
 }
 
 impl ChainState {
@@ -79,28 +69,14 @@ impl ChainState {
 /// Encode `bytes` as lowercase hex.
 #[must_use]
 pub fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
+    hex::encode(bytes)
 }
 
 /// Parse exactly 32 bytes of lowercase or uppercase hex.
 #[must_use]
 pub fn from_hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
-        return None;
-    }
     let mut out = [0u8; 32];
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < 32 {
-        let hi = (bytes[i * 2] as char).to_digit(16)?;
-        let lo = (bytes[i * 2 + 1] as char).to_digit(16)?;
-        out[i] = u8::try_from(hi * 16 + lo).ok()?;
-        i += 1;
-    }
+    hex::decode_to_slice(s, &mut out).ok()?;
     Some(out)
 }
 
@@ -163,10 +139,12 @@ mod tests {
         let h = chain_hash(&GENESIS_HEAD, 7, b"x");
         let s = to_hex(&h);
         check!(s.len() == 64);
+        let upper = s.to_uppercase();
         for (name, input, expected) in [
             ("round trip", s.as_str(), Some(h)),
             ("non-hex input", "zz", None),
             ("odd-length input", "abc", None),
+            ("uppercase input", upper.as_str(), Some(h)),
         ] {
             check!(from_hex32(input) == expected, "case {name}");
         }

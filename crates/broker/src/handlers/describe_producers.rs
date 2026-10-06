@@ -40,16 +40,12 @@
 //! producer, and `current_txn_start_offset` is `-1` when the producer has no
 //! open transaction.
 
-use bytes::Bytes;
 use krabka_log::topic_name::validate_topic_name;
 use krabka_metadata::AclOperation;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_producers_request::DescribeProducersRequest,
-        describe_producers_response::{
-            DescribeProducersResponse, PartitionResponse, ProducerState, TopicResponse,
-        },
+use krabka_protocol::owned::{
+    describe_producers_request::DescribeProducersRequest,
+    describe_producers_response::{
+        DescribeProducersResponse, PartitionResponse, ProducerState, TopicResponse,
     },
 };
 
@@ -64,19 +60,15 @@ use crate::{
     name = "handle_describe_producers",
     level = "info",
     skip_all,
-    fields(api = "DescribeProducers", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeProducers", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeProducersRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeProducersRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeProducersResponse, BrokerError> {
     let image = broker.controller.current_image();
 
     // Kafka's `checkValidTopic` runs `Topic.validate` before it authorizes
@@ -184,12 +176,11 @@ pub(crate) async fn handle(
         });
     }
 
-    let resp = DescribeProducersResponse {
+    Ok(DescribeProducersResponse {
         throttle_time_ms: 0,
         topics: topics_out,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// The row of a partition that the metadata holds: Kafka's
@@ -263,6 +254,7 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
+    use bytes::Bytes;
     use krabka_protocol::owned::describe_producers_request::TopicRequest;
     use krabka_security::Principal;
 
@@ -275,12 +267,7 @@ mod tests {
 
     const VERSION: i16 = 0;
 
-    crate::test_support::wire_helpers!(
-        DescribeProducersRequest,
-        DescribeProducersResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -302,11 +289,9 @@ mod tests {
         peer: &SocketAddr,
     ) -> DescribeProducersResponse {
         let ctx = test_context(principal, peer);
-        let req_bytes = encode_request(req);
-        let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+        handle(broker, req.clone(), VERSION, &ctx)
             .await
-            .expect("handle");
-        decode_response(&bytes)
+            .expect("handle")
     }
 
     /// Kafka's `checkValidTopic` answers `INVALID_TOPIC_EXCEPTION` (17) for

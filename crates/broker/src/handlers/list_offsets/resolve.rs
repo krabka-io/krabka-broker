@@ -591,10 +591,7 @@ mod tests {
         const CURRENT_EPOCH: i32 = 3;
         const RECORDS: usize = 4;
 
-        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
-        })
-        .await;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
         let client = client_for(&broker).await;
         create_topic(&client, TOPIC, Vec::new()).await;
         broker.wait_until_partition_present(TOPIC, 0).await;
@@ -666,10 +663,7 @@ mod tests {
     async fn non_tiered_sentinels_use_ordinary_earliest_and_unknown_remote_offsets() {
         const TOPIC: &str = "list-offsets-local";
 
-        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
-        })
-        .await;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
         let client = client_for(&broker).await;
         create_topic(&client, TOPIC, Vec::new()).await;
         broker.wait_until_partition_present(TOPIC, 0).await;
@@ -723,8 +717,7 @@ mod tests {
 
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
         let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_with(move |config| {
-            config.audit_enabled = false;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
             config.remote_storage_backend =
                 Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
         })
@@ -869,8 +862,7 @@ mod tests {
 
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
         let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_with(move |config| {
-            config.audit_enabled = false;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
             config.remote_storage_backend =
                 Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
         })
@@ -931,8 +923,7 @@ mod tests {
 
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
         let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_with(move |config| {
-            config.audit_enabled = false;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
             config.remote_storage_backend =
                 Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
         })
@@ -1050,7 +1041,7 @@ mod tests {
             },
             version,
         );
-        let bytes = handle(&broker_arc, version, 123, &req, &ctx)
+        let bytes = handle(&broker_arc, version, &req, &ctx)
             .await
             .expect("handle");
         let mut response = decode_response(&bytes, version);
@@ -1204,10 +1195,7 @@ mod tests {
         const READ_UNCOMMITTED: i8 = 0;
         const READ_COMMITTED: i8 = 1;
 
-        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
-        })
-        .await;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
         let client = client_for(&broker).await;
         create_topic(&client, TOPIC, Vec::new()).await;
         broker.wait_until_partition_present(TOPIC, 0).await;

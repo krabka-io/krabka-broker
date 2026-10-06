@@ -19,7 +19,6 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
         init_producer_id_request::InitProducerIdRequest,
-        init_producer_id_response::InitProducerIdResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
     },
@@ -33,7 +32,7 @@ use crate::{
     codes,
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        request_context, start_broker_with,
+        request_context, start_broker_no_audit_with,
     },
 };
 
@@ -44,8 +43,7 @@ const TXN_ID: &str = "t1";
 const ADMIN_GRANTS: &str = "Cluster:Create";
 
 async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
             GrantsInPrincipalName,
         ));
@@ -108,16 +106,9 @@ async fn open_transaction(broker: &Broker) -> (i64, i16) {
         ..Default::default()
     };
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
-    let init_bytes = crate::handlers::init_producer_id::handle(
-        broker,
-        version,
-        1,
-        &encode_request(&init_request, version),
-        &ctx,
-    )
-    .await
-    .expect("InitProducerId");
-    let init: InitProducerIdResponse = decode_response(&init_bytes, version);
+    let init = crate::handlers::init_producer_id::handle(broker, init_request, version, &ctx)
+        .await
+        .expect("InitProducerId");
     assert!(init.error_code == codes::NONE, "InitProducerId: {init:?}");
     (init.producer_id, init.producer_epoch)
 }
@@ -208,16 +199,9 @@ async fn drive(
     let address = peer();
     let ctx = request_context(&user, &address, "produce-txn-authz");
     let request_bytes = encode_request(&request, version);
-    let response_bytes = handle(
-        broker,
-        version,
-        7,
-        &request_bytes,
-        request_bytes.clone(),
-        &ctx,
-    )
-    .await
-    .expect("handle produce");
+    let response_bytes = handle(broker, version, &request_bytes, request_bytes.clone(), &ctx)
+        .await
+        .expect("handle produce");
     decode_response(&response_bytes, version)
 }
 

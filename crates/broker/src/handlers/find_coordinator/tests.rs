@@ -13,7 +13,7 @@ use krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse;
 use super::*;
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-    test_support::{DenyAll, peer, principal, start_broker_with},
+    test_support::{DenyAll, peer, principal, start_broker_no_audit, start_broker_no_audit_with},
 };
 
 const KAFKA_TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
@@ -40,8 +40,7 @@ impl Authorizer for DenyOneTransaction {
 
 #[tokio::test]
 async fn configured_partition_count_controls_txn_topic_and_routing() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.transaction_state_num_partitions = 7;
         config.transaction_state_replication_factor = 1;
     })
@@ -64,17 +63,9 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
         .wait_until_transaction_coordinator_ready()
         .await;
 
-    let response = handle(
-        &broker,
-        version,
-        1,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("find transaction coordinator");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("find transaction coordinator");
 
     let image = broker_handle.controller_image_for_test();
     let topic = image
@@ -91,7 +82,7 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
 
 #[tokio::test]
 async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
-    let (broker_handle, _dir) = start_broker_with(|config| config.audit_enabled = false).await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal("alice");
     let peer = peer();
@@ -103,17 +94,9 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        4,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("reject pre-v6 share coordinator lookup");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("reject pre-v6 share coordinator lookup");
 
     assert!(response.coordinators.len() == 1);
     assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
@@ -128,7 +111,7 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
 
 #[tokio::test]
 async fn v4_empty_key_array_stays_empty_without_bootstrap() {
-    let (broker_handle, _dir) = start_broker_with(|config| config.audit_enabled = false).await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal("alice");
     let peer = peer();
@@ -140,17 +123,9 @@ async fn v4_empty_key_array_stays_empty_without_bootstrap() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        5,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("empty batched coordinator lookup");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("empty batched coordinator lookup");
 
     assert!(response.coordinators.is_empty());
     assert!(
@@ -164,8 +139,7 @@ async fn v4_empty_key_array_stays_empty_without_bootstrap() {
 
 #[tokio::test]
 async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.authorizer = std::sync::Arc::new(DenyOneTransaction);
         config.transaction_state_replication_factor = 1;
     })
@@ -188,17 +162,9 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        6,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("mixed coordinator lookup");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("mixed coordinator lookup");
 
     assert!(
         response
@@ -217,8 +183,7 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
 
 #[tokio::test]
 async fn malformed_share_key_is_invalid_without_bootstrap() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.share_coordinator.state_topic_replication_factor = 1;
     })
     .await;
@@ -233,17 +198,9 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        3,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("reject malformed share coordinator key");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("reject malformed share coordinator key");
 
     assert!(response.coordinators.len() == 1);
     assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
@@ -256,7 +213,8 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
     broker_handle.shutdown().await;
 }
 
-/// Drive `handle` with `request` at `version` and decode the answer.
+/// Serve `request` at `version` through the dispatch registry and decode the
+/// answer: below v4 the wire carries the one `key` and the top-level answer.
 async fn find(
     broker: &crate::broker::Broker,
     request: &FindCoordinatorRequest,
@@ -266,16 +224,14 @@ async fn find(
     let principal = principal(principal_name);
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "find-client");
-    let response = handle(
+    crate::test_support::dispatch_wire(
         broker,
+        krabka_protocol::owned::find_coordinator_request::API_KEY,
         version,
-        1,
-        &crate::test_support::encode_request(request, version),
+        request,
         &context,
     )
     .await
-    .expect("find coordinator");
-    crate::test_support::decode_response(&response, version)
 }
 
 fn row(key: &str, error_code: i16, error_message: Option<String>) -> Coordinator {
@@ -296,8 +252,7 @@ fn row(key: &str, error_code: i16, error_message: Option<String>) -> Coordinator
 /// `getErrorResponse` stamps every key. Nothing is bootstrapped.
 #[tokio::test]
 async fn denied_share_request_answers_cluster_authorization_failed_on_every_key() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.authorizer = std::sync::Arc::new(DenyAll);
         config.share_coordinator.state_topic_replication_factor = 1;
     })
@@ -341,11 +296,8 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
 /// message of the code and `Node.noNode()`.
 #[tokio::test]
 async fn denied_group_key_answers_kafka_row_shape_per_version() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-        config.authorizer = std::sync::Arc::new(DenyAll);
-    })
-    .await;
+    let (broker_handle, _dir) =
+        start_broker_no_audit_with(|config| config.authorizer = std::sync::Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
     let rows = [
         (
@@ -388,8 +340,7 @@ async fn denied_group_key_answers_kafka_row_shape_per_version() {
 /// `INVALID_REQUEST` row with no message and a valid key resolves.
 #[tokio::test]
 async fn granted_share_request_validates_each_key() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.share_coordinator.state_topic_replication_factor = 1;
     })
     .await;
@@ -432,7 +383,7 @@ async fn granted_share_request_validates_each_key() {
 /// bootstrapped.
 #[tokio::test]
 async fn unknown_key_type_fails_the_whole_request() {
-    let (broker_handle, _dir) = start_broker_with(|config| config.audit_enabled = false).await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     let message = response::error_message(codes::INVALID_REQUEST);
     let rows = [
@@ -537,18 +488,10 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
     ] {
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
-                node_id: NodeId(node),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "legacy".into(),
                 port: 1000,
-                rack: None,
                 endpoints,
-                log_dirs: vec![],
-                features: std::collections::BTreeMap::new(),
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
+                ..crate::test_support::broker_registration(node)
             },
         ));
     }
@@ -626,11 +569,8 @@ fn resolve_answers_only_an_alive_leader_on_the_request_listener() {
 /// which for `NONE` is the enum name.
 #[tokio::test]
 async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-        config.offsets_topic_replication_factor = 1;
-    })
-    .await;
+    let (broker_handle, _dir) =
+        start_broker_no_audit_with(|config| config.offsets_topic_replication_factor = 1).await;
     let broker = broker_handle.broker_arc_for_test();
     broker_handle.wait_until_group_coordinator_ready().await;
     let request = FindCoordinatorRequest {
@@ -694,8 +634,7 @@ async fn the_first_lookup_creates_the_state_topic_once_and_a_later_one_names_the
         ),
     ];
     for (key_type, key, topic) in cases {
-        let (broker_handle, _dir) = start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
             config.offsets_topic_num_partitions = 3;
             config.transaction_state_num_partitions = 3;
             config.share_coordinator.state_topic_num_partitions = 3;
@@ -762,8 +701,7 @@ async fn the_first_lookup_creates_the_state_topic_once_and_a_later_one_names_the
 /// topic with a replica on each broker.
 #[tokio::test]
 async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.offsets_topic_num_partitions = 3;
         config.offsets_topic_replication_factor = 2;
     })
@@ -795,18 +733,10 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
         .controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: other,
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(2),
-                host: "127.0.0.1".into(),
                 port: 9094,
-                rack: None,
-                endpoints: vec![],
-                log_dirs: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(other.0)
             },
         )])
         .await

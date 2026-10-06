@@ -33,7 +33,6 @@
 //! `controller.submit_change`. One batched commit keeps the metadata image
 //! consistent across several rows in the same request.
 
-use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
     alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
@@ -54,15 +53,10 @@ use self::{
     response::{apply_submit_error, err_result},
     validation::{CLUSTER_ALTER_DENIED_MESSAGE, SCRAM_UNSUPPORTED_MESSAGE},
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes, error::BrokerError};
 
-/// Runs the `AlterUserScramCredentials` request and returns the typed
-/// response. The caller, `dispatch.rs`, encodes the response on the wire and
-/// prepends the response header.
+/// The `typed` dispatch entry point: [`answer`] at any version, which the
+/// generated adapter encodes.
 #[tracing::instrument(
     name = "handle_alter_user_scram_credentials",
     level = "info",
@@ -70,6 +64,17 @@ use crate::{
     fields(api = "AlterUserScramCredentials")
 )]
 pub(crate) async fn handle(
+    broker: &Broker,
+    req: AlterUserScramCredentialsRequest,
+    _version: i16,
+    ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<AlterUserScramCredentialsResponse, BrokerError> {
+    Ok(answer(broker, req, ctx).await)
+}
+
+/// Runs the `AlterUserScramCredentials` request and returns the typed
+/// response.
+async fn answer(
     broker: &Broker,
     req: AlterUserScramCredentialsRequest,
     ctx: &crate::handlers::RequestContext<'_>,
@@ -80,17 +85,8 @@ pub(crate) async fn handle(
     // bypass short-circuits inside `authorize` → ALLOW when `super_users`
     // is configured.
     let image = broker.controller.current_image();
-    let authorized = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Alter,
-        },
-    ) == AuthorizationResult::Allow;
-
+    let authorized =
+        !crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
     if !authorized {
         // Kafka's `AlterUserScramCredentialsRequest.getErrorResponse` gives
         // one row per distinct user, sorted by name.

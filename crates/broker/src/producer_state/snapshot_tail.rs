@@ -4,7 +4,25 @@ use krabka_log::{Log, LogConfig, Offset};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::prelude::bytes;
 
-use super::{Decision, ProducerState, RetainedBatch, SequenceContext};
+use super::{Checked, Decision, ProducerState, RetainedBatch, SequenceContext};
+
+/// `state.check_batch` for partition `t-0` outside a transaction, as every
+/// test in this module and in `truncation_replay` asks it.
+pub(super) async fn check(
+    state: &ProducerState,
+    producer: (i64, i16),
+    sequences: (i32, i32),
+) -> Checked {
+    state
+        .check_batch(
+            "t",
+            PartitionIndex(0),
+            SequenceContext::RELEASED,
+            producer,
+            sequences,
+        )
+        .await
+}
 
 fn batch(pid: i64, sequence: i32, delta: i32) -> RecordBatch {
     RecordBatch {
@@ -43,26 +61,10 @@ async fn reopening_rebuilds_only_the_snapshot_seed_and_uncovered_tail() {
             .unwrap();
         // The older covered batch still exists, but the snapshot stores only
         // the last batch and replay begins after both covered batches.
-        let covered = state
-            .check_batch(
-                "t",
-                PartitionIndex(0),
-                SequenceContext::RELEASED,
-                (42, 7),
-                (0, 0),
-            )
-            .await;
+        let covered = check(&state, (42, 7), (0, 0)).await;
         assert!(covered.decision == Decision::OutOfOrder);
         assert!(covered.duplicate == None);
-        let seed = state
-            .check_batch(
-                "t",
-                PartitionIndex(0),
-                SequenceContext::RELEASED,
-                (42, 7),
-                (1, 0),
-            )
-            .await;
+        let seed = check(&state, (42, 7), (1, 0)).await;
         if count < 5 {
             assert!(seed.decision == Decision::Duplicate { base_offset: 1 });
             assert!(
@@ -80,15 +82,7 @@ async fn reopening_rebuilds_only_the_snapshot_seed_and_uncovered_tail() {
             assert!(seed.duplicate == None);
         }
         for sequence in 2..2 + count {
-            let checked = state
-                .check_batch(
-                    "t",
-                    PartitionIndex(0),
-                    SequenceContext::RELEASED,
-                    (42, 7),
-                    (sequence, 0),
-                )
-                .await;
+            let checked = check(&state, (42, 7), (sequence, 0)).await;
             if 2 + count - sequence <= 5 {
                 assert!(
                     checked.decision
@@ -135,15 +129,7 @@ async fn a_surviving_snapshot_preserves_a_retry_below_the_local_floor() {
         .rebuild_from_log("t", PartitionIndex(0), &reopened)
         .await
         .unwrap();
-    let checked = state
-        .check_batch(
-            "t",
-            PartitionIndex(0),
-            SequenceContext::RELEASED,
-            (42, 7),
-            (0, 1),
-        )
-        .await;
+    let checked = check(&state, (42, 7), (0, 1)).await;
     assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
     assert!(
         checked.duplicate

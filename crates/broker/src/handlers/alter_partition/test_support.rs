@@ -6,9 +6,6 @@
 //! registrations, so those fixtures live in one module rather than being
 //! duplicated per test file.
 
-use std::time::Duration;
-
-use assert2::assert;
 use krabka_metadata::{
     BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
 };
@@ -25,18 +22,9 @@ const TOPIC_ID_BYTES: [u8; 16] = [7; 16];
 
 fn reg(node_id: u64, epoch: i64) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: krabka_metadata::NodeId(node_id),
         broker_epoch: epoch,
-        incarnation_id: uuid::Uuid::nil(),
         host: "h".into(),
-        port: 9092,
-        rack: None,
-        log_dirs: vec![],
-        endpoints: vec![],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 
@@ -117,25 +105,6 @@ pub(super) fn bs(broker_id: i32, broker_epoch: i64) -> BrokerState {
         broker_id,
         broker_epoch,
         ..Default::default()
-    }
-}
-
-pub(super) async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 

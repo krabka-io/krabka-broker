@@ -87,17 +87,15 @@ impl LeaderEpochCheckpoint {
             let _ = writeln!(s, "{} {}", e.epoch.0, e.start_offset.0);
         }
         let tmp = self.path.with_extension("tmp");
-        {
-            let f = fs::File::create(&tmp).map_err(LogError::Io)?;
-            crate::io::write_all(&*self.io, IoTarget::LeaderEpochCheckpoint, &f, s.as_bytes())
-                .map_err(LogError::Io)?;
-            self.io
-                .sync_file(IoTarget::LeaderEpochCheckpoint, &f)
-                .map_err(LogError::Io)?;
-        }
-        self.io
-            .rename(IoTarget::LeaderEpochCheckpoint, &tmp, &self.path)
-            .map_err(LogError::Io)?;
+        crate::io::write_atomic(
+            &*self.io,
+            IoTarget::LeaderEpochCheckpoint,
+            &tmp,
+            &self.path,
+            s.as_bytes(),
+            false,
+        )
+        .map_err(LogError::Io)?;
         Ok(())
     }
 }

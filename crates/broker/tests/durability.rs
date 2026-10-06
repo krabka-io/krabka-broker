@@ -16,39 +16,14 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
-    primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
+use support::topic_id_for;
 use tempfile::TempDir;
 
 mod support;
-
-/// Resolves the topic UUID through Metadata.
-///
-/// Produce and Fetch at v ≥ 13 carry only `topic_id` on the wire (KIP-516).
-/// Without this lookup, the broker decodes the request with an empty name and
-/// a ZERO `topic_id`, and returns `UNKNOWN_TOPIC_ID`. This mirrors
-/// the helper in `crates/client-consumer/tests/integration.rs`.
-async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
 
 fn record_batch_with_values(values: &[&str]) -> RecordBatch {
     let mut batch = RecordBatch {

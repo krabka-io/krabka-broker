@@ -39,9 +39,15 @@ pub(crate) struct PendingInjection {
 ///
 /// The type is [`PartialEq`] but not [`Eq`], because [`GroupValue`] carries a
 /// [`Time`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub(crate) struct GroupEntry {
     /// The last definition that a group record carried.
+    #[default(GroupValue {
+        topics: Vec::new(),
+        interval: None,
+        retained_cuts: 0,
+        last_epoch: NO_EPOCH_YET,
+    })]
     pub(crate) definition: GroupValue,
     /// The cuts the group retains, keyed by epoch and ordered by it.
     pub(crate) cuts: BTreeMap<i64, CutValue>,
@@ -50,22 +56,6 @@ pub(crate) struct GroupEntry {
     /// When the scheduler should inject next, in milliseconds since the Unix
     /// epoch. It is `None` for a group that injects only on demand.
     pub(crate) next_due_ms: Option<i64>,
-}
-
-impl Default for GroupEntry {
-    fn default() -> Self {
-        Self {
-            definition: GroupValue {
-                topics: Vec::new(),
-                interval: None,
-                retained_cuts: 0,
-                last_epoch: NO_EPOCH_YET,
-            },
-            cuts: BTreeMap::new(),
-            pending: None,
-            next_due_ms: None,
-        }
-    }
 }
 
 impl GroupEntry {

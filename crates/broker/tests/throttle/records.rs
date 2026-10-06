@@ -3,7 +3,7 @@
 //! many bytes come back.
 //!
 //! The Fetch driver frames its own request instead of reusing
-//! `crate::wire::round_trip`, because the assertion under test is the *size* of
+//! `kafka_wire::round_trip`, because the assertion under test is the *size* of
 //! the raw response and that has to be captured before decoding.
 
 use std::net::SocketAddr;
@@ -16,7 +16,7 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::wire::round_trip;
+use crate::{CLIENT_ID, kafka_wire};
 
 /// Produce `count` records of `record_bytes` bytes each to `(topic, 0)` over
 /// a PLAINTEXT connection. Asserts `error_code=0` on the partition row.
@@ -70,7 +70,7 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
     // leadership errors of that window as any Kafka client does.
     let mut attempts = 0;
     let error_code = loop {
-        let resp_bytes = round_trip(&mut stream, 0, VERSION, 1, true, &body)
+        let resp_bytes = kafka_wire::round_trip(&mut stream, 0, VERSION, 1, CLIENT_ID, true, &body)
             .await
             .expect("Produce round-trip");
         let mut cur: &[u8] = &resp_bytes;

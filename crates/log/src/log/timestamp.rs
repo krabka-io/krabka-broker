@@ -216,7 +216,7 @@ mod tests {
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{sample_batch, ts_batch},
+        log::test_support::{sample_batch, test_log, ts_batch},
         segment::Segment,
     };
 
@@ -347,8 +347,7 @@ mod tests {
 
     #[test]
     fn log_offset_for_timestamp_empty_log_is_none() {
-        let dir = tempdir().unwrap();
-        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, log) = test_log();
         assert2::assert!(log.offset_for_timestamp(0) == None);
         log.close();
         drop(dir);
@@ -358,8 +357,7 @@ mod tests {
     /// answers `MAX_TIMESTAMP` with an empty result rather than the log start.
     #[test]
     fn log_max_timestamp_of_an_empty_log_is_none() {
-        let dir = tempdir().unwrap();
-        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, log) = test_log();
         assert2::assert!(log.max_timestamp_offset_and_ts().unwrap() == None);
         log.close();
         drop(dir);
@@ -385,8 +383,7 @@ mod tests {
 
     #[test]
     fn legacy_offsets_before_semantics() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         assert2::assert!(log.legacy_offsets_before(-1, 10).unwrap() == vec![Offset(0)]);
         assert2::assert!(log.legacy_offsets_before(-2, 10).unwrap() == vec![Offset(0)]);
         assert2::assert!(log.legacy_offsets_before(0, 10).unwrap().is_empty());

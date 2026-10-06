@@ -82,21 +82,15 @@ fn parse(contents: &str) -> Result<Offset, LogError> {
 pub(crate) fn write(io: &dyn LogIo, dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
     let path = name::log_start_offset_checkpoint_path(dir);
     let tmp = path.with_extension("tmp");
-    {
-        let file = fs::File::create(&tmp).map_err(LogError::Io)?;
-        crate::io::write_all(
-            io,
-            IoTarget::LogStartOffsetCheckpoint,
-            &file,
-            format!("0\n{}\n", log_start_offset.0).as_bytes(),
-        )
-        .map_err(LogError::Io)?;
-        io.sync_file(IoTarget::LogStartOffsetCheckpoint, &file)
-            .map_err(LogError::Io)?;
-    }
-    io.rename(IoTarget::LogStartOffsetCheckpoint, &tmp, &path)
-        .map_err(LogError::Io)?;
-    io.sync_dir(dir).map_err(LogError::Io)
+    crate::io::write_atomic(
+        io,
+        IoTarget::LogStartOffsetCheckpoint,
+        &tmp,
+        &path,
+        format!("0\n{}\n", log_start_offset.0).as_bytes(),
+        true,
+    )
+    .map_err(LogError::Io)
 }
 
 /// Drop the checkpoint. A log that was reset holds no records at all, so the

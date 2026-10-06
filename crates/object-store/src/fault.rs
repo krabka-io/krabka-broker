@@ -38,35 +38,28 @@ use object_store::{
 /// The granularity is the one an operator's incident is described in -- "puts
 /// are being throttled", "listing is slow" -- rather than one variant per
 /// trait method, so a policy written for `Put` covers the multipart path too.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// `ALL` lists every variant, so a policy can be applied across the board and
+/// a table test can walk them. `label` is the `store` field of the errors an
+/// op's faults produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, krabka_macros::EnumStr)]
+#[enum_str(as_str = label, all)]
 pub enum StoreOp {
     /// `put_opts` and `put_multipart_opts`.
+    #[enum_str(name = "FaultInjectingStore::put")]
     Put,
     /// `get_opts` and everything layered on it, `head` included.
+    #[enum_str(name = "FaultInjectingStore::get")]
     Get,
     /// `delete_stream`.
+    #[enum_str(name = "FaultInjectingStore::delete")]
     Delete,
     /// `list` and `list_with_delimiter`.
+    #[enum_str(name = "FaultInjectingStore::list")]
     List,
     /// `copy_opts`.
+    #[enum_str(name = "FaultInjectingStore::copy")]
     Copy,
-}
-
-impl StoreOp {
-    /// Every variant, so a policy can be applied across the board and a table
-    /// test can walk them.
-    pub const ALL: [Self; 5] = [Self::Put, Self::Get, Self::Delete, Self::List, Self::Copy];
-
-    /// The `store` field of the errors this op's faults produce.
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Put => "FaultInjectingStore::put",
-            Self::Get => "FaultInjectingStore::get",
-            Self::Delete => "FaultInjectingStore::delete",
-            Self::List => "FaultInjectingStore::list",
-            Self::Copy => "FaultInjectingStore::copy",
-        }
-    }
 }
 
 /// What a failing call fails with.

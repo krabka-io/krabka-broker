@@ -164,18 +164,10 @@ mod tests {
             for (index, rack) in racks.iter().enumerate() {
                 image.apply(&MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
-                        fenced: false,
-                        in_controlled_shutdown: false,
-                        cordoned_log_dirs: None,
-                        node_id: krabka_audit::NodeId(1 + u64::try_from(index).unwrap()),
-                        broker_epoch: 0,
-                        incarnation_id: uuid::Uuid::nil(),
-                        host: "127.0.0.1".into(),
-                        port: 9092,
                         rack: rack.map(str::to_owned),
-                        endpoints: vec![],
-                        log_dirs: vec![],
-                        features: std::collections::BTreeMap::new(),
+                        ..crate::test_support::broker_registration(
+                            1 + u64::try_from(index).unwrap(),
+                        )
                     },
                 ));
             }

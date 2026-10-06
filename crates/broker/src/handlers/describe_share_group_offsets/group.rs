@@ -6,7 +6,7 @@
 //! decides: authorization, coordinator routing, and whether a persister is
 //! installed at all. Once those hold, it hands the group's topics to `rows`.
 
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     describe_share_group_offsets_request::{
         DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
@@ -20,7 +20,7 @@ use super::{
     topics::initialized_topics,
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::GroupCoordinator,
@@ -40,14 +40,12 @@ pub(super) async fn describe_group(
 
     // ── ACL preamble ────────────────────────────────────
     // Per-group `Describe` check. On Deny → group `error_code = 30`.
-    let acl_req = AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type: ResourceType::Group,
-        resource_name: gid.as_str(),
-        operation: AclOperation::Describe,
-    };
-    if broker.config.authorizer.authorize(image, &acl_req) == AuthorizationResult::Deny {
+    if crate::handlers::group_describe_denied(
+        broker.config.authorizer.as_ref(),
+        image,
+        ctx,
+        gid.as_str(),
+    ) {
         return DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
             error_code: codes::GROUP_AUTHORIZATION_FAILED,
@@ -163,7 +161,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_log::Offset;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::{MetadataRecord, ResourceType, TopicRecord};
     use krabka_protocol::{
         UnknownTaggedFields,
         owned::describe_share_group_offsets_response::{

@@ -4,7 +4,6 @@
 
 pub(crate) mod config;
 pub(crate) mod manager;
-pub(crate) mod otlp;
 pub(crate) mod otlp_sink;
 pub(crate) mod prometheus_sink;
 use std::sync::Arc;

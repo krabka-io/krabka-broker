@@ -5,13 +5,13 @@
 use assert2::{assert, check};
 use krabka_protocol::records::RecordBatch;
 use krabka_units::prelude::{kibibytes, mebibytes};
-use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    config::LogConfig,
     leader_epoch_checkpoint::EpochEntry,
-    log::test_support::{sample_batch, test_batch_at, test_log, verbatim_from},
+    log::test_support::{
+        log_append_time_log, sample_batch, test_batch_at, test_log, verbatim_from,
+    },
     stamp_index::{StampEntry, StampIndex},
 };
 
@@ -153,10 +153,8 @@ fn append_verbatim_matches_owned_append_bytes() {
     // The verbatim path and the owned path must write byte-identical
     // .log bytes for the same logical batch — proving passthrough does
     // not perturb the stored representation.
-    let dir_owned = tempdir().unwrap();
-    let mut log_owned = Log::open(dir_owned.path(), LogConfig::default()).unwrap();
-    let dir_verb = tempdir().unwrap();
-    let mut log_verb = Log::open(dir_verb.path(), LogConfig::default()).unwrap();
+    let (dir_owned, mut log_owned) = test_log();
+    let (dir_verb, mut log_verb) = test_log();
 
     let mut producer = test_batch_at(0);
     producer.base_offset = 12345; // overwritten by both paths
@@ -257,21 +255,6 @@ fn non_txn_verbatim_batch_with_valid_pid_advances_lso() {
     assert2::assert!(log.log_end_offset() == Offset(2));
     assert2::assert!(log.lso() == Offset(2));
     drop(dir);
-}
-
-/// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
-/// configures one, with everything else at its default.
-fn log_append_time_log() -> (tempfile::TempDir, Log) {
-    let dir = tempdir().unwrap();
-    let log = Log::open(
-        dir.path(),
-        LogConfig {
-            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
-    (dir, log)
 }
 
 /// The passthrough path stamps the same three header fields the owned path

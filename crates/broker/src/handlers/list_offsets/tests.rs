@@ -36,11 +36,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
 
     let authorizer = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
     let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    let principal = krabka_security::Principal {
-        name: "ANONYMOUS".into(),
-        auth_method: krabka_security::AuthMethod::Anonymous,
-        groups: vec![],
-    };
+    let principal = crate::test_support::principal("ANONYMOUS");
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
 
     let ctx = crate::handlers::RequestContext::new(
@@ -120,9 +116,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
     };
     let req = encode_request(&req, version);
 
-    let bytes = handle(&broker, version, 123, &req, &ctx)
-        .await
-        .expect("handle");
+    let bytes = handle(&broker, version, &req, &ctx).await.expect("handle");
     let resp = decode_response(&bytes, version);
 
     let denied_row = |partition_index: i32| ListOffsetsPartitionResponse {
@@ -233,9 +227,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
         };
         let req = encode_request(&req, version);
 
-        let bytes = handle(&broker, version, 123, &req, &ctx)
-            .await
-            .expect("handle");
+        let bytes = handle(&broker, version, &req, &ctx).await.expect("handle");
         let resp = decode_response(&bytes, version);
 
         let mut expected_order: Vec<&str> = case

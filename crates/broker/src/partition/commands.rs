@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 use crate::{
     error::BrokerError,
     partition::{Partition, ProduceData, ProduceJob, ProducerAppendCheck, WriterMessage},
+    task_util::{AskError, ask},
 };
 
 /// Whether an internal produce definitely failed or may already be appended.
@@ -21,6 +22,36 @@ pub(crate) enum ProduceBatchError {
 }
 
 impl Partition {
+    /// [`ask`] the writer task, and report a dead writer or a dropped
+    /// acknowledgement as [`BrokerError::Replication`].
+    async fn ask_writer<T>(
+        &self,
+        make: impl FnOnce(oneshot::Sender<T>) -> WriterMessage,
+    ) -> Result<T, BrokerError> {
+        self.ask_writer_or(make, BrokerError::Replication, "ack dropped")
+            .await
+    }
+
+    /// [`ask`] the writer task. A dead writer is reported as
+    /// `error("partition writer dead")`, and a dropped acknowledgement as
+    /// `error(dropped)`.
+    async fn ask_writer_or<T>(
+        &self,
+        make: impl FnOnce(oneshot::Sender<T>) -> WriterMessage,
+        error: fn(String) -> BrokerError,
+        dropped: &str,
+    ) -> Result<T, BrokerError> {
+        ask(&self.writer_tx, make).await.map_err(|ask_error| {
+            error(
+                match ask_error {
+                    AskError::Closed => "partition writer dead",
+                    AskError::Dropped => dropped,
+                }
+                .into(),
+            )
+        })
+    }
+
     /// Start a KIP-890 transaction verification on the log. See
     /// [`krabka_log::Log::maybe_start_transaction_verification`].
     ///
@@ -68,17 +99,11 @@ impl Partition {
         base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
         let merged = crate::config_keys::apply_to_log_config(overrides, base);
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::SetLogConfig {
-                config: merged,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?;
+        self.ask_writer(|ack| WriterMessage::SetLogConfig {
+            config: merged,
+            ack,
+        })
+        .await?;
         Ok(())
     }
 
@@ -89,14 +114,8 @@ impl Partition {
     /// rejects those appends anyway, but the channel ordering is still part
     /// of the invariant.
     pub async fn replicate_batch(&self, batch: RecordBatch) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Replicate { batch, ack: ack_tx })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+        self.ask_writer(|ack| WriterMessage::Replicate { batch, ack })
+            .await?
     }
 
     pub async fn replicate_verbatim(
@@ -104,18 +123,12 @@ impl Partition {
         batch: krabka_log::VerbatimBatch,
         base_offset: Offset,
     ) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::ReplicateVerbatim {
-                batch,
-                base_offset,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+        self.ask_writer(|ack| WriterMessage::ReplicateVerbatim {
+            batch,
+            base_offset,
+            ack,
+        })
+        .await?
     }
 
     /// Truncate the log to `offset` and drop all records at offsets
@@ -123,48 +136,24 @@ impl Partition {
     /// calls this, and so does the KIP-320 in-band `diverging_epoch`
     /// truncation path, which passes the leader's epoch boundary and not 0.
     pub async fn truncate_to(&self, offset: Offset) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Truncate {
-                offset,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+        self.ask_writer(|ack| WriterMessage::Truncate { offset, ack })
+            .await?
     }
 
     /// The lowest offset the log was cut to by [`Self::truncate_to`] or
     /// [`Self::reset_to`] since the last call, which the KIP-113 move task
     /// applies to its future log. See [`WriterMessage::TakeFutureTruncation`].
     pub(crate) async fn take_future_truncation(&self) -> Result<Option<Offset>, BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::TakeFutureTruncation { ack: ack_tx })
+        self.ask_writer(|ack| WriterMessage::TakeFutureTruncation { ack })
             .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))
     }
 
     /// Drop every segment and recreate the active segment at `new_base`.
     /// The request goes through the writer task, so it stays ordered with
     /// appends.
     pub async fn reset_to(&self, new_base: Offset) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::ResetTo {
-                new_base,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+        self.ask_writer(|ack| WriterMessage::ResetTo { new_base, ack })
+            .await?
     }
 
     /// Send a trim request through the writer actor. Returns the resulting
@@ -175,31 +164,20 @@ impl Partition {
     /// Returns `BrokerError` if the writer is dead, the ack is dropped,
     /// or the underlying `Log::trim_to_offset` fails (negative offset).
     pub async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::TrimToOffset {
-                new_start,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+        self.ask_writer(|ack| WriterMessage::TrimToOffset { new_start, ack })
+            .await?
     }
 
     /// Send a `WriterMessage::Compact` to the partition's writer
     /// actor and await the ack. The broker-wide [`Cleaner`] ticker
     /// calls this.
     pub async fn compact_log(&self) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Compact { ack: ack_tx })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("compact ack dropped".into()))?
+        self.ask_writer_or(
+            |ack| WriterMessage::Compact { ack },
+            BrokerError::Replication,
+            "compact ack dropped",
+        )
+        .await?
     }
 
     /// Send a `WriterMessage::Retain` to the partition's writer actor and
@@ -216,14 +194,12 @@ impl Partition {
     /// Returns `BrokerError::Replication` if the writer is dead or the ack is
     /// dropped, and whatever `Log::tick` returned otherwise.
     pub async fn retain_log(&self) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Retain { ack: ack_tx })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("retain ack dropped".into()))?
+        self.ask_writer_or(
+            |ack| WriterMessage::Retain { ack },
+            BrokerError::Replication,
+            "retain ack dropped",
+        )
+        .await?
     }
 
     /// Append `batch` to the local log at the next assigned offset. The append
@@ -262,21 +238,22 @@ impl Partition {
         batch: RecordBatch,
         producer_check: Option<ProducerAppendCheck>,
     ) -> Result<Offset, ProduceBatchError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Produce(ProduceJob {
+        let job = |ack| {
+            WriterMessage::Produce(ProduceJob {
                 data: ProduceData::Owned(batch),
-                ack: ack_tx,
+                ack,
                 producer_check,
-            }))
+            })
+        };
+        ask(&self.writer_tx, job)
             .await
-            .map_err(|_| {
-                ProduceBatchError::Rejected(BrokerError::Txn("partition writer dead".into()))
-            })?;
-        ack_rx
-            .await
-            .map_err(|_| {
-                ProduceBatchError::Indeterminate("produce acknowledgement dropped".into())
+            .map_err(|error| match error {
+                AskError::Closed => {
+                    ProduceBatchError::Rejected(BrokerError::Txn("partition writer dead".into()))
+                }
+                AskError::Dropped => {
+                    ProduceBatchError::Indeterminate("produce acknowledgement dropped".into())
+                }
             })?
             .map(|appended| appended.base_offset)
             .map_err(ProduceBatchError::Rejected)
@@ -290,20 +267,22 @@ impl Partition {
     ) -> Result<Offset, ProduceBatchError> {
         let record_count = i64::from(batch.last_offset_delta) + 1;
         let base_offset = self.produce_batch_outcome(batch).await?;
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::SyncDurable {
-                leo: base_offset + record_count,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| {
-                ProduceBatchError::Indeterminate("durable sync command rejected".into())
-            })?;
-        ack_rx
-            .await
-            .map_err(|_| ProduceBatchError::Indeterminate("durable sync ack dropped".into()))?
-            .map_err(|error| ProduceBatchError::Indeterminate(error.to_string()))?;
+        let leo = base_offset + record_count;
+        ask(&self.writer_tx, |ack| WriterMessage::SyncDurable {
+            leo,
+            ack,
+        })
+        .await
+        .map_err(|error| {
+            ProduceBatchError::Indeterminate(
+                match error {
+                    AskError::Closed => "durable sync command rejected",
+                    AskError::Dropped => "durable sync ack dropped",
+                }
+                .into(),
+            )
+        })?
+        .map_err(|error| ProduceBatchError::Indeterminate(error.to_string()))?;
         Ok(base_offset)
     }
 
@@ -319,21 +298,19 @@ impl Partition {
         batch: RecordBatch,
         commit_stamp: u64,
     ) -> Result<Offset, BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Produce(ProduceJob {
+        let job = |ack| {
+            WriterMessage::Produce(ProduceJob {
                 data: ProduceData::OwnedCommitMarker {
                     batch,
                     commit_stamp,
                 },
-                ack: ack_tx,
+                ack,
                 producer_check: None,
-            }))
-            .await
-            .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
-        Ok(ack_rx
-            .await
-            .map_err(|_| BrokerError::Txn("ack dropped".into()))??
+            })
+        };
+        Ok(self
+            .ask_writer_or(job, BrokerError::Txn, "ack dropped")
+            .await??
             .base_offset)
     }
 
@@ -355,18 +332,19 @@ impl Partition {
         &self,
         batch: RecordBatch,
     ) -> Result<Offset, BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::Produce(ProduceJob {
-                data: ProduceData::OwnedControl(batch),
-                ack: ack_tx,
-                producer_check: None,
-            }))
-            .await
-            .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
-        Ok(ack_rx
-            .await
-            .map_err(|_| BrokerError::Txn("ack dropped".into()))??
+        Ok(self
+            .ask_writer_or(
+                |ack| {
+                    WriterMessage::Produce(ProduceJob {
+                        data: ProduceData::OwnedControl(batch),
+                        ack,
+                        producer_check: None,
+                    })
+                },
+                BrokerError::Txn,
+                "ack dropped",
+            )
+            .await??
             .base_offset)
     }
 
@@ -375,17 +353,8 @@ impl Partition {
     /// single-writer invariant on the underlying `Log`.
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn test_set_log_start(&self, new_start: Offset) -> Result<(), BrokerError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.writer_tx
-            .send(WriterMessage::TestSetLogStart {
-                new_start,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
-        ack_rx
-            .await
-            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+        self.ask_writer(|ack| WriterMessage::TestSetLogStart { new_start, ack })
+            .await?
     }
 }
 

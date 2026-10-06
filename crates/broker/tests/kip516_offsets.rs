@@ -5,7 +5,6 @@ mod support;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
@@ -22,6 +21,7 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid as WireUuid,
 };
+use support::topic_id_for;
 
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
@@ -32,24 +32,6 @@ async fn start() -> support::InProcess {
     let p = support::start().await;
     p.broker.wait_until_group_coordinator_ready().await;
     p
-}
-
-async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 #[tokio::test]

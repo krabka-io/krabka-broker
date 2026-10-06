@@ -18,65 +18,36 @@ use crate::{
 /// [`RemoteStorageManager`] copies all of these on
 /// [`RemoteStorageManager::copy_log_segment_data`] and serves any of them
 /// back on [`RemoteStorageManager::fetch_index`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `suffix` is the Kafka `LocalTieredStorage` filename suffix of each index
+/// type. Its remote leader-epoch artifact uses `.leader_epoch_checkpoint`,
+/// distinct from a partition log's local `leader-epoch-checkpoint` file.
+/// `from_suffix` is its inverse. A reader that discovers an archive from the
+/// object store alone identifies each artifact by the suffix of its key, and
+/// every key that is not an index ends in [`LOG_FILE_SUFFIX`], so `None` means
+/// "not an index". `ALL` lists every index kind, so a caller that has to act
+/// on all of them -- such as dropping one segment's whole cache footprint --
+/// cannot silently miss one that is added later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, krabka_macros::EnumStr)]
+#[enum_str(as_str = suffix, parse = from_suffix, all)]
 pub enum IndexType {
     /// Sparse offset → byte-position index (`.index`).
+    #[enum_str(name = ".index")]
     Offset,
     /// Sparse timestamp → relative-offset index (`.timeindex`).
+    #[enum_str(name = ".timeindex")]
     Timestamp,
     /// Producer id snapshot (`.snapshot`).
+    #[enum_str(name = ".snapshot")]
     ProducerSnapshot,
     /// Leader-epoch checkpoint (`.leader_epoch_checkpoint` in Kafka's
     /// `LocalTieredStorage`).
+    #[enum_str(name = ".leader_epoch_checkpoint")]
     LeaderEpoch,
     /// Aborted-transaction index (`.txnindex`). It is optional. A segment
     /// with no aborted transactions has none.
+    #[enum_str(name = ".txnindex")]
     Transaction,
-}
-
-impl IndexType {
-    /// Every index kind, so a caller that has to act on all of them -- such as
-    /// dropping one segment's whole cache footprint -- cannot silently miss
-    /// one that is added later.
-    pub const ALL: [IndexType; 5] = [
-        IndexType::Offset,
-        IndexType::Timestamp,
-        IndexType::ProducerSnapshot,
-        IndexType::LeaderEpoch,
-        IndexType::Transaction,
-    ];
-
-    /// The Kafka `LocalTieredStorage` filename suffix for this index type.
-    /// Its remote leader-epoch artifact uses `.leader_epoch_checkpoint`,
-    /// distinct from a partition log's local `leader-epoch-checkpoint` file.
-    #[must_use]
-    pub fn suffix(self) -> &'static str {
-        match self {
-            IndexType::Offset => ".index",
-            IndexType::Timestamp => ".timeindex",
-            IndexType::ProducerSnapshot => ".snapshot",
-            IndexType::LeaderEpoch => ".leader_epoch_checkpoint",
-            IndexType::Transaction => ".txnindex",
-        }
-    }
-
-    /// The index type that a filename suffix names.
-    ///
-    /// It is the inverse of [`IndexType::suffix`]. A reader that discovers an
-    /// archive from the object store alone identifies each artifact by the
-    /// suffix of its key, and every key that is not an index ends in
-    /// [`LOG_FILE_SUFFIX`], so `None` means "not an index".
-    #[must_use]
-    pub fn from_suffix(suffix: &str) -> Option<Self> {
-        match suffix {
-            ".index" => Some(IndexType::Offset),
-            ".timeindex" => Some(IndexType::Timestamp),
-            ".snapshot" => Some(IndexType::ProducerSnapshot),
-            ".leader_epoch_checkpoint" => Some(IndexType::LeaderEpoch),
-            ".txnindex" => Some(IndexType::Transaction),
-            _ => None,
-        }
-    }
 }
 
 /// Filename suffix of a segment's data, as distinct from one of its indexes.

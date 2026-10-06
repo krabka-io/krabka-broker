@@ -10,13 +10,14 @@ use crate::error::RaftError;
 /// records to the log instead.
 pub(crate) const BOOTSTRAP_SNAPSHOT_ID: (i64, i32) = (0, 0);
 
-/// Write a KIP-630 `.checkpoint` artifact (bytes only) directly with
-/// temp+rename atomicity.
+/// Write a KIP-630 `.checkpoint` artifact (bytes only) atomically and
+/// durably: the temporary file is synced before the rename and the directory
+/// after it, as Kafka's `FileRawSnapshotWriter.freeze` does.
 ///
 /// # Errors
 ///
 /// Returns an error when the directory cannot be created, or the temporary
-/// file cannot be written or renamed into place.
+/// file cannot be written, synced or renamed into place.
 pub fn write_checkpoint(
     dir: &std::path::Path,
     end_offset: i64,
@@ -26,9 +27,8 @@ pub fn write_checkpoint(
     std::fs::create_dir_all(dir).map_err(krabka_log::LogError::Io)?;
     let name = checkpoint_name(end_offset, epoch);
     let path = dir.join(name);
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).map_err(krabka_log::LogError::Io)?;
-    std::fs::rename(&tmp, &path).map_err(krabka_log::LogError::Io)?;
+    krabka_log::write_file_atomic(&path.with_extension("tmp"), &path, bytes)
+        .map_err(krabka_log::LogError::Io)?;
     Ok(())
 }
 
