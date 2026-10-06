@@ -22,7 +22,6 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -33,6 +32,7 @@ use crate::{
     },
     rlmm_round_trip::remote_log_files,
     run_broker_test,
+    support::topic_id_for,
 };
 
 const TOPIC: &str = "tiered-delete-records-itest";
@@ -259,22 +259,4 @@ async fn await_fetch_records(
         }
         tokio::task::yield_now().await;
     }
-}
-
-async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|topic| topic.name.as_deref() == Some(name))
-        .map(|topic| topic.topic_id)
-        .unwrap_or_default()
 }

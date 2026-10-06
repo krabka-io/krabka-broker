@@ -378,11 +378,9 @@ fn stamping_does_not_change_offsets_lso_or_log_bytes() {
         ]
     }
 
-    let dir_plain = tempdir().unwrap();
-    let mut plain = Log::open(dir_plain.path(), LogConfig::default()).unwrap();
+    let (_dir_plain, mut plain) = test_log();
 
-    let dir_stamped = tempdir().unwrap();
-    let mut stamped = Log::open(dir_stamped.path(), LogConfig::default()).unwrap();
+    let (_dir_stamped, mut stamped) = test_log();
     stamped
         .set_stamp_source(std::sync::Arc::new(
             crate::stamp_source::MonotonicStampSource::new(7, 3),

@@ -51,18 +51,7 @@ pub(crate) async fn require_transition(
         audit_log,
         ctx,
         approver_set_fingerprint(&config.approvers),
-        &PrivilegedAudit {
-            outcome: AuditOutcome::Success,
-            phase: transition.phase,
-            action: action_name(transition.action),
-            target: transition.target,
-            proposal_id: transition.proposal_id,
-            counterparties: &[],
-            key_id: "",
-            signature: &[],
-            signature_verified: false,
-            reason: transition.reason,
-        },
+        &transition_audit(transition, AuditOutcome::Success),
     )
     .await
 }
@@ -95,23 +84,37 @@ pub(crate) fn audit_transition(
         audit_log,
         ctx,
         approver_set_fingerprint(&config.approvers),
-        &PrivilegedAudit {
-            outcome: if matches!(transition.phase, PrivilegedPhase::Refused) {
+        &transition_audit(
+            transition,
+            if matches!(transition.phase, PrivilegedPhase::Refused) {
                 AuditOutcome::Failure
             } else {
                 AuditOutcome::Success
             },
-            phase: transition.phase,
-            action: action_name(transition.action),
-            target: transition.target,
-            proposal_id: transition.proposal_id,
-            counterparties: &[],
-            key_id: "",
-            signature: &[],
-            signature_verified: false,
-            reason: transition.reason,
-        },
+        ),
     );
+}
+
+/// The [`PrivilegedAudit`] that `transition` records with `outcome`.
+///
+/// A gated transition is never signed and names no counterparty: the
+/// approvers are named on the proposal's own approve events.
+fn transition_audit<'a>(
+    transition: &GatedTransition<'a>,
+    outcome: AuditOutcome,
+) -> PrivilegedAudit<'a> {
+    PrivilegedAudit {
+        outcome,
+        phase: transition.phase,
+        action: action_name(transition.action),
+        target: transition.target,
+        proposal_id: transition.proposal_id,
+        counterparties: &[],
+        key_id: "",
+        signature: &[],
+        signature_verified: false,
+        reason: transition.reason,
+    }
 }
 
 #[cfg(test)]

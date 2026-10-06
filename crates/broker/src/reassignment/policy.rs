@@ -181,12 +181,7 @@ pub(crate) async fn compute_reassignment_progress(
     let mut updates = Vec::new();
     // Snapshot the alive set once (single lock) instead of taking the
     // liveness lock per target replica in the leader-handoff branch.
-    let alive: std::collections::HashSet<NodeId> = liveness
-        .alive_snapshot()
-        .await
-        .into_iter()
-        .map(NodeId)
-        .collect();
+    let alive = liveness.alive_node_ids().await;
     for pr in image.reassignments_in_flight() {
         if matches!(
             resolve_freeze_mutation(

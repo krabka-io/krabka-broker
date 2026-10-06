@@ -9,6 +9,7 @@
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `streams_classic_upgrade/` directory, which keeps the parts out of `tests/`
 // where every `.rs` file would become another test binary.
+mod support;
 #[path = "streams_classic_upgrade/upgrade_classic.rs"]
 mod upgrade_classic;
 #[path = "streams_classic_upgrade/upgrade_conversion.rs"]

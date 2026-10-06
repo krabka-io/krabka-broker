@@ -15,9 +15,9 @@ use krabka_units::{
 };
 
 use super::{
-    AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfig, FileConfigError,
-    FileGssapiConfig, FileInterBrokerCredentials, FileProcessConfig, FileSchemaRegistryConfig,
-    gssapi::DEFAULT_KERBEROS_SERVICE_NAME,
+    AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfigError, FileGssapiConfig,
+    FileInterBrokerCredentials, FileProcessConfig, FileSchemaRegistryConfig,
+    gssapi::DEFAULT_KERBEROS_SERVICE_NAME, parse_bootstrap_server, parse_quorum_voter,
 };
 
 pub(super) struct FileConfigTail {
@@ -192,14 +192,14 @@ pub(super) fn apply_config_tail(
         cfg.controller_quorum_voters = tail
             .controller_quorum_voters
             .iter()
-            .map(|entry| FileConfig::parse_quorum_voter(entry))
+            .map(|entry| parse_quorum_voter(entry))
             .collect::<Result<_, _>>()?;
     }
     if !tail.bootstrap_servers.is_empty() {
         cfg.bootstrap_servers = tail
             .bootstrap_servers
             .iter()
-            .map(|entry| FileConfig::parse_bootstrap_server(entry))
+            .map(|entry| parse_bootstrap_server(entry))
             .collect::<Result<_, _>>()?;
     }
     if let Some(auto_join) = tail.auto_join {

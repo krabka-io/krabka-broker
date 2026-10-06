@@ -15,7 +15,7 @@ use krabka_units::{ByteSize, Time, kibibytes};
 
 use super::{
     kerberos_name::{KerberosNameError, KerberosRule, short_name},
-    response::fail_authenticate,
+    response::{fail_authenticate, sasl_ok},
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 
@@ -136,7 +136,7 @@ fn authenticate_gssapi(
                     exchange: SaslExchange::Gssapi(Box::new(next)),
                     pending_token_expiry_ms: None,
                 };
-                gssapi_challenge_response(token)
+                sasl_ok(token, 0)
             }
             // GSSAPI always negotiates the security layer after context
             // establishment, so round 1 never completes the exchange.
@@ -173,7 +173,7 @@ fn authenticate_gssapi(
                     exchange: SaslExchange::Gssapi(Box::new(next)),
                     pending_token_expiry_ms: None,
                 };
-                gssapi_challenge_response(token)
+                sasl_ok(token, 0)
             }
             ServerStep::Done { principal } => {
                 finish_gssapi(&principal, mechanism, config, auth, max_reauth)
@@ -182,19 +182,6 @@ fn authenticate_gssapi(
     }
 
     fail_authenticate("not in GSSAPI negotiation")
-}
-
-/// Handles a non-terminal GSSAPI round. It returns the next token to the
-/// client with `error_code = 0`. The connection stays open and `auth` stays
-/// `Negotiating`.
-fn gssapi_challenge_response(token: Vec<u8>) -> SaslAuthenticateResponse {
-    SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::from(token),
-        session_lifetime_ms: 0,
-        ..Default::default()
-    }
 }
 
 /// Maps the authenticated Kerberos principal through `auth_to_local` and, on
@@ -226,13 +213,7 @@ fn finish_gssapi(
         expires_at_ms,
         authenticated_via_token: false,
     };
-    SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::new(),
-        session_lifetime_ms,
-        ..Default::default()
-    }
+    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
 }
 
 /// Applies the configured `auth_to_local` rules to a raw Kerberos principal.
@@ -269,8 +250,8 @@ mod tests {
     };
 
     #[test]
-    fn gssapi_challenge_response_carries_token_and_zero_lifetime() {
-        let resp = gssapi_challenge_response(vec![1, 2, 3, 4]);
+    fn sasl_ok_challenge_carries_token_and_zero_lifetime() {
+        let resp = sasl_ok(vec![1, 2, 3, 4], 0);
         assert_success_authenticate_response(&resp, &[1, 2, 3, 4], 0);
     }
 

@@ -31,7 +31,6 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -50,7 +49,8 @@ use crate::{
     },
     error::BrokerError,
     handlers::{
-        acl_denied, cluster_describe_denied, coordinator_routing::any_group_partition_loading,
+        cluster_describe_denied, coordinator_routing::any_group_partition_loading,
+        group_describe_denied,
     },
 };
 
@@ -104,15 +104,7 @@ pub(crate) async fn handle(
     // `Describe`, and a denied group is silently omitted.
     let cluster_describe = !cluster_describe_denied(authorizer, &image, ctx);
     let may_describe = |group_id: &str| {
-        cluster_describe
-            || !acl_denied(
-                authorizer,
-                &image,
-                ctx,
-                ResourceType::Group,
-                group_id,
-                AclOperation::Describe,
-            )
+        cluster_describe || !group_describe_denied(authorizer, &image, ctx, group_id)
     };
 
     let resp = ListGroupsResponse {
@@ -306,7 +298,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::MetadataRecord;
+    use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 
     use super::*;
     use crate::test_support::{peer, principal};

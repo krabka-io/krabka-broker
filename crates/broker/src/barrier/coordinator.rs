@@ -54,7 +54,7 @@ use crate::{
         config::BarrierConfig,
         error::BarrierError,
         injection::RemoteMarkerWriter,
-        metrics::BarrierMetrics,
+        metrics::BrokerBarrierMetrics,
         partitioner::partition_for_group,
         persistence::{RecordKey, encode_key},
         state::{GroupEntry, GroupSpec},
@@ -175,7 +175,7 @@ pub(crate) struct BarrierCoordinator {
     /// Creates `__barrier_state` when the first group needs it.
     auto_topic_creation: Arc<AutoTopicCreation>,
     config: BarrierConfig,
-    metrics: Arc<dyn BarrierMetrics>,
+    metrics: Arc<BrokerBarrierMetrics>,
     remote: Option<Arc<dyn RemoteMarkerWriter>>,
     /// Live groups: name to locked entry.
     groups: DashMap<String, Arc<Mutex<GroupEntry>>>,
@@ -190,7 +190,7 @@ impl BarrierCoordinator {
         controller: Arc<dyn MetadataSource>,
         auto_topic_creation: Arc<AutoTopicCreation>,
         config: BarrierConfig,
-        metrics: Arc<dyn BarrierMetrics>,
+        metrics: Arc<BrokerBarrierMetrics>,
     ) -> Self {
         Self {
             node_id,

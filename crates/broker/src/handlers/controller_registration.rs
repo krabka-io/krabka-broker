@@ -8,10 +8,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use bytes::Bytes;
-use krabka_metadata::{
-    AclOperation, BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId,
-    ResourceType,
-};
+use krabka_metadata::{BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -22,7 +19,12 @@ use krabka_protocol::{
 use krabka_raft::RaftError;
 use krabka_security::ListenerProtocol;
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{RequestContext, forward_to_controller::is_active_controller},
+};
 
 pub(crate) async fn handle(
     broker: &Broker,
@@ -34,21 +36,14 @@ pub(crate) async fn handle(
     let mut cur = req_bytes;
     let req = ControllerRegistrationRequest::decode(&mut cur, version)?;
     let image = broker.controller.current_image();
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        AclOperation::ClusterAction,
-    ) {
+    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return response(
             version,
             codes::CLUSTER_AUTHORIZATION_FAILED,
             Some("cluster action denied".into()),
         );
     }
-    if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
+    if !is_active_controller(broker) {
         return response(version, codes::NOT_CONTROLLER, None);
     }
     // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the

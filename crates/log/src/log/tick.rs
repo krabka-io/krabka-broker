@@ -194,7 +194,7 @@ mod tests {
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{rolled_log, sample_batch},
+        log::test_support::{rolled_log, sample_batch, test_log},
     };
 
     /// Retention may take the whole log, but it never leaves the log without a
@@ -336,8 +336,7 @@ mod tests {
 
     #[test]
     fn tick_with_no_retention_is_noop() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         let mut b1 = sample_batch(2);
         let mut b2 = sample_batch(3);
         log.append(&mut b1).unwrap();

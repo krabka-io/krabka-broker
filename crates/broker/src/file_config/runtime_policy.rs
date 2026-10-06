@@ -60,7 +60,7 @@ impl RuntimeFileConfig {
         if let Some(value) = runtime.controlled_shutdown_drain_timeout {
             positive_time("controlled_shutdown_drain_timeout", value)?;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             metadata_max_bytes_between_snapshots,
             cfg.metadata_max_bytes_between_snapshots,
@@ -81,7 +81,7 @@ impl RuntimeFileConfig {
             metadata_snapshot_interval_records,
             cfg.metadata_snapshot_interval_records
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             metadata_snapshot_fetch_max,
             cfg.metadata_snapshot_fetch_max,
@@ -109,7 +109,7 @@ impl RuntimeFileConfig {
                 disableable_millis_i32_time("txn_id_expiration_cleanup_interval", value)?;
             cfg.static_config_origins.txn_id_expiration_cleanup_interval = true;
         }
-        set_runtime_time_secs!(
+        set_runtime_time_millis!(
             runtime,
             leader_imbalance_check_interval,
             cfg.leader_imbalance_check_interval
@@ -169,7 +169,7 @@ impl RuntimeFileConfig {
         metadata_log: &mut krabka_raft::MetadataLogConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             metadata_log_segment_bytes,
             metadata_log.segment_size,

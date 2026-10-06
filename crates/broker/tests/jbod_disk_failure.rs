@@ -13,10 +13,12 @@
 //!   2. A Produce to a partition that lives on the still-online `primary` dir
 //!      returns error code 0.
 
+mod kafka_wire;
+
 use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
@@ -37,45 +39,21 @@ use krabka_protocol::{
     records::{Record, RecordBatch},
 };
 use tempfile::TempDir;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
 const CLIENT_ID: &str = "krabka-jbod-disk-failure-test";
 const PRODUCE_VERSION: i16 = 9; // flexible, acks=1
 
-/// Raw wire round trip. It sends a framed request, reads the response, strips
-/// the correlation-id and tagged-fields header prefix, and returns the body.
+/// One length-prefixed request/response exchange on correlation id 1, with
+/// flexible headers because every API this suite sends is flexible; see
+/// [`kafka_wire::round_trip`].
 async fn round_trip(
     stream: &mut TcpStream,
     api_key: i16,
     api_version: i16,
     body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(1); // correlation id
-    frame.put_i16(i16::try_from(CLIENT_ID.len()).unwrap());
-    frame.put_slice(CLIENT_ID.as_bytes());
-    frame.put_u8(0); // header tagged-fields (flexible APIs)
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    let _tagged = cur.get_u8(); // v1 response header tagged-fields
-    Ok(cur.to_vec())
+) -> io::Result<Vec<u8>> {
+    kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
 }
 
 fn start_two_dir_broker()

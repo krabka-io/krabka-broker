@@ -22,7 +22,7 @@ use tokio::sync::oneshot;
 use crate::{
     broker::Broker,
     codes,
-    coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
+    coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
     handlers::authorized_operations::authorized_operations_bits,
 };
@@ -70,14 +70,7 @@ pub(crate) async fn handle(
     let mut invalid: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for gid in &req.group_ids {
-        if crate::handlers::acl_denied(
-            authorizer,
-            &image,
-            ctx,
-            ResourceType::Group,
-            gid,
-            AclOperation::Describe,
-        ) {
+        if crate::handlers::group_describe_denied(authorizer, &image, ctx, gid) {
             groups.push(error_row(gid, codes::GROUP_AUTHORIZATION_FAILED, None));
             continue;
         }
@@ -100,7 +93,10 @@ pub(crate) async fn handle(
             described.push(error_row(
                 gid,
                 codes::GROUP_ID_NOT_FOUND,
-                Some(not_found_message(coordinator, gid)),
+                Some(crate::handlers::share_group_not_found_message(
+                    coordinator,
+                    gid,
+                )),
             ));
             continue;
         };
@@ -185,21 +181,6 @@ fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> 
         error_code,
         error_message,
         ..Default::default()
-    }
-}
-
-/// The `GROUP_ID_NOT_FOUND` message of Kafka's `GroupMetadataManager.shareGroup`
-/// lookup: a group of another type is not a share group, and anything else is
-/// not found. A classic or consumer group lives in the `groups` registry and a
-/// streams group keeps its offset home there too.
-fn not_found_message(coordinator: &GroupCoordinator, group_id: &str) -> String {
-    let other_type = coordinator.group_type(group_id).is_some()
-        || coordinator.find(group_id).is_some()
-        || coordinator.find_streams(group_id).is_some();
-    if other_type {
-        format!("Group {group_id} is not a share group.")
-    } else {
-        format!("Group {group_id} not found.")
     }
 }
 

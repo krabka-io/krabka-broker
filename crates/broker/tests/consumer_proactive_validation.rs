@@ -69,6 +69,8 @@
 //! This test is Windows-gated like the other broker integration tests, because
 //! openraft's `debug_assert!` races on the hosted Windows scheduler.
 
+mod support;
+
 use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
@@ -80,30 +82,12 @@ use krabka_metadata::{MetadataRecord, PartitionRecord};
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     records::{Record, RecordBatch},
 };
+use support::topic_id_for;
 use tempfile::TempDir;
-
-async fn topic_id_for(client: &Client, name: &str) -> krabka_protocol::primitives::uuid::Uuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
 
 /// Produces each value as its OWN single-record batch, one batch per offset,
 /// and retries the `UNKNOWN_TOPIC_OR_PARTITION` (3) metadata-apply race.

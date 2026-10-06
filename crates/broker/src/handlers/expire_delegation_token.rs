@@ -29,17 +29,12 @@ use krabka_protocol::owned::{
 };
 use krabka_raft::DelegationTokenMutation;
 use krabka_security::SecretBytes;
-use krabka_verified::{
-    TokenExpireDecision,
-    delegation_token::{TokenApi, TokenApiAdmission},
-    expire_token_deadline,
+use krabka_verified::{TokenExpireDecision, delegation_token::TokenApi, expire_token_deadline};
+
+use crate::{
+    handlers::renew_delegation_token::admit_token_request, network::auth::ConnectionAuth,
+    time_util::now_ms,
 };
-
-use crate::{network::auth::ConnectionAuth, time_util::now_ms};
-
-/// Kafka's `DelegationTokenManager.ERROR_TIMESTAMP`, the expiry the broker
-/// answers with when it refuses the request before forwarding it.
-const ERROR_TIMESTAMP: i64 = -1;
 
 #[tracing::instrument(
     name = "handle_expire_delegation_token",
@@ -53,40 +48,22 @@ pub(crate) async fn handle(
     secret_key: Option<&SecretBytes>,
     controller: &dyn crate::metadata_source::MetadataSource,
 ) -> ExpireDelegationTokenResponse {
-    if auth.token_api_admission(TokenApi::Expire) == TokenApiAdmission::Reject {
-        return ExpireDelegationTokenResponse {
-            expiry_timestamp_ms: ERROR_TIMESTAMP,
-            ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
-        };
-    }
-    let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return ExpireDelegationTokenResponse {
-            expiry_timestamp_ms: ERROR_TIMESTAMP,
-            ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
-        };
-    };
-    let Some(secret_key) = secret_key else {
-        return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+    let (principal, token) = match admit_token_request(
+        TokenApi::Expire,
+        auth,
+        secret_key,
+        req.hmac.as_ref(),
+        controller,
+    ) {
+        Ok(admitted) => admitted,
+        Err((error_code, expiry_timestamp_ms)) => {
+            return ExpireDelegationTokenResponse {
+                expiry_timestamp_ms,
+                ..err_response(error_code)
+            };
+        }
     };
     let caller = principal.to_kafka();
-
-    let image = controller.current_image();
-    // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
-    if crate::features::require_feature(
-        &image,
-        crate::features::METADATA_VERSION,
-        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
-    )
-    .is_err()
-    {
-        return err_response(crate::codes::UNSUPPORTED_VERSION);
-    }
-    let Some(token) = image
-        .delegation_token_by_hmac(secret_key.as_bytes(), req.hmac.as_ref())
-        .cloned()
-    else {
-        return err_response(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
-    };
 
     if token.owner != caller && !token.renewers.contains(&caller) {
         return err_response(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);

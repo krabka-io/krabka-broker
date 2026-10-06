@@ -50,6 +50,7 @@ mod admin_api;
 mod cluster;
 #[path = "client_quotas/data_plane.rs"]
 mod data_plane;
+mod kafka_wire;
 #[path = "client_quotas/quota_admin.rs"]
 mod quota_admin;
 #[path = "client_quotas/throttling.rs"]

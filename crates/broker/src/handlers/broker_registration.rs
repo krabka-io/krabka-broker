@@ -3,9 +3,7 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use krabka_metadata::{
-    AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, ResourceType,
-};
+use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -16,7 +14,12 @@ use krabka_protocol::{
 use krabka_raft::RaftError;
 use krabka_security::ListenerProtocol;
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{RequestContext, forward_to_controller::is_active_controller},
+};
 
 pub(crate) async fn handle(
     broker: &Broker,
@@ -31,17 +34,10 @@ pub(crate) async fn handle(
 
     // Every listener runs the `ClusterAction` gate, the controller listener
     // included, as Kafka's `ControllerApis.handleBrokerRegistration` does.
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        AclOperation::ClusterAction,
-    ) {
+    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return response(version, codes::CLUSTER_AUTHORIZATION_FAILED, -1);
     }
-    if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
+    if !is_active_controller(broker) {
         return response(version, codes::NOT_CONTROLLER, -1);
     }
     // Kafka's controller decides one registration at a time on its event
@@ -710,7 +706,7 @@ mod wire_tests {
             start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
+        while !is_active_controller(&broker) {
             assert!(
                 std::time::Instant::now() <= deadline,
                 "broker did not become controller leader"

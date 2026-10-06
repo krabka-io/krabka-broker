@@ -4,9 +4,10 @@
 //! value that the test sent.
 
 use assert2::assert;
+mod kafka_wire;
 mod support;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use krabka_ids::Offset;
 use krabka_protocol::{
     Decode, Encode,
@@ -20,15 +21,12 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
     },
     records::RecordsPayload,
 };
 use krabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use support::topic_id_for;
+use tokio::net::TcpStream;
 
 // ── Raw TCP wire helpers ──────────────────────────────────────────────────────
 
@@ -51,13 +49,9 @@ fn build_v0_messageset(pairs: &[(&str, &str)]) -> Bytes {
     buf.freeze()
 }
 
-/// Send a single length-prefixed request frame and return the response body
-/// bytes. The `correlation_id` and any response-header bytes are already
-/// stripped.
-///
-/// For Produce v0 the request is non-flexible. The request header has no
-/// trailing tagged-fields byte, and the response header is v0, with a 4-byte
-/// `correlation_id` only and no tagged-fields byte.
+/// One length-prefixed request/response exchange with non-flexible v1 request
+/// and v0 response headers; see [`kafka_wire::round_trip`]. Panics on an I/O
+/// error.
 async fn round_trip_v0(
     stream: &mut TcpStream,
     api_key: i16,
@@ -65,58 +59,20 @@ async fn round_trip_v0(
     corr_id: i32,
     body: &[u8],
 ) -> Vec<u8> {
-    let client_id = "legacy-produce-test";
-    let mut frame = BytesMut::with_capacity(12 + client_id.len() + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    frame.put_i16(i16::try_from(client_id.len()).expect("fits in i16"));
-    frame.put_slice(client_id.as_bytes());
-    // v0: non-flexible, so NO trailing tagged-fields byte in request header
-    frame.put_slice(body);
-
-    // Length-prefix framing (4-byte big-endian).
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await
-        .expect("write frame length");
-    stream.write_all(&frame).await.expect("write frame body");
-    stream.flush().await.expect("flush");
-
-    let resp_len = stream.read_u32().await.expect("read resp length");
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await.expect("read resp body");
-
-    let mut cur: &[u8] = &resp;
-    let _corr = cur.get_i32(); // strip `correlation_id`
-    // v0 response header: no tagged-fields byte — nothing more to strip
-    cur.to_vec()
+    kafka_wire::round_trip(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        "legacy-produce-test",
+        false,
+        body,
+    )
+    .await
+    .expect("non-flexible round trip")
 }
 
 // ── Topic helpers ─────────────────────────────────────────────────────────────
-
-/// Send a Metadata request to learn the topic's UUID. Fetch needs it at the
-/// high versions that use `topic_id`.
-async fn topic_id_for(
-    client: &krabka_client_core::Client,
-    name: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
 
 // ── Test ──────────────────────────────────────────────────────────────────────
 

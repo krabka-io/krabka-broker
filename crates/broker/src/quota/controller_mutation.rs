@@ -75,24 +75,14 @@ impl ControllerMutationQuota {
             let window_secs = request.window.secs_f64();
             let usable =
                 rate.is_finite() && rate > 0.0 && window_secs.is_finite() && window_secs > 0.0;
-            usable.then(|| {
-                let field = |name: &str| {
-                    entity_key
-                        .iter()
-                        .find(|(key, _)| key == name)
-                        .and_then(|(_, value)| value.clone())
-                };
-                Limit {
-                    bucket: request.buckets.controller_mutation_bucket(
-                        &entity_key,
-                        rate,
-                        window_secs,
-                    ),
-                    rate,
-                    window_secs,
-                    user: field("user"),
-                    client_id: field("client-id"),
-                }
+            usable.then(|| Limit {
+                bucket: request
+                    .buckets
+                    .controller_mutation_bucket(&entity_key, rate, window_secs),
+                rate,
+                window_secs,
+                user: super::entity_field(&entity_key, "user"),
+                client_id: super::entity_field(&entity_key, "client-id"),
             })
         });
         Self {

@@ -36,72 +36,70 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
-    {
-        let mut cur: &[u8] = req_bytes;
-        let req: SyncGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
+    let mut cur: &[u8] = req_bytes;
+    let req: SyncGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
-        // Kafka's `KafkaApis.handleSyncGroupRequest` answers a v5+ request
-        // without a protocol type or name before the ACL check
-        // (`SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`).
-        if !mandatory_protocol_type_and_name_present(&req, version) {
-            return encode_err(version, codes::INCONSISTENT_GROUP_PROTOCOL);
-        }
-
-        // ── ACL preamble ────────────────────────────────────────────
-        // `Read` on `Group(group_id)`. On Deny → whole-response
-        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-        {
-            let image = broker.controller.current_image();
-            if group_read_denied(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx,
-                &req.group_id,
-            ) {
-                return encode_err(version, codes::GROUP_AUTHORIZATION_FAILED);
-            }
-        }
-
-        // Kafka's `GroupCoordinatorService.syncGroup` answers an empty group
-        // id before any group lookup.
-        let invalid_group = req.group_id.is_empty().then_some(codes::INVALID_GROUP_ID);
-        if let Some(error_code) = invalid_group
-            .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
-        {
-            return encode_err(version, error_code);
-        }
-
-        let Some(handle) = coordinator.find(&req.group_id) else {
-            return encode_err(version, codes::UNKNOWN_MEMBER_ID);
-        };
-
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(GroupActorMessage::ClassicSync { req, reply: tx })
-            .await
-            .is_err()
-        {
-            return encode_err(version, codes::REBALANCE_IN_PROGRESS);
-        }
-        // The leader and the already-Stable follower reply immediately; a
-        // not-yet-synced follower is parked and resolved when the leader's
-        // SyncGroup installs assignments, bounded by the configured follower wait.
-        let Ok(Ok(result)) =
-            tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), rx).await
-        else {
-            return encode_err(version, codes::REBALANCE_IN_PROGRESS);
-        };
-
-        let resp = SyncGroupResponse {
-            error_code: result.error_code,
-            assignment: result.assignment,
-            protocol_type: result.protocol_type,
-            protocol_name: result.protocol_name,
-            ..Default::default()
-        };
-        crate::handlers::encode_response(&resp, version)
+    // Kafka's `KafkaApis.handleSyncGroupRequest` answers a v5+ request
+    // without a protocol type or name before the ACL check
+    // (`SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`).
+    if !mandatory_protocol_type_and_name_present(&req, version) {
+        return encode_err(version, codes::INCONSISTENT_GROUP_PROTOCOL);
     }
+
+    // ── ACL preamble ────────────────────────────────────────────
+    // `Read` on `Group(group_id)`. On Deny → whole-response
+    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+    {
+        let image = broker.controller.current_image();
+        if group_read_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            &req.group_id,
+        ) {
+            return encode_err(version, codes::GROUP_AUTHORIZATION_FAILED);
+        }
+    }
+
+    // Kafka's `GroupCoordinatorService.syncGroup` answers an empty group
+    // id before any group lookup.
+    let invalid_group = req.group_id.is_empty().then_some(codes::INVALID_GROUP_ID);
+    if let Some(error_code) =
+        invalid_group.or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
+    {
+        return encode_err(version, error_code);
+    }
+
+    let Some(handle) = coordinator.find(&req.group_id) else {
+        return encode_err(version, codes::UNKNOWN_MEMBER_ID);
+    };
+
+    let (tx, rx) = oneshot::channel();
+    if handle
+        .tx
+        .send(GroupActorMessage::ClassicSync { req, reply: tx })
+        .await
+        .is_err()
+    {
+        return encode_err(version, codes::REBALANCE_IN_PROGRESS);
+    }
+    // The leader and the already-Stable follower reply immediately; a
+    // not-yet-synced follower is parked and resolved when the leader's
+    // SyncGroup installs assignments, bounded by the configured follower wait.
+    let Ok(Ok(result)) =
+        tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), rx).await
+    else {
+        return encode_err(version, codes::REBALANCE_IN_PROGRESS);
+    };
+
+    let resp = SyncGroupResponse {
+        error_code: result.error_code,
+        assignment: result.assignment,
+        protocol_type: result.protocol_type,
+        protocol_name: result.protocol_name,
+        ..Default::default()
+    };
+    crate::handlers::encode_response(&resp, version)
 }
 
 /// Kafka's `SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`: from v5

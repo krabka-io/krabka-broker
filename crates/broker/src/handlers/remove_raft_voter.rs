@@ -47,13 +47,10 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return crate::handlers::encode_response(
-            &RemoveRaftVoterResponse {
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("remove-raft-voter denied".into()),
-                ..Default::default()
-            },
+        return respond(
             version,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            Some("remove-raft-voter denied".into()),
         );
     }
 
@@ -73,26 +70,16 @@ pub(crate) async fn handle(
         // `validateLeaderOnlyRequest` with only the error code set, so the
         // nullable message stays at the generated empty-string default, not
         // null and not `Errors.message()`.
-        return crate::handlers::encode_response(
-            &RemoveRaftVoterResponse {
-                error_code: voter_requests::NOT_LEADER_OR_FOLLOWER,
-                error_message: Some(String::new()),
-                ..Default::default()
-            },
+        return respond(
             version,
+            voter_requests::NOT_LEADER_OR_FOLLOWER,
+            Some(String::new()),
         );
     };
     if let Some((error_code, error_message)) =
         voter_requests::remove_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
     {
-        return crate::handlers::encode_response(
-            &RemoveRaftVoterResponse {
-                error_code,
-                error_message,
-                ..Default::default()
-            },
-            version,
-        );
+        return respond(version, error_code, error_message);
     }
 
     let id = u64::try_from(req.voter_id).unwrap_or_default();
@@ -118,6 +105,15 @@ pub(crate) async fn handle(
         );
     }
 
+    respond(version, error_code, error_message)
+}
+
+/// Encodes a response that carries only `error_code` and `error_message`.
+fn respond(
+    version: i16,
+    error_code: i16,
+    error_message: Option<String>,
+) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(
         &RemoveRaftVoterResponse {
             error_code,

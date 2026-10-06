@@ -11,7 +11,7 @@
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -21,19 +21,17 @@ use krabka_protocol::{
         elect_leaders_response::ElectLeadersResponse,
     },
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
+
+use crate::kafka_wire;
 
 pub const ELECT_LEADERS_VERSION: i16 = 2;
 
-/// Runs one length-prefixed request and response exchange.
-///
-/// The exchange uses a **PLAINTEXT** connection. This function encodes a Kafka
-/// request header v1, which is non-flexible, or v2, which is flexible. It then
-/// writes the frame, reads one response frame, strips the response header, and
-/// returns the body bytes.
+/// The client id every request header in this suite carries.
+pub const CLIENT_ID: &str = "krabka-elect-test";
+
+/// Runs one length-prefixed request and response exchange on a **PLAINTEXT**
+/// connection; see [`kafka_wire::round_trip`].
 pub async fn round_trip(
     stream: &mut TcpStream,
     api_key: i16,
@@ -41,41 +39,17 @@ pub async fn round_trip(
     corr_id: i32,
     flexible: bool,
     body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-elect-test";
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0); // empty header tagged-fields byte
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _resp_corr_id = cur.get_i32();
-    let uses_v1_header = flexible && api_key != 18;
-    if uses_v1_header {
-        if cur.is_empty() {
-            return Err(io::Error::other(
-                "flexible response missing tagged-fields byte",
-            ));
-        }
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
+) -> io::Result<Vec<u8>> {
+    kafka_wire::round_trip(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        CLIENT_ID,
+        flexible,
+        body,
+    )
+    .await
 }
 
 /// Drives `ElectLeaders` over a fresh PLAINTEXT connection.

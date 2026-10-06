@@ -12,32 +12,11 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-    },
+    owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     primitives::uuid::Uuid as WireUuid,
 };
 
-/// Fetches the topic-id for `name` from the given client with a Metadata
-/// request.
-pub(crate) async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
+pub(crate) use crate::support::topic_id_for;
 
 /// Fetches all records from `(topic, partition)`, starting at `start_offset`,
 /// from the broker at `bootstrap`. It retries until `expected_count` records

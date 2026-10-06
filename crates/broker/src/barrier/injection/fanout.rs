@@ -17,7 +17,7 @@ use tracing::warn;
 use super::{RemoteMarkerWriter, append_marker, backoff_for, group_by_leader};
 use crate::{
     barrier::{
-        config::BarrierConfig, marker::BarrierMarker, metrics::BarrierMetrics,
+        config::BarrierConfig, marker::BarrierMarker, metrics::BrokerBarrierMetrics,
         state::TargetPartition,
     },
     metadata_source::MetadataSource,
@@ -37,7 +37,7 @@ pub(crate) struct MarkerFanout<'a> {
     pub(crate) partitions: &'a PartitionRegistry,
     pub(crate) controller: &'a Arc<dyn MetadataSource>,
     pub(crate) remote: Option<&'a Arc<dyn RemoteMarkerWriter>>,
-    pub(crate) metrics: &'a dyn BarrierMetrics,
+    pub(crate) metrics: &'a BrokerBarrierMetrics,
     pub(crate) config: &'a BarrierConfig,
 }
 
@@ -120,8 +120,6 @@ impl MarkerFanout<'_> {
                     partition = target.partition.get(),
                     "barrier target is led locally but is not open here"
                 );
-                self.metrics
-                    .marker_append_failed(&target.topic, target.partition);
                 continue;
             };
             match append_marker(
@@ -143,8 +141,6 @@ impl MarkerFanout<'_> {
                         %error,
                         "barrier marker append failed"
                     );
-                    self.metrics
-                        .marker_append_failed(&target.topic, target.partition);
                 }
             }
         }
@@ -164,10 +160,6 @@ impl MarkerFanout<'_> {
                 count = targets.len(),
                 "no barrier marker transport; the remote partitions stay unmarked"
             );
-            for target in targets {
-                self.metrics
-                    .marker_append_failed(&target.topic, target.partition);
-            }
             return;
         };
         match remote.write_markers(leader, marker, targets).await {
@@ -192,10 +184,6 @@ impl MarkerFanout<'_> {
             }
             Err(error) => {
                 warn!(%leader, %error, "barrier marker request to the leader failed");
-                for target in targets {
-                    self.metrics
-                        .marker_append_failed(&target.topic, target.partition);
-                }
             }
         }
     }
@@ -221,10 +209,11 @@ mod tests {
                 test_support::{at, fast_config, marker, source},
             },
             marker::parse_barrier_marker,
-            metrics::NoBarrierMetrics,
+            metrics::BrokerBarrierMetrics,
             test_support::{open_partition, topic_records},
         },
         error::BrokerError,
+        metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
     };
 
@@ -241,7 +230,7 @@ mod tests {
                 .await;
         }
         let controller = source(&topic_records("orders", 2, NodeId(1)));
-        let metrics = NoBarrierMetrics;
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
         let fanout = MarkerFanout {
             node_id: NodeId(1),
@@ -289,7 +278,7 @@ mod tests {
             .install_leader_change(NodeId(1).get(), 3)
             .await;
         let controller = source(&topic_records("orders", 2, NodeId(1)));
-        let metrics = NoBarrierMetrics;
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
         let fanout = MarkerFanout {
             node_id: NodeId(1),
@@ -314,7 +303,7 @@ mod tests {
     async fn a_remote_partition_goes_through_the_transport_seam() {
         let registry = PartitionRegistry::new();
         let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = NoBarrierMetrics;
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
 
         let mut remote = MockRemoteMarkerWriter::new();
@@ -351,7 +340,7 @@ mod tests {
     async fn invalid_remote_placements_do_not_enter_the_cut() {
         let registry = PartitionRegistry::new();
         let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = NoBarrierMetrics;
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
 
         let mut remote = MockRemoteMarkerWriter::new();
@@ -392,7 +381,7 @@ mod tests {
     async fn the_fan_out_retries_a_leader_that_failed_once() {
         let registry = PartitionRegistry::new();
         let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = NoBarrierMetrics;
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = BarrierConfig {
             injection_timeout: secs(30),
             retry_backoff: millis(1),
@@ -438,7 +427,7 @@ mod tests {
     async fn a_deadline_that_runs_out_returns_what_it_placed() {
         let registry = PartitionRegistry::new();
         let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = NoBarrierMetrics;
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
 
         let mut remote = MockRemoteMarkerWriter::new();

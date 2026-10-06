@@ -144,7 +144,7 @@ mod tests {
     use super::*;
     use crate::server::{
         api_versions::table::CONTROLLER_LISTENER_APIS,
-        test_support::{single_voter_engine, wait_for_leader},
+        test_support::{encoded, single_voter_engine, wait_for_leader},
     };
 
     #[test]
@@ -281,13 +281,6 @@ mod tests {
         .await
         .expect("end dispatch");
         assert2::assert!(!end_resp.is_empty());
-    }
-
-    /// Encodes `message` at `version`.
-    fn encoded(message: &impl krabka_protocol::Encode, version: i16) -> Bytes {
-        let mut body = bytes::BytesMut::new();
-        message.encode(&mut body, version).expect("encode request");
-        body.freeze()
     }
 
     /// Whether `body` decodes whole as a `T` at `version`.

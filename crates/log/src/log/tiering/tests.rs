@@ -9,7 +9,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{rolled_log, sample_batch, sample_batch_with_epoch},
+    log::test_support::{rolled_log, sample_batch, sample_batch_with_epoch, test_log},
 };
 
 /// An epoch covers `[start_offset, next.start_offset)`, so one ending
@@ -120,8 +120,7 @@ fn tierable_segments_excludes_active_and_reports_paths() {
 
 #[test]
 fn tierable_segments_empty_for_single_active_segment() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b = sample_batch(3);
     log.append(&mut b).unwrap();
     // No roll happened: the only segment is active and never tierable.
@@ -238,8 +237,7 @@ fn epochs_for_range_clamps_and_filters() {
 
 #[test]
 fn local_log_start_offset_matches_log_start_offset() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     for _ in 0..3 {
         let mut b = sample_batch(2);
         log.append(&mut b).unwrap();
@@ -430,8 +428,7 @@ fn delete_local_segments_through_is_noop_at_or_below_current_start() {
 
 #[test]
 fn delete_local_segments_through_rejects_negative_target() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let err = log.delete_local_segments_through(Offset(-1)).unwrap_err();
     assert2::assert!(matches!(err, LogError::InvalidArgument(_)));
 }
@@ -543,8 +540,7 @@ fn roll_and_describe(log: &mut Log) -> AfterRoll {
 // is nothing in it to copy and the new segment would open at the same base.
 #[test]
 fn roll_seals_the_active_records_and_never_rolls_an_empty_segment() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
 
     check!(
         roll_and_describe(&mut log)
@@ -590,8 +586,7 @@ fn active_segment_export_ages_the_segment_the_way_retention_does() {
         ("a stamped record", 5_000, false),
         ("no record timestamp", -1, true),
     ] {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
         let mut batch = sample_batch(2);
         batch.max_timestamp = max_timestamp;
         log.append(&mut batch).unwrap();

@@ -70,9 +70,9 @@
 //! Every wait is bounded with `tokio::time::timeout`. CI kills a test at 600s
 //! and reports TIMEOUT with no cause; a bounded wait names the step that hung.
 
-use std::{future::Future, sync::OnceLock, time::Duration};
+use std::{future::Future, time::Duration};
 
-use tokio::sync::Mutex;
+use support::cluster_lock;
 
 mod support;
 
@@ -119,14 +119,6 @@ const N_RECORDS: i32 = 4;
 /// Generous enough that a loaded runner does not fail a healthy cluster, short
 /// enough that a broken one reports in seconds rather than at CI's kill.
 const STEP_TIMEOUT: Duration = Duration::from_secs(45);
-
-/// Serialize the whole binary: each test boots a three-node loopback cluster
-/// with short raft timings, and two at once starve the election. Same rationale
-/// as `replication.rs::cluster_lock`.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 async fn within<F: Future>(what: &str, future: F) -> F::Output {
     tokio::time::timeout(STEP_TIMEOUT, future)

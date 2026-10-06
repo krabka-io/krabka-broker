@@ -20,7 +20,6 @@
 
 use std::{
     collections::BTreeSet,
-    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -36,19 +35,10 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
+use support::cluster_lock;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
 
 mod support;
-
-/// Serialize the whole test binary. A 2-broker loopback cluster plus short
-/// raft timings starves the openraft election when it runs at the same time
-/// as anything else in the same binary. The rationale is the same as
-/// `replication.rs::cluster_lock`.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 const N_RECORDS: i32 = 5;
 const RACK_A: &str = "rack-a"; // broker 1 (leader)

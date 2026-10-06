@@ -26,9 +26,9 @@
 //! [`cluster`] and [`cluster_boot`] boot it, [`containers`] addresses the JVM
 //! container suites, [`coordinator`] makes a client's coordinator lookup, [`audit`] reads the audit topic back, and [`relay`] cuts
 //! links. Every helper is re-exported here, so a suite reaches all of them as
-//! `support::<name>`. What stays in this file is the tracing setup, the
-//! metadata round-trip that resolves a topic id, and the two pollers that wait
-//! on the audit topic.
+//! `support::<name>`. What stays in this file is the tracing setup, the lock
+//! that serializes a binary's cluster tests, the metadata round-trip that
+//! resolves a topic id, and the two pollers that wait on the audit topic.
 //!
 //! Cargo treats `tests/support/mod.rs` (rather than `tests/support.rs`) as
 //! a non-binary submodule, so it does not compile the file as its own test
@@ -88,6 +88,22 @@ pub fn init_tracing() {
         )
         .with_test_writer()
         .try_init();
+}
+
+/// Serializes the multi-broker tests of one test binary.
+///
+/// Each such test boots a loopback cluster with short raft timings. Two at
+/// once exhaust the ephemeral ports and starve the openraft election, which
+/// shows as intermittent `FENCED_LEADER_EPOCH` churn, so a test takes this lock
+/// for its whole body. The binary is then effectively single-threaded for
+/// these scenarios, whether or not nextest test groups also serialize it.
+///
+/// This is a `tokio::sync::Mutex` and not a `std::sync::Mutex`, so a test can
+/// hold the lock across the `.await` calls in its body without a report from
+/// clippy's `await_holding_lock`.
+pub fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 /// A `CreateTopics` row that pins partition `p` to the brokers `replicas[p]`,

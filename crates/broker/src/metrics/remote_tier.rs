@@ -46,34 +46,24 @@ impl BrokerMetrics {
     /// so the errors below are a subset of these and the ratio of the two is
     /// the failure rate.
     pub fn record_remote_request(&self, path: RemoteTierPath, topic: &str) {
-        let label = TopicLabel {
-            topic: Arc::from(topic),
-        };
-        match path {
+        let family = match path {
             RemoteTierPath::Copy => &self.remote_copy_requests_total,
             RemoteTierPath::Fetch => &self.remote_fetch_requests_total,
             RemoteTierPath::Delete => &self.remote_delete_requests_total,
-        }
-        .get_or_create(&label)
-        .inc();
-        self.track_topic_series(&label);
+        };
+        self.count_topic(family, Arc::from(topic), 1);
     }
 
     /// Counts one failed attempt on one of the tier's paths.
     ///
     /// Kafka's `Remote{Copy,Fetch,Delete}ErrorsPerSec`.
     pub fn record_remote_error(&self, path: RemoteTierPath, topic: &str) {
-        let label = TopicLabel {
-            topic: Arc::from(topic),
-        };
-        match path {
+        let family = match path {
             RemoteTierPath::Copy => &self.remote_copy_errors_total,
             RemoteTierPath::Fetch => &self.remote_fetch_errors_total,
             RemoteTierPath::Delete => &self.remote_delete_errors_total,
-        }
-        .get_or_create(&label)
-        .inc();
-        self.track_topic_series(&label);
+        };
+        self.count_topic(family, Arc::from(topic), 1);
     }
 
     /// Accounts bytes moved on the copy or fetch path.
@@ -90,11 +80,7 @@ impl BrokerMetrics {
             RemoteTierPath::Fetch => &self.remote_fetch_bytes_total,
             RemoteTierPath::Delete => return,
         };
-        let label = TopicLabel {
-            topic: Arc::from(topic),
-        };
-        family.get_or_create(&label).inc_by(bytes);
-        self.track_topic_series(&label);
+        self.count_topic(family, Arc::from(topic), bytes);
     }
 
     /// Sets what the copy path has left to do for one topic.

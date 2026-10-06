@@ -50,10 +50,6 @@ use crate::{
 const NO_PLUGIN_MESSAGE: &str =
     "The broker has no streams group topology description plugin configured.";
 
-/// Minimum finalized `streams.version` at which the broker serves the
-/// KIP-1071 streams RPCs.
-const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
-
 #[tracing::instrument(
     name = "handle_streams_group_topology_description_update",
     level = "info",
@@ -90,13 +86,7 @@ async fn answer(
     let invalid = |message: &str| (codes::INVALID_REQUEST, Some(message.to_owned()));
     {
         let image = broker.controller.current_image();
-        let streams_enabled = broker.config.streams_group.enable
-            && crate::features::feature_enabled(
-                &image,
-                crate::features::STREAMS_VERSION,
-                STREAMS_VERSION_MIN_LEVEL,
-            );
-        if !streams_enabled {
+        if !crate::handlers::streams_protocol_enabled(broker, &image) {
             return (codes::UNSUPPORTED_VERSION, None);
         }
         if group_read_denied(

@@ -16,7 +16,6 @@ use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
@@ -92,23 +91,7 @@ pub(crate) async fn finalize_streams_version(client: &Client) {
     );
 }
 
-pub(crate) async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
+pub(crate) use crate::support::topic_id_for;
 
 /// Commits an offset as the streams member `member_id` at `member_epoch`, as
 /// a Streams client does. Kafka's `StreamsGroup.validateOffsetCommit` refuses

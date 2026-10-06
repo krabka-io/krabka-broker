@@ -12,14 +12,12 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-    },
-    primitives::uuid::Uuid as WireUuid,
+use krabka_protocol::owned::{
+    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
 };
+
+use crate::support::topic_id_for;
 
 /// Shared copy→metadata→read body: create a tiered topic, wait for the
 /// config to propagate, produce enough to seal segments, wait for the RLM
@@ -185,24 +183,6 @@ pub(crate) async fn copy_then_fetch_round_trip(
         value.as_deref() == Some(b"test-record-0".as_slice()),
         "offset 0 should read back the first produced record"
     );
-}
-
-async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 /// Current `*.log` files and legacy files named `log` under `root`. Each one

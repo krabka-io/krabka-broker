@@ -58,6 +58,7 @@ use std::{
 
 use dashmap::DashSet;
 use krabka_metadata::{MetadataImage, NodeId};
+use prometheus_client::metrics::{counter::Counter, family::Family};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -68,6 +69,19 @@ use crate::schema_validation::RejectReason;
 impl BrokerMetrics {
     pub(crate) fn track_topic_series(&self, label: &TopicLabel) {
         self.metric_series.topics.insert(label.clone());
+    }
+
+    /// Adds `by` to the `topic` series of `family`, and tracks that series
+    /// for release when the topic goes away.
+    pub(crate) fn count_topic(
+        &self,
+        family: &Family<TopicLabel, Counter>,
+        topic: Arc<str>,
+        by: u64,
+    ) {
+        let label = TopicLabel { topic };
+        family.get_or_create(&label).inc_by(by);
+        self.track_topic_series(&label);
     }
 
     pub(crate) fn track_topic_name(&self, topic: &str) {

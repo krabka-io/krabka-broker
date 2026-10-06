@@ -11,15 +11,14 @@ use super::*;
 use crate::{
     io::FileIo,
     log::test_support::{
-        NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, transaction_fields,
-        transactional_batch,
+        NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, test_log,
+        transaction_fields, transactional_batch,
     },
 };
 
 #[test]
 fn open_empty_dir_creates_first_segment() {
-    let dir = tempdir().unwrap();
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, log) = test_log();
     assert2::assert!(log.log_start_offset() == Offset(0));
     assert2::assert!(log.log_end_offset() == Offset(0));
     log.close();
@@ -27,8 +26,7 @@ fn open_empty_dir_creates_first_segment() {
 
 #[test]
 fn open_creates_log_file() {
-    let dir = tempdir().unwrap();
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (dir, log) = test_log();
     drop(log);
     let log_path = dir.path().join("00000000000000000000.log");
     assert2::assert!(log_path.exists());
@@ -696,8 +694,7 @@ fn a_reload_takes_a_snapshot_at_the_log_end() {
         ("a log with records takes one at its end", 3, None, vec![6]),
         ("a log trimmed to its end takes none", 3, Some(6), vec![]),
     ] {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
         for _ in 0..batches {
             log.append(&mut sample_batch(2)).unwrap();
         }
@@ -792,8 +789,7 @@ fn reopen_retains_the_snapshot_batch_and_the_replayed_tail() {
 /// the last one, oldest first, and a new producer epoch clears them.
 #[test]
 fn appends_retain_four_earlier_batches_until_the_epoch_moves() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let append = |log: &mut Log, epoch: i16, sequence: i32| {
         let mut batch = sample_batch(1);
         batch.producer_id = 7;

@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use super::{
     BreakGlassAction, BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
-    TopicLabel,
 };
 
 impl BrokerMetrics {
@@ -18,11 +17,7 @@ impl BrokerMetrics {
     /// `topic` comes from a name that resolved in the metadata image, and the
     /// series count is bounded by the number of topics a freeze covers.
     pub fn record_topic_freeze_rejection(&self, topic: &str) {
-        let lbl = TopicLabel {
-            topic: Arc::from(topic),
-        };
-        self.topic_freeze_rejections.get_or_create(&lbl).inc();
-        self.track_topic_series(&lbl);
+        self.count_topic(&self.topic_freeze_rejections, Arc::from(topic), 1);
     }
 
     /// KFC-9: publish the number of live entries in the freeze registry.
@@ -70,6 +65,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::metrics::TopicLabel;
 
     #[test]
     fn topic_freeze_rejections_accumulate_per_topic() {

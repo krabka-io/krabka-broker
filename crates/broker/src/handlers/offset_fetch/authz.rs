@@ -7,8 +7,6 @@
 //! in one place is what lets the v0 to v7 and v8 and above paths apply it
 //! identically.
 
-use krabka_metadata::{AclOperation, ResourceType};
-
 use crate::broker::Broker;
 
 /// Reports whether the principal may `Describe` the group, the gate that
@@ -20,12 +18,10 @@ pub(super) fn group_authorized(
     context: &crate::handlers::RequestContext<'_>,
     group_id: &str,
 ) -> bool {
-    !crate::handlers::acl_denied(
+    !crate::handlers::group_describe_denied(
         broker.config.authorizer.as_ref(),
         &broker.controller.current_image(),
         context,
-        ResourceType::Group,
         group_id,
-        AclOperation::Describe,
     )
 }

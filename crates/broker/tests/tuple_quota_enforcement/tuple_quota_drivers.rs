@@ -25,7 +25,10 @@ use krabka_protocol::{
     records::{Record, RecordBatch},
 };
 
-use crate::tuple_quota_wire::{round_trip, round_trip_with_client_id, sasl_plain_authenticate};
+use crate::{
+    kafka_wire,
+    tuple_quota_wire::{round_trip, sasl_plain_authenticate},
+};
 
 pub(crate) type QuotaEntity = Vec<(String, Option<String>)>;
 pub(crate) type QuotaOperations = Vec<(String, f64, bool)>;
@@ -167,13 +170,13 @@ async fn drive_produce_sasl_with_client_id(
         .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode Produce");
-    let resp_bytes = round_trip_with_client_id(
+    let resp_bytes = kafka_wire::round_trip(
         &mut stream,
         0, // Produce api_key
         VERSION,
         1,
-        true, // flexible
         wire_client_id,
+        true, // flexible
         &body,
     )
     .await

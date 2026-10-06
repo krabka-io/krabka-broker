@@ -42,6 +42,7 @@ mod config_propagation;
 mod configs;
 #[path = "throttle/fetch_size.rs"]
 mod fetch_size;
+mod kafka_wire;
 #[path = "throttle/records.rs"]
 mod records;
 #[path = "throttle/wire.rs"]

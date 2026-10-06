@@ -13,7 +13,7 @@ use krabka_security::SaslMechanism;
 use krabka_units::Time;
 
 use super::{
-    response::fail_authenticate_with,
+    response::{fail_authenticate_with, sasl_ok},
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 use crate::codes::ILLEGAL_SASL_STATE;
@@ -113,13 +113,7 @@ fn authenticate_plain<S: BuildHasher>(
         // PLAIN never auths via a delegation token.
         authenticated_via_token: false,
     };
-    SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::new(),
-        session_lifetime_ms,
-        ..Default::default()
-    }
+    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
 }
 
 #[cfg(test)]

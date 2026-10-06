@@ -20,6 +20,7 @@ pub use buckets::QuotaBuckets;
 pub use controller_mutation::consume_controller_mutation_quota;
 pub(crate) use controller_mutation::{ControllerMutationQuota, QuotaRequest};
 pub use ip_names::{IpNames, parse_ip_literal};
+pub(crate) use lookup::entity_field;
 pub use lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key};
 pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;
@@ -141,14 +142,8 @@ fn consume_configured_quota(
         return QuotaDelay::zero();
     }
     let token_rate = token_rate(rate);
-    let user = entity_key
-        .iter()
-        .find(|(k, _)| k == "user")
-        .and_then(|(_, v)| v.clone());
-    let client_id = entity_key
-        .iter()
-        .find(|(k, _)| k == "client-id")
-        .and_then(|(_, v)| v.clone());
+    let user = entity_field(&entity_key, "user");
+    let client_id = entity_field(&entity_key, "client-id");
 
     let bucket = request
         .buckets

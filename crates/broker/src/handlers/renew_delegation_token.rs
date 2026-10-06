@@ -23,13 +23,13 @@
 //! earlier. The handler appends a fresh `V1DelegationToken` record with the
 //! same `token_id`; the image semantics are replace.
 
-use krabka_metadata::DelegationTokenRecord;
+use krabka_metadata::{DelegationToken, DelegationTokenRecord};
 use krabka_protocol::owned::{
     renew_delegation_token_request::RenewDelegationTokenRequest,
     renew_delegation_token_response::RenewDelegationTokenResponse,
 };
 use krabka_raft::DelegationTokenMutation;
-use krabka_security::SecretBytes;
+use krabka_security::{Principal, SecretBytes};
 use krabka_verified::{
     TokenRenewDecision,
     delegation_token::{TokenApi, TokenApiAdmission},
@@ -55,40 +55,22 @@ pub(crate) async fn handle(
     default_renew_period_ms: i64,
     controller: &dyn crate::metadata_source::MetadataSource,
 ) -> RenewDelegationTokenResponse {
-    if auth.token_api_admission(TokenApi::Renew) == TokenApiAdmission::Reject {
-        return RenewDelegationTokenResponse {
-            expiry_timestamp_ms: ERROR_TIMESTAMP,
-            ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
-        };
-    }
-    let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return RenewDelegationTokenResponse {
-            expiry_timestamp_ms: ERROR_TIMESTAMP,
-            ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
-        };
-    };
-    let Some(secret_key) = secret_key else {
-        return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+    let (principal, token) = match admit_token_request(
+        TokenApi::Renew,
+        auth,
+        secret_key,
+        req.hmac.as_ref(),
+        controller,
+    ) {
+        Ok(admitted) => admitted,
+        Err((error_code, expiry_timestamp_ms)) => {
+            return RenewDelegationTokenResponse {
+                expiry_timestamp_ms,
+                ..err_response(error_code)
+            };
+        }
     };
     let caller = principal.to_kafka();
-
-    let image = controller.current_image();
-    // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
-    if crate::features::require_feature(
-        &image,
-        crate::features::METADATA_VERSION,
-        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
-    )
-    .is_err()
-    {
-        return err_response(crate::codes::UNSUPPORTED_VERSION);
-    }
-    let Some(token) = image
-        .delegation_token_by_hmac(secret_key.as_bytes(), req.hmac.as_ref())
-        .cloned()
-    else {
-        return err_response(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
-    };
 
     let decision = renew_token_expiry(
         now_ms(),
@@ -128,6 +110,57 @@ pub(crate) async fn handle(
         expiry_timestamp_ms: new_expiry,
         ..Default::default()
     }
+}
+
+/// The checks `RenewDelegationToken` and `ExpireDelegationToken` share,
+/// steps 1 and 2 of Kafka's order up to the `hmac` lookup.
+///
+/// Returns the authenticated principal and the token the `hmac` names, or the
+/// refusal's error code and the expiry its response carries:
+/// `ERROR_TIMESTAMP` for a broker-side refusal, the schema default of 0 for a
+/// controller-side one.
+pub(crate) fn admit_token_request<'a>(
+    api: TokenApi,
+    auth: &'a ConnectionAuth,
+    secret_key: Option<&SecretBytes>,
+    hmac: &[u8],
+    controller: &dyn crate::metadata_source::MetadataSource,
+) -> Result<(&'a Principal, DelegationToken), (i16, i64)> {
+    let refuse = |code| Err((code, 0));
+    if auth.token_api_admission(api) == TokenApiAdmission::Reject {
+        return Err((
+            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+            ERROR_TIMESTAMP,
+        ));
+    }
+    let ConnectionAuth::Authenticated { principal, .. } = auth else {
+        return Err((
+            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+            ERROR_TIMESTAMP,
+        ));
+    };
+    let Some(secret_key) = secret_key else {
+        return refuse(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+    };
+
+    let image = controller.current_image();
+    // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
+    if crate::features::require_feature(
+        &image,
+        crate::features::METADATA_VERSION,
+        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
+    )
+    .is_err()
+    {
+        return refuse(crate::codes::UNSUPPORTED_VERSION);
+    }
+    let Some(token) = image
+        .delegation_token_by_hmac(secret_key.as_bytes(), hmac)
+        .cloned()
+    else {
+        return refuse(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
+    };
+    Ok((principal, token))
 }
 
 /// A controller-side refusal: `code`, and the schema-default expiry of 0.

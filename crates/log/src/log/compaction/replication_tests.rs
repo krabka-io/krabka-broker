@@ -12,7 +12,7 @@ use super::*;
 use crate::{
     CleanupPolicy,
     config::LogConfig,
-    log::test_support::{compaction_ctx, keyed_batch, verbatim_from},
+    log::test_support::{compaction_ctx, keyed_batch, test_log, verbatim_from},
 };
 
 /// A leader that one compaction pass has cut holes into. Each batch sits in a
@@ -113,8 +113,7 @@ fn a_follower_catches_up_from_a_compacted_leader() {
     );
 
     for (label, verbatim) in [("verbatim", true), ("owned", false)] {
-        let follower_dir = tempdir().unwrap();
-        let mut follower = Log::open(follower_dir.path(), LogConfig::default()).unwrap();
+        let (_follower_dir, mut follower) = test_log();
 
         catch_up(&leader, &mut follower, verbatim);
 
@@ -136,8 +135,7 @@ fn a_follower_catches_up_from_a_compacted_leader() {
 fn a_follower_still_refuses_a_batch_below_its_log_end_offset() {
     let leader_dir = tempdir().unwrap();
     let leader = compacted_leader(leader_dir.path());
-    let follower_dir = tempdir().unwrap();
-    let mut follower = Log::open(follower_dir.path(), LogConfig::default()).unwrap();
+    let (_follower_dir, mut follower) = test_log();
     catch_up(&leader, &mut follower, true);
     let leo = follower.log_end_offset();
 

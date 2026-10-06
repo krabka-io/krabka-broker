@@ -16,6 +16,7 @@
 // where every `.rs` file would become another test binary.
 #[path = "controller_mutation_quota/cluster.rs"]
 mod cluster;
+mod kafka_wire;
 #[path = "controller_mutation_quota/quota_admin.rs"]
 mod quota_admin;
 #[path = "controller_mutation_quota/topic_admin.rs"]

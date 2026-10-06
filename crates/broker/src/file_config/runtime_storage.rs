@@ -48,7 +48,7 @@ impl RuntimeFileConfig {
             self_registration_max_attempts,
             cfg.self_registration_max_attempts
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             observer_fetch_max,
             cfg.observer_fetch_max,
@@ -64,7 +64,7 @@ impl RuntimeFileConfig {
             audit_tail_window_offsets,
             cfg.audit_tail_window_offsets
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             audit_tail_read_max,
             cfg.audit_tail_read_max,
@@ -95,13 +95,13 @@ impl RuntimeFileConfig {
             diskless_wal_flush_interval,
             cfg.diskless_wal_flush_interval
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             diskless_wal_flush_max_size,
             cfg.diskless_wal_flush_max_size,
             whole_bytes_usize
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             diskless_wal_hot_tail_max_size,
             cfg.diskless_wal_hot_tail_max_size,
@@ -125,7 +125,7 @@ impl RuntimeFileConfig {
             unclean_recovery_queue_capacity,
             cfg.unclean_recovery_queue_capacity
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             share_coordinator_load_buffer_size,
             cfg.share_coordinator_load_buffer_size,
@@ -136,13 +136,13 @@ impl RuntimeFileConfig {
             share_session_cache_max_when_unlimited,
             cfg.share_session_cache_max_when_unlimited
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             log_read_buffer_cap,
             cfg.log_config.read_buffer_cap,
             whole_bytes_usize
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             log_timestamp_scan_window,
             cfg.log_config.timestamp_scan_window,
@@ -152,13 +152,13 @@ impl RuntimeFileConfig {
         // operator named them, so the loader records the provenance.
         cfg.static_config_origins.log.log_segment_bytes |= runtime.log_segment_bytes.is_some();
         cfg.static_config_origins.log.message_max_bytes |= runtime.message_max_bytes.is_some();
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             log_segment_bytes,
             cfg.log_config.segment_size,
             whole_bytes_u64
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             message_max_bytes,
             cfg.log_config.max_message_size,
@@ -177,7 +177,7 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             socket_request_max,
             cfg.socket_request_max,
@@ -189,7 +189,7 @@ impl RuntimeFileConfig {
         authentication.sasl_server_max_receive |= runtime.sasl_server_max_receive.is_some();
         authentication.connection_failed_authentication_delay |=
             runtime.connection_failed_authentication_delay.is_some();
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             sasl_server_max_receive,
             cfg.sasl_server_max_receive,
@@ -205,14 +205,14 @@ impl RuntimeFileConfig {
         if let Some(bytes) = runtime.queued_max_request_bytes.take() {
             cfg.queued_max_request_bytes = Some(bytes);
         }
-        set_runtime_size_bytes!(runtime, sendfile_min, cfg.sendfile_min, whole_bytes_usize);
-        set_runtime_size_bytes!(
+        set_runtime_validated!(runtime, sendfile_min, cfg.sendfile_min, whole_bytes_usize);
+        set_runtime_validated!(
             runtime,
             socket_send_buffer,
             cfg.socket_send_buffer,
             whole_bytes_usize
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             socket_receive_buffer,
             cfg.socket_receive_buffer,
@@ -227,13 +227,13 @@ impl RuntimeFileConfig {
             cfg.record_decompression_max_ratio =
                 positive_ratio("record_decompression_max_ratio", value)?;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             record_decompression_output_floor,
             cfg.record_decompression_output_floor,
             whole_bytes_u64
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             record_decompression_output_ceiling,
             cfg.record_decompression_output_ceiling,

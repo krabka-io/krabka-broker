@@ -27,10 +27,7 @@
 pub(crate) mod describe_freezes;
 pub(crate) mod set_freeze;
 
-use krabka_audit::{
-    AuditEndpoint, AuditError, AuditEvent, AuditLog, AuditMode, AuditOutcome, AuditPrincipal,
-    PrivilegedPhase,
-};
+use krabka_audit::{AuditError, AuditEvent, AuditLog, AuditMode, AuditOutcome, PrivilegedPhase};
 use krabka_metadata::PatternType;
 use krabka_protocol::krabka::freeze::{
     PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
@@ -41,8 +38,9 @@ use krabka_protocol::krabka::freeze::{
 // not reach into another subsystem for an ACL gate.
 pub(crate) use crate::handlers::cluster_describe_denied;
 use crate::{
-    break_glass::handlers::principal_name, handlers::RequestContext,
-    operator_keys::approver_set_fingerprint, time_util::now_ms,
+    break_glass::handlers::{PrivilegedAudit, privileged_event},
+    handlers::RequestContext,
+    operator_keys::approver_set_fingerprint,
 };
 
 // The dispatch constant and the codec must name one api key. The registry
@@ -185,32 +183,26 @@ fn freeze_event(
     audit: &FreezeAudit<'_>,
     approvers: &[String],
 ) -> AuditEvent {
-    AuditEvent::PrivilegedAction {
-        outcome,
-        phase,
-        action: audit.action.to_owned(),
-        target: audit.target.clone(),
-        proposal_id: audit.proposal_id.to_string(),
-        principal: AuditPrincipal {
-            // The Kafka form, which is what the break-glass events carry. An
-            // auditor joins a freeze to the approval that authorized it by
-            // principal, and two spellings of one person break that join.
-            name: principal_name(ctx),
-            auth_method: format!("{:?}", ctx.principal.auth_method),
+    // The principal is the Kafka form, which is what the break-glass events
+    // carry. An auditor joins a freeze to the approval that authorized it by
+    // principal, and two spellings of one person break that join.
+    privileged_event(
+        ctx,
+        approver_set_fingerprint(approvers),
+        &PrivilegedAudit {
+            outcome,
+            phase,
+            action: audit.action,
+            target: &audit.target,
+            proposal_id: Some(audit.proposal_id),
+            counterparties: &[],
+            key_id: audit.key_id,
+            signature: audit.signature,
+            signature_verified: audit.signature_verified,
+            reason: &audit.reason,
         },
-        counterparties: Vec::new(),
-        approver_set_fingerprint: approver_set_fingerprint(approvers),
-        key_id: audit.key_id.to_owned(),
-        signature: audit.signature.to_vec(),
-        signature_verified: audit.signature_verified,
-        signed_at_ms: audit.set_at_ms,
-        source: AuditEndpoint {
-            ip: ctx.peer.ip().to_string(),
-            port: ctx.peer.port(),
-        },
-        reason: audit.reason.clone(),
-        time_ms: now_ms(),
-    }
+        audit.set_at_ms,
+    )
 }
 
 #[cfg(test)]

@@ -35,123 +35,97 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let ng = broker.group_coordinator.clone();
-    {
-        let mut cur: &[u8] = req_bytes;
-        let req: ShareGroupHeartbeatRequest =
-            crate::handlers::decode_group_request(&mut cur, version)?;
+    let mut cur: &[u8] = req_bytes;
+    let req: ShareGroupHeartbeatRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
-        // ── Protocol gate ───────────────────────────────────────────
-        // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
-        // enabled BEFORE any ACL check, so a disabled feature answers
-        // `UNSUPPORTED_VERSION` even to a caller with no ACLs on the group at
-        // all. They are enabled by a finalized `share.version` of 1.
-        let image = broker.controller.current_image();
-        if !crate::features::share_groups_enabled(&image) {
-            return crate::handlers::encode_response(&error(codes::UNSUPPORTED_VERSION), version);
-        }
-
-        // ── ACL preamble ────────────────────────────────────────────
-        // KIP-932 share groups still gate membership on `Read` on
-        // `Group(group_id)`. On Deny → whole-response
-        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-        if group_read_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            &req.group_id,
-        ) {
-            return crate::handlers::encode_response(
-                &error(codes::GROUP_AUTHORIZATION_FAILED),
-                version,
-            );
-        }
-
-        // Kafka's `KafkaApis.isMemberIdValid`: the member id must be set and
-        // at most 36 characters long. The share consumer mints its own id, so
-        // even a first join must carry one. `getErrorResponse` sets only the
-        // code. This runs before the topic `Describe` check, so a malformed
-        // request that names a denied topic answers `INVALID_REQUEST`.
-        if !member_id_valid(&req.member_id) {
-            return crate::handlers::encode_response(&error(codes::INVALID_REQUEST), version);
-        }
-
-        // `Describe` on every distinct name in `subscribed_topic_names`
-        // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
-        // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
-        // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
-        // unauthorized caller cannot learn a denied topic's id or partitions
-        // by being admitted as a member. This runs before
-        // `group_coordinator_error` -- Kafka authorizes the request before it
-        // ever reaches coordinator routing, so an unauthorized subscription
-        // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-        if crate::handlers::subscribed_names_describe_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            req.subscribed_topic_names.as_deref(),
-        ) {
-            return crate::handlers::encode_response(
-                &error(codes::TOPIC_AUTHORIZATION_FAILED),
-                version,
-            );
-        }
-
-        // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
-        // runs before the operation reaches a coordinator shard.
-        if let Some(message) = invalid_request_message(&req) {
-            return crate::handlers::encode_response(
-                &ShareGroupHeartbeatResponse {
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some(message.to_owned()),
-                    ..Default::default()
-                },
-                version,
-            );
-        }
-
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-            return crate::handlers::encode_response(&error(error_code), version);
-        }
-
-        // Kafka creates a share group only on a join, and answers
-        // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
-        // group of another type, without touching any group.
-        if let Some(message) = share_group_lookup_error(&ng, &req.group_id, req.member_epoch) {
-            return crate::handlers::encode_response(
-                &ShareGroupHeartbeatResponse {
-                    error_code: codes::GROUP_ID_NOT_FOUND,
-                    error_message: Some(message),
-                    ..Default::default()
-                },
-                version,
-            );
-        }
-
-        ng.mark_share(&req.group_id);
-        let handle = ng.get_or_create_share(&req.group_id);
-        let group_id = req.group_id.clone();
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(ShareGroupActorMessage::Heartbeat {
-                request: req,
-                client_id: ctx.client_id.unwrap_or_default().to_owned(),
-                client_host: ctx.client_host(),
-                reply: tx,
-            })
-            .await
-            .is_err()
-        {
-            return crate::handlers::encode_response(
-                &error(codes::COORDINATOR_LOAD_IN_PROGRESS),
-                version,
-            );
-        }
-        let resp = rx
-            .await
-            .unwrap_or_else(|_| error(stopped_actor_code(broker, &group_id)));
-        crate::handlers::encode_response(&resp, version)
+    // ── Protocol gate ───────────────────────────────────────────
+    // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
+    // enabled BEFORE any ACL check, so a disabled feature answers
+    // `UNSUPPORTED_VERSION` even to a caller with no ACLs on the group at
+    // all. They are enabled by a finalized `share.version` of 1.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
+        return reply(version, codes::UNSUPPORTED_VERSION, None);
     }
+
+    // ── ACL preamble ────────────────────────────────────────────
+    // KIP-932 share groups still gate membership on `Read` on
+    // `Group(group_id)`. On Deny → whole-response
+    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+    if group_read_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        &req.group_id,
+    ) {
+        return reply(version, codes::GROUP_AUTHORIZATION_FAILED, None);
+    }
+
+    // Kafka's `KafkaApis.isMemberIdValid`: the member id must be set and
+    // at most 36 characters long. The share consumer mints its own id, so
+    // even a first join must carry one. `getErrorResponse` sets only the
+    // code. This runs before the topic `Describe` check, so a malformed
+    // request that names a denied topic answers `INVALID_REQUEST`.
+    if !crate::handlers::share_fetch::member_id_is_valid(&req.member_id) {
+        return reply(version, codes::INVALID_REQUEST, None);
+    }
+
+    // `Describe` on every distinct name in `subscribed_topic_names`
+    // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
+    // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
+    // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
+    // unauthorized caller cannot learn a denied topic's id or partitions
+    // by being admitted as a member. This runs before
+    // `group_coordinator_error` -- Kafka authorizes the request before it
+    // ever reaches coordinator routing, so an unauthorized subscription
+    // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
+    if crate::handlers::subscribed_names_describe_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        req.subscribed_topic_names.as_deref(),
+    ) {
+        return reply(version, codes::TOPIC_AUTHORIZATION_FAILED, None);
+    }
+
+    // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
+    // runs before the operation reaches a coordinator shard.
+    if let Some(message) = invalid_request_message(&req) {
+        return reply(version, codes::INVALID_REQUEST, Some(message.to_owned()));
+    }
+
+    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+        return reply(version, error_code, None);
+    }
+
+    // Kafka creates a share group only on a join, and answers
+    // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
+    // group of another type, without touching any group.
+    if let Some(message) = share_group_lookup_error(&ng, &req.group_id, req.member_epoch) {
+        return reply(version, codes::GROUP_ID_NOT_FOUND, Some(message));
+    }
+
+    ng.mark_share(&req.group_id);
+    let handle = ng.get_or_create_share(&req.group_id);
+    let group_id = req.group_id.clone();
+    let (tx, rx) = oneshot::channel();
+    if handle
+        .tx
+        .send(ShareGroupActorMessage::Heartbeat {
+            request: req,
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
+            client_host: ctx.client_host(),
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return reply(version, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
+    }
+    let resp = rx
+        .await
+        .unwrap_or_else(|_| error(stopped_actor_code(broker, &group_id)));
+    crate::handlers::encode_response(&resp, version)
 }
 
 /// The `GROUP_ID_NOT_FOUND` message for a heartbeat that must not reach a
@@ -187,12 +161,6 @@ fn share_group_lookup_error(
     } else {
         format!("Share group {group_id} not found.")
     })
-}
-
-/// Kafka's `KafkaApis.isMemberIdValid`: set, and at most 36 UTF-16 code
-/// units long, as Java's `String.length` counts them.
-fn member_id_valid(member_id: &str) -> bool {
-    !member_id.is_empty() && member_id.encode_utf16().count() <= 36
 }
 
 /// Kafka's `Utils.throwIfEmptyString` test: a set value that Java's
@@ -236,6 +204,17 @@ fn error(code: i16) -> ShareGroupHeartbeatResponse {
     }
 }
 
+/// The encoded early refusal: `error(code)` carrying `message`.
+fn reply(version: i16, code: i16, message: Option<String>) -> Result<Bytes, BrokerError> {
+    crate::handlers::encode_response(
+        &ShareGroupHeartbeatResponse {
+            error_message: message,
+            ..error(code)
+        },
+        version,
+    )
+}
+
 /// The code of a heartbeat that the group's actor dropped unanswered.
 ///
 /// The actor stops when this broker unloads the group's offsets partition,
@@ -256,7 +235,7 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use krabka_metadata::{MetadataImage, MetadataRecord};
+    use krabka_metadata::MetadataImage;
     use krabka_protocol::{Decode, UnknownTaggedFields, owned::share_group_heartbeat_response};
     use krabka_security::{AuthMethod, Principal};
 
@@ -310,7 +289,12 @@ mod tests {
         client_id = "client-a"
     );
 
-    use crate::test_support::start_broker_with_authorizer as start_broker;
+    use crate::{
+        handlers::group_heartbeat_test_support::{
+            alice, describe_acl, group_read_acl, topic_with_partitions,
+        },
+        test_support::start_broker_with_authorizer as start_broker,
+    };
 
     fn anonymous_principal() -> Principal {
         Principal {
@@ -318,78 +302,6 @@ mod tests {
             auth_method: AuthMethod::Anonymous,
             groups: Vec::new(),
         }
-    }
-
-    fn alice() -> Principal {
-        Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec![],
-        }
-    }
-
-    fn describe_acl(name: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-            resource_type: krabka_metadata::ResourceType::Topic,
-            resource_name: name.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: krabka_metadata::AclOperation::Describe,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
-    }
-
-    fn group_read_acl(name: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-            resource_type: krabka_metadata::ResourceType::Group,
-            resource_name: name.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: krabka_metadata::AclOperation::Read,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
-    }
-
-    fn topic_record(name: &str, topic_id: uuid::Uuid, partitions: i32) -> MetadataRecord {
-        MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-            name: name.into(),
-            topic_id,
-            partitions,
-            replication_factor: 1,
-        })
-    }
-
-    /// A `V1Topic` record plus one `V1Partition` per index, assigned to
-    /// `node`. The KIP-631 wire framing does not carry `TopicRecord.partitions`
-    /// -- a decoded `V1Topic` round-trips back at `partitions == 0`, and the
-    /// real count comes from the `V1Partition` records that follow it -- so a
-    /// topic meant to be assignable needs both, unlike [`topic_record`] alone
-    /// (used only where a test never reaches the assignor).
-    fn topic_with_partitions(
-        name: &str,
-        topic_id: uuid::Uuid,
-        partitions: i32,
-        node: krabka_raft::NodeId,
-    ) -> Vec<MetadataRecord> {
-        let replicas = vec![node];
-        let mut records = vec![topic_record(name, topic_id, partitions)];
-        records.extend((0..partitions).map(|partition| {
-            MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: name.into(),
-                partition,
-                leader: node,
-                replicas: replicas.clone(),
-                isr: replicas.clone(),
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            })
-        }));
-        records
     }
 
     fn request(group_id: &str, subscribed: Vec<&str>) -> ShareGroupHeartbeatRequest {

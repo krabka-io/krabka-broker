@@ -85,7 +85,7 @@ impl RuntimeFileConfig {
             cfg.client_metrics_default_interval,
             positive_i32
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             client_metrics_telemetry_max,
             cfg.client_metrics_telemetry_max,
@@ -149,7 +149,7 @@ impl RuntimeFileConfig {
             }
             cfg.replication.fetchers = fetchers;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             replication_fetch_max,
             cfg.replication.fetch_max,
@@ -161,7 +161,7 @@ impl RuntimeFileConfig {
             cfg.replication.fetch_max_wait,
             positive_i32
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             replication_fetch_min,
             cfg.replication.fetch_min,

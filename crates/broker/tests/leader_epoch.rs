@@ -3,9 +3,7 @@
 //!
 //! Windows-gated like the other multi-broker tests.
 
-use std::sync::OnceLock;
-
-use tokio::sync::Mutex;
+use support::cluster_lock;
 
 mod support;
 
@@ -23,14 +21,3 @@ mod epoch_diverge_leader;
 mod epoch_fencing;
 #[path = "leader_epoch/epoch_harness.rs"]
 mod epoch_harness;
-
-/// Serializes the multi-broker tests in this binary.
-///
-/// Each test starts a 3-broker loopback cluster. Running them at the same time
-/// exhausts the ephemeral ports and starves the openraft election timing. This
-/// is the same reason as for `replication.rs::cluster_lock` and
-/// `quorum.rs::cluster_lock`.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}

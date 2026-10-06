@@ -45,6 +45,24 @@ pub(crate) fn group_read_denied(
     )
 }
 
+/// The `Describe` gate on `Group(group_id)`, the twin of
+/// [`group_read_denied`].
+pub(crate) fn group_describe_denied(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    group_id: &str,
+) -> bool {
+    acl_denied(
+        authorizer,
+        image,
+        ctx,
+        krabka_metadata::ResourceType::Group,
+        group_id,
+        krabka_metadata::AclOperation::Describe,
+    )
+}
+
 pub(crate) fn cluster_alter_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
     image: &krabka_metadata::MetadataImage,
@@ -142,6 +160,30 @@ pub(crate) fn subscribed_names_describe_denied(
         unique,
     )
     .is_empty()
+}
+
+/// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)` as the
+/// streams-group handlers read it: `true` when any of `names` is
+/// `Describe`-denied for `ctx`'s principal.
+///
+/// It stops at the first denial, so a name after it is never authorized and
+/// never audited.
+pub(crate) fn any_topic_describe_denied(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    names: &[String],
+) -> bool {
+    names.iter().any(|topic| {
+        acl_denied(
+            authorizer,
+            image,
+            ctx,
+            krabka_metadata::ResourceType::Topic,
+            topic,
+            krabka_metadata::AclOperation::Describe,
+        )
+    })
 }
 
 /// The name a `Produce` or `Fetch` topic row stands for: its `name` when the

@@ -40,10 +40,6 @@ mod tests;
 use self::group::{Included, describe_group};
 use crate::{broker::Broker, codes, error::BrokerError};
 
-/// Minimum finalized `streams.version` feature level at which the broker
-/// serves the KIP-1071 streams RPCs, heartbeat and describe.
-const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
-
 // cargo-mutants: streams-coordinator response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
@@ -53,7 +49,6 @@ pub(crate) async fn handle(
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    let streams_enabled = broker.config.streams_group.enable;
     let image = broker.controller.current_image();
     let ng = broker.group_coordinator.clone();
     let mut cur: &[u8] = req_bytes;
@@ -64,12 +59,7 @@ pub(crate) async fn handle(
     // `StreamsGroupDescribeRequest.getErrorResponse` answers every requested
     // group id with UNSUPPORTED_VERSION when the protocol is off, checked
     // once for the whole request and before any ACL check runs.
-    let enabled = crate::features::feature_enabled(
-        &image,
-        crate::features::STREAMS_VERSION,
-        STREAMS_VERSION_MIN_LEVEL,
-    ) && streams_enabled;
-    if !enabled {
+    if !crate::handlers::streams_protocol_enabled(broker, &image) {
         let groups = req
             .group_ids
             .iter()
@@ -92,13 +82,11 @@ pub(crate) async fn handle(
     let mut denied_rows: Vec<DescribedGroup> = Vec::new();
     let mut other_rows: Vec<DescribedGroup> = Vec::new();
     for gid in &req.group_ids {
-        if crate::handlers::acl_denied(
+        if crate::handlers::group_describe_denied(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            krabka_metadata::ResourceType::Group,
             gid,
-            krabka_metadata::AclOperation::Describe,
         ) {
             denied_rows.push(DescribedGroup {
                 group_id: gid.clone(),

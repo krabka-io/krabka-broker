@@ -5,7 +5,7 @@
 //! every reconnect and freezing a peer's boot-time address would strand a
 //! `StatefulSet` peer that restarts on a new pod IP.
 
-use super::{FileConfig, FileConfigError};
+use super::FileConfigError;
 
 /// Validate an unresolved KIP-853 `host:port` endpoint.
 ///
@@ -49,23 +49,12 @@ pub fn parse_quorum_voter(entry: &str) -> Result<(krabka_raft::NodeId, String), 
     Ok((node_id, host_port.to_string()))
 }
 
-impl FileConfig {
-    pub(super) fn parse_quorum_voter(
-        entry: &str,
-    ) -> Result<(krabka_raft::NodeId, String), FileConfigError> {
-        parse_quorum_voter(entry)
-    }
-
-    pub(super) fn parse_bootstrap_server(entry: &str) -> Result<String, FileConfigError> {
-        parse_bootstrap_server(entry)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::file_config::FileConfig;
 
     #[test]
     fn apply_to_parses_multi_voter_quorum_in_order() {

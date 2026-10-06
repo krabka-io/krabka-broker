@@ -16,7 +16,6 @@ use krabka_protocol::{
         consumer_protocol_subscription::ConsumerProtocolSubscription,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
@@ -30,8 +29,8 @@ use krabka_protocol::{
             OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
         },
     },
-    primitives::uuid::Uuid as WireUuid,
 };
+use support::topic_id_for;
 
 const OFFSET_ABSENT_SENTINEL: i64 = -1; // OffsetFetch returns -1 when no offset is committed.
 
@@ -41,27 +40,6 @@ async fn start() -> support::InProcess {
     let p = support::start().await;
     p.broker.wait_until_group_coordinator_ready().await;
     p
-}
-
-/// Resolve a topic's UUID with Metadata. Under KIP-516, `OffsetCommit` and
-/// `OffsetFetch` negotiate to v10/v8+, which key by `topic_id` on the wire.
-async fn topic_id_for(p: &support::InProcess, name: &str) -> WireUuid {
-    let resp = p
-        .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
@@ -83,7 +61,7 @@ async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
 }
 
 async fn commit_offset(p: &support::InProcess, group: &str, topic: &str, partition: i32, off: i64) {
-    let id = topic_id_for(p, topic).await;
+    let id = topic_id_for(&p.client, topic).await;
     let resp = p
         .client
         .send(OffsetCommitRequest {
@@ -113,7 +91,7 @@ async fn commit_offset(p: &support::InProcess, group: &str, topic: &str, partiti
 }
 
 async fn fetch_offset(p: &support::InProcess, group: &str, topic: &str, partition: i32) -> i64 {
-    let id = topic_id_for(p, topic).await;
+    let id = topic_id_for(&p.client, topic).await;
     let resp = p
         .client
         .send(OffsetFetchRequest {

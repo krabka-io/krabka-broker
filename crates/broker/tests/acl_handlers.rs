@@ -29,6 +29,7 @@ mod client_api;
 mod framing;
 #[path = "acl_handlers/implications.rs"]
 mod implications;
+mod kafka_wire;
 #[path = "acl_handlers/metadata_group_txn.rs"]
 mod metadata_group_txn;
 #[path = "acl_handlers/polling.rs"]

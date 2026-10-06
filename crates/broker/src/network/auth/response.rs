@@ -45,6 +45,24 @@ pub fn fail_authenticate_with(message: String) -> SaslAuthenticateResponse {
     }
 }
 
+/// Builds a successful response carrying `auth_bytes` (a server challenge or
+/// final message, possibly empty) and `session_lifetime_ms`.
+///
+/// `error_message` stays an explicit `None`: Kafka sends a null message on
+/// success.
+pub fn sasl_ok(
+    auth_bytes: impl Into<bytes::Bytes>,
+    session_lifetime_ms: i64,
+) -> SaslAuthenticateResponse {
+    SaslAuthenticateResponse {
+        error_code: 0,
+        error_message: None,
+        auth_bytes: auth_bytes.into(),
+        session_lifetime_ms,
+        ..Default::default()
+    }
+}
+
 /// Kafka's message for a failed exchange whose mechanism raised a plain
 /// `SaslException`: `SaslServerAuthenticator.handleSaslToken` deliberately
 /// names nothing but the phase and the mechanism.

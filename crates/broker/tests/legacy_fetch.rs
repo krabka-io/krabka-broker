@@ -8,6 +8,7 @@
 //!   - control batches, which the broker drops from the down-converted
 //!     response.
 
+mod kafka_wire;
 mod support;
 
 // Cargo compiles this file as its own test binary, so the crate root's module

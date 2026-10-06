@@ -2,13 +2,12 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
-use tempfile::tempdir;
 
 use super::*;
 use crate::{
     TransactionalBatch,
     config::LogConfig,
-    log::test_support::{control_key, control_value, verbatim_from},
+    log::test_support::{control_key, control_value, test_log, verbatim_from},
 };
 
 /// The path a batch takes into the log.
@@ -186,8 +185,7 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
     ];
     for (name, batches, want) in cases {
         for path in [Path::Leader, Path::Follower, Path::Verbatim] {
-            let dir = tempdir().unwrap();
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let (dir, mut log) = test_log();
             for batch in batches.clone() {
                 append(&mut log, path, batch);
             }
@@ -281,8 +279,7 @@ fn last_records_of_active_producers_follow_every_append_path() {
     ];
     for (name, batches, want) in cases {
         for path in [Path::Leader, Path::Follower, Path::Verbatim] {
-            let dir = tempdir().unwrap();
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let (dir, mut log) = test_log();
             for batch in batches.clone() {
                 append(&mut log, path, batch);
             }
@@ -327,8 +324,7 @@ fn remove_expired_producers_keeps_open_transactions_and_recent_producers() {
         ("long after every write", i64::MAX, vec![3]),
     ];
     for (name, now_ms, staying) in cases {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         log.append(&mut data((1, 0), 0, 1, 1_000, false)).unwrap();
         log.append(&mut data((2, 0), 0, 1, 1_500, true)).unwrap();
         log.append(&mut marker((2, 0), true, 4, 3_000)).unwrap();
@@ -359,8 +355,7 @@ fn remove_expired_producers_keeps_open_transactions_and_recent_producers() {
 /// gone too, so the next batch at the same epoch is its only batch.
 #[test]
 fn an_expired_producer_starts_again_without_its_retained_batches() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     log.append(&mut data((5, 0), 0, 1, 1_000, false)).unwrap();
     log.append(&mut data((5, 0), 1, 1, 1_000, false)).unwrap();
 
@@ -391,8 +386,7 @@ fn remove_expired_producers_drops_old_verification_state() {
         ("a verification at the expiration", 2_000, false),
     ];
     for (name, now_ms, verifies) in cases {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         let guard = log
             .maybe_start_transaction_verification(batch, false, (1_000, 86_400_000))
             .unwrap();

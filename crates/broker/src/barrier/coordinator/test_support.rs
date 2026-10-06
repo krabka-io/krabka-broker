@@ -15,11 +15,12 @@ use crate::{
     barrier::{
         STATE_TOPIC,
         config::BarrierConfig,
-        metrics::NoBarrierMetrics,
+        metrics::BrokerBarrierMetrics,
         state::GroupSpec,
         test_support::{metadata_source, open_partition, topic_records},
     },
     metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
     partition_registry::PartitionRegistry,
     test_support::FakeMetadataSource,
 };
@@ -107,7 +108,7 @@ impl Fixture {
             controller,
             Arc::default(),
             self.config.clone(),
-            Arc::new(NoBarrierMetrics),
+            Arc::new(BrokerBarrierMetrics::new(BrokerMetrics::new())),
         );
         coordinator
             .refresh_leader_partitions(&self.source.current_image())

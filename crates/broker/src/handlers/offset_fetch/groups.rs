@@ -168,17 +168,9 @@ fn group_named_topics(
     let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
     let resolved: Vec<_> = requested
         .iter()
+        // Below v10 a row carries only `name`, from v10 only `topic_id`.
         .map(|topic| {
-            let name = if !use_topic_ids {
-                topic.name.clone()
-            } else if topic.topic_id == WireUuid::ZERO {
-                String::new()
-            } else {
-                image
-                    .topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0))
-                    .map(str::to_string)
-                    .unwrap_or_default()
-            };
+            let name = crate::handlers::requested_topic_name(image, &topic.name, topic.topic_id);
             (topic, name)
         })
         .collect();

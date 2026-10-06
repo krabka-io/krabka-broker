@@ -23,6 +23,7 @@
 // resolves against `tests/`. `#[path]` re-bases each declaration onto the
 // sibling `describe_user_scram_credentials/` directory, which keeps the parts
 // out of `tests/`, where every `.rs` file would become another test binary.
+mod kafka_wire;
 #[path = "describe_user_scram_credentials/scram_authorization.rs"]
 mod scram_authorization;
 #[path = "describe_user_scram_credentials/scram_cluster.rs"]

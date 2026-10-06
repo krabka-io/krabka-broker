@@ -12,7 +12,7 @@ use krabka_protocol::owned::{
 use krabka_units::{Time, convert::TimeExt as _};
 
 use super::{
-    response::{fail_authenticate, fail_authenticate_with},
+    response::{fail_authenticate, fail_authenticate_with, sasl_ok},
     state::{ConnectionAuth, SaslExchange, principal_change_message},
 };
 
@@ -128,7 +128,7 @@ async fn handle_authenticate_oauthbearer_inner(
                         // never a delegation token.
                         authenticated_via_token: false,
                     };
-                    successful_authentication(session_lifetime_ms)
+                    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
                 }
                 Err(reason) => reject_initial_oauthbearer(auth, mech, reason),
             }
@@ -201,7 +201,7 @@ async fn handle_authenticate_oauthbearer_inner(
                         // token-authed session.
                         authenticated_via_token: false,
                     };
-                    successful_authentication(session_lifetime_ms)
+                    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
                 }
                 // A rejected token gets the RFC 7628 error challenge, exactly
                 // as on the initial authentication; the client's `\x01` reply
@@ -211,15 +211,7 @@ async fn handle_authenticate_oauthbearer_inner(
                     if let ConnectionAuth::Reauthenticating { exchange, .. } = auth {
                         *exchange = SaslExchange::OAuthBearerFailed;
                     }
-                    SaslAuthenticateResponse {
-                        error_code: 0,
-                        error_message: None,
-                        auth_bytes: bytes::Bytes::from(
-                            krabka_security::invalid_token_json().into_bytes(),
-                        ),
-                        session_lifetime_ms: 0,
-                        ..Default::default()
-                    }
+                    sasl_ok(krabka_security::invalid_token_json().into_bytes(), 0)
                 }
             }
         }
@@ -272,13 +264,7 @@ fn reject_initial_oauthbearer(
         exchange: SaslExchange::OAuthBearerFailed,
         pending_token_expiry_ms: None,
     };
-    SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::from(krabka_security::invalid_token_json().into_bytes()),
-        session_lifetime_ms: 0,
-        ..Default::default()
-    }
+    sasl_ok(krabka_security::invalid_token_json().into_bytes(), 0)
 }
 
 /// `OAuthBearerSaslServer` throws `SaslAuthenticationException(errorMessage)`
@@ -286,16 +272,6 @@ fn reject_initial_oauthbearer(
 /// same JSON the challenge carried.
 fn oauthbearer_failure() -> SaslAuthenticateResponse {
     fail_authenticate_with(krabka_security::invalid_token_json())
-}
-
-fn successful_authentication(session_lifetime_ms: i64) -> SaslAuthenticateResponse {
-    SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::new(),
-        session_lifetime_ms,
-        ..Default::default()
-    }
 }
 
 /// Parses and validates an OAUTHBEARER client initial response. The authzid,

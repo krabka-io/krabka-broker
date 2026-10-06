@@ -23,8 +23,7 @@ fn batch_header_floor_is_the_protocol_header_length() {
 /// limit reads nothing.
 #[test]
 fn a_raw_fetch_outside_the_readable_range_is_refused_or_empty() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     for _ in 0..4 {
         let mut batch = sample_batch(2);
         log.append(&mut batch).expect("append");
@@ -355,8 +354,7 @@ fn a_read_never_skips_past_a_segment_its_budget_clipped() {
 
 #[test]
 fn append_then_read_back_in_order() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut expected = Vec::new();
     for _ in 0..3 {
         let mut b = sample_batch(2);
@@ -370,8 +368,7 @@ fn append_then_read_back_in_order() {
 
 #[test]
 fn read_offset_too_low_errors() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b = sample_batch(2);
     log.append(&mut b).unwrap();
     assert2::assert!(matches!(
@@ -382,8 +379,7 @@ fn read_offset_too_low_errors() {
 
 #[test]
 fn read_at_log_end_returns_empty() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b = sample_batch(2);
     log.append(&mut b).unwrap();
     let log_end = log.log_end_offset();

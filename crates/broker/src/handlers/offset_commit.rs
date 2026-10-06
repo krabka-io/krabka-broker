@@ -115,7 +115,11 @@ pub(crate) async fn handle(
 
     let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
     if use_topic_ids {
-        resolve_topic_names(&mut req, &image);
+        // v10+ rows carry only `topic_id`; a zero or unknown id keeps the
+        // empty name.
+        for topic in &mut req.topics {
+            topic.name = crate::handlers::requested_topic_name(&image, &topic.name, topic.topic_id);
+        }
     }
 
     let allowed: Vec<bool> = {
@@ -156,21 +160,6 @@ pub(crate) async fn handle(
     req.topics = accepted;
     response.merge(commit(broker, &req, version).await);
     crate::handlers::encode_response(&response.build(), version)
-}
-
-/// Sets the name of each topic row whose `topic_id` the image knows.
-///
-/// A row whose id the image does not know keeps its empty name. That includes
-/// the zero id, which names no topic.
-fn resolve_topic_names(request: &mut OffsetCommitRequest, image: &krabka_metadata::MetadataImage) {
-    for topic in &mut request.topics {
-        if topic.topic_id == WireUuid::ZERO {
-            continue;
-        }
-        if let Some(name) = image.topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0)) {
-            topic.name = name.to_string();
-        }
-    }
 }
 
 /// Keeps the partitions of an authorized `topic` that the image holds.

@@ -112,7 +112,7 @@ mod tests {
             test_support::{
                 PartitionState, abort_marker, barrier_marker, barrier_marker_from_producer,
                 commit_marker, compaction_ctx, keyed_batch, partition_state, sample_batch,
-                transactional_batch,
+                test_log, transactional_batch,
             },
         },
         producer_snapshot::ProducerSnapshotEntry,
@@ -186,8 +186,7 @@ mod tests {
                 barrier_marker_from_producer("nightly", 7, 1000, 2),
             ),
         ] {
-            let dir = tempdir().unwrap();
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let (_dir, mut log) = test_log();
             log.set_stamp_source(std::sync::Arc::new(
                 crate::stamp_source::MonotonicStampSource::new(40, 1),
             ))
@@ -221,8 +220,7 @@ mod tests {
             ("open transaction", true, Offset(0), Offset(2)),
         ] {
             for (kind, is_barrier) in [("data batch", false), ("barrier marker", true)] {
-                let dir = tempdir().unwrap();
-                let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+                let (_dir, mut log) = test_log();
                 if open_transaction {
                     let mut data = transactional_batch(1000, 0, &["a"]);
                     data.base_sequence = 0;
@@ -273,8 +271,7 @@ mod tests {
                 vec![None, None, None, None],
             ),
         ] {
-            let dir = tempdir().unwrap();
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let (_dir, mut log) = test_log();
             log.set_stamp_source(std::sync::Arc::new(
                 crate::stamp_source::MonotonicStampSource::new(40, 1),
             ))

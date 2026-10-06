@@ -66,6 +66,7 @@ pub(crate) const DELEGATION_TOKEN_AUTHORIZATION_FAILED: i16 = 65;
 /// DELEGATION_TOKEN_OWNER_MISMATCH`. The same sync rule applies.
 pub(crate) const DELEGATION_TOKEN_OWNER_MISMATCH: i16 = 63;
 
+mod kafka_wire;
 #[path = "delegation_tokens/wire.rs"]
 mod wire;
 

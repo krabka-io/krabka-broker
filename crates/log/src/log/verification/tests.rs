@@ -1,12 +1,8 @@
 use assert2::assert;
 use krabka_ids::Offset;
-use tempfile::tempdir;
 
 use super::*;
-use crate::{
-    config::LogConfig,
-    log::test_support::{commit_marker, sample_batch, transactional_batch},
-};
+use crate::log::test_support::{commit_marker, sample_batch, test_log, transactional_batch};
 
 const PID: i64 = 1000;
 const CLOCK: (i64, i64) = (1_000, 86_400_000);
@@ -33,8 +29,7 @@ enum Start {
 }
 
 fn log_at(start: Start) -> (tempfile::TempDir, Log) {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (dir, mut log) = test_log();
     if matches!(start, Start::CommittedAtEpoch3 | Start::OpenAtEpoch3) {
         let mut data = transactional_batch(PID, 3, &["a", "b"]);
         data.base_sequence = 0;

@@ -36,7 +36,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::server::registration::NOT_CONTROLLER;
+    use crate::server::{registration::NOT_CONTROLLER, test_support::decoded};
 
     /// The controller registration response carries the error code and the
     /// message the caller passed, and encodes to bytes.
@@ -46,7 +46,7 @@ mod tests {
     /// returns `Ok`.
     #[test]
     fn the_registration_response_carries_what_it_was_given() {
-        use krabka_protocol::{Decode as _, owned::controller_registration_response};
+        use krabka_protocol::owned::controller_registration_response;
 
         let bytes = controller_registration_response(
             controller_registration_response::MAX_VERSION,
@@ -54,13 +54,11 @@ mod tests {
             Some("not the controller".to_owned()),
         )
         .expect("encode controller response");
-        let mut cursor = &bytes[..];
-        let decoded = ControllerRegistrationResponse::decode(
-            &mut cursor,
+        let response = decoded::<ControllerRegistrationResponse>(
+            &bytes,
             controller_registration_response::MAX_VERSION,
-        )
-        .expect("decode controller response");
-        check!(decoded.error_code == NOT_CONTROLLER);
-        check!(decoded.error_message.as_deref() == Some("not the controller"));
+        );
+        check!(response.error_code == NOT_CONTROLLER);
+        check!(response.error_message.as_deref() == Some("not the controller"));
     }
 }

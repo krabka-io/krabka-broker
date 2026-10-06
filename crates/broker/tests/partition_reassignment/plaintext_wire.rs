@@ -8,15 +8,17 @@
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_protocol::{Decode, Encode};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
+
+use crate::kafka_wire;
+
+/// The client id every request header in this suite carries.
+pub const CLIENT_ID: &str = "krabka-reassign-test";
 
 /// One length-prefixed request and response exchange over a PLAINTEXT
-/// connection. It is copied verbatim from `elect_leaders.rs`.
+/// connection; see [`kafka_wire::round_trip`].
 pub async fn round_trip(
     stream: &mut TcpStream,
     api_key: i16,
@@ -24,41 +26,17 @@ pub async fn round_trip(
     corr_id: i32,
     flexible: bool,
     body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-reassign-test";
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0); // empty header tagged-fields byte
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _resp_corr_id = cur.get_i32();
-    let uses_v1_header = flexible && api_key != 18;
-    if uses_v1_header {
-        if cur.is_empty() {
-            return Err(io::Error::other(
-                "flexible response missing tagged-fields byte",
-            ));
-        }
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
+) -> io::Result<Vec<u8>> {
+    kafka_wire::round_trip(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        CLIENT_ID,
+        flexible,
+        body,
+    )
+    .await
 }
 
 /// Creates a topic over PLAINTEXT. The authorizer's compat shim, with no

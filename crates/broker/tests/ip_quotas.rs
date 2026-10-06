@@ -16,6 +16,7 @@
 // `.rs` file would become another test binary.
 #[path = "ip_quotas/cluster.rs"]
 mod cluster;
+mod kafka_wire;
 #[path = "ip_quotas/quota_admin.rs"]
 mod quota_admin;
 #[path = "ip_quotas/wire.rs"]

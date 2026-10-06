@@ -20,6 +20,7 @@ mod downgrade_harness;
 mod downgrade_streams_join;
 #[path = "streams_classic_downgrade/downgrade_type_lock.rs"]
 mod downgrade_type_lock;
+mod support;
 
 // ── error codes ──────────────────────────────────────────────────────────────
 const ERR_NONE: i16 = 0;

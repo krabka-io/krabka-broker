@@ -59,7 +59,7 @@ impl RuntimeFileConfig {
                 .topic_creation
                 .default_replication_factor = true;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             future_log_move_read_chunk,
             cfg.future_log_move_read_chunk,
@@ -74,7 +74,7 @@ impl RuntimeFileConfig {
             cfg.share_coordinator.state_topic_replication_factor =
                 positive_i16("share_state_replication_factor", value)?;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             share_state_segment_bytes,
             cfg.share_coordinator.state_topic_segment_bytes,
@@ -152,7 +152,7 @@ impl RuntimeFileConfig {
             };
         }
         // Kafka's `atLeast(512 * 1024)` over an `INT`.
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             share_coordinator_cached_buffer_max_bytes,
             cfg.share_coordinator.cached_buffer_max_bytes,
@@ -167,7 +167,7 @@ impl RuntimeFileConfig {
             cfg.offsets_topic_replication_factor =
                 positive_i16("offsets_topic_replication_factor", value)?;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             offsets_topic_segment_bytes,
             cfg.offsets_topic_segment_bytes,
@@ -188,7 +188,7 @@ impl RuntimeFileConfig {
             transaction_state_num_partitions,
             cfg.transaction_state_num_partitions
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             transaction_recovery_read_max,
             cfg.transaction_recovery_read_max,
@@ -198,7 +198,7 @@ impl RuntimeFileConfig {
             cfg.transaction_state_replication_factor =
                 positive_i16("transaction_state_replication_factor", value)?;
         }
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             transaction_state_segment_bytes,
             cfg.transaction_state_segment_bytes,
@@ -254,7 +254,7 @@ impl RuntimeFileConfig {
             cfg.barrier_injection_timeout,
             positive_i64
         );
-        set_runtime_size_bytes!(
+        set_runtime_validated!(
             runtime,
             barrier_recovery_read_max,
             cfg.barrier_recovery_read_max,

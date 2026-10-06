@@ -11,10 +11,12 @@
 //! It is gated to non-Windows. The broker handle's `metrics_addr()` is for
 //! Linux and macOS by convention, which matches the other integration tests.
 
+mod kafka_wire;
+
 use std::{io, time::Duration};
 
 use assert2::{assert, check};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::PartitionLabel};
 use krabka_protocol::{
     Decode, Encode,
@@ -37,6 +39,8 @@ const FETCH_VERSION: i16 = 12;
 const PRODUCE_VERSION: i16 = 9;
 const CREATE_TOPICS_VERSION: i16 = 7;
 
+/// One length-prefixed request/response exchange; see
+/// [`kafka_wire::round_trip`].
 async fn round_trip(
     stream: &mut TcpStream,
     api_key: i16,
@@ -44,34 +48,17 @@ async fn round_trip(
     corr_id: i32,
     flexible: bool,
     body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-metrics-test";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0);
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    if flexible {
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
+) -> io::Result<Vec<u8>> {
+    kafka_wire::round_trip(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        "krabka-metrics-test",
+        flexible,
+        body,
+    )
+    .await
 }
 
 async fn create_topic(addr: std::net::SocketAddr) {

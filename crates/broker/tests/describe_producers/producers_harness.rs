@@ -12,34 +12,12 @@ use krabka_protocol::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         find_coordinator_request::FindCoordinatorRequest,
         init_producer_id_request::InitProducerIdRequest,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
     },
     records::{Attributes, Record, RecordBatch},
 };
 
 use crate::support;
-
-pub(crate) async fn topic_id_for(
-    p: &support::InProcess,
-    name: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
-    let resp = p
-        .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
+pub(crate) use crate::support::topic_id_for;
 
 pub(crate) async fn create_topic(client: &Client, name: &str, partitions: i32) {
     let resp = client

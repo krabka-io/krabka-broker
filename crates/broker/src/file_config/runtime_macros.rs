@@ -38,24 +38,7 @@ macro_rules! set_runtime_duration {
     };
 }
 
-/// Assigns a validated dimensioned time value.
-macro_rules! set_runtime_time_secs {
-    ($runtime:ident, $field:ident, $target:expr) => {
-        if let Some(value) = $runtime.$field {
-            $target = positive_time(stringify!($field), value)?;
-        }
-    };
-}
-
-/// Assigns a validated dimensioned byte size.
-macro_rules! set_runtime_size_bytes {
-    ($runtime:ident, $field:ident, $target:expr, $validator:ident) => {
-        if let Some(value) = $runtime.$field {
-            $target = $validator(stringify!($field), value)?;
-        }
-    };
-}
-
+/// Assigns `$field` through the named `$validator`.
 macro_rules! set_runtime_validated {
     ($runtime:ident, $field:ident, $target:expr, $validator:ident) => {
         if let Some(value) = $runtime.$field {

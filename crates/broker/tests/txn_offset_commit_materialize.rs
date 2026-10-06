@@ -33,7 +33,6 @@ use krabka_protocol::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         end_txn_request::EndTxnRequest,
         init_producer_id_request::InitProducerIdRequest,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
@@ -51,6 +50,7 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid as WireUuid,
 };
+use support::topic_id_for;
 
 /// `NOT_COORDINATOR`. The broker elects the `__transaction_state` partition
 /// leader lazily on first access, so an early `InitProducerId` can race ahead
@@ -87,27 +87,6 @@ async fn create_topic(client: &krabka_client_core::Client) {
         .await
         .expect("create topic");
     assert!(resp.topics[0].error_code == 0, "create topic: {resp:?}");
-}
-
-/// Resolve `TOPIC`'s `topic_id` with Metadata. At v10 the v8+ `OffsetFetch`
-/// `groups[]` shape keys topics by `topic_id`, and the wire drops the name. So
-/// the read must carry the id, not only the name.
-async fn topic_id_for(client: &krabka_client_core::Client) -> WireUuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(TOPIC))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 /// `OffsetFetch` for `(TOPIC, 0)` under `group_id`. This function fills BOTH
@@ -216,7 +195,7 @@ async fn begin_and_commit_offsets(
     // TxnOffsetCommit: empty member_id + generation_id -1 = simple consumer (no
     // membership fencing). Appends a transactional offset record + buffers it.
     // The client negotiates v6 (KIP-1319), which names the topic by id only.
-    let topic_id = topic_id_for(client).await;
+    let topic_id = topic_id_for(client, TOPIC).await;
     let toc = client
         .send(TxnOffsetCommitRequest {
             transactional_id: tid.into(),
@@ -254,7 +233,7 @@ async fn begin_and_commit_offsets(
 async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
     let p = start().await;
     create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client).await;
+    let topic_id = topic_id_for(&p.client, TOPIC).await;
 
     let tid = "tid-commit";
     let group = "g-commit";
@@ -297,7 +276,7 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
 async fn txn_offset_commit_dropped_on_abort_marker() {
     let p = start().await;
     create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client).await;
+    let topic_id = topic_id_for(&p.client, TOPIC).await;
 
     let tid = "tid-abort";
     let group = "g-abort";
@@ -344,7 +323,7 @@ async fn commit_stable_offset(client: &krabka_client_core::Client, group_id: &st
             member_id: String::new(),
             topics: vec![OffsetCommitRequestTopic {
                 name: TOPIC.into(),
-                topic_id: topic_id_for(client).await,
+                topic_id: topic_id_for(client, TOPIC).await,
                 partitions: vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: offset,
@@ -447,7 +426,7 @@ fn stable_row(offset: i64) -> OffsetFetchResponsePartitions {
 async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
     let p = start().await;
     create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client).await;
+    let topic_id = topic_id_for(&p.client, TOPIC).await;
 
     let tid = "tid-require-stable";
     let group = "g-require-stable";
@@ -502,7 +481,7 @@ async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
 async fn require_stable_offset_fetch_becomes_stable_again_after_an_abort_marker() {
     let p = start().await;
     create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client).await;
+    let topic_id = topic_id_for(&p.client, TOPIC).await;
 
     let tid = "tid-require-stable-abort";
     let group = "g-require-stable-abort";

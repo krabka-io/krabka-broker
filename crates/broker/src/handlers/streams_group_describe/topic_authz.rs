@@ -5,26 +5,22 @@
 //! `TOPIC_AUTHORIZATION_FAILED` (29), no topology and no members, instead of
 //! disclosing the topic names through the topology.
 //!
-//! This mirrors `streams_group_heartbeat::topic_authz`'s `required_topics`
-//! and `describe_denied`, adapted to the describe view's stored topology
-//! shape (`StreamsGroupTopologyValue`/`StoredSubtopology`) rather than the
+//! This mirrors `streams_group_heartbeat::topic_authz`'s `required_topics`,
+//! adapted to the describe view's stored topology shape
+//! (`StreamsGroupTopologyValue`/`StoredSubtopology`) rather than the
 //! heartbeat request's wire `Topology`.
 
-use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
-
 use crate::{
-    broker::Broker, coordinator::unified::streams::persistence::StreamsGroupTopologyValue,
-    handlers::RequestContext,
+    coordinator::unified::streams::persistence::StreamsGroupTopologyValue,
+    handlers::streams_group_heartbeat::topic_authz::dedup_first_seen,
 };
 
 /// Kafka's `requiredTopics`: every source, repartition sink, repartition
 /// source and changelog topic of the topology, deduplicated in first-seen
 /// order across the subtopologies.
 pub(super) fn required_topics(topology: &StreamsGroupTopologyValue) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for subtopology in &topology.subtopologies {
-        let names = subtopology
+    dedup_first_seen(topology.subtopologies.iter().flat_map(|subtopology| {
+        subtopology
             .source_topics
             .iter()
             .map(String::as_str)
@@ -45,34 +41,8 @@ pub(super) fn required_topics(topology: &StreamsGroupTopologyValue) -> Vec<Strin
                     .state_changelog_topics
                     .iter()
                     .map(|topic| topic.name.as_str()),
-            );
-        for name in names {
-            if seen.insert(name) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    out
-}
-
-/// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)`: `true` when
-/// any of `required` denies `Describe`.
-pub(super) fn describe_denied(
-    broker: &Broker,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-    required: &[String],
-) -> bool {
-    required.iter().any(|topic| {
-        crate::handlers::acl_denied(
-            broker.config.authorizer.as_ref(),
-            image,
-            ctx,
-            ResourceType::Topic,
-            topic,
-            AclOperation::Describe,
-        )
-    })
+            )
+    }))
 }
 
 #[cfg(test)]

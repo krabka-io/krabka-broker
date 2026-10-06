@@ -114,15 +114,14 @@ pub(crate) async fn handle(
         None => coordinator.find_share(&gid),
     };
     let Some(actor) = actor else {
-        let other_type = coordinator.group_type(&gid).is_some()
-            || coordinator.find(&gid).is_some()
-            || coordinator.find_streams(&gid).is_some();
-        let message = if other_type {
-            format!("Group {gid} is not a share group.")
-        } else {
-            format!("Group {gid} not found.")
-        };
-        return encode_top_level(version, codes::GROUP_ID_NOT_FOUND, Some(message));
+        return encode_top_level(
+            version,
+            codes::GROUP_ID_NOT_FOUND,
+            Some(crate::handlers::share_group_not_found_message(
+                coordinator,
+                &gid,
+            )),
+        );
     };
 
     let metadata = coordinator.share_state_partition_metadata(&gid);

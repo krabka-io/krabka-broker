@@ -36,6 +36,8 @@
 
 mod support;
 
+use support::cluster_lock;
+
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `elect_leaders/` directory, which keeps the parts out of `tests/` where every
@@ -44,6 +46,7 @@ mod support;
 mod authorization;
 #[path = "elect_leaders/auto_rebalance.rs"]
 mod auto_rebalance;
+mod kafka_wire;
 #[path = "elect_leaders/preferred.rs"]
 mod preferred;
 #[path = "elect_leaders/sasl.rs"]
@@ -54,16 +57,3 @@ mod unclean;
 mod wait;
 #[path = "elect_leaders/wire.rs"]
 mod wire;
-
-/// Shared cluster lock for every test in this binary.
-///
-/// The lock serializes the tests onto one 3-broker cluster at a time. It
-/// mirrors the locks in `quorum.rs` and `leader_election.rs`. Without it, the
-/// static 3-voter clusters of the tests boot at the same time on the same
-/// loopback with short raft timings. They then starve each other of elections
-/// and of ISR re-admission, which shows as intermittent `FENCED_LEADER_EPOCH`
-/// churn.
-fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-}

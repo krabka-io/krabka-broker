@@ -16,34 +16,19 @@
 // ids, and topics are built with `..Default::default()`. Hoisting these into
 // named helpers would obscure the per-test narrative.
 
-use std::{sync::OnceLock, time::Duration};
+use std::time::Duration;
 
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle};
-use tokio::sync::Mutex;
 
 mod support;
 
-/// Test-binary-wide serialization.
-///
-/// Each test in this file starts a 3-broker cluster on loopback. Concurrent
-/// runs exhaust the loopback ephemeral ports and starve the openraft election
-/// timing. Acquire this lock at the top of every `#[tokio::test]`, so the
-/// binary is effectively single-threaded for these scenarios. This holds
-/// whether or not the caller serializes execution through nextest test groups.
-///
-/// This is a `tokio::sync::Mutex` and not a `std::sync::Mutex`, so a test can
-/// hold the lock across the `.await` calls in its body without a report from
-/// clippy's `await_holding_lock`.
-fn cluster_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     metadata_request::MetadataRequest,
 };
+use support::cluster_lock;
 use tempfile::TempDir;
 
 /// Waits until every broker reports an elected controller leader with a

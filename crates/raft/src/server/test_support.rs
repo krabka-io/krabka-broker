@@ -105,3 +105,19 @@ pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
         replication_factor: 1,
     })
 }
+
+/// Encodes `message` at `version`.
+pub(super) fn encoded(message: &impl krabka_protocol::Encode, version: i16) -> bytes::Bytes {
+    let mut body = bytes::BytesMut::new();
+    message.encode(&mut body, version).expect("encode");
+    body.freeze()
+}
+
+/// Decodes a `T` at `version` from the front of `bytes`.
+pub(super) fn decoded<T>(bytes: &[u8], version: i16) -> T
+where
+    T: for<'de> krabka_protocol::Decode<'de>,
+{
+    let mut cursor = bytes;
+    T::decode(&mut cursor, version).expect("decode")
+}

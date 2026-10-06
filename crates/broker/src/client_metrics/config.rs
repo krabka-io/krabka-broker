@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use fancy_regex::Regex;
 
 use self::java_fold::Escape;
-use crate::config_keys::parse::{check_valid_list, java_trim, list_value};
+use crate::config_keys::parse::{check_valid_list, int_value, java_trim, list_value, parse_int};
 
 pub(crate) const KEY_METRICS: &str = "metrics";
 pub(crate) const KEY_INTERVAL_MS: &str = "interval.ms";
@@ -116,14 +116,7 @@ pub(crate) fn validate(
     }
     let interval = configs
         .get(KEY_INTERVAL_MS)
-        .map(|value| {
-            java_trim(value).parse::<i32>().map_err(|_| {
-                ConfigError::InvalidConfig(format!(
-                    "Invalid value {value} for configuration {KEY_INTERVAL_MS}: Not a number of \
-                     type INT"
-                ))
-            })
-        })
+        .map(|value| parse_int(KEY_INTERVAL_MS, value).map_err(ConfigError::InvalidConfig))
         .transpose()?;
     let patterns = configs
         .get(KEY_MATCH)
@@ -152,7 +145,7 @@ pub(crate) fn effective_interval_ms(
 ) -> i32 {
     configs
         .get(KEY_INTERVAL_MS)
-        .and_then(|v| java_trim(v).parse::<i32>().ok())
+        .and_then(|v| int_value(v.as_str()))
         .unwrap_or(default_interval_ms)
 }
 

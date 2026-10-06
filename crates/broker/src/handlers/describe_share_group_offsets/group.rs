@@ -6,7 +6,7 @@
 //! decides: authorization, coordinator routing, and whether a persister is
 //! installed at all. Once those hold, it hands the group's topics to `rows`.
 
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     describe_share_group_offsets_request::{
         DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
@@ -40,13 +40,11 @@ pub(super) async fn describe_group(
 
     // ── ACL preamble ────────────────────────────────────
     // Per-group `Describe` check. On Deny → group `error_code = 30`.
-    if crate::handlers::acl_denied(
+    if crate::handlers::group_describe_denied(
         broker.config.authorizer.as_ref(),
         image,
         ctx,
-        ResourceType::Group,
         gid.as_str(),
-        AclOperation::Describe,
     ) {
         return DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
@@ -163,7 +161,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_log::Offset;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::{MetadataRecord, ResourceType, TopicRecord};
     use krabka_protocol::{
         UnknownTaggedFields,
         owned::describe_share_group_offsets_response::{

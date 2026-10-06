@@ -101,7 +101,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionElrRecord, PartitionRecord};
 
-use super::state::{PartitionElr, TopicElr, legacy_elr, wire_node_ids, without_legacy_elr};
+use super::state::{
+    PartitionElr, TopicElr, legacy_elr, metadata_node_ids, wire_node_ids, without_legacy_elr,
+};
 use crate::{
     config_keys::effective_min_insync_replicas,
     features::{ELR_VERSION, feature_enabled},
@@ -253,7 +255,7 @@ impl<'a> ElrPublisher<'a> {
             &before,
             &self.unclean_shutdown,
         );
-        changed_record(topic, partition, &before, after)
+        changed_record(topic, partition, &before, &after)
     }
 
     /// The `V1PartitionElr` records of the partitions [`Self::leaderless`]
@@ -271,7 +273,7 @@ impl<'a> ElrPublisher<'a> {
                     &before,
                     &self.unclean_shutdown,
                 );
-                changed_record(topic, *partition, &before, after)
+                changed_record(topic, *partition, &before, &after)
             })
             .collect()
     }
@@ -283,24 +285,16 @@ fn changed_record(
     topic: &str,
     partition: i32,
     before: &PartitionElr,
-    after: PartitionElr,
+    after: &PartitionElr,
 ) -> Option<MetadataRecord> {
-    if after == *before {
+    if after == before {
         return None;
     }
     Some(MetadataRecord::V1PartitionElr(PartitionElrRecord {
         topic: topic.to_string(),
         partition,
-        eligible_leader_replicas: after
-            .eligible_leader_replicas
-            .into_iter()
-            .filter_map(|id| u64::try_from(id).ok().map(krabka_metadata::NodeId))
-            .collect(),
-        last_known_elr: after
-            .last_known_elr
-            .into_iter()
-            .filter_map(|id| u64::try_from(id).ok().map(krabka_metadata::NodeId))
-            .collect(),
+        eligible_leader_replicas: metadata_node_ids(&after.eligible_leader_replicas),
+        last_known_elr: metadata_node_ids(&after.last_known_elr),
     }))
 }
 

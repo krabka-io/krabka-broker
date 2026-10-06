@@ -12,8 +12,8 @@ use crate::{
     io::LogIo,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        abort_marker, sample_batch, sample_batch_with_epoch, test_batch_at, test_log,
-        transactional_batch, verbatim_from,
+        abort_marker, log_append_time_log, sample_batch, sample_batch_with_epoch, test_batch_at,
+        test_log, transactional_batch, verbatim_from,
     },
     stamp_index::{StampEntry, StampIndex},
 };
@@ -80,8 +80,7 @@ impl LogIo for FailSyncAt {
 
 #[test]
 fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (dir, mut log) = test_log();
     log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
         16,
     ))));
@@ -100,8 +99,7 @@ fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
 
 #[test]
 fn shorter_append_after_partial_write_leaves_no_physical_tail() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (dir, mut log) = test_log();
     let mut first = sample_batch(1);
     log.append(&mut first).unwrap();
     let log_path = crate::name::log_path(dir.path(), 0);
@@ -237,8 +235,7 @@ fn every_appended_batch_is_assigned_its_leader_epoch() {
             ),
         ];
         for (path, append) in &paths {
-            let dir = tempdir().unwrap();
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let (_dir, mut log) = test_log();
             for (i, epoch) in offered.iter().enumerate() {
                 append(&mut log, i, *epoch);
             }
@@ -462,8 +459,7 @@ fn post_roll_partial_write_restores_the_previous_active_segment() {
 
 #[test]
 fn append_assigns_monotonic_offsets() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b1 = sample_batch(3);
     let mut b2 = sample_batch(2);
     let (first_offset, _) = log.append(&mut b1).unwrap();
@@ -475,8 +471,7 @@ fn append_assigns_monotonic_offsets() {
 
 #[test]
 fn append_at_matching_offset_preserves_caller_offset() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b = sample_batch(3);
     // Pretend the caller (a replicator) already knows the leader's
     // assigned offset for this batch is 0.
@@ -494,8 +489,7 @@ fn append_at_matching_offset_preserves_caller_offset() {
 /// offset, the duplicate or divergence a replicator has to notice.
 #[test]
 fn append_at_below_the_log_end_offset_errors() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     log.append(&mut sample_batch(3)).unwrap();
     let mut b = sample_batch(2);
     let err = log.append_at(&mut b, Offset(2)).unwrap_err();
@@ -514,8 +508,7 @@ fn append_at_below_the_log_end_offset_errors() {
 /// compacted leader's log has between two batches.
 #[test]
 fn append_at_past_the_log_end_offset_leaves_a_hole() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     log.append_at(&mut sample_batch(2), Offset(0)).unwrap();
     let mut b = sample_batch(2);
 
@@ -773,21 +766,6 @@ fn append_records_epoch_transition() {
                 }
             ]
     );
-}
-
-/// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
-/// configures one, with everything else at its default.
-fn log_append_time_log() -> (tempfile::TempDir, Log) {
-    let dir = tempdir().unwrap();
-    let log = Log::open(
-        dir.path(),
-        LogConfig {
-            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
-    (dir, log)
 }
 
 /// The first record of the only batch the log holds, read back off disk.

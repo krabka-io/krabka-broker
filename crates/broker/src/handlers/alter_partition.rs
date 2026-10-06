@@ -20,7 +20,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-mod authorization;
 mod isr_update;
 
 #[cfg(test)]
@@ -28,13 +27,15 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use self::{authorization::denied_response, isr_update::handle_partition_with_recovery};
+use self::isr_update::handle_partition_with_recovery;
 use crate::{
     broker::Broker,
     codes,
     elr::ElrPublisher,
     error::BrokerError,
-    handlers::{cluster_action_denied, encode_response},
+    handlers::{
+        cluster_action_denied, encode_response, forward_to_controller::is_active_controller,
+    },
 };
 
 #[tracing::instrument(
@@ -52,134 +53,132 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let controller = broker.controller.clone();
-    let node_id = broker.config.node_id;
 
-    {
-        let mut cur: &[u8] = req_bytes;
-        let req = AlterPartitionRequest::decode(&mut cur, version)?;
+    let mut cur: &[u8] = req_bytes;
+    let req = AlterPartitionRequest::decode(&mut cur, version)?;
 
-        // ── ACL preamble ────────────────────────────────────────────
-        // Inter-broker control-plane RPC: `ClusterAction` on
-        // `Cluster("kafka-cluster")`. On Deny → whole-response
-        // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
-        {
-            let image = controller.current_image();
-            if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-                return denied_response(version);
-            }
-        }
-
-        // Only the openraft leader handles AlterPartition.
-        let is_leader = controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == node_id);
-        if !is_leader {
-            return encode_response(
-                &AlterPartitionResponse {
-                    throttle_time_ms: 0,
-                    error_code: codes::NOT_CONTROLLER,
-                    topics: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                version,
-            );
-        }
-
-        let image = controller.current_image();
-        // Kafka's `ReplicationControlManager.alterPartition` starts with
-        // `ClusterControlManager.checkBrokerEpoch`: a sender that is not
-        // registered, or that sends another epoch than its registration's,
-        // gets a top-level `STALE_BROKER_EPOCH` and no rows.
-        let sender_epoch = u64::try_from(req.broker_id)
-            .ok()
-            .and_then(|id| image.broker_epoch(krabka_metadata::NodeId(id)));
-        if sender_epoch != Some(req.broker_epoch) {
-            return encode_response(
-                &AlterPartitionResponse {
-                    throttle_time_ms: 0,
-                    error_code: codes::STALE_BROKER_EPOCH,
-                    topics: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                version,
-            );
-        }
-        // One snapshot of the brokers that may sit in an ISR: alive, unfenced
-        // and not in controlled shutdown. The registry is seeded for this term
-        // first, so a request served right after a failover does not read
-        // the registry an earlier term left.
-        broker
-            .liveness
-            .seed_term(
-                controller.current_controller_epoch(),
-                crate::heartbeat::controller_state::replicated_registrations(&image),
-            )
-            .await;
-        let active = broker.liveness.alive_snapshot().await;
-        let mut changes: Vec<MetadataRecord> = Vec::new();
-        let mut resp_topics: Vec<RespTopicData> = Vec::new();
-
-        for req_topic in &req.topics {
-            // Kafka's `ReplicationControlManager.alterPartition` answers
-            // UNKNOWN_TOPIC_ID on every partition row when the topic id is
-            // zero or names no topic. An unknown partition of a known topic
-            // answers UNKNOWN_TOPIC_OR_PARTITION in `isr_update`.
-            let topic_name = (req_topic.topic_id != WireUuid::ZERO)
-                .then(|| image.topic_name_by_id(&uuid::Uuid::from_bytes(req_topic.topic_id.0)))
-                .flatten();
-            let resp_partitions: Vec<RespPartitionData> = match topic_name {
-                None => req_topic
-                    .partitions
-                    .iter()
-                    .map(|req_part| RespPartitionData {
-                        partition_index: req_part.partition_index,
-                        error_code: codes::UNKNOWN_TOPIC_ID,
-                        ..Default::default()
-                    })
-                    .collect(),
-                Some(topic_name) => req_topic
-                    .partitions
-                    .iter()
-                    .map(|req_part| {
-                        handle_partition_with_recovery(
-                            &image,
-                            &active,
-                            req.broker_id,
-                            topic_name,
-                            req_part,
-                            &mut changes,
-                        )
-                    })
-                    .collect(),
-            };
-
-            resp_topics.push(RespTopicData {
-                topic_id: req_topic.topic_id,
-                partitions: resp_partitions,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            });
-        }
-
-        // KIP-966: the ISR moves this request just approved decide the
-        // partition's eligible-leader set, so the state that carries them
-        // rides the same batch.
-        ElrPublisher::new(&image).extend(&mut changes);
-
-        if !changes.is_empty()
-            && let Err(e) = controller.submit_change(changes).await
-        {
-            return Err(BrokerError::Replication(format!("submit_change: {e}")));
-        }
-
-        encode_response(
+    // ── ACL preamble ────────────────────────────────────────────
+    // Inter-broker control-plane RPC: `ClusterAction` on
+    // `Cluster("kafka-cluster")`. On Deny → whole-response
+    // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
+    // Then only the active controller handles AlterPartition; any other node
+    // answers a whole-response `NOT_CONTROLLER`.
+    let refusal = if cluster_action_denied(
+        broker.config.authorizer.as_ref(),
+        &controller.current_image(),
+        ctx,
+    ) {
+        Some(codes::CLUSTER_AUTHORIZATION_FAILED)
+    } else if is_active_controller(broker) {
+        None
+    } else {
+        Some(codes::NOT_CONTROLLER)
+    };
+    if let Some(error_code) = refusal {
+        return encode_response(
             &AlterPartitionResponse {
                 throttle_time_ms: 0,
-                error_code: codes::NONE,
-                topics: resp_topics,
+                error_code,
+                topics: Vec::new(),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
             version,
-        )
+        );
     }
+
+    let image = controller.current_image();
+    // Kafka's `ReplicationControlManager.alterPartition` starts with
+    // `ClusterControlManager.checkBrokerEpoch`: a sender that is not
+    // registered, or that sends another epoch than its registration's,
+    // gets a top-level `STALE_BROKER_EPOCH` and no rows.
+    let sender_epoch = u64::try_from(req.broker_id)
+        .ok()
+        .and_then(|id| image.broker_epoch(krabka_metadata::NodeId(id)));
+    if sender_epoch != Some(req.broker_epoch) {
+        return encode_response(
+            &AlterPartitionResponse {
+                throttle_time_ms: 0,
+                error_code: codes::STALE_BROKER_EPOCH,
+                topics: Vec::new(),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            version,
+        );
+    }
+    // One snapshot of the brokers that may sit in an ISR: alive, unfenced
+    // and not in controlled shutdown. The registry is seeded for this term
+    // first, so a request served right after a failover does not read
+    // the registry an earlier term left.
+    broker
+        .liveness
+        .seed_term(
+            controller.current_controller_epoch(),
+            crate::heartbeat::controller_state::replicated_registrations(&image),
+        )
+        .await;
+    let active = broker.liveness.alive_snapshot().await;
+    let mut changes: Vec<MetadataRecord> = Vec::new();
+    let mut resp_topics: Vec<RespTopicData> = Vec::new();
+
+    for req_topic in &req.topics {
+        // Kafka's `ReplicationControlManager.alterPartition` answers
+        // UNKNOWN_TOPIC_ID on every partition row when the topic id is
+        // zero or names no topic. An unknown partition of a known topic
+        // answers UNKNOWN_TOPIC_OR_PARTITION in `isr_update`.
+        let topic_name = (req_topic.topic_id != WireUuid::ZERO)
+            .then(|| image.topic_name_by_id(&uuid::Uuid::from_bytes(req_topic.topic_id.0)))
+            .flatten();
+        let resp_partitions: Vec<RespPartitionData> = match topic_name {
+            None => req_topic
+                .partitions
+                .iter()
+                .map(|req_part| RespPartitionData {
+                    partition_index: req_part.partition_index,
+                    error_code: codes::UNKNOWN_TOPIC_ID,
+                    ..Default::default()
+                })
+                .collect(),
+            Some(topic_name) => req_topic
+                .partitions
+                .iter()
+                .map(|req_part| {
+                    handle_partition_with_recovery(
+                        &image,
+                        &active,
+                        req.broker_id,
+                        topic_name,
+                        req_part,
+                        &mut changes,
+                    )
+                })
+                .collect(),
+        };
+
+        resp_topics.push(RespTopicData {
+            topic_id: req_topic.topic_id,
+            partitions: resp_partitions,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        });
+    }
+
+    // KIP-966: the ISR moves this request just approved decide the
+    // partition's eligible-leader set, so the state that carries them
+    // rides the same batch.
+    ElrPublisher::new(&image).extend(&mut changes);
+
+    if !changes.is_empty()
+        && let Err(e) = controller.submit_change(changes).await
+    {
+        return Err(BrokerError::Replication(format!("submit_change: {e}")));
+    }
+
+    encode_response(
+        &AlterPartitionResponse {
+            throttle_time_ms: 0,
+            error_code: codes::NONE,
+            topics: resp_topics,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        },
+        version,
+    )
 }

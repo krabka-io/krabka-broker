@@ -6,10 +6,29 @@
 use std::net::SocketAddr;
 
 use bytes::{Bytes, BytesMut};
-use krabka_protocol::api_key::ApiKey;
+use krabka_protocol::{
+    api_key::ApiKey,
+    owned::{
+        sasl_authenticate_request::SaslAuthenticateRequest,
+        sasl_authenticate_response::SaslAuthenticateResponse,
+        sasl_handshake_request::SaslHandshakeRequest,
+        sasl_handshake_response::SaslHandshakeResponse,
+    },
+};
+use krabka_security::{AuthMethod, Principal, SaslMechanism};
 
 use super::response::encode_response;
-use crate::{broker::Broker, codes, error::BrokerError, handlers::ApiKeyCode};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::ApiKeyCode,
+    network::auth::{
+        ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
+        handle_authenticate_oauthbearer_with_jwks_cache, handle_authenticate_plain,
+        handle_authenticate_scram, handle_handshake,
+    },
+};
 
 /// `SaslHandshake` wire `api_key`. The loop handles it inline, before the
 /// handler table, because it mutates the per-connection auth state.
@@ -43,7 +62,7 @@ pub(super) struct SaslListener<'a> {
     /// Whether the listener runs SASL (`SASL_PLAINTEXT` or `SASL_SSL`).
     pub(super) is_sasl: bool,
     /// The mechanisms that the listener enables.
-    pub(super) mechanisms: &'a [krabka_security::SaslMechanism],
+    pub(super) mechanisms: &'a [SaslMechanism],
     /// The KIP-368 re-authentication window of the listener.
     pub(super) max_reauth: Option<krabka_units::Time>,
 }
@@ -66,7 +85,7 @@ pub(super) struct SaslSession {
 
 impl SaslSession {
     /// Whether the next frame is a raw SASL token rather than a Kafka request.
-    pub(super) fn expects_raw_token(&self, auth: &crate::network::auth::ConnectionAuth) -> bool {
+    pub(super) fn expects_raw_token(&self, auth: &ConnectionAuth) -> bool {
         self.raw_tokens && auth.negotiated_mechanism().is_some()
     }
 
@@ -75,14 +94,10 @@ impl SaslSession {
     /// `SaslServerAuthenticator.handleApiVersionsRequest` throws
     /// `IllegalStateException` for one outside `HANDSHAKE_OR_VERSIONS_REQUEST`,
     /// which closes the connection.
-    pub(super) fn repeats_api_versions(
-        &self,
-        auth: &crate::network::auth::ConnectionAuth,
-        api_key: ApiKeyCode,
-    ) -> bool {
+    pub(super) fn repeats_api_versions(&self, auth: &ConnectionAuth, api_key: ApiKeyCode) -> bool {
         self.api_versions_answered
             && api_key == API_VERSIONS_KEY
-            && matches!(auth, crate::network::auth::ConnectionAuth::Anonymous)
+            && matches!(auth, ConnectionAuth::Anonymous)
     }
 
     /// Records that the request in `parsed` gets a full `ApiVersions` answer
@@ -90,11 +105,11 @@ impl SaslSession {
     /// answer leaves Kafka's state as it was, so the client can ask again.
     pub(super) fn note_api_versions(
         &mut self,
-        auth: &crate::network::auth::ConnectionAuth,
+        auth: &ConnectionAuth,
         parsed: &crate::network::request::ParsedRequest<'_>,
     ) {
         if parsed.api_key == API_VERSIONS_KEY
-            && matches!(auth, crate::network::auth::ConnectionAuth::Anonymous)
+            && matches!(auth, ConnectionAuth::Anonymous)
             && crate::handlers::api_versions::is_valid_request_body(parsed.api_version, parsed.body)
         {
             self.api_versions_answered = true;
@@ -121,14 +136,13 @@ pub(super) async fn delay_failed_authentication(broker: &Broker) {
 /// chose, or the `Unknown` sentinel when none did.
 pub(super) fn record_refused_authentication(
     (metrics, audit_log): (&crate::metrics::BrokerMetrics, &krabka_audit::AuditLog),
-    auth: &crate::network::auth::ConnectionAuth,
+    auth: &ConnectionAuth,
     peer: &SocketAddr,
     reason: &str,
 ) {
-    let mech_label = auth.negotiated_mechanism().map_or(
-        crate::metrics::UNKNOWN_LABEL,
-        krabka_security::SaslMechanism::wire_name,
-    );
+    let mech_label = auth
+        .negotiated_mechanism()
+        .map_or(crate::metrics::UNKNOWN_LABEL, SaslMechanism::wire_name);
     metrics.record_authentication(mech_label, false);
     emit_authentication(
         audit_log,
@@ -137,7 +151,7 @@ pub(super) fn record_refused_authentication(
         auth.principal().map_or_else(
             || krabka_audit::AuditPrincipal {
                 name: String::new(),
-                auth_method: format!("{:?}", krabka_security::AuthMethod::Anonymous),
+                auth_method: format!("{:?}", AuthMethod::Anonymous),
             },
             audit_principal,
         ),
@@ -164,7 +178,7 @@ pub(super) fn record_refused_authentication(
 pub(super) async fn refuse_gated_request(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
-    auth: &crate::network::auth::ConnectionAuth,
+    auth: &ConnectionAuth,
     peer: &SocketAddr,
     listener_name: &str,
 ) -> Option<Bytes> {
@@ -179,7 +193,7 @@ pub(super) async fn refuse_gated_request(
         peer,
         "request blocked by per-state auth gate",
     );
-    if !matches!(auth, crate::network::auth::ConnectionAuth::Anonymous) {
+    if !matches!(auth, ConnectionAuth::Anonymous) {
         delay_failed_authentication(broker).await;
     }
     // Only mid-exchange does Kafka answer before closing.
@@ -202,13 +216,11 @@ fn unexpected_request_during_exchange(
 
     let mut body = BytesMut::new();
     let encoded = match parsed.api_key {
-        SASL_HANDSHAKE_KEY => {
-            krabka_protocol::owned::sasl_handshake_response::SaslHandshakeResponse {
-                error_code: codes::ILLEGAL_SASL_STATE,
-                ..Default::default()
-            }
-            .encode(&mut body, parsed.api_version)
+        SASL_HANDSHAKE_KEY => SaslHandshakeResponse {
+            error_code: codes::ILLEGAL_SASL_STATE,
+            ..Default::default()
         }
+        .encode(&mut body, parsed.api_version),
         API_VERSIONS_KEY => krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
             error_code: codes::ILLEGAL_SASL_STATE,
             ..Default::default()
@@ -237,11 +249,11 @@ fn unexpected_request_during_exchange(
 pub(super) async fn handle_raw_sasl_token(
     broker: &Broker,
     token: &Bytes,
-    auth: &mut crate::network::auth::ConnectionAuth,
+    auth: &mut ConnectionAuth,
     (listener, session): (&SaslListener<'_>, &mut SaslSession),
     peer: &SocketAddr,
 ) -> Option<Bytes> {
-    let req = krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+    let req = SaslAuthenticateRequest {
         auth_bytes: token.clone(),
         ..Default::default()
     };
@@ -274,7 +286,7 @@ pub(super) async fn handle_raw_sasl_token(
 pub(super) async fn try_handle_sasl_frame(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
-    auth: &mut crate::network::auth::ConnectionAuth,
+    auth: &mut ConnectionAuth,
     listener: &SaslListener<'_>,
     session: &mut SaslSession,
     peer: &SocketAddr,
@@ -303,19 +315,18 @@ fn non_sasl_listener_response(
 
     let mut body = BytesMut::new();
     if parsed.api_key == SASL_HANDSHAKE_KEY {
-        let response = krabka_protocol::owned::sasl_handshake_response::SaslHandshakeResponse {
+        let response = SaslHandshakeResponse {
             error_code: codes::ILLEGAL_SASL_STATE,
             ..Default::default()
         };
         body.reserve(response.encoded_len(parsed.api_version));
         response.encode(&mut body, parsed.api_version)?;
     } else {
-        let response =
-            krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
-                error_code: codes::ILLEGAL_SASL_STATE,
-                error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
-                ..Default::default()
-            };
+        let response = SaslAuthenticateResponse {
+            error_code: codes::ILLEGAL_SASL_STATE,
+            error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
+            ..Default::default()
+        };
         body.reserve(response.encoded_len(parsed.api_version));
         response.encode(&mut body, parsed.api_version)?;
     }
@@ -334,7 +345,7 @@ fn non_sasl_listener_response(
 async fn handle_sasl_frame(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
-    auth: &mut crate::network::auth::ConnectionAuth,
+    auth: &mut ConnectionAuth,
     listener: &SaslListener<'_>,
     session: &mut SaslSession,
     peer: &SocketAddr,
@@ -352,11 +363,7 @@ async fn handle_sasl_frame(
         }
         SASL_AUTHENTICATE_KEY => {
             let mut cur: &[u8] = parsed.body;
-            let req =
-                krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest::decode(
-                    &mut cur,
-                    parsed.api_version,
-                )?;
+            let req = SaslAuthenticateRequest::decode(&mut cur, parsed.api_version)?;
             // The request gate admits `SaslAuthenticate` only mid-exchange
             // and once authenticated. On an authenticated connection Kafka
             // hands it to `KafkaApis.handleSaslAuthenticateRequest`, which
@@ -377,7 +384,7 @@ async fn handle_sasl_frame(
                 ));
             } else {
                 (
-                    krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                    SaslAuthenticateResponse {
                         error_code: codes::ILLEGAL_SASL_STATE,
                         error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
                         ..Default::default()
@@ -417,37 +424,29 @@ async fn handle_sasl_frame(
 /// phase are known.
 async fn run_authenticate(
     broker: &Broker,
-    req: &krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest,
-    auth: &mut crate::network::auth::ConnectionAuth,
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
     max_reauth: Option<krabka_units::Time>,
     peer: &SocketAddr,
-) -> krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+) -> SaslAuthenticateResponse {
     let mech_opt = auth.negotiated_mechanism();
-    let reauthentication = matches!(
-        auth,
-        crate::network::auth::ConnectionAuth::Reauthenticating { .. }
-    );
+    let reauthentication = matches!(auth, ConnectionAuth::Reauthenticating { .. });
     let mut resp = match mech_opt {
-        Some(krabka_security::SaslMechanism::Plain) => {
-            crate::network::auth::handle_authenticate_plain(
-                req,
-                auth,
-                broker.config.plain_credentials.as_map(),
-                max_reauth,
-            )
-        }
-        Some(
-            krabka_security::SaslMechanism::ScramSha256
-            | krabka_security::SaslMechanism::ScramSha512,
-        ) => crate::network::auth::handle_authenticate_scram(
+        Some(SaslMechanism::Plain) => handle_authenticate_plain(
+            req,
+            auth,
+            broker.config.plain_credentials.as_map(),
+            max_reauth,
+        ),
+        Some(SaslMechanism::ScramSha256 | SaslMechanism::ScramSha512) => handle_authenticate_scram(
             req,
             auth,
             &*broker.controller,
             broker.config.delegation_token_secret_key.as_ref(),
             max_reauth,
         ),
-        Some(krabka_security::SaslMechanism::OAuthBearer) => {
-            crate::network::auth::handle_authenticate_oauthbearer_with_jwks_cache(
+        Some(SaslMechanism::OAuthBearer) => {
+            handle_authenticate_oauthbearer_with_jwks_cache(
                 req,
                 auth,
                 &broker.config.oauthbearer_validator,
@@ -458,16 +457,16 @@ async fn run_authenticate(
             )
             .await
         }
-        Some(krabka_security::SaslMechanism::Gssapi) => {
+        Some(SaslMechanism::Gssapi) => {
             let cfg = broker
                 .config
                 .gssapi
                 .as_ref()
                 .expect("GSSAPI enabled without config");
-            crate::network::auth::handle_authenticate_gssapi(req, auth, cfg, max_reauth)
+            handle_authenticate_gssapi(req, auth, cfg, max_reauth)
         }
         // Callers only run an exchange a handshake started.
-        None => krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+        None => SaslAuthenticateResponse {
             error_code: codes::ILLEGAL_SASL_STATE,
             error_message: None,
             ..Default::default()
@@ -477,17 +476,11 @@ async fn run_authenticate(
         && resp.error_code == codes::SASL_AUTHENTICATION_FAILED
         && resp.error_message.is_none()
     {
-        resp.error_message = Some(crate::network::auth::generic_failure_message(
-            mech,
-            reauthentication,
-        ));
+        resp.error_message = Some(generic_failure_message(mech, reauthentication));
     }
     // Account this SaslAuthenticate frame in the per-mechanism
     // success/failure counters, under the mechanism the handshake chose.
-    let mech_label = mech_opt.map_or(
-        crate::metrics::UNKNOWN_LABEL,
-        krabka_security::SaslMechanism::wire_name,
-    );
+    let mech_label = mech_opt.map_or(crate::metrics::UNKNOWN_LABEL, SaslMechanism::wire_name);
     let ok = resp.error_code == 0;
     broker.metrics.record_authentication(mech_label, ok);
     // One audit row per *completed* exchange, initial or KIP-368 re-auth
@@ -542,15 +535,13 @@ pub(crate) fn emit_authentication(
     });
 }
 
-/// Renders a resolved [`krabka_security::Principal`] as an audit principal.
+/// Renders a resolved [`Principal`] as an audit principal.
 ///
 /// The name is the `User:<name>` Kafka form, which is what
 /// `break_glass::handlers::principal_name` puts on a `PrivilegedAction` row.
 /// An auditor joins the two by that string, so the two sites have to spell a
 /// principal the same way.
-pub(crate) fn audit_principal(
-    principal: &krabka_security::Principal,
-) -> krabka_audit::AuditPrincipal {
+pub(crate) fn audit_principal(principal: &Principal) -> krabka_audit::AuditPrincipal {
     krabka_audit::AuditPrincipal {
         name: principal.to_kafka().to_string(),
         auth_method: format!("{:?}", principal.auth_method),
@@ -567,11 +558,11 @@ pub(crate) fn audit_principal(
 // ponytail: PLAIN only. SCRAM's client-first `n=<user>` would need a GS2
 // header parser here if a failed SCRAM row ever has to name the claimed user.
 fn claimed_principal(
-    mechanism: Option<krabka_security::SaslMechanism>,
-    req: &krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest,
+    mechanism: Option<SaslMechanism>,
+    req: &SaslAuthenticateRequest,
 ) -> krabka_audit::AuditPrincipal {
     let name = match mechanism {
-        Some(krabka_security::SaslMechanism::Plain) => req
+        Some(SaslMechanism::Plain) => req
             .auth_bytes
             .split(|&b| b == 0)
             .nth(1)
@@ -586,31 +577,26 @@ fn claimed_principal(
         name,
         auth_method: format!(
             "{:?}",
-            mechanism.map_or(krabka_security::AuthMethod::Anonymous, |m| {
-                krabka_security::AuthMethod::from_sasl(m)
-            })
+            mechanism.map_or(AuthMethod::Anonymous, |m| { AuthMethod::from_sasl(m) })
         ),
     }
 }
 
 fn handle_sasl_handshake(
     parsed: &crate::network::request::ParsedRequest<'_>,
-    auth: &mut crate::network::auth::ConnectionAuth,
-    sasl_mechanisms: &[krabka_security::SaslMechanism],
+    auth: &mut ConnectionAuth,
+    sasl_mechanisms: &[SaslMechanism],
     session: &mut SaslSession,
 ) -> Result<(Bytes, bool), BrokerError> {
     use krabka_protocol::{Decode, Encode};
 
     let mut body = parsed.body;
-    let request = krabka_protocol::owned::sasl_handshake_request::SaslHandshakeRequest::decode(
-        &mut body,
-        parsed.api_version,
-    )?;
-    let outcome = crate::network::auth::handle_handshake(
+    let request = SaslHandshakeRequest::decode(&mut body, parsed.api_version)?;
+    let outcome = handle_handshake(
         &request,
         auth,
         sasl_mechanisms,
-        &mut crate::network::auth::ReauthClock {
+        &mut ReauthClock {
             now_ms: crate::time_util::now_ms(),
             last_start_ms: &mut session.last_reauth_start_ms,
         },
@@ -624,7 +610,6 @@ fn handle_sasl_handshake(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_security::SaslMechanism;
 
     use super::*;
 

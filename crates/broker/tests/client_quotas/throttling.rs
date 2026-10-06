@@ -26,8 +26,9 @@ use super::{
     },
     data_plane::{drive_add_offsets_to_txn, drive_fetch_sasl, drive_produce_sasl},
     quota_admin::drive_alter_client_quotas_sasl,
-    wire::{round_trip_split_header, sasl_plain_authenticate},
+    wire::{CLIENT_ID, sasl_plain_authenticate},
 };
+use crate::kafka_wire::{self, Flexibility};
 
 /// `ApiVersions` is `api_key` 18.
 const API_VERSIONS_KEY: i16 = 18;
@@ -657,13 +658,16 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
     let mut body = BytesMut::new();
     req.encode(&mut body, API_VERSIONS_VERSION)
         .expect("encode ApiVersions");
-    let resp_bytes = round_trip_split_header(
+    let resp_bytes = kafka_wire::round_trip_with(
         stream,
         API_VERSIONS_KEY,
         API_VERSIONS_VERSION,
         corr_id,
-        true,
-        false,
+        CLIENT_ID,
+        Flexibility {
+            request: true,
+            response: false,
+        },
         &body,
     )
     .await

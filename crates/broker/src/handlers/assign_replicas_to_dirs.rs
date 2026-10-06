@@ -29,7 +29,9 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{ApiVersion, CorrelationId, RequestContext},
+    handlers::{
+        ApiVersion, CorrelationId, RequestContext, forward_to_controller::is_active_controller,
+    },
 };
 
 mod changes;
@@ -55,7 +57,6 @@ pub(crate) async fn handle(
     let req = AssignReplicasToDirsRequest::decode(&mut cur, version)?;
 
     let controller = broker.controller.clone();
-    let node_id = broker.config.node_id;
     let image = controller.current_image();
 
     // ── ACL preamble ────────────────────────────────────────────
@@ -74,11 +75,7 @@ pub(crate) async fn handle(
         );
     }
 
-    let is_leader = controller
-        .watch_leader()
-        .borrow()
-        .is_some_and(|n| is_controller_leader(Some(n.0), node_id.0));
-    if !is_leader {
+    if !is_active_controller(broker) {
         return crate::handlers::encode_response(&not_controller_response(), version);
     }
 
@@ -122,10 +119,6 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&response, version)
 }
 
-fn is_controller_leader(leader: Option<u64>, node_id: u64) -> bool {
-    leader == Some(node_id)
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -144,13 +137,6 @@ mod tests {
         },
         *,
     };
-
-    #[test]
-    fn leader_predicate_matches_current_node_only() {
-        for (leader, want) in [(Some(1), true), (Some(2), false), (None, false)] {
-            assert!(is_controller_leader(leader, 1) == want, "leader {leader:?}");
-        }
-    }
 
     /// The topic reference and the partition that one request row reports.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -5,7 +5,7 @@ use assert2::check;
 use krabka_protocol::Decode;
 
 use super::*;
-use crate::server::test_support::{single_voter_engine, wait_for_leader};
+use crate::server::test_support::{decoded, single_voter_engine, wait_for_leader};
 
 /// A wire listener set is usable only when every entry is named, hosted
 /// and on a real port, no name repeats, and there is at least one.
@@ -121,9 +121,8 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
             .await
             .expect("a refusal is still a response");
-        let mut cursor = &bytes[..];
-        let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-        check!(decoded == expected, "{what}");
+        let response = decoded::<RemoveRaftVoterResponse>(&bytes, version);
+        check!(response == expected, "{what}");
     }
 
     // Omitting the cluster id entirely is allowed: the field is optional,
@@ -139,12 +138,11 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
         .await
         .expect("response");
-    let mut cursor = &bytes[..];
-    let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    let response = decoded::<RemoveRaftVoterResponse>(&bytes, version);
     check!(
-        decoded.error_code != INVALID_REQUEST,
+        response.error_code != INVALID_REQUEST,
         "a well-formed request reaches the quorum, got {}",
-        decoded.error_code
+        response.error_code
     );
 
     // voter_id == 0 is valid (non-negative) and must not be rejected with INVALID_REQUEST
@@ -159,12 +157,11 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
         .await
         .expect("response");
-    let mut cursor = &bytes[..];
-    let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    let response = decoded::<RemoveRaftVoterResponse>(&bytes, version);
     check!(
-        decoded.error_code != INVALID_REQUEST,
+        response.error_code != INVALID_REQUEST,
         "voter_id 0 reaches the quorum, got {}",
-        decoded.error_code
+        response.error_code
     );
 }
 
@@ -240,10 +237,9 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
             .await
             .expect("a refusal is still a response");
-        let mut cursor = &bytes[..];
-        let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-        check!(decoded.error_code == INVALID_REQUEST, "{what}");
-        check!(decoded.error_message.is_some(), "{what}: says why");
+        let response = decoded::<AddRaftVoterResponse>(&bytes, version);
+        check!(response.error_code == INVALID_REQUEST, "{what}");
+        check!(response.error_message.is_some(), "{what}: says why");
     }
 
     // Foreign cluster_id is refused with INCONSISTENT_CLUSTER_ID (104)
@@ -259,9 +255,8 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
         .await
         .expect("response");
-    let mut cursor = &bytes[..];
-    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-    check!(decoded.error_code == 104);
+    let response = decoded::<AddRaftVoterResponse>(&bytes, version);
+    check!(response.error_code == 104);
 
     // Matching cluster_id is accepted (does not return INVALID_REQUEST)
     let request = AddRaftVoterRequest {
@@ -276,9 +271,8 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
         .await
         .expect("response");
-    let mut cursor = &bytes[..];
-    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-    check!(decoded.error_code != INVALID_REQUEST);
+    let response = decoded::<AddRaftVoterResponse>(&bytes, version);
+    check!(response.error_code != INVALID_REQUEST);
 
     // At kraft.version >= 1, AddRaftVoter probes the candidate listeners.
     // Unreachable candidate fails probe with code 7.
@@ -295,14 +289,13 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
         .await
         .expect("response");
-    let mut cursor = &bytes[..];
-    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    let response = decoded::<AddRaftVoterResponse>(&bytes, version);
     check!(
-        decoded.error_code == 7,
+        response.error_code == 7,
         "ApiVersions probe failed on unreachable candidate"
     );
     check!(
-        decoded
+        response
             .error_message
             .as_deref()
             .is_some_and(|m| m.contains("API_VERSIONS returned an error"))
@@ -370,10 +363,7 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         let bytes = update_raft_voter_response(version, &body.freeze(), &engine)
             .await
             .expect("response");
-        let mut cursor = &bytes[..];
-        UpdateRaftVoterResponse::decode(&mut cursor, version)
-            .expect("decode")
-            .error_code
+        decoded::<UpdateRaftVoterResponse>(&bytes, version).error_code
     };
 
     // (what it is, cluster id, epoch offered, version range, code expected)

@@ -14,6 +14,8 @@ use krabka_protocol::{
         push_telemetry_response::PushTelemetryResponse,
     },
 };
+use opentelemetry_proto::tonic::metrics::v1::MetricsData;
+use prost::Message as _;
 use uuid::Uuid;
 
 mod prometheus;
@@ -27,10 +29,7 @@ use self::prometheus::flatten_for_prometheus;
 use crate::{
     api_catalog::UnstableApiVersions,
     broker::Broker,
-    client_metrics::{
-        manager::{ClientAttributes, PushCheck, PushDecision},
-        otlp,
-    },
+    client_metrics::manager::{ClientAttributes, PushCheck, PushDecision},
     codes,
     error::BrokerError,
     handlers::context::TelemetryContext,
@@ -106,7 +105,7 @@ pub(crate) fn handle(
             // which makes the Java client stop pushing telemetry. Trunk
             // (KAFKA-21076) answers the retriable TELEMETRY_TOO_LARGE instead.
             match krabka_compression::decompress(ct, &req.metrics, manager.telemetry_max()) {
-                Ok(raw) => match otlp::decode_metrics(&raw) {
+                Ok(raw) => match MetricsData::decode(&raw[..]) {
                     Ok(md) => {
                         let instance_str = instance.to_string();
                         let points = flatten_for_prometheus(&md, &instance_str, ctx.client_id);

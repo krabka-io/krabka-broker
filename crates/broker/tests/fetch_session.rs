@@ -12,12 +12,12 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
+use support::topic_id_for;
 
 const FETCH_SESSION_ID_NOT_FOUND: i16 = 70;
 const INVALID_FETCH_SESSION_EPOCH: i16 = 71;
@@ -54,27 +54,8 @@ async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
     assert!(resp.topics[0].error_code == 0, "CreateTopics for {name}");
 }
 
-async fn topic_id_for(p: &support::InProcess, name: &str) -> WireUuid {
-    let resp = p
-        .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
-}
-
 async fn produce(p: &support::InProcess, topic: &str, partition: i32, records: i32) {
-    let topic_id = topic_id_for(p, topic).await;
+    let topic_id = topic_id_for(&p.client, topic).await;
     let req = ProduceRequest {
         acks: 1,
         timeout_ms: 5_000,
@@ -121,7 +102,7 @@ fn fetch_topic(name: &str, topic_id: WireUuid, partitions: Vec<FetchPartition>) 
 async fn new_session_then_incremental_filters_unchanged_partitions() {
     let p = support::start().await;
     create_topic(&p, "t", 3).await;
-    let tid = topic_id_for(&p, "t").await;
+    let tid = topic_id_for(&p.client, "t").await;
 
     // (1) New session — session_id=0, session_epoch=0.
     let r1 = p
@@ -209,7 +190,7 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
 async fn forgotten_topics_drop_partitions_from_subscription() {
     let p = support::start().await;
     create_topic(&p, "t", 3).await;
-    let tid = topic_id_for(&p, "t").await;
+    let tid = topic_id_for(&p.client, "t").await;
 
     // Open a session covering t-0..t-2.
     let r1 = p
@@ -318,7 +299,7 @@ async fn unknown_session_id_returns_not_found() {
 async fn stale_session_epoch_returns_invalid_epoch() {
     let p = support::start().await;
     create_topic(&p, "t", 1).await;
-    let tid = topic_id_for(&p, "t").await;
+    let tid = topic_id_for(&p.client, "t").await;
 
     let r1 = p
         .client
@@ -356,7 +337,7 @@ async fn stale_session_epoch_returns_invalid_epoch() {
 async fn close_session_drops_cache_entry() {
     let p = support::start().await;
     create_topic(&p, "t", 1).await;
-    let tid = topic_id_for(&p, "t").await;
+    let tid = topic_id_for(&p.client, "t").await;
 
     let r1 = p
         .client
@@ -428,7 +409,7 @@ async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
 async fn sessionless_full_fetch_round_trip() {
     let p = support::start().await;
     create_topic(&p, "t", 1).await;
-    let tid = topic_id_for(&p, "t").await;
+    let tid = topic_id_for(&p.client, "t").await;
     produce(&p, "t", 0, 2).await;
 
     let r = p

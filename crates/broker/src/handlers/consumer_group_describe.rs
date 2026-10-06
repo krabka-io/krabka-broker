@@ -47,12 +47,8 @@ use crate::{
     codes,
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::{authorized_operations::authorized_operations_bits, group_version_disabled},
 };
-
-/// KIP-848/KIP-584: minimum finalized `group.version` feature level that
-/// enables the next-gen consumer-group RPCs.
-const NEXT_GEN_MIN_GROUP_VERSION: i16 = 1;
 
 /// `member_type` of a member that speaks the classic protocol inside a
 /// consumer group.
@@ -96,13 +92,11 @@ pub(crate) async fn handle(
     let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for group_id in &req.group_ids {
-        if crate::handlers::acl_denied(
+        if crate::handlers::group_describe_denied(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            krabka_metadata::ResourceType::Group,
             group_id,
-            krabka_metadata::AclOperation::Describe,
         ) {
             denied.push(error_row(group_id, codes::GROUP_AUTHORIZATION_FAILED, None));
             continue;
@@ -318,14 +312,6 @@ fn assignment(partitions: HashMap<Uuid, Vec<i32>>, image: &MetadataImage) -> Ass
         topic_partitions,
         ..Default::default()
     }
-}
-
-fn group_version_disabled(image: &MetadataImage) -> bool {
-    !crate::features::feature_enabled(
-        image,
-        krabka_metadata::group_version::GROUP_VERSION_FEATURE,
-        NEXT_GEN_MIN_GROUP_VERSION,
-    )
 }
 
 fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {

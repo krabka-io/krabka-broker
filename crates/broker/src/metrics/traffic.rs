@@ -38,11 +38,7 @@ impl BrokerMetrics {
         if messages == 0 {
             return;
         }
-        let lbl = TopicLabel {
-            topic: Arc::clone(topic),
-        };
-        self.topic_messages_in.get_or_create(&lbl).inc_by(messages);
-        self.track_topic_series(&lbl);
+        self.count_topic(&self.topic_messages_in, Arc::clone(topic), messages);
     }
 
     /// Convenience: record a Fetch hit on `topic` with the bytes
@@ -64,22 +60,14 @@ impl BrokerMetrics {
     /// carries a non-zero error code — mirrors the JVM's per-row
     /// `failedProduceRequestRate.mark()`.
     pub fn record_failed_produce(&self, topic: &Arc<str>) {
-        let lbl = TopicLabel {
-            topic: Arc::clone(topic),
-        };
-        self.topic_failed_produce_requests.get_or_create(&lbl).inc();
-        self.track_topic_series(&lbl);
+        self.count_topic(&self.topic_failed_produce_requests, Arc::clone(topic), 1);
     }
 
     /// Record a single failed Fetch partition response
     /// for `topic`. Same per-partition semantics as
     /// `record_failed_produce`.
     pub fn record_failed_fetch(&self, topic: &Arc<str>) {
-        let lbl = TopicLabel {
-            topic: Arc::clone(topic),
-        };
-        self.topic_failed_fetch_requests.get_or_create(&lbl).inc();
-        self.track_topic_series(&lbl);
+        self.count_topic(&self.topic_failed_fetch_requests, Arc::clone(topic), 1);
     }
 
     /// Convenience: account a partition's slice of a Produce request.
@@ -114,22 +102,14 @@ impl BrokerMetrics {
     /// path (the partition's `records` field arrived as a legacy
     /// `MessageSet` and was decoded into a v2 `RecordBatch`).
     pub fn record_produce_message_conversion(&self, topic: &Arc<str>) {
-        let lbl = TopicLabel {
-            topic: Arc::clone(topic),
-        };
-        self.produce_message_conversions.get_or_create(&lbl).inc();
-        self.track_topic_series(&lbl);
+        self.count_topic(&self.produce_message_conversions, Arc::clone(topic), 1);
     }
 
     /// Account one v2 → v0/v1 down-conversion on the Fetch
     /// path (a legacy client's Fetch v < 4 response is being assembled
     /// from a v2 record batch).
     pub fn record_fetch_message_conversion(&self, topic: &Arc<str>) {
-        let lbl = TopicLabel {
-            topic: Arc::clone(topic),
-        };
-        self.fetch_message_conversions.get_or_create(&lbl).inc();
-        self.track_topic_series(&lbl);
+        self.count_topic(&self.fetch_message_conversions, Arc::clone(topic), 1);
     }
 
     /// Convenience: account handler-thread microseconds spent on a

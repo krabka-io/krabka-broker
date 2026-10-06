@@ -20,10 +20,12 @@
 //! keeps the blast radius small and leaves the auth test file, over 1500
 //! lines, untouched.
 
+mod kafka_wire;
+
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
 use krabka_protocol::{
     Decode, Encode,
@@ -37,10 +39,7 @@ use krabka_protocol::{
     },
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
 /// Formats `log_dir`, seeding one SCRAM credential.
 ///
@@ -262,9 +261,8 @@ async fn drive_sasl_scram_session(
     Ok(())
 }
 
-/// Encodes a `RequestHeader v1`, or v2 when `flexible` is set, appends the
-/// body, and writes the length-prefixed frame. It then reads one response
-/// frame and strips the `ResponseHeader`.
+/// One length-prefixed request/response exchange; see
+/// [`kafka_wire::round_trip`].
 async fn round_trip(
     stream: &mut TcpStream,
     api_key: i16,
@@ -272,39 +270,15 @@ async fn round_trip(
     corr_id: i32,
     flexible: bool,
     body: &[u8],
-) -> Result<Vec<u8>, io::Error> {
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    let client_id = "krabka-bootstrap-test";
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0); // empty header tagged-fields
-    }
-    frame.put_slice(body);
-
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame size fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
-
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-
-    let mut cur = &resp[..];
-    let _resp_corr_id = cur.get_i32();
-    let uses_v1_header = flexible && api_key != 18;
-    if uses_v1_header {
-        if cur.is_empty() {
-            return Err(io::Error::other(
-                "flexible response missing tagged-fields byte",
-            ));
-        }
-        let _tagged = cur.get_u8();
-    }
-    Ok(cur.to_vec())
+) -> io::Result<Vec<u8>> {
+    kafka_wire::round_trip(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        "krabka-bootstrap-test",
+        flexible,
+        body,
+    )
+    .await
 }

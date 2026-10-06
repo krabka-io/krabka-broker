@@ -14,11 +14,12 @@ use krabka_protocol::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        metadata_request::MetadataRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     records::{Record, RecordBatch},
 };
+use support::topic_id_for;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Build a `RecordBatch` with one entry per provided value. Codegen's
@@ -65,30 +66,6 @@ fn timestamped_batch(entries: &[(&str, i64)]) -> RecordBatch {
         });
     }
     batch
-}
-
-/// Round-trip a Metadata request to learn the topic's assigned UUID.
-/// Produce / Fetch at v ≥ 13 carry only `topic_id` on the wire, so the
-/// caller must pass the real UUID through.
-async fn topic_id_for(
-    client: &krabka_client_core::Client,
-    name: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
-    let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata for topic_id");
-    resp.topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
 }
 
 #[tokio::test]

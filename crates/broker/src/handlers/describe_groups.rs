@@ -27,7 +27,7 @@
 //! `i32::MIN` "not present" sentinel.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::ResourceType;
 use krabka_protocol::{
     Decode,
     owned::{
@@ -80,13 +80,11 @@ pub(crate) async fn handle(
     let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
     for gid in req.groups {
-        if crate::handlers::acl_denied(
+        if crate::handlers::group_describe_denied(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            ResourceType::Group,
             gid.as_str(),
-            AclOperation::Describe,
         ) {
             denied.push(DescribedGroup {
                 group_id: gid,
@@ -236,6 +234,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
+    use krabka_metadata::AclOperation;
 
     use super::*;
     use crate::{

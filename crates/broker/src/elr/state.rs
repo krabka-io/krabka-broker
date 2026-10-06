@@ -192,7 +192,7 @@ pub(crate) fn without_legacy_elr(
     ))
 }
 
-fn metadata_node_ids(ids: &[i32]) -> Vec<NodeId> {
+pub(super) fn metadata_node_ids(ids: &[i32]) -> Vec<NodeId> {
     ids.iter()
         .filter_map(|id| u64::try_from(*id).ok().map(NodeId))
         .collect()
