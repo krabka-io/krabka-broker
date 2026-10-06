@@ -25,8 +25,8 @@
 //! established by the existing integration suites.
 //!
 //! Tests 1 and 2 live in `config_propagation`, tests 3 and 4 in `fetch_size`.
-//! The helpers they share are split by layer: `wire` for the framing and the
-//! SASL handshake, `cluster` for broker and topic setup, `configs` for the
+//! The helpers they share are split by layer: `kafka_wire` for the framing and
+//! the SASL handshake, `cluster` for broker and topic setup, `configs` for the
 //! `IncrementalAlterConfigs` and `DescribeConfigs` drivers, and `records` for
 //! Produce and Fetch.
 
@@ -45,5 +45,6 @@ mod fetch_size;
 mod kafka_wire;
 #[path = "throttle/records.rs"]
 mod records;
-#[path = "throttle/wire.rs"]
-mod wire;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-throttle-test";

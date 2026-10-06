@@ -1,11 +1,11 @@
-//! PLAINTEXT wire helpers for the partition-reassignment suite: one
-//! length-prefixed request and response exchange, and the `CreateTopics` call
-//! that provisions a topic before a test drives a reassignment.
+//! PLAINTEXT wire helpers for the partition-reassignment suite: the client id
+//! every request carries, and the `CreateTopics` call that provisions a topic
+//! before a test drives a reassignment.
 //!
 //! The authorizer compatibility shim allows every request when there are no
 //! `super_users` and no ACLs, so nothing here performs a SASL handshake.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -16,28 +16,6 @@ use crate::kafka_wire;
 
 /// The client id every request header in this suite carries.
 pub const CLIENT_ID: &str = "krabka-reassign-test";
-
-/// One length-prefixed request and response exchange over a PLAINTEXT
-/// connection; see [`kafka_wire::round_trip`].
-pub async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        CLIENT_ID,
-        flexible,
-        body,
-    )
-    .await
-}
 
 /// Creates a topic over PLAINTEXT. The authorizer's compat shim, with no
 /// `super_users` and no ACLs, lets the request through. Copied from
@@ -66,7 +44,7 @@ pub async fn create_topic_plaintext(
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;

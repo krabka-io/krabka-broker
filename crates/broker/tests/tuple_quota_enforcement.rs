@@ -32,8 +32,11 @@ mod kafka_wire;
 mod tuple_quota_cluster;
 #[path = "tuple_quota_enforcement/tuple_quota_drivers.rs"]
 mod tuple_quota_drivers;
-#[path = "tuple_quota_enforcement/tuple_quota_wire.rs"]
-mod tuple_quota_wire;
+
+/// The default client id request headers in this suite carry. The tuple-quota
+/// test sends a second produce under another id, which the broker reads for the
+/// quota lookup.
+const CLIENT_ID: &str = "krabka-tuple-quota-test";
 
 use assert2::assert;
 

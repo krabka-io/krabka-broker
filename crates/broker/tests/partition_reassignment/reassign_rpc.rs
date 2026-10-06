@@ -11,7 +11,7 @@ use bytes::BytesMut;
 use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 
-use crate::plaintext_wire::round_trip;
+use crate::{kafka_wire, plaintext_wire::CLIENT_ID};
 
 /// Drives `AlterPartitionReassignments` over a fresh PLAINTEXT connection. It
 /// returns `(topic_name, [(partition_index, error_code)])` rows.
@@ -57,7 +57,7 @@ pub async fn drive_alter_reassignments(
     let mut body = BytesMut::new();
     req.encode(&mut body, 1)
         .expect("encode AlterPartitionReassignments");
-    let resp_bytes = round_trip(&mut stream, 45, 1, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 45, 1, 1, CLIENT_ID, true, &body)
         .await
         .expect("AlterPartitionReassignments round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -113,7 +113,7 @@ pub async fn drive_list_reassignments(
     let mut body = BytesMut::new();
     req.encode(&mut body, 0)
         .expect("encode ListPartitionReassignments");
-    let resp_bytes = round_trip(&mut stream, 46, 0, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 46, 0, 1, CLIENT_ID, true, &body)
         .await
         .expect("ListPartitionReassignments round-trip");
     let mut cur: &[u8] = &resp_bytes;

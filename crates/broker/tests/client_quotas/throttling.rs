@@ -19,6 +19,7 @@ use krabka_protocol::{
 use tokio::net::TcpStream;
 
 use super::{
+    CLIENT_ID,
     cluster::{
         create_topic_as_admin, seed_alice_read_acl, seed_alice_write_acl,
         seed_compat_shim_disable_acl, start_single_broker_sasl_plaintext_with_users,
@@ -26,7 +27,6 @@ use super::{
     },
     data_plane::{drive_add_offsets_to_txn, drive_fetch_sasl, drive_produce_sasl},
     quota_admin::drive_alter_client_quotas_sasl,
-    wire::{CLIENT_ID, sasl_plain_authenticate},
 };
 use crate::kafka_wire::{self, Flexibility};
 
@@ -470,7 +470,7 @@ async fn user_client_tuple_overrides_user_specific() {
     .await;
     assert!(alter_user[0].1 == 0, "alter user quota must succeed");
 
-    // Set a tight tuple quota for the client id written by `round_trip`.
+    // Set a tight tuple quota for `CLIENT_ID`.
     let alter_tuple = drive_alter_client_quotas_sasl(
         addr,
         "admin",
@@ -573,7 +573,7 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
 
     // One connection for every alice request: re-authenticating would charge
     // each handshake to the same quota bucket.
-    let mut stream = sasl_plain_authenticate(addr, "alice", b"alice-secret")
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "alice", b"alice-secret")
         .await
         .expect("SASL authenticate for AddOffsetsToTxn");
 
@@ -697,7 +697,7 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
     )
     .await;
 
-    let mut stream = sasl_plain_authenticate(addr, "alice", b"alice-secret")
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "alice", b"alice-secret")
         .await
         .expect("SASL authenticate for ApiVersions");
 

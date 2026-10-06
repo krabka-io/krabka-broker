@@ -13,7 +13,7 @@
 
 mod kafka_wire;
 
-use std::{io, time::Duration};
+use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::BytesMut;
@@ -39,27 +39,8 @@ const FETCH_VERSION: i16 = 12;
 const PRODUCE_VERSION: i16 = 9;
 const CREATE_TOPICS_VERSION: i16 = 7;
 
-/// One length-prefixed request/response exchange; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "krabka-metrics-test",
-        flexible,
-        body,
-    )
-    .await
-}
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-metrics-test";
 
 async fn create_topic(addr: std::net::SocketAddr) {
     create_topic_named(addr, TOPIC).await;
@@ -79,9 +60,17 @@ async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION).unwrap();
-    let resp = round_trip(&mut stream, 19, CREATE_TOPICS_VERSION, 1, true, &body)
-        .await
-        .unwrap();
+    let resp = kafka_wire::round_trip(
+        &mut stream,
+        19,
+        CREATE_TOPICS_VERSION,
+        1,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .unwrap();
     let mut cur: &[u8] = &resp;
     let r = CreateTopicsResponse::decode(&mut cur, CREATE_TOPICS_VERSION).unwrap();
     assert!(r.topics[0].error_code == 0, "create: {:?}", r.topics[0]);
@@ -121,7 +110,7 @@ async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> 
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = round_trip(&mut stream, 0, PRODUCE_VERSION, 1, true, &body)
+    let resp = kafka_wire::round_trip(&mut stream, 0, PRODUCE_VERSION, 1, CLIENT_ID, true, &body)
         .await
         .unwrap();
     let mut cur: &[u8] = &resp;
@@ -156,7 +145,7 @@ async fn fetch_one(addr: std::net::SocketAddr) {
     let mut body = BytesMut::new();
     req.encode(&mut body, FETCH_VERSION).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = round_trip(&mut stream, 1, FETCH_VERSION, 1, true, &body)
+    let resp = kafka_wire::round_trip(&mut stream, 1, FETCH_VERSION, 1, CLIENT_ID, true, &body)
         .await
         .unwrap();
     let mut cur: &[u8] = &resp;

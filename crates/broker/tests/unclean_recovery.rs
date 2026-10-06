@@ -53,7 +53,7 @@
 //! convention. The openraft `debug_assert!` races on the hosted Windows
 //! scheduler are unrelated.
 
-use std::{io, net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -86,27 +86,8 @@ const WITNESS_CONFIG_KEY: &str = "broker.witness";
 // independently so a small duplicate keeps the helper local + simple.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// One length-prefixed request/response exchange; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "krabka-unclean-test",
-        flexible,
-        body,
-    )
-    .await
-}
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-unclean-test";
 
 /// Creates a topic on a PLAINTEXT broker. The authorizer compat shim, with no
 /// `super_users` and no ACLs, lets the request through.
@@ -127,7 +108,7 @@ async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i32]) 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -163,9 +144,17 @@ async fn drive_elect_leaders(
     let mut body = BytesMut::new();
     req.encode(&mut body, ELECT_LEADERS_VERSION)
         .expect("encode ElectLeaders");
-    let resp_bytes = round_trip(&mut stream, 43, ELECT_LEADERS_VERSION, 1, true, &body)
-        .await
-        .expect("ElectLeaders round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        43,
+        ELECT_LEADERS_VERSION,
+        1,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .expect("ElectLeaders round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp = ElectLeadersResponse::decode(&mut cur, ELECT_LEADERS_VERSION)
         .expect("decode ElectLeadersResponse");

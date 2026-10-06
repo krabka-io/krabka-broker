@@ -13,7 +13,7 @@
 //! The test is gated to non-Windows to match the multi-broker convention established by the existing integration suites.`debug_assert!` races on the hosted Windows
 //! task scheduler are unrelated to the protocol under test.
 
-use std::{io, net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -33,27 +33,8 @@ mod support;
 const CREATE_TOPICS_API_KEY: i16 = 19;
 const CREATE_TOPICS_VERSION: i16 = 7;
 
-/// One length-prefixed request/response exchange; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "krabka-controlled-shutdown-test",
-        flexible,
-        body,
-    )
-    .await
-}
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-controlled-shutdown-test";
 
 async fn create_topic(addr: SocketAddr, name: &str, partitions: i32, rf: i16) {
     let req = CreateTopicsRequest {
@@ -70,11 +51,12 @@ async fn create_topic(addr: SocketAddr, name: &str, partitions: i32, rf: i16) {
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION)
         .expect("encode CreateTopics");
-    let resp_bytes = round_trip(
+    let resp_bytes = kafka_wire::round_trip(
         &mut stream,
         CREATE_TOPICS_API_KEY,
         CREATE_TOPICS_VERSION,
         1,
+        CLIENT_ID,
         true,
         &body,
     )

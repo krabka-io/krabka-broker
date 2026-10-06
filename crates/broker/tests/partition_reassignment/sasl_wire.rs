@@ -2,10 +2,10 @@
 //!
 //! The deny test needs a principal that is not a super-user, so it runs against
 //! a single-broker `SASL_PLAINTEXT` listener with `SimpleAclAuthorizer`
-//! installed. This module holds the handshake, that cluster boot, and the
+//! installed. This module holds that cluster boot and the
 //! authenticated `CreateTopics` and `AlterPartitionReassignments` drivers.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -13,22 +13,8 @@ use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, confi
 use krabka_protocol::{self, Decode, Encode};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
-use tokio::net::TcpStream;
 
-use crate::{
-    kafka_wire,
-    plaintext_wire::{CLIENT_ID, round_trip},
-};
-
-/// Opens a TCP stream to `addr` and authenticates it with SASL/PLAIN; see
-/// [`kafka_wire::sasl_plain_authenticate`].
-async fn sasl_plain_authenticate(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-) -> io::Result<TcpStream> {
-    kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await
-}
+use crate::{kafka_wire, plaintext_wire::CLIENT_ID};
 
 /// Starts a single-broker SASL/PLAINTEXT cluster and returns
 /// `(handle, _dir, addr)`. `super_user` becomes the only super-user. `users`
@@ -99,12 +85,12 @@ pub async fn create_topic_as_admin(
         timeout_ms: 5_000,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, "admin", b"admin-secret")
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "admin", b"admin-secret")
         .await
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -160,13 +146,13 @@ pub async fn drive_alter_reassignments_sasl_plain(
         topics,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for AlterPartitionReassignments");
     let mut body = BytesMut::new();
     req.encode(&mut body, 1)
         .expect("encode AlterPartitionReassignments");
-    let resp_bytes = round_trip(&mut stream, 45, 1, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 45, 1, 1, CLIENT_ID, true, &body)
         .await
         .expect("AlterPartitionReassignments round-trip");
     let mut cur: &[u8] = &resp_bytes;

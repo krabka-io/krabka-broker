@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use bytes::BytesMut;
 use krabka_protocol::{Decode, Encode};
 
-use crate::scram_wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 /// Drives `DescribeUserScramCredentials` (`api_key=50`) over a SASL/PLAIN
 /// connection.
@@ -38,7 +38,7 @@ pub(crate) async fn drive_describe_user_scram_credentials_sasl(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for DescribeUserScramCredentials");
 
@@ -46,7 +46,7 @@ pub(crate) async fn drive_describe_user_scram_credentials_sasl(
     req.encode(&mut body, 0)
         .expect("encode DescribeUserScramCredentials");
 
-    let resp_bytes = round_trip(&mut stream, 50, 0, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 50, 0, 1, CLIENT_ID, true, &body)
         .await
         .expect("DescribeUserScramCredentials round-trip");
 

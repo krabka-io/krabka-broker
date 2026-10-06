@@ -19,7 +19,7 @@ use krabka_protocol::{
     },
 };
 
-use crate::wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
 /// Returns `(throttle_time_ms, per-topic error_code)` from the first result.
@@ -43,12 +43,12 @@ pub(crate) async fn drive_create_topics_sasl(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, VERSION, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, VERSION, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -78,12 +78,12 @@ pub(crate) async fn drive_delete_topics_sasl(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for DeleteTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode DeleteTopics");
-    let resp_bytes = round_trip(&mut stream, 20, VERSION, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 20, VERSION, 1, CLIENT_ID, true, &body)
         .await
         .expect("DeleteTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;

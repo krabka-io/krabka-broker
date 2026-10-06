@@ -44,7 +44,6 @@ use krabka_protocol::{
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
-use tokio::net::TcpStream;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 // Local mirror of `krabka_broker::codes::TOPIC_AUTHORIZATION_FAILED`,
@@ -58,6 +57,9 @@ const ERR_TOPIC_AUTHORIZATION_FAILED: i16 = 29;
 //     rather than topic_id (v >= 13 introduces the latter).
 const CREATE_TOPICS_VERSION: i16 = 7;
 const PRODUCE_VERSION: i16 = 11;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-opa-test";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster bring-up.
@@ -141,45 +143,7 @@ fn start_broker_with_opa_authorizer(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire driver helpers.
-//
-// Identical shape to the helpers in `tests/acl_handlers.rs` and
-// `tests/delegation_tokens.rs` — kept inline here because Cargo's integration
-// test layout treats each `tests/*.rs` as its own crate, so reuse across
-// files isn't free without a `mod support;` declaration. The wire framing
-// is small enough that another copy is cheaper than the extra indirection.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// One length-prefixed request/response exchange; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "krabka-opa-test",
-        flexible,
-        body,
-    )
-    .await
-}
-
-/// Connects and authenticates with SASL/PLAIN; see
-/// [`kafka_wire::sasl_plain_authenticate`].
-async fn sasl_plain_authenticate(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-) -> io::Result<TcpStream> {
-    kafka_wire::sasl_plain_authenticate(addr, "krabka-opa-test", user, password).await
-}
 
 fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) -> ProduceRequest {
     ProduceRequest {
@@ -216,11 +180,20 @@ async fn drive_create_topics_as_plain(
     password: &[u8],
     req: CreateTopicsRequest,
 ) -> Result<CreateTopicsResponse, io::Error> {
-    let mut stream = sasl_plain_authenticate(addr, user, password).await?;
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await?;
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION)
         .map_err(|e| io::Error::other(format!("CreateTopics encode: {e}")))?;
-    let resp_bytes = round_trip(&mut stream, 19, CREATE_TOPICS_VERSION, 4, true, &body).await?;
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        19,
+        CREATE_TOPICS_VERSION,
+        4,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await?;
     let mut cur: &[u8] = &resp_bytes;
     CreateTopicsResponse::decode(&mut cur, CREATE_TOPICS_VERSION)
         .map_err(|e| io::Error::other(format!("CreateTopics decode: {e}")))
@@ -232,11 +205,12 @@ async fn drive_produce_as_plain(
     password: &[u8],
     req: ProduceRequest,
 ) -> Result<ProduceResponse, io::Error> {
-    let mut stream = sasl_plain_authenticate(addr, user, password).await?;
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await?;
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION)
         .map_err(|e| io::Error::other(format!("Produce encode: {e}")))?;
-    let resp_bytes = round_trip(&mut stream, 0, PRODUCE_VERSION, 4, true, &body).await?;
+    let resp_bytes =
+        kafka_wire::round_trip(&mut stream, 0, PRODUCE_VERSION, 4, CLIENT_ID, true, &body).await?;
     let mut cur: &[u8] = &resp_bytes;
     ProduceResponse::decode(&mut cur, PRODUCE_VERSION)
         .map_err(|e| io::Error::other(format!("Produce decode: {e}")))

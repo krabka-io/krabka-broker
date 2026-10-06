@@ -8,7 +8,7 @@ use assert2::assert;
 use bytes::BytesMut;
 use krabka_protocol::{Decode, Encode};
 
-use super::wire::{round_trip, sasl_plain_authenticate};
+use crate::{CLIENT_ID, kafka_wire};
 
 pub type QuotaEntity = Vec<(String, Option<String>)>;
 pub type QuotaOperations = Vec<(String, f64, bool)>;
@@ -69,13 +69,13 @@ pub async fn drive_alter_client_quotas_sasl(
 
     let version: i16 = 1; // flexible
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for AlterClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode AlterClientQuotas");
-    let resp_bytes = round_trip(&mut stream, 49, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 49, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("AlterClientQuotas round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -129,13 +129,13 @@ pub async fn drive_describe_client_quotas_sasl(
 
     let version: i16 = 1; // flexible
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for DescribeClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode DescribeClientQuotas");
-    let resp_bytes = round_trip(&mut stream, 48, version, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 48, version, 1, CLIENT_ID, true, &body)
         .await
         .expect("DescribeClientQuotas round-trip");
     let mut cur: &[u8] = &resp_bytes;

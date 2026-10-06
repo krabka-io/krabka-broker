@@ -30,8 +30,9 @@ mod compaction_cluster;
 mod compaction_records;
 #[path = "compaction/compaction_rpc.rs"]
 mod compaction_rpc;
-#[path = "compaction/compaction_wire.rs"]
-mod compaction_wire;
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-compaction-test";
 
 /// End-to-end compaction test:
 ///

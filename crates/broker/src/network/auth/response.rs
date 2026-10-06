@@ -55,7 +55,6 @@ pub fn sasl_ok(
     session_lifetime_ms: i64,
 ) -> SaslAuthenticateResponse {
     SaslAuthenticateResponse {
-        error_code: 0,
         error_message: None,
         auth_bytes: auth_bytes.into(),
         session_lifetime_ms,

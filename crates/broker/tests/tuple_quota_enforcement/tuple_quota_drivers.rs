@@ -25,10 +25,7 @@ use krabka_protocol::{
     records::{Record, RecordBatch},
 };
 
-use crate::{
-    kafka_wire,
-    tuple_quota_wire::{round_trip, sasl_plain_authenticate},
-};
+use crate::{CLIENT_ID, kafka_wire};
 
 pub(crate) type QuotaEntity = Vec<(String, Option<String>)>;
 pub(crate) type QuotaOperations = Vec<(String, f64, bool)>;
@@ -82,13 +79,13 @@ pub(crate) async fn drive_alter_client_quotas_sasl(
         ..Default::default()
     };
 
-    let mut stream = sasl_plain_authenticate(addr, user, pass.as_bytes())
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for AlterClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION)
         .expect("encode AlterClientQuotas");
-    let resp_bytes = round_trip(&mut stream, 49, VERSION, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 49, VERSION, 1, CLIENT_ID, true, &body)
         .await
         .expect("AlterClientQuotas round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -165,7 +162,7 @@ async fn drive_produce_sasl_with_client_id(
     // SASL handshake uses the default test client_id; only the Produce request
     // itself carries wire_client_id.  Each TCP connection creates a fresh
     // broker-side connection state, so the quota window resets per connection.
-    let mut stream = sasl_plain_authenticate(addr, user, pass)
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
         .await
         .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();

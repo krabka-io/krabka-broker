@@ -20,7 +20,7 @@
 
 mod kafka_wire;
 
-use std::{io, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -42,6 +42,9 @@ use tokio_rustls::{
         pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
     },
 };
+
+/// The client id every request header in this suite carries.
+const CLIENT_ID: &str = "krabka-mtls-test";
 
 const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
 const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
@@ -221,7 +224,9 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     };
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut tls, 19, 7, 1, true, &body).await.unwrap();
+    let resp_bytes = kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body)
+        .await
+        .unwrap();
     let mut cur: &[u8] = &resp_bytes;
     let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
 
@@ -233,31 +238,6 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     );
 
     handle.shutdown().await;
-}
-
-/// One length-prefixed request/response exchange over any stream, TLS
-/// included; see [`kafka_wire::round_trip`].
-async fn round_trip<S>(
-    stream: &mut S,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "krabka-mtls-test",
-        flexible,
-        body,
-    )
-    .await
 }
 
 /// A presented certificate whose Subject DN matches no
@@ -348,7 +328,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
 
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        round_trip(&mut tls, 19, 7, 1, true, &body),
+        kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body),
     )
     .await
     .expect("the broker must close rather than hang");
@@ -442,7 +422,7 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     // shape and gets no answer at all.
     let resp_bytes = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        round_trip(&mut tls, 19, 7, 1, true, &body),
+        kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body),
     )
     .await
     .expect("the broker must not hang")

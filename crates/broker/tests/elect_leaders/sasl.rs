@@ -1,12 +1,11 @@
-//! The SASL/PLAIN half of the wire layer: the authentication exchange, and the
-//! `CreateTopics` and `ElectLeaders` drivers that run over an authenticated
-//! stream.
+//! The SASL/PLAIN half of the wire layer: the `CreateTopics` and
+//! `ElectLeaders` drivers that run over an authenticated stream.
 //!
 //! Only the authorization test uses these. It needs a named principal for the
 //! authorizer to deny, so its listener is `SASL_PLAINTEXT` rather than the
 //! PLAINTEXT one the election tests use.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -19,11 +18,10 @@ use krabka_protocol::{
         elect_leaders_response::ElectLeadersResponse,
     },
 };
-use tokio::net::TcpStream;
 
 use crate::{
     kafka_wire,
-    wire::{CLIENT_ID, ELECT_LEADERS_VERSION, round_trip},
+    wire::{CLIENT_ID, ELECT_LEADERS_VERSION},
 };
 
 /// Creates a topic with SASL/PLAIN.
@@ -48,12 +46,12 @@ pub async fn create_topic_sasl_plain(
         timeout_ms: 5_000,
         ..Default::default()
     };
-    let mut stream = sasl_plain_authenticate(addr, user, password)
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password)
         .await
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = round_trip(&mut stream, 19, 7, 1, true, &body)
+    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
@@ -79,7 +77,7 @@ pub async fn drive_elect_leaders_sasl_plain(
     partitions: Vec<i32>,
     election_type: i8,
 ) -> Vec<(i32, i16)> {
-    let mut stream = sasl_plain_authenticate(addr, user, password)
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password)
         .await
         .expect("SASL authenticate for ElectLeaders");
     let req = ElectLeadersRequest {
@@ -95,9 +93,17 @@ pub async fn drive_elect_leaders_sasl_plain(
     let mut body = BytesMut::new();
     req.encode(&mut body, ELECT_LEADERS_VERSION)
         .expect("encode ElectLeaders");
-    let resp_bytes = round_trip(&mut stream, 43, ELECT_LEADERS_VERSION, 1, true, &body)
-        .await
-        .expect("ElectLeaders round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        43,
+        ELECT_LEADERS_VERSION,
+        1,
+        CLIENT_ID,
+        true,
+        &body,
+    )
+    .await
+    .expect("ElectLeaders round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp = ElectLeadersResponse::decode(&mut cur, ELECT_LEADERS_VERSION)
         .expect("decode ElectLeadersResponse");
@@ -112,14 +118,4 @@ pub async fn drive_elect_leaders_sasl_plain(
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Opens a TCP stream to `addr` and authenticates it with SASL/PLAIN; see
-/// [`kafka_wire::sasl_plain_authenticate`].
-pub async fn sasl_plain_authenticate(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-) -> io::Result<TcpStream> {
-    kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await
 }
