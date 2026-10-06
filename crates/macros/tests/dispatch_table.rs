@@ -660,10 +660,7 @@ fn a_typed_adapter_returns_the_encoders_error() {
 
     for api in [ApiKey::ListGroups, ApiKey::Heartbeat] {
         let entry = registry.0[&(api as i16)];
-        assert!(
-            call(entry, b"nope") == Err(BrokerError::Encode),
-            "{api:?}"
-        );
+        assert!(call(entry, b"nope") == Err(BrokerError::Encode), "{api:?}");
     }
 }
 
