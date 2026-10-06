@@ -29,10 +29,8 @@
 //! group-level response and the encoder, and `tombstone` the
 //! `__consumer_offsets` append.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode,
     owned::{
         offset_delete_request::OffsetDeleteRequest, offset_delete_response::OffsetDeleteResponse,
     },
@@ -62,19 +60,15 @@ use crate::{
     name = "handle_offset_delete",
     level = "info",
     skip_all,
-    fields(api = "OffsetDelete", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "OffsetDelete", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: OffsetDeleteRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = OffsetDeleteRequest::decode(&mut cur, version)?;
-
+) -> Result<OffsetDeleteResponse, BrokerError> {
     let image = broker.controller.current_image();
 
     // Group `Delete` ACL — `OffsetDeleteRequest.getErrorResponse` on Deny.
@@ -86,32 +80,25 @@ pub(crate) async fn handle(
         req.group_id.as_str(),
         AclOperation::Delete,
     ) {
-        return crate::handlers::encode_response(
-            &OffsetDeleteResponse::error(codes::GROUP_AUTHORIZATION_FAILED),
-            version,
-        );
+        return Ok(OffsetDeleteResponse::error(
+            codes::GROUP_AUTHORIZATION_FAILED,
+        ));
     }
 
     // `GroupCoordinatorService.deleteOffsets` answers an empty group id
     // before it routes the request.
     if req.group_id.is_empty() {
-        return crate::handlers::encode_response(
-            &OffsetDeleteResponse::error(codes::INVALID_GROUP_ID),
-            version,
-        );
+        return Ok(OffsetDeleteResponse::error(codes::INVALID_GROUP_ID));
     }
 
     if let Some(code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return crate::handlers::encode_response(&OffsetDeleteResponse::error(code), version);
+        return Ok(OffsetDeleteResponse::error(code));
     }
 
     // The group must exist and pass Kafka's `validateOffsetDelete`; its
     // answer also names the topics it subscribes to.
     let Some(group_handle) = broker.group_coordinator.find(&req.group_id) else {
-        return crate::handlers::encode_response(
-            &OffsetDeleteResponse::error(codes::GROUP_ID_NOT_FOUND),
-            version,
-        );
+        return Ok(OffsetDeleteResponse::error(codes::GROUP_ID_NOT_FOUND));
     };
     let subscribed_topics = {
         let (tx, rx) = oneshot::channel();
@@ -129,10 +116,7 @@ pub(crate) async fn handle(
         match guard {
             Ok(topics) => topics,
             Err(code) => {
-                return crate::handlers::encode_response(
-                    &OffsetDeleteResponse::error(code),
-                    version,
-                );
+                return Ok(OffsetDeleteResponse::error(code));
             }
         }
     };
@@ -173,10 +157,7 @@ pub(crate) async fn handle(
         Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(group_id = %req.group_id, %error, "offset tombstones are not encodable");
-            return crate::handlers::encode_response(
-                &OffsetDeleteResponse::error(codes::UNKNOWN_SERVER_ERROR),
-                version,
-            );
+            return Ok(OffsetDeleteResponse::error(codes::UNKNOWN_SERVER_ERROR));
         }
     };
 
@@ -196,7 +177,7 @@ pub(crate) async fn handle(
         // The answer waits for the tombstones to commit, as Kafka's
         // `CoordinatorRuntime` completes the write only then.
         if let Err(code) = append_tombstones(broker, &req.group_id, batch).await {
-            return crate::handlers::encode_response(&OffsetDeleteResponse::error(code), version);
+            return Ok(OffsetDeleteResponse::error(code));
         }
         let (tx, rx) = oneshot::channel();
         if group_handle
@@ -212,11 +193,10 @@ pub(crate) async fn handle(
         }
     }
 
-    let resp = OffsetDeleteResponse {
+    Ok(OffsetDeleteResponse {
         error_code: codes::NONE,
         throttle_time_ms: 0,
         topics,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }

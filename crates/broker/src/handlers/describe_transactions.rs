@@ -17,16 +17,10 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_transactions_request::DescribeTransactionsRequest,
-        describe_transactions_response::{
-            DescribeTransactionsResponse, TopicData, TransactionState,
-        },
-    },
+use krabka_protocol::owned::{
+    describe_transactions_request::DescribeTransactionsRequest,
+    describe_transactions_response::{DescribeTransactionsResponse, TopicData, TransactionState},
 };
 
 use crate::{
@@ -97,19 +91,15 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     name = "handle_describe_transactions",
     level = "info",
     skip_all,
-    fields(api = "DescribeTransactions", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeTransactions", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeTransactionsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeTransactionsRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeTransactionsResponse, BrokerError> {
     // Refresh leader-partition view from the current metadata image before
     // checking coordinator-ness, as EndTxn, AddPartitionsToTxn and
     // AddOffsetsToTxn do. Otherwise a stale `leader_partitions` cache can
@@ -192,12 +182,11 @@ pub(crate) async fn handle(
         rows.push(row);
     }
 
-    let resp = DescribeTransactionsResponse {
+    Ok(DescribeTransactionsResponse {
         throttle_time_ms: 0,
         transaction_states: rows,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 #[cfg(test)]
@@ -249,11 +238,7 @@ mod tests {
         assert!(t == expected);
     }
 
-    crate::test_support::wire_helpers!(
-        DescribeTransactionsRequest,
-        DescribeTransactionsResponse,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     /// Kafka `TransactionCoordinator.handleDescribeTransactions` per requested
     /// id: `INVALID_REQUEST` for an empty id, the coordinator error of the id's
@@ -313,25 +298,19 @@ mod tests {
             })
             .expect("an id in an unled partition");
 
-        let request = encode_request(
-            &DescribeTransactionsRequest {
-                transactional_ids: vec![
-                    String::new(),
-                    empty_id.clone(),
-                    foreign_id.clone(),
-                    dead_id.to_string(),
-                    ongoing_id.to_string(),
-                ],
-                ..Default::default()
-            },
-            version,
-        );
-        let response: DescribeTransactionsResponse = decode_response(
-            &handle(&broker, version, 1, &request, &context)
-                .await
-                .expect("describe"),
-            version,
-        );
+        let request = DescribeTransactionsRequest {
+            transactional_ids: vec![
+                String::new(),
+                empty_id.clone(),
+                foreign_id.clone(),
+                dead_id.to_string(),
+                ongoing_id.to_string(),
+            ],
+            ..Default::default()
+        };
+        let response = handle(&broker, request, version, &context)
+            .await
+            .expect("describe");
 
         let not_found = |tid: &str| TransactionState {
             error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
@@ -486,19 +465,13 @@ mod tests {
 
             let principal = principal(user);
             let context = test_context(&principal, &peer);
-            let request = encode_request(
-                &DescribeTransactionsRequest {
-                    transactional_ids: vec![tid.to_string()],
-                    ..Default::default()
-                },
-                version,
-            );
-            let response: DescribeTransactionsResponse = decode_response(
-                &handle(&broker, version, 1, &request, &context)
-                    .await
-                    .expect("describe"),
-                version,
-            );
+            let request = DescribeTransactionsRequest {
+                transactional_ids: vec![tid.to_string()],
+                ..Default::default()
+            };
+            let response = handle(&broker, request, version, &context)
+                .await
+                .expect("describe");
 
             let expected = TransactionState {
                 error_code: codes::NONE,

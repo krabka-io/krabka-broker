@@ -19,13 +19,9 @@
 //! query through the topology topic-Describe filter, and `render` projects
 //! the actor's describe view onto the response types.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        streams_group_describe_request::StreamsGroupDescribeRequest,
-        streams_group_describe_response::{DescribedGroup, StreamsGroupDescribeResponse},
-    },
+use krabka_protocol::owned::{
+    streams_group_describe_request::StreamsGroupDescribeRequest,
+    streams_group_describe_response::{DescribedGroup, StreamsGroupDescribeResponse},
 };
 
 mod group;
@@ -44,15 +40,12 @@ use crate::{broker::Broker, codes, error::BrokerError};
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: StreamsGroupDescribeRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<StreamsGroupDescribeResponse, BrokerError> {
     let image = broker.controller.current_image();
     let ng = broker.group_coordinator.clone();
-    let mut cur: &[u8] = req_bytes;
-    let req = StreamsGroupDescribeRequest::decode(&mut cur, version)?;
 
     // KIP-1071: same gate as the heartbeat — finalized streams.version >= 1
     // AND the config kill-switch. Kafka's
@@ -73,7 +66,7 @@ pub(crate) async fn handle(
             groups,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     // Kafka puts `GROUP_AUTHORIZATION_FAILED` rows first, ahead of
@@ -112,9 +105,8 @@ pub(crate) async fn handle(
     }
     denied_rows.extend(other_rows);
 
-    let resp = StreamsGroupDescribeResponse {
+    Ok(StreamsGroupDescribeResponse {
         groups: denied_rows,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }

@@ -7,22 +7,15 @@ use krabka_protocol::owned::{
 };
 
 use super::*;
-use crate::test_support::{DenyAll, encode_request, peer, principal, start_broker_no_audit_with};
+use crate::test_support::{DenyAll, peer, principal, start_broker_no_audit_with};
 
 async fn leave(broker: &Broker, request: &LeaveGroupRequest, version: i16) -> LeaveGroupResponse {
     let principal = principal("alice");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "leave-client");
-    let response = handle(
-        broker,
-        version,
-        1,
-        &encode_request(request, version),
-        &context,
-    )
-    .await
-    .expect("LeaveGroup");
-    crate::test_support::decode_response(&response, version)
+    handle(broker, request.clone(), version, &context)
+        .await
+        .expect("LeaveGroup")
 }
 
 fn identity(member_id: &str, group_instance_id: Option<&str>) -> MemberIdentity {

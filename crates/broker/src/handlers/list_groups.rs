@@ -30,13 +30,9 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        list_groups_request::ListGroupsRequest,
-        list_groups_response::{ListGroupsResponse, ListedGroup},
-    },
+use krabka_protocol::owned::{
+    list_groups_request::ListGroupsRequest,
+    list_groups_response::{ListGroupsResponse, ListedGroup},
 };
 use tokio::sync::oneshot;
 
@@ -74,18 +70,15 @@ const STREAMS_PROTOCOL_TYPE: &str = "streams";
     name = "handle_list_groups",
     level = "info",
     skip_all,
-    fields(api = "ListGroups", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ListGroups", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ListGroupsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ListGroupsRequest::decode(&mut cur, version)?;
+) -> Result<ListGroupsResponse, BrokerError> {
     // Kafka's `GroupCoordinatorService.listGroups` reads every local shard and
     // answers the load error of one that is still loading, with no groups.
     if any_group_partition_loading(broker) {
@@ -93,7 +86,7 @@ pub(crate) async fn handle(
             error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
     let candidates = collect_groups(broker).await;
 
@@ -107,13 +100,12 @@ pub(crate) async fn handle(
         cluster_describe || !group_describe_denied(authorizer, &image, ctx, group_id)
     };
 
-    let resp = ListGroupsResponse {
+    Ok(ListGroupsResponse {
         error_code: codes::NONE,
         groups: filter_groups(candidates, &req, &may_describe),
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Every group the coordinator hosts, as Kafka's `asListedGroup` renders it,
@@ -305,12 +297,7 @@ mod tests {
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
-    crate::test_support::wire_helpers!(
-        ListGroupsRequest,
-        ListGroupsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     fn group(group_id: &str, protocol_type: &str, state: &str, group_type: &str) -> ListedGroup {
         listed(
@@ -344,12 +331,10 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&ListGroupsRequest::default());
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+        let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         let expected = ListGroupsResponse {
             throttle_time_ms: 0,
@@ -424,12 +409,10 @@ mod tests {
             let p = principal(user);
             let peer = peer();
             let ctx = test_context(&p, &peer);
-            let req = encode_request(&ListGroupsRequest::default());
 
-            let bytes = handle(&broker, VERSION, 1, &req, &ctx)
+            let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
                 .await
                 .expect("handle");
-            let resp = decode_response(&bytes);
 
             let expected = ListGroupsResponse {
                 groups: expected_groups,

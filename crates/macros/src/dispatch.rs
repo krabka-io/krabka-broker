@@ -20,6 +20,11 @@ enum Adapter {
     /// Decodes the body into the request type and wraps the handler's result
     /// in a ready future.
     DecodedSync,
+    /// Decodes the body into the request type, awaits the handler's response
+    /// struct and encodes it. `group` decodes through
+    /// `decode_group_request`, which also refuses a record string over the
+    /// coordinator bound.
+    Typed { group: bool },
     /// Hands a telemetry handler the raw body and wraps its result in a ready
     /// future.
     Telemetry,
@@ -35,7 +40,7 @@ struct Kind {
     constructor: &'static str,
 }
 
-const KINDS: [Kind; 7] = [
+const KINDS: [Kind; 9] = [
     Kind {
         label: "context",
         adapter: Adapter::Context,
@@ -54,6 +59,16 @@ const KINDS: [Kind; 7] = [
     Kind {
         label: "decoded_sync",
         adapter: Adapter::DecodedSync,
+        constructor: "context",
+    },
+    Kind {
+        label: "typed",
+        adapter: Adapter::Typed { group: false },
+        constructor: "context",
+    },
+    Kind {
+        label: "typed_group",
+        adapter: Adapter::Typed { group: true },
         constructor: "context",
     },
     Kind {
@@ -140,6 +155,41 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                 })()))
             }
         },
+        Adapter::Typed { group } => {
+            let decode = if group {
+                moxy::template! {
+                    crate::handlers::decode_group_request::<
+                        krabka_protocol::owned::{{ request_module }}::{{ request_type }},
+                    >(&mut cur, version)?
+                }
+            } else {
+                moxy::template! {
+                    {
+                        use krabka_protocol::Decode as _;
+
+                        krabka_protocol::owned::{{ request_module }}::{{ request_type }}::decode(
+                            &mut cur, version,
+                        )?
+                    }
+                }
+            };
+            moxy::template! {
+                fn {{ adapter }}<'a>(
+                    broker: &'a Broker,
+                    version: ApiVersion,
+                    _correlation_id: CorrelationId,
+                    body: &'a [u8],
+                    ctx: &'a RequestContext<'a>,
+                ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
+                    Box::pin(async move {
+                        let mut cur = body;
+                        let req = {{ decode }};
+                        let resp = {{ handler }}(broker, req, version, ctx).await?;
+                        crate::handlers::encode_response(&resp, version)
+                    })
+                }
+            }
+        }
         Adapter::Telemetry => moxy::template! {
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,

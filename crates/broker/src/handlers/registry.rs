@@ -129,7 +129,6 @@ krabka_macros::dispatch_table! {
     context:
         AssignReplicasToDirs,
         Metadata,
-        DescribeCluster,
         DescribeTopicPartitions,
         CreateTopics,
         DeleteTopics,
@@ -137,8 +136,6 @@ krabka_macros::dispatch_table! {
         IncrementalAlterConfigs,
         DeleteRecords,
         CreatePartitions,
-        DescribeGroups,
-        ListGroups,
         ShareGroupDescribe,
         ShareFetch,
         ShareAcknowledge,
@@ -149,10 +146,6 @@ krabka_macros::dispatch_table! {
         JoinGroup,
         OffsetCommit,
         OffsetFetch,
-        OffsetDelete,
-        DescribeProducers,
-        DescribeTransactions,
-        ListTransactions,
         UnregisterBroker,
         UnregisterController,
         AddRaftVoter,
@@ -162,18 +155,12 @@ krabka_macros::dispatch_table! {
         BrokerHeartbeat,
         BrokerRegistration,
         ControllerRegistration,
-        Heartbeat,
-        SyncGroup,
-        LeaveGroup,
         ConsumerGroupHeartbeat,
         ShareGroupHeartbeat,
         StreamsGroupHeartbeat,
-        ConsumerGroupDescribe,
-        StreamsGroupDescribe,
         StreamsGroupTopologyDescriptionUpdate,
         FindCoordinator,
         ListOffsets,
-        DescribeLogDirs,
         InitProducerId,
         AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle,
         EndTxn => crate::txn::handlers::end_txn::handle,
@@ -207,6 +194,25 @@ krabka_macros::dispatch_table! {
         ListPartitionReassignments,
         DescribeClientQuotas,
         DescribeUserScramCredentials;
+    // `handle(broker, request, version, ctx)` on the decoded request, awaited;
+    // the handler returns its response struct, which the adapter encodes.
+    typed:
+        DescribeCluster,
+        DescribeGroups,
+        ListGroups,
+        OffsetDelete,
+        DescribeProducers,
+        DescribeTransactions,
+        ListTransactions,
+        ConsumerGroupDescribe,
+        StreamsGroupDescribe,
+        DescribeLogDirs;
+    // The same, with the request decoded by `decode_group_request`, which
+    // refuses a string no coordinator record can carry.
+    typed_group:
+        Heartbeat,
+        SyncGroup,
+        LeaveGroup;
     // Hand-written in `decoded`: the handler returns a response struct that
     // the adapter encodes.
     custom_context:

@@ -78,6 +78,8 @@
 //!     sync_context: DescribeConfigs;
 //!     decoded: CreateAcls;
 //!     decoded_sync: DescribeAcls;
+//!     typed: ListGroups;
+//!     typed_group: Heartbeat;
 //!     custom_context: UpdateFeatures;
 //!     auth: CreateDelegationToken;
 //!     telemetry: PushTelemetry;
@@ -94,6 +96,11 @@
 //!   a `sync_context` handler returns its result instead of a future.
 //! - `decoded` and `decoded_sync` adapters decode the request first and call
 //!   `handler(broker, request, ctx, version)`.
+//! - `typed` adapters decode the request, await
+//!   `handler(broker, request, version, ctx)` for a
+//!   `Result<Response, BrokerError>`, and encode the response with
+//!   `crate::handlers::encode_response`. `typed_group` adapters do the same
+//!   but decode through `crate::handlers::decode_group_request`.
 //! - `telemetry` adapters pass a `TelemetryContext` and wrap a synchronous
 //!   result.
 //! - `custom_context` and `auth` entries generate no adapter: the

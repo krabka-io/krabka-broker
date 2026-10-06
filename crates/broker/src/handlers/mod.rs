@@ -51,7 +51,7 @@ pub(crate) use self::{
         ErrorCodeResponse, ErrorResponse, encode_response, encode_response_with_context,
     },
     submit_failure::submit_failure_code,
-    wire_types::{ApiKeyCode, ApiVersion, CorrelationId, ErrorCode},
+    wire_types::{ApiKeyCode, ApiVersion, CorrelationId},
 };
 
 pub(crate) mod context;

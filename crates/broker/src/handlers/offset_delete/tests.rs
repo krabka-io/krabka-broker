@@ -29,7 +29,7 @@ use crate::{
         },
         group::{CoordinatorGroup, GroupKind},
     },
-    test_support::{DenyAll, decode_response, encode_request, request_context},
+    test_support::{DenyAll, request_context},
 };
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
@@ -240,16 +240,9 @@ async fn offset_delete_matches_kafka_whole_responses() {
             group_id: group_id.into(),
             ..req_with_topics(topics)
         };
-        let resp = handle(
-            &broker.broker_arc_for_test(),
-            version,
-            1,
-            &encode_request(&req, version),
-            &ctx,
-        )
-        .await
-        .expect("OffsetDelete");
-        let resp: OffsetDeleteResponse = decode_response(&resp, version);
+        let resp = handle(&broker.broker_arc_for_test(), req, version, &ctx)
+            .await
+            .expect("OffsetDelete");
         check!(resp == want, "{name}");
     }
 

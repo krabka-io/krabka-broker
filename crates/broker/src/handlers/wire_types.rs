@@ -14,8 +14,5 @@ pub type ApiKeyCode = i16;
 /// Negotiated Kafka request/response schema version for a single RPC.
 pub type ApiVersion = i16;
 
-/// Kafka wire error code (`crate::codes::*`), `0` = NONE.
-pub type ErrorCode = i16;
-
 /// Client-chosen request correlation id. The response header echoes it exactly.
 pub type CorrelationId = i32;

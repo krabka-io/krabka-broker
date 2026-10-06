@@ -9,7 +9,6 @@
 //! `protocol_name`, so an L7 proxy can route the call without remembering the
 //! earlier `JoinGroup` exchange.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     sync_group_request::SyncGroupRequest, sync_group_response::SyncGroupResponse,
 };
@@ -28,25 +27,22 @@ use crate::{
     name = "handle_sync_group",
     level = "info",
     skip_all,
-    fields(api = "SyncGroup", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "SyncGroup", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: SyncGroupRequest,
     version: crate::handlers::ApiVersion,
-    _correlation_id: crate::handlers::CorrelationId,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<SyncGroupResponse, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
-    let mut cur: &[u8] = req_bytes;
-    let req: SyncGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // Kafka's `KafkaApis.handleSyncGroupRequest` answers a v5+ request
     // without a protocol type or name before the ACL check
     // (`SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`).
     if !mandatory_protocol_type_and_name_present(&req, version) {
-        return encode_err(version, codes::INCONSISTENT_GROUP_PROTOCOL);
+        return Ok(SyncGroupResponse::error(codes::INCONSISTENT_GROUP_PROTOCOL));
     }
 
     // ── ACL preamble ────────────────────────────────────────────
@@ -60,7 +56,7 @@ pub(crate) async fn handle(
             ctx,
             &req.group_id,
         ) {
-            return encode_err(version, codes::GROUP_AUTHORIZATION_FAILED);
+            return Ok(SyncGroupResponse::error(codes::GROUP_AUTHORIZATION_FAILED));
         }
     }
 
@@ -70,11 +66,11 @@ pub(crate) async fn handle(
     if let Some(error_code) =
         invalid_group.or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
     {
-        return encode_err(version, error_code);
+        return Ok(SyncGroupResponse::error(error_code));
     }
 
     let Some(handle) = coordinator.find(&req.group_id) else {
-        return encode_err(version, codes::UNKNOWN_MEMBER_ID);
+        return Ok(SyncGroupResponse::error(codes::UNKNOWN_MEMBER_ID));
     };
 
     let (tx, rx) = oneshot::channel();
@@ -84,7 +80,7 @@ pub(crate) async fn handle(
         .await
         .is_err()
     {
-        return encode_err(version, codes::REBALANCE_IN_PROGRESS);
+        return Ok(SyncGroupResponse::error(codes::REBALANCE_IN_PROGRESS));
     }
     // The leader and the already-Stable follower reply immediately; a
     // not-yet-synced follower is parked and resolved when the leader's
@@ -92,17 +88,16 @@ pub(crate) async fn handle(
     let Ok(Ok(result)) =
         tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), rx).await
     else {
-        return encode_err(version, codes::REBALANCE_IN_PROGRESS);
+        return Ok(SyncGroupResponse::error(codes::REBALANCE_IN_PROGRESS));
     };
 
-    let resp = SyncGroupResponse {
+    Ok(SyncGroupResponse {
         error_code: result.error_code,
         assignment: result.assignment,
         protocol_type: result.protocol_type,
         protocol_name: result.protocol_name,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Kafka's `SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`: from v5
@@ -114,28 +109,17 @@ fn mandatory_protocol_type_and_name_present(
     version < 5 || (req.protocol_type.is_some() && req.protocol_name.is_some())
 }
 
-/// Kafka's `SyncGroupRequest.getErrorResponse`: only `error_code` is set, so
-/// the protocol type and name stay null and the assignment stays empty.
-fn encode_err(
-    version: crate::handlers::ApiVersion,
-    code: crate::handlers::ErrorCode,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(&SyncGroupResponse::error(code), version)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use krabka_protocol::{
-        Decode,
-        owned::{
-            join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-            join_group_response::{self, JoinGroupResponse},
-            sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
-            sync_group_response::{self, SyncGroupResponse},
-        },
+    use bytes::Bytes;
+    use krabka_protocol::owned::{
+        join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+        join_group_response::{self, JoinGroupResponse},
+        sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+        sync_group_response::{self, SyncGroupResponse},
     };
     use krabka_security::Principal;
 
@@ -151,10 +135,6 @@ mod tests {
 
     fn decode_join(bytes: &Bytes) -> JoinGroupResponse {
         crate::test_support::decode_response(bytes, join_group_response::MAX_VERSION)
-    }
-
-    fn decode_sync(bytes: &Bytes) -> SyncGroupResponse {
-        crate::test_support::decode_response(bytes, sync_group_response::MAX_VERSION)
     }
 
     fn principal() -> Principal {
@@ -244,15 +224,6 @@ mod tests {
         let ctx = crate::test_support::request_context(&principal, &peer, "sync-client");
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
-
-        let bytes = encode_err(
-            sync_group_response::MAX_VERSION,
-            codes::GROUP_AUTHORIZATION_FAILED,
-        )
-        .expect("encode");
-        let mut cur: &[u8] = &bytes;
-        let resp = SyncGroupResponse::decode(&mut cur, sync_group_response::MAX_VERSION).unwrap();
-        assert!(resp.error_code == codes::GROUP_AUTHORIZATION_FAILED);
     }
 
     /// #736 and #793: from v5 a missing protocol type or name answers
@@ -348,16 +319,9 @@ mod tests {
                 ..Default::default()
             };
 
-            let resp = handle(
-                &broker,
-                r.version,
-                3,
-                &encode_request(&req, r.version),
-                &ctx,
-            )
-            .await
-            .expect("SyncGroup");
-            let resp: SyncGroupResponse = crate::test_support::decode_response(&resp, r.version);
+            let resp = handle(&broker, req, r.version, &ctx)
+                .await
+                .expect("SyncGroup");
 
             let expected = SyncGroupResponse {
                 error_code: r.want,
@@ -386,10 +350,9 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, version, 3, &encode_request(&req, version), &ctx)
+        let resp = handle(&broker, req, version, &ctx)
             .await
             .expect("SyncGroup");
-        let resp = decode_sync(&resp);
 
         let expected = SyncGroupResponse {
             throttle_time_ms: 0,
@@ -428,10 +391,9 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, version, 3, &encode_request(&req, version), &ctx)
+        let resp = handle(&broker, req, version, &ctx)
             .await
             .expect("SyncGroup");
-        let resp = decode_sync(&resp);
 
         let expected = SyncGroupResponse {
             throttle_time_ms: 0,

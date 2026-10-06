@@ -42,8 +42,7 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::{
-        consumer_group_heartbeat, heartbeat, join_group, share_group_heartbeat,
-        streams_group_heartbeat, sync_group,
+        consumer_group_heartbeat, join_group, share_group_heartbeat, streams_group_heartbeat,
     },
     share_coordinator::handlers::initialize,
     test_support::{decode_response, encode_request},
@@ -614,10 +613,10 @@ async fn a_generated_member_id_over_32767_bytes_fails_the_join() {
             }],
             ..Default::default()
         };
-        let synced = sync_group::handle(
+        let synced = crate::test_support::try_dispatch_context(
             &env.broker,
+            sync_group_request::API_KEY,
             SYNC_VERSION,
-            2,
             &encode_request(&sync, SYNC_VERSION),
             &env.ctx(&client_id),
         )
@@ -711,10 +710,11 @@ async fn classic_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = heartbeat::handle(
+        // Through the dispatch adapter, which decodes the request.
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            heartbeat_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx(&client_id),
         )

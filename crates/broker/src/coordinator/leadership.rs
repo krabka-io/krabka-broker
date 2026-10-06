@@ -515,13 +515,10 @@ mod tests {
             delete_groups_request::DeleteGroupsRequest,
             delete_groups_response::DeleteGroupsResponse,
             heartbeat_request::HeartbeatRequest,
-            heartbeat_response::HeartbeatResponse,
             join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
             join_group_response::JoinGroupResponse,
             leave_group_request::{LeaveGroupRequest, MemberIdentity},
-            leave_group_response::LeaveGroupResponse,
             list_groups_request::ListGroupsRequest,
-            list_groups_response::ListGroupsResponse,
             offset_commit_request::{
                 OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
             },
@@ -571,16 +568,10 @@ mod tests {
                     generation_id: 1,
                     ..Default::default()
                 };
-                let bytes = crate::handlers::heartbeat::handle(
-                    broker,
-                    4,
-                    1,
-                    &encode_request(&request, 4),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<HeartbeatResponse>(&bytes, 4).error_code
+                crate::handlers::heartbeat::handle(broker, request, 4, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::LeaveGroup => {
                 let request = LeaveGroupRequest {
@@ -591,16 +582,10 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::leave_group::handle(
-                    broker,
-                    5,
-                    1,
-                    &encode_request(&request, 5),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<LeaveGroupResponse>(&bytes, 5).error_code
+                crate::handlers::leave_group::handle(broker, request, 5, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::OffsetCommit => {
                 let request = OffsetCommitRequest {
@@ -682,16 +667,10 @@ mod tests {
                 decode_response::<OffsetFetchResponse>(&bytes, 8).groups[0].error_code
             }
             GroupRpc::ListGroups => {
-                let bytes = crate::handlers::list_groups::handle(
-                    broker,
-                    4,
-                    1,
-                    &encode_request(&ListGroupsRequest::default(), 4),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<ListGroupsResponse>(&bytes, 4).error_code
+                crate::handlers::list_groups::handle(broker, ListGroupsRequest::default(), 4, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::DeleteGroups => {
                 let request = DeleteGroupsRequest {

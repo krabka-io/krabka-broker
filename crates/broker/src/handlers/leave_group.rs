@@ -10,7 +10,6 @@
 //! and a top-level `NONE`; `LeaveGroupResponse` folds that row into the
 //! top-level code at v0-v2.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     leave_group_request::LeaveGroupRequest,
     leave_group_response::{LeaveGroupResponse, MemberResponse},
@@ -32,19 +31,16 @@ mod tests;
     name = "handle_leave_group",
     level = "info",
     skip_all,
-    fields(api = "LeaveGroup", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "LeaveGroup", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: LeaveGroupRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<LeaveGroupResponse, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
-    let mut cur: &[u8] = req_bytes;
-    let req: LeaveGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────────
     // `Read` on `Group(group_id)`. On Deny → whole-response
@@ -56,17 +52,17 @@ pub(crate) async fn handle(
         ctx,
         &req.group_id,
     ) {
-        return encode_top_level(codes::GROUP_AUTHORIZATION_FAILED, version);
+        return Ok(LeaveGroupResponse::error(codes::GROUP_AUTHORIZATION_FAILED));
     }
 
     // `GroupCoordinatorService.leaveGroup`'s `isGroupIdNotEmpty` check runs
     // before the request is routed to a coordinator shard.
     if req.group_id.is_empty() {
-        return encode_top_level(codes::INVALID_GROUP_ID, version);
+        return Ok(LeaveGroupResponse::error(codes::INVALID_GROUP_ID));
     }
 
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return encode_top_level(error_code, version);
+        return Ok(LeaveGroupResponse::error(error_code));
     }
 
     let result = match coordinator.find(&req.group_id) {
@@ -100,19 +96,12 @@ pub(crate) async fn handle(
         }
     };
 
-    crate::handlers::encode_response(
-        &LeaveGroupResponse {
-            error_code: result.error_code,
-            throttle_time_ms: 0,
-            members: result.members,
-            ..Default::default()
-        },
-        version,
-    )
-}
-
-fn encode_top_level(error_code: i16, version: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(&LeaveGroupResponse::error(error_code), version)
+    Ok(LeaveGroupResponse {
+        error_code: result.error_code,
+        throttle_time_ms: 0,
+        members: result.members,
+        ..Default::default()
+    })
 }
 
 /// Kafka's answer for a group the coordinator does not hold: one

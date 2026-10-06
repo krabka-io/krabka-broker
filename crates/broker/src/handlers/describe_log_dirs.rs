@@ -17,15 +17,11 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_log_dirs_request::DescribeLogDirsRequest,
-        describe_log_dirs_response::{
-            DescribeLogDirsPartition, DescribeLogDirsResponse, DescribeLogDirsResult,
-            DescribeLogDirsTopic,
-        },
+use krabka_protocol::owned::{
+    describe_log_dirs_request::DescribeLogDirsRequest,
+    describe_log_dirs_response::{
+        DescribeLogDirsPartition, DescribeLogDirsResponse, DescribeLogDirsResult,
+        DescribeLogDirsTopic,
     },
 };
 
@@ -47,23 +43,19 @@ use crate::{
     name = "handle_describe_log_dirs",
     level = "info",
     skip_all,
-    fields(api = "DescribeLogDirs", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeLogDirs", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeLogDirsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<DescribeLogDirsResponse, BrokerError> {
     let log_dirs = broker.config.all_log_dirs();
     let partitions = broker.partitions.clone();
     let future_logs = broker.future_logs.clone();
     let log_dir_status = broker.log_dir_status.clone();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeLogDirsRequest::decode(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────
     // `Describe` on `Cluster("kafka-cluster")`. On Deny → whole-response
@@ -79,7 +71,7 @@ pub(crate) async fn handle(
             results: Vec::new(),
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     let filter = request_filter(req);
@@ -184,13 +176,12 @@ pub(crate) async fn handle(
         });
     }
 
-    let resp = DescribeLogDirsResponse {
+    Ok(DescribeLogDirsResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         results,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 #[cfg(test)]
@@ -203,11 +194,7 @@ mod tests {
     use super::*;
     use crate::test_support::{DenyAll, start_broker_with_authorizer};
 
-    crate::test_support::wire_helpers!(
-        DescribeLogDirsRequest,
-        DescribeLogDirsResponse,
-        client_id = "client-a"
-    );
+    crate::test_support::context_helper!(client_id = "client-a");
 
     /// A principal without `Describe` on the cluster gets a whole-response
     /// `CLUSTER_AUTHORIZATION_FAILED` and no directories.
@@ -219,9 +206,8 @@ mod tests {
         let principal = crate::test_support::principal("ANONYMOUS");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&DescribeLogDirsRequest::default(), version);
 
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, DescribeLogDirsRequest::default(), version, &ctx)
             .await
             .expect("handle");
 
@@ -231,7 +217,7 @@ mod tests {
             results: Vec::new(),
             ..Default::default()
         };
-        assert!(decode_response(&resp, version) == expected);
+        assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 }

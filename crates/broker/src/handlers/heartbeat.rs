@@ -3,7 +3,6 @@
 //! This handler validates `(generation, member)`. It then refreshes the
 //! member's `last_heartbeat` clock inside the group's actor.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse,
 };
@@ -18,21 +17,18 @@ use crate::{
     name = "handle_heartbeat",
     level = "info",
     skip_all,
-    fields(api = "Heartbeat", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "Heartbeat", version),
+    err
 )]
 // cargo-mutants: the generated protocol default for throttle_time_ms is zero.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: HeartbeatRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<HeartbeatResponse, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
-    let mut cur: &[u8] = req_bytes;
-    let req: HeartbeatRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────
     // `Read` on `Group(group_id)`. On Deny → whole-response
@@ -45,7 +41,7 @@ pub(crate) async fn handle(
             ctx,
             &req.group_id,
         ) {
-            return encode_denied(version);
+            return Ok(denied());
         }
     }
 
@@ -65,14 +61,11 @@ pub(crate) async fn handle(
             }
         })
     {
-        return crate::handlers::encode_response(
-            &HeartbeatResponse {
-                error_code,
-                throttle_time_ms: 0,
-                ..Default::default()
-            },
-            version,
-        );
+        return Ok(HeartbeatResponse {
+            error_code,
+            throttle_time_ms: 0,
+            ..Default::default()
+        });
     }
 
     let error_code = match coordinator.find(&req.group_id) {
@@ -92,36 +85,31 @@ pub(crate) async fn handle(
         }
     };
 
-    let resp = HeartbeatResponse {
+    Ok(HeartbeatResponse {
         error_code,
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Whole-response `GROUP_AUTHORIZATION_FAILED (30)` that the handler builds
 /// on Deny.
-fn encode_denied(version: i16) -> Result<Bytes, BrokerError> {
-    let resp = HeartbeatResponse {
+fn denied() -> HeartbeatResponse {
+    HeartbeatResponse {
         error_code: codes::GROUP_AUTHORIZATION_FAILED,
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::Decode;
 
     use super::*;
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use krabka_protocol::owned::heartbeat_response::{self, HeartbeatResponse};
-
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
@@ -131,13 +119,13 @@ mod tests {
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 
-        let bytes = encode_denied(heartbeat_response::MAX_VERSION).expect("encode");
-        let mut cur: &[u8] = &bytes;
-        let resp = HeartbeatResponse::decode(&mut cur, heartbeat_response::MAX_VERSION).unwrap();
         assert!(
-            (resp.error_code, resp.throttle_time_ms, cur.is_empty())
-                == (codes::GROUP_AUTHORIZATION_FAILED, 0, true),
-            "response decoder consumed all bytes"
+            denied()
+                == HeartbeatResponse {
+                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    throttle_time_ms: 0,
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                }
         );
     }
 }

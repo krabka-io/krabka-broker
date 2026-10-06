@@ -659,6 +659,20 @@ pub(crate) async fn dispatch_context(
     body: &[u8],
     ctx: &RequestContext<'_>,
 ) -> Bytes {
+    try_dispatch_context(broker, api_key, version, body, ctx)
+        .await
+        .unwrap_or_else(|error| panic!("api_key {api_key} handler: {error}"))
+}
+
+/// [`dispatch_context`], returning the handler's error instead of panicking
+/// on it: a test of a request the adapter or the handler refuses.
+pub(crate) async fn try_dispatch_context(
+    broker: &crate::broker::Broker,
+    api_key: i16,
+    version: i16,
+    body: &[u8],
+    ctx: &RequestContext<'_>,
+) -> Result<Bytes, crate::error::BrokerError> {
     let entry = broker
         .handlers()
         .get(api_key)
@@ -666,9 +680,25 @@ pub(crate) async fn dispatch_context(
     let crate::handlers::DispatchKind::Context(handler) = entry.kind() else {
         panic!("api_key {api_key} is a context dispatch, so its handler gets the principal");
     };
-    handler(broker, version, 1, body, ctx)
-        .await
-        .unwrap_or_else(|error| panic!("api_key {api_key} handler: {error}"))
+    handler(broker, version, 1, body, ctx).await
+}
+
+/// Serve `req` through the broker's dispatch registry as wire bytes at
+/// `version`, and decode the response at the same version.
+///
+/// A `typed` handler takes and returns structs, so its unit tests call it
+/// directly. This is the path for a test about the wire itself: a field that
+/// an older version drops, or the encoding of the response.
+pub(crate) async fn dispatch_wire<Resp: Decode<'static>>(
+    broker: &crate::broker::Broker,
+    api_key: i16,
+    version: i16,
+    req: &impl Encode,
+    ctx: &RequestContext<'_>,
+) -> Resp {
+    let bytes =
+        dispatch_context(broker, api_key, version, &encode_request(req, version), ctx).await;
+    decode_response(&bytes, version)
 }
 
 /// Start an in-process broker over a fresh temp dir. It applies `configure` to

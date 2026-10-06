@@ -28,12 +28,9 @@
 
 use bytes::Bytes;
 use krabka_metadata::ResourceType;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_groups_request::DescribeGroupsRequest,
-        describe_groups_response::{DescribeGroupsResponse, DescribedGroup, DescribedGroupMember},
-    },
+use krabka_protocol::owned::{
+    describe_groups_request::DescribeGroupsRequest,
+    describe_groups_response::{DescribeGroupsResponse, DescribedGroup, DescribedGroupMember},
 };
 use tokio::sync::oneshot;
 
@@ -60,19 +57,15 @@ const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
     name = "handle_describe_groups",
     level = "info",
     skip_all,
-    fields(api = "DescribeGroups", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeGroups", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: DescribeGroupsRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeGroupsRequest::decode(&mut cur, version)?;
-
+) -> Result<DescribeGroupsResponse, BrokerError> {
     let image = broker.controller.current_image();
 
     // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
@@ -122,12 +115,11 @@ pub(crate) async fn handle(
     }
 
     denied.extend(groups);
-    let resp = DescribeGroupsResponse {
+    Ok(DescribeGroupsResponse {
         groups: denied,
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Describes one allowed group the way `GroupMetadataManager.describeGroups`
@@ -244,11 +236,7 @@ mod tests {
 
     const VERSION: i16 = krabka_protocol::owned::describe_groups_response::MAX_VERSION;
 
-    crate::test_support::wire_helpers!(
-        DescribeGroupsRequest,
-        DescribeGroupsResponse,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     /// Start a broker with `authorizer` and audit off, and wait until its
     /// group coordinator serves `__consumer_offsets`.
@@ -295,10 +283,9 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let bytes = handle(broker, version, 123, &encode_request(req, version), &ctx)
+        handle(broker, req.clone(), version, &ctx)
             .await
-            .expect("handle");
-        decode_response(&bytes, version)
+            .expect("handle")
     }
 
     /// A Deny on `Describe Group` answers the row, not the request: each named

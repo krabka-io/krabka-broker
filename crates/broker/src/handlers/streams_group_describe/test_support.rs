@@ -174,7 +174,11 @@ pub(super) async fn describe_as(
         include_authorized_operations,
         ..request(group_ids)
     };
-    send(broker, principal, response_mod::MAX_VERSION, &req).await
+    let peer = crate::test_support::peer();
+    let ctx = crate::test_support::request_context(principal, &peer, "admin-client");
+    handle(broker, req, response_mod::MAX_VERSION, &ctx)
+        .await
+        .expect("handle describe")
 }
 
 /// Describes `group_ids` as `admin` at `version`, asking for the topology
@@ -186,26 +190,21 @@ pub(super) async fn describe_at(
     group_ids: &[&str],
 ) -> StreamsGroupDescribeResponse {
     let principal = crate::test_support::principal("admin");
+    let peer = crate::test_support::peer();
+    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
     let req = StreamsGroupDescribeRequest {
         include_topology_description,
         ..request(group_ids)
     };
-    send(broker, &principal, version, &req).await
-}
-
-async fn send(
-    broker: &Broker,
-    principal: &Principal,
-    version: i16,
-    req: &StreamsGroupDescribeRequest,
-) -> StreamsGroupDescribeResponse {
-    let req_bytes = crate::test_support::encode_request(req, version);
-    let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(principal, &peer, "admin-client");
-    let resp = handle(broker, version, 1, &req_bytes, &ctx)
-        .await
-        .expect("handle describe");
-    crate::test_support::decode_response(&resp, version)
+    // Over the wire: the fields `version` lacks must not reach the answer.
+    crate::test_support::dispatch_wire(
+        broker,
+        krabka_protocol::owned::streams_group_describe_request::API_KEY,
+        version,
+        &req,
+        &ctx,
+    )
+    .await
 }
 
 pub(super) fn task_map(entries: &[(&str, Vec<i32>)]) -> BTreeMap<String, Vec<i32>> {

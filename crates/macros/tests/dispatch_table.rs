@@ -33,6 +33,10 @@ struct TelemetryContext<'a> {
 enum BrokerError {
     Decode,
     EmptyBody,
+    /// `decode_group_request` refused a record string over its bound.
+    RecordString,
+    /// `encode_response` refused the response.
+    Encode,
 }
 
 impl From<krabka_protocol::DecodeError> for BrokerError {
@@ -51,6 +55,8 @@ enum ApiKey {
     UpdateFeatures = 57,
     CreateDelegationToken = 38,
     PushTelemetry = 72,
+    ListGroups = 16,
+    Heartbeat = 12,
 }
 
 type ContextHandler = for<'a> fn(
@@ -162,6 +168,14 @@ mod krabka_protocol {
             pub use crate::krabka_protocol::Text as DescribeAclsRequest;
             pub const FLEXIBLE_MIN: i16 = 2;
         }
+        pub mod list_groups_request {
+            pub use crate::krabka_protocol::Text as ListGroupsRequest;
+            pub const FLEXIBLE_MIN: i16 = 3;
+        }
+        pub mod heartbeat_request {
+            pub use crate::krabka_protocol::Text as HeartbeatRequest;
+            pub const FLEXIBLE_MIN: i16 = 4;
+        }
         pub mod add_partitions_to_txn_request {
             pub const FLEXIBLE_MIN: i16 = 3;
         }
@@ -197,6 +211,85 @@ fn text(body: &[u8]) -> String {
 }
 
 mod handlers {
+    use crate::{ApiVersion, BrokerError, Bytes, krabka_protocol::Decode};
+
+    /// The `typed` adapters' encoder: the response, then the version it was
+    /// encoded at. It refuses a response that says `nope`.
+    pub fn encode_response<R: std::fmt::Display>(
+        resp: &R,
+        version: ApiVersion,
+    ) -> Result<Bytes, BrokerError> {
+        let text = resp.to_string();
+        if text.contains("nope") {
+            return Err(BrokerError::Encode);
+        }
+        Ok(format!("{text} @v{version}").into_bytes())
+    }
+
+    /// The `typed_group` adapters' decoder, which refuses a body longer than
+    /// eight bytes as the broker's refuses an over-long record string.
+    pub fn decode_group_request<R: Decode>(
+        buf: &mut &[u8],
+        version: ApiVersion,
+    ) -> Result<R, BrokerError> {
+        if buf.len() > 8 {
+            return Err(BrokerError::RecordString);
+        }
+        Ok(R::decode(buf, version)?)
+    }
+
+    /// Renders what a typed handler received, failing on an empty body like
+    /// [`crate::reply`].
+    fn typed_reply(parts: &[&dyn std::fmt::Display]) -> Result<String, BrokerError> {
+        crate::reply(parts).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    pub mod list_groups {
+        use crate::{
+            ApiVersion, Broker, BrokerError, RequestContext,
+            krabka_protocol::owned::list_groups_request::ListGroupsRequest,
+        };
+
+        pub fn handle(
+            broker: &Broker,
+            request: ListGroupsRequest,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> std::future::Ready<Result<String, BrokerError>> {
+            let ListGroupsRequest(text) = request;
+            std::future::ready(super::typed_reply(&[
+                &"list_groups",
+                &broker.name,
+                &version,
+                &ctx.client_id,
+                &text,
+            ]))
+        }
+    }
+
+    pub mod heartbeat {
+        use crate::{
+            ApiVersion, Broker, BrokerError, RequestContext,
+            krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
+        };
+
+        pub fn handle(
+            broker: &Broker,
+            request: HeartbeatRequest,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> std::future::Ready<Result<String, BrokerError>> {
+            let HeartbeatRequest(text) = request;
+            std::future::ready(super::typed_reply(&[
+                &"heartbeat",
+                &broker.name,
+                &version,
+                &ctx.client_id,
+                &text,
+            ]))
+        }
+    }
+
     pub mod metadata {
         use crate::{
             ApiVersion, BoxFuture, Broker, BrokerError, Bytes, CorrelationId, RequestContext,
@@ -376,6 +469,8 @@ krabka_macros::dispatch_table! {
     sync_context: DescribeConfigs;
     decoded: CreateAcls;
     decoded_sync: DescribeAcls;
+    typed: ListGroups;
+    typed_group: Heartbeat;
     custom_context: UpdateFeatures;
     auth: CreateDelegationToken;
     telemetry: PushTelemetry;
@@ -477,6 +572,20 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
             Err(BrokerError::EmptyBody),
         ),
         (
+            ApiKey::ListGroups,
+            "context",
+            3,
+            ok("list_groups b1 5 c1 v5:body @v5"),
+            Err(BrokerError::EmptyBody),
+        ),
+        (
+            ApiKey::Heartbeat,
+            "context",
+            4,
+            ok("heartbeat b1 5 c1 v5:body @v5"),
+            Err(BrokerError::EmptyBody),
+        ),
+        (
             ApiKey::UpdateFeatures,
             "context",
             0,
@@ -516,9 +625,45 @@ fn a_decoded_adapter_maps_a_decode_failure_to_a_broker_error() {
     let mut registry = DispatchRegistry::default();
     register_dispatch_table(&mut registry);
 
-    for api in [ApiKey::CreateAcls, ApiKey::DescribeAcls] {
+    for api in [
+        ApiKey::CreateAcls,
+        ApiKey::DescribeAcls,
+        ApiKey::ListGroups,
+        ApiKey::Heartbeat,
+    ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, &[0xff]) == Err(BrokerError::Decode), "{api:?}");
+    }
+}
+
+#[test]
+fn only_a_typed_group_adapter_decodes_through_decode_group_request() {
+    let mut registry = DispatchRegistry::default();
+    register_dispatch_table(&mut registry);
+
+    let long = b"longer-than-eight";
+    let replies =
+        [ApiKey::ListGroups, ApiKey::Heartbeat].map(|api| call(registry.0[&(api as i16)], long));
+    assert!(
+        replies
+            == [
+                Ok("list_groups b1 5 c1 v5:longer-than-eight @v5".to_owned()),
+                Err(BrokerError::RecordString),
+            ]
+    );
+}
+
+#[test]
+fn a_typed_adapter_returns_the_encoders_error() {
+    let mut registry = DispatchRegistry::default();
+    register_dispatch_table(&mut registry);
+
+    for api in [ApiKey::ListGroups, ApiKey::Heartbeat] {
+        let entry = registry.0[&(api as i16)];
+        assert!(
+            call(entry, b"nope") == Err(BrokerError::Encode),
+            "{api:?}"
+        );
     }
 }
 
