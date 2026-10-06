@@ -1,0 +1,176 @@
+//! `#[derive(RegisterMetrics)]`: see the crate documentation.
+
+use moxy::{
+    ast::{Attributed, Field, ItemStruct, ParseError},
+    token::{Ident, LitStr, Spanner, TokenStream},
+};
+
+use crate::meta::Tokens;
+
+/// The arguments of one `#[metric(...)]` field attribute.
+#[derive(moxy::FromMeta)]
+struct MetricArgs {
+    /// Leave the field out of the registration. It is still constructed.
+    #[meta(default)]
+    skip: bool,
+    /// The registered name, when it is not the field name without `_total`.
+    #[meta(default)]
+    name: Option<String>,
+    /// The help text, kept as the tokens of the literal so that the text
+    /// reaches the registry exactly as rustc reads it.
+    #[meta(default)]
+    help: Option<Tokens>,
+    /// The bucket boundaries of a histogram, or of each histogram of a family.
+    #[meta(default)]
+    buckets: Option<Tokens>,
+    /// An expression that constructs the field, in place of `Default`.
+    #[meta(default)]
+    new: Option<Tokens>,
+}
+
+/// One field of the derived struct, with what the derive emits for it.
+struct Metric {
+    ident: Ident,
+    constructor: TokenStream,
+    registration: Option<(LitStr, TokenStream)>,
+}
+
+/// The name a metric field registers under when it names none itself.
+///
+/// `prometheus-client` appends `_total` to the name of every counter, so a
+/// field that already ends in `_total` drops it. Any other field registers
+/// under its own name.
+fn default_name(field: &str) -> &str {
+    field.strip_suffix("_total").unwrap_or(field)
+}
+
+/// Whether `field` is a `Family<..>` rather than a single metric.
+fn is_family(field: &Field) -> bool {
+    field
+        .ty
+        .as_path()
+        .and_then(|ty| ty.path.last())
+        .is_some_and(|segment| segment.ident == "Family")
+}
+
+fn metric(field: &Field) -> Result<Metric, ParseError> {
+    let Some(ident) = field.ident.as_ref() else {
+        return Err(ParseError::new(
+            field.span(),
+            "`RegisterMetrics` needs named fields",
+        ));
+    };
+    let args = field
+        .parse_meta::<MetricArgs>("metric")?
+        .unwrap_or(MetricArgs {
+            skip: false,
+            name: None,
+            help: None,
+            buckets: None,
+            new: None,
+        });
+
+    let constructor = match (args.new, args.buckets) {
+        (Some(_), Some(buckets)) => {
+            return Err(ParseError::new(
+                buckets.0.span(),
+                "give `new` or `buckets`, not both",
+            ));
+        }
+        (Some(new), None) => new.0,
+        (None, Some(buckets)) if is_family(field) => moxy::template! {
+            ::prometheus_client::metrics::family::Family::new_with_constructor(|| {
+                ::prometheus_client::metrics::histogram::Histogram::new({{ buckets.0 }})
+            })
+        },
+        (None, Some(buckets)) => moxy::template! {
+            ::prometheus_client::metrics::histogram::Histogram::new({{ buckets.0 }})
+        },
+        (None, None) => moxy::template! { ::core::default::Default::default() },
+    };
+
+    let registration = if args.skip {
+        None
+    } else {
+        let Some(help) = args.help else {
+            return Err(ParseError::new(
+                ident.span(),
+                "a registered metric needs `#[metric(help = \"...\")]`, or `skip`",
+            ));
+        };
+        let name = args
+            .name
+            .unwrap_or_else(|| default_name(ident.text()).to_owned());
+        Some((LitStr::new(&name, ident.span()), help.0))
+    };
+
+    Ok(Metric {
+        ident: ident.clone(),
+        constructor,
+        registration,
+    })
+}
+
+/// Expands `#[derive(RegisterMetrics)]` on `item`.
+pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    // Moved out field by field: moxy's `ItemFn` parser rejects a `let`
+    // that destructures `item` with a struct pattern.
+    let ident = item.ident;
+    let generics = item.generics;
+    let fields = item.fields;
+    let Some(named) = fields.as_named() else {
+        return Err(ParseError::new(
+            ident.span(),
+            "`RegisterMetrics` needs a struct with named fields",
+        ));
+    };
+    let metrics = named
+        .fields
+        .iter()
+        .map(metric)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let (impl_generics, type_generics, where_clause) = generics.split();
+    Ok(moxy::template! {
+        impl {{ impl_generics }} {{ ident }} {{ type_generics }} {{ where_clause }} {
+            fn unregistered() -> Self {
+                Self {
+                    @for metric in &metrics {
+                        {{ metric.ident }}: {{ metric.constructor }},
+                    }
+                }
+            }
+
+            fn register(&self, registry: &mut ::prometheus_client::registry::Registry) {
+                @for metric in &metrics {
+                    @if let Some((name, help)) = &metric.registration {
+                        registry.register(
+                            {{ name }},
+                            {{ help }},
+                            ::core::clone::Clone::clone(&self.{{ metric.ident }}),
+                        );
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::default_name;
+
+    #[test]
+    fn default_name_drops_only_a_trailing_total() {
+        for (field, name) in [
+            ("isr_shrinks_total", "isr_shrinks"),
+            ("partitions_total_led", "partitions_total_led"),
+            ("topic_bytes_in", "topic_bytes_in"),
+            ("total", "total"),
+        ] {
+            assert!(default_name(field) == name);
+        }
+    }
+}
