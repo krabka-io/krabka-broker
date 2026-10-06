@@ -15,15 +15,17 @@ use crate::config::{DEFAULT_BREAK_GLASS_PROPOSAL_TTL, DEFAULT_BREAK_GLASS_REQUIR
 /// log, for the reason that keeps `super_users` out of the ACL store: an
 /// attacker who can write the metadata log must not be able to add themselves
 /// to the set that authorizes a data-losing operation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub struct BreakGlassConfig {
     /// Principals that may approve a proposal. Empty is the default and means
     /// no break-glass workflow is configured on this broker.
     pub approvers: Vec<String>,
     /// Distinct approving principals a proposal needs. Never below
     /// [`MIN_BREAK_GLASS_REQUIRED_APPROVALS`](super::MIN_BREAK_GLASS_REQUIRED_APPROVALS).
+    #[default(DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS)]
     pub required_approvals: usize,
     /// How long a proposal stays usable after it is created.
+    #[default(DEFAULT_BREAK_GLASS_PROPOSAL_TTL)]
     pub proposal_ttl: Time,
     /// Actions whose approvals must also carry a detached operator signature.
     /// Empty is the default; see
@@ -32,18 +34,6 @@ pub struct BreakGlassConfig {
     /// What the background unclean-recovery path does, where there is no
     /// caller to ask for an approval.
     pub background_unclean_recovery: BackgroundUncleanRecovery,
-}
-
-impl Default for BreakGlassConfig {
-    fn default() -> Self {
-        Self {
-            approvers: Vec::new(),
-            required_approvals: DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS,
-            proposal_ttl: DEFAULT_BREAK_GLASS_PROPOSAL_TTL,
-            signed_actions: Vec::new(),
-            background_unclean_recovery: BackgroundUncleanRecovery::default(),
-        }
-    }
 }
 
 /// What the background unclean-recovery path does when it cannot ask anybody

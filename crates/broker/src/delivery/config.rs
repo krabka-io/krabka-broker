@@ -15,7 +15,7 @@ use qubit_clock::{StdWallClock, Timer, WallClock};
 ///
 /// The struct is [`Clone`] but neither [`Debug`] nor [`PartialEq`], because the
 /// two injected trait objects are neither.
-#[derive(Clone)]
+#[derive(Clone, krabka_macros::FieldDefaults)]
 pub(crate) struct DeliveryConfig {
     /// Longest the scheduler sleeps when no partition it leads has a batch
     /// waiting, and the cap on every sleep.
@@ -25,6 +25,7 @@ pub(crate) struct DeliveryConfig {
     /// undiscovered. The [`waker`](crate::delivery::waker) covers the deadlines
     /// that fall *before* that instant, so this value only has to be short
     /// enough to keep discovery honest, not short enough to be prompt.
+    #[default(secs(1))]
     pub(crate) idle_sleep: Time,
 
     /// Shortest sleep the scheduler arms.
@@ -33,6 +34,7 @@ pub(crate) struct DeliveryConfig {
     /// zero-length sleep, and a partition whose watermark cannot advance for an
     /// unrelated reason would spin the task. The floor turns that into a slow
     /// retry.
+    #[default(millis(1))]
     pub(crate) min_sleep: Time,
 
     /// Wall clock the scheduler reads to decide which batches are due.
@@ -41,6 +43,7 @@ pub(crate) struct DeliveryConfig {
     /// and [`Self::timer`] from one
     /// [`qubit_clock::ManualMonotonicClock`], so the activation boundary is an
     /// assertion and not a race against real time.
+    #[default(Arc::new(StdWallClock::new()))]
     pub(crate) clock: Arc<dyn WallClock>,
 
     /// Timer that drives the scheduler's cadence. Production uses
@@ -48,18 +51,8 @@ pub(crate) struct DeliveryConfig {
     /// [`qubit_clock::ManualMonotonicClock`] that handed out [`Self::clock`],
     /// which puts the reading and the cadence on one timeline by construction
     /// rather than by agreement.
+    #[default(crate::time_util::system_timer())]
     pub(crate) timer: Arc<dyn Timer>,
-}
-
-impl Default for DeliveryConfig {
-    fn default() -> Self {
-        Self {
-            idle_sleep: secs(1),
-            min_sleep: millis(1),
-            clock: Arc::new(StdWallClock::new()),
-            timer: crate::time_util::system_timer(),
-        }
-    }
 }
 
 #[cfg(test)]

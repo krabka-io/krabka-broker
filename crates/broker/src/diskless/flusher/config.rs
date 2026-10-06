@@ -11,27 +11,20 @@ use crate::config::{
     DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub(crate) struct FlushConfig {
+    #[default(DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL.to_std())]
     pub(crate) interval: Duration,
+    #[default(DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE)]
     pub(crate) max_size: ByteSize,
+    #[default(Some(DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG))]
     pub(crate) trim_safety_lag: Option<i64>,
     /// How long the flusher tolerates the index projection standing still:
     /// both waiting for its own published record to come back, and waiting
     /// for the startup replay to advance. It bounds a lack of *progress*, not
     /// total elapsed time, so a large index-topic backlog does not trip it.
+    #[default(DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT.to_std())]
     pub(crate) index_projection_timeout: Duration,
-}
-
-impl Default for FlushConfig {
-    fn default() -> Self {
-        Self {
-            interval: DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL.to_std(),
-            max_size: DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
-            trim_safety_lag: Some(DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG),
-            index_projection_timeout: DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT.to_std(),
-        }
-    }
 }
 
 impl FlushConfig {

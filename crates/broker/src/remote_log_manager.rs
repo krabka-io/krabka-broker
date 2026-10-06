@@ -152,26 +152,18 @@ const DEFAULT_TIERING_INTERVAL: Time = secs(30);
 const NO_BYTES: ByteSize = bytes(0);
 
 /// Tunables for [`run`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub(crate) struct RemoteLogManagerConfig {
+    #[default(DEFAULT_TIERING_INTERVAL)]
     pub interval: Time,
     /// Deadline on one segment copy. See [`RemoteTier::copy_timeout`].
+    #[default(crate::config::DEFAULT_REMOTE_COPY_TIMEOUT)]
     pub copy_timeout: Time,
     /// How wide one tick sweeps. See [`SweepConcurrency`].
     pub concurrency: SweepConcurrency,
     /// See [`RemoteTier::unstable_api_versions`].
+    #[default(crate::api_catalog::UnstableApiVersions::Disabled)]
     pub unstable_api_versions: crate::api_catalog::UnstableApiVersions,
-}
-
-impl Default for RemoteLogManagerConfig {
-    fn default() -> Self {
-        Self {
-            interval: DEFAULT_TIERING_INTERVAL,
-            copy_timeout: crate::config::DEFAULT_REMOTE_COPY_TIMEOUT,
-            concurrency: SweepConcurrency::default(),
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-        }
-    }
 }
 
 /// How many partition passes of each kind one tick may have in flight.
@@ -183,19 +175,12 @@ impl Default for RemoteLogManagerConfig {
 /// (`remote.log.manager.expiration.thread.pool.size`). A partition takes one
 /// slot for the whole of its pass, so the bound counts partitions in flight
 /// rather than object-store calls in flight.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub(crate) struct SweepConcurrency {
+    #[default(crate::config::DEFAULT_REMOTE_COPIER_THREADS)]
     pub copier: usize,
+    #[default(crate::config::DEFAULT_REMOTE_EXPIRATION_THREADS)]
     pub expiration: usize,
-}
-
-impl Default for SweepConcurrency {
-    fn default() -> Self {
-        Self {
-            copier: crate::config::DEFAULT_REMOTE_COPIER_THREADS,
-            expiration: crate::config::DEFAULT_REMOTE_EXPIRATION_THREADS,
-        }
-    }
 }
 
 /// The two bounds of [`SweepConcurrency`], as the semaphores one tick hands

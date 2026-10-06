@@ -41,14 +41,16 @@ const TAG_FAILED_DESCRIPTION_TOPOLOGY_EPOCH: u32 = 3;
 /// KIP-1331's record of what the topology description plugin holds for a
 /// group: Kafka's `StreamsGroup.storedDescriptionTopologyEpoch` and
 /// `failedDescriptionTopologyEpoch`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct DescriptionEpochs {
     /// The topology epoch whose description the plugin holds,
     /// [`Self::NONE`] when it holds none, or [`Self::UNCERTAIN`] when a plugin
     /// operation may not have completed.
+    #[default(Self::NONE)]
     pub stored: i32,
     /// The topology epoch whose description the plugin rejected for good, or
     /// [`Self::NONE`].
+    #[default(Self::NONE)]
     pub failed: i32,
 }
 
@@ -65,15 +67,6 @@ impl DescriptionEpochs {
     #[must_use]
     pub fn holds(self, topology_epoch: i32) -> bool {
         self.stored >= 0 && self.stored == topology_epoch
-    }
-}
-
-impl Default for DescriptionEpochs {
-    fn default() -> Self {
-        Self {
-            stored: Self::NONE,
-            failed: Self::NONE,
-        }
     }
 }
 

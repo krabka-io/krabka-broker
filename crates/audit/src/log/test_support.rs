@@ -56,28 +56,20 @@ pub fn test_signer() -> (std::sync::Arc<FileEd25519Signer>, Vec<u8>) {
     (std::sync::Arc::new(s), pubkey)
 }
 
-#[derive(Debug)]
+#[derive(Debug, krabka_macros::FieldDefaults)]
 pub struct FailableSink {
+    #[default(AtomicBool::new(false))]
     fail: AtomicBool,
+    #[default(AtomicBool::new(false))]
     indeterminate: AtomicBool,
+    #[default(AtomicI64::new(-1))]
     indeterminate_after: AtomicI64,
     /// -1 = unlimited; >= 0 = writes remaining before budget error.
+    #[default(AtomicI64::new(-1))]
     allow: AtomicI64,
+    #[default(AtomicU64::new(0))]
     durable_requests: AtomicU64,
     pub inner: MemorySink,
-}
-
-impl Default for FailableSink {
-    fn default() -> Self {
-        Self {
-            fail: AtomicBool::new(false),
-            indeterminate: AtomicBool::new(false),
-            indeterminate_after: AtomicI64::new(-1),
-            allow: AtomicI64::new(-1),
-            durable_requests: AtomicU64::new(0),
-            inner: MemorySink::default(),
-        }
-    }
 }
 
 impl FailableSink {

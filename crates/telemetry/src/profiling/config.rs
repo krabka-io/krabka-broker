@@ -35,11 +35,13 @@ pub enum ProfilingError {
 pub struct ProfilingSampleFrequency(i32);
 
 /// Process-local CPU and heap profiling policy.
-#[derive(Args, Clone, Debug, PartialEq)]
+#[derive(Args, Clone, Debug, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ProfilingConfig {
     #[arg(long, env = "KRABKA_PROFILING_CPU_DEFAULT_DURATION", default_value = "30s", value_parser = parse::positive_time)]
+    #[default(secs(30))]
     pub profiling_cpu_default_duration: Time,
     #[arg(long, env = "KRABKA_PROFILING_CPU_MAX_DURATION", default_value = "60s", value_parser = parse::positive_time)]
+    #[default(secs(60))]
     pub profiling_cpu_max_duration: Time,
     #[arg(
         long,
@@ -48,8 +50,10 @@ pub struct ProfilingConfig {
     )]
     pub profiling_cpu_sample_frequency: ProfilingSampleFrequency,
     #[arg(long, env = "KRABKA_PROFILING_HEAP_DEFAULT_DURATION", default_value = "5s", value_parser = parse::positive_time)]
+    #[default(secs(5))]
     pub profiling_heap_default_duration: Time,
     #[arg(long, env = "KRABKA_PROFILING_HEAP_MAX_DURATION", default_value = "30s", value_parser = parse::positive_time)]
+    #[default(secs(30))]
     pub profiling_heap_max_duration: Time,
     #[arg(
         long,
@@ -57,6 +61,12 @@ pub struct ProfilingConfig {
         default_value = "libc,libgcc,pthread,vdso",
         value_delimiter = ','
     )]
+    #[default(vec![
+        "libc".to_string(),
+        "libgcc".to_string(),
+        "pthread".to_string(),
+        "vdso".to_string(),
+    ])]
     pub profiling_native_frame_blocklist: Vec<String>,
 }
 
@@ -77,24 +87,6 @@ impl ProfilingConfig {
             return Err("profiling maximum duration must be at least 1s".to_string());
         }
         Ok(())
-    }
-}
-
-impl Default for ProfilingConfig {
-    fn default() -> Self {
-        Self {
-            profiling_cpu_default_duration: secs(30),
-            profiling_cpu_max_duration: secs(60),
-            profiling_cpu_sample_frequency: ProfilingSampleFrequency::default(),
-            profiling_heap_default_duration: secs(5),
-            profiling_heap_max_duration: secs(30),
-            profiling_native_frame_blocklist: vec![
-                "libc".to_string(),
-                "libgcc".to_string(),
-                "pthread".to_string(),
-                "vdso".to_string(),
-            ],
-        }
     }
 }
 

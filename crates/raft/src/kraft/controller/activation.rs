@@ -28,7 +28,7 @@ const ACTIVATION_FAULT: &str = "exception while completing controller activation
 
 /// What a new leader of an empty metadata log writes: the inputs of Kafka's
 /// `ActivationRecordsGenerator.recordsForEmptyLog`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub struct Activation {
     /// The bootstrap records. An empty list writes nothing.
     pub bootstrap_records: Vec<MetadataRecord>,
@@ -36,16 +36,8 @@ pub struct Activation {
     /// `ConfigurationControlManager.getStaticallyConfiguredMinInsyncReplicas`.
     /// It becomes the cluster-level `min.insync.replicas` when the bootstrap
     /// records enable ELR. Default: `1`, Kafka's default.
+    #[default(1)]
     pub default_min_insync_replicas: i32,
-}
-
-impl Default for Activation {
-    fn default() -> Self {
-        Self {
-            bootstrap_records: Vec::new(),
-            default_min_insync_replicas: 1,
-        }
-    }
 }
 
 /// The level of the last `FeatureLevelRecord` for `name` in `records`, or

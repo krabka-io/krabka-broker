@@ -170,24 +170,29 @@ impl RemoteTierFlags {
 /// `retention.ms`, `index.interval.bytes`, and the other tunables. Start from
 /// the [`Default`](Self::default) impl. Most production deployments override
 /// only [`Self::retention`] and [`Self::retention_size`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub struct LogConfig {
     /// Cap the initial allocation used by decoded and raw segment reads.
+    #[default(DEFAULT_READ_BUFFER_CAP)]
     pub read_buffer_cap: ByteSize,
 
     /// Read timestamp searches in windows of this size.
+    #[default(DEFAULT_TIMESTAMP_SCAN_WINDOW)]
     pub timestamp_scan_window: ByteSize,
 
     /// Roll the active segment once it grows past this. Kafka's
     /// `segment.bytes`; default 1 GiB.
+    #[default(DEFAULT_SEGMENT_SIZE)]
     pub segment_size: ByteSize,
 
     /// Roll the active segment when its first record is older than this.
     /// Kafka's `segment.ms`; default 7 days.
+    #[default(DEFAULT_SEGMENT_ROLL_INTERVAL)]
     pub segment_roll_interval: Time,
 
     /// Delete sealed segments older than this. `None` = unlimited. Kafka's
     /// `retention.ms`; default 7 days.
+    #[default(Some(DEFAULT_RETENTION))]
     pub retention: Option<Time>,
 
     /// Delete oldest sealed segments until the total `.log` size fits.
@@ -200,6 +205,7 @@ pub struct LogConfig {
     /// batch is refused with `MESSAGE_TOO_LARGE` (10) rather than truncated,
     /// because a batch that lands in the log is a batch every consumer has to
     /// fetch whole.
+    #[default(DEFAULT_MAX_MESSAGE_SIZE)]
     pub max_message_size: ByteSize,
 
     /// Kafka trunk's `max.decompressed.message.bytes`: the largest record body a
@@ -216,12 +222,14 @@ pub struct LogConfig {
 
     /// Write one `.index`/`.timeindex` entry per this much `.log`. Kafka's
     /// `index.interval.bytes`; default 4 KiB.
+    #[default(DEFAULT_INDEX_INTERVAL)]
     pub index_interval: ByteSize,
 
     /// Roll the active segment once its `.index` or its `.timeindex` holds
     /// this many bytes of entries. Kafka's `segment.index.bytes`; default
     /// 10 MiB. Kafka rounds the size down to whole entries, so the offset
     /// index holds `size / 8` entries and the time index `size / 12`.
+    #[default(DEFAULT_SEGMENT_INDEX_SIZE)]
     pub segment_index_size: ByteSize,
 
     /// fsync after every `append`. Default off. The broker manages fsync
@@ -229,15 +237,18 @@ pub struct LogConfig {
     pub flush_on_append: bool,
 
     /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
+    #[default(true)]
     pub validate_on_open: bool,
 
     /// Cleanup policy. Defaults to `Delete`. See [`CleanupPolicy`].
+    #[default(CleanupPolicy::Delete)]
     pub cleanup_policy: CleanupPolicy,
 
     /// Kafka's `min.compaction.lag.ms`: a record stays uncompacted for at
     /// least this long after it is written. The broker's cleaner reads it and
     /// leaves a partition whose newest dirty record is younger than this
     /// alone. Default 0, which is Kafka's.
+    #[default(Time::ZERO)]
     pub min_compaction_lag: Time,
 
     /// Kafka's `max.compaction.lag.ms`: however clean a partition looks, once
@@ -248,11 +259,13 @@ pub struct LogConfig {
     /// Kafka's `min.cleanable.dirty.ratio`: the share of a compacted
     /// partition's log that must be uncleaned before the cleaner spends a pass
     /// on it. Default 0.5, which is Kafka's.
+    #[default(DEFAULT_MIN_CLEANABLE_DIRTY_RATIO)]
     pub min_cleanable_dirty_ratio: Ratio,
 
     /// Kafka's `message.timestamp.type`: whose clock the stored records carry.
     /// `CreateTime` is the producer's own timestamp and is the default;
     /// `LogAppendTime` is the broker's clock at append time.
+    #[default(TimestampType::CreateTime)]
     pub message_timestamp_type: TimestampType,
 
     /// Broker-side recompression target. `None` is Kafka's
@@ -272,6 +285,9 @@ pub struct LogConfig {
 
     /// KIP-950's two disablement controls, `remote.log.copy.disable` and
     /// `remote.log.delete.on.disable`. See [`RemoteTierFlags`].
+    // Both KIP-950 controls default off, as in Kafka: a tiered topic
+    // copies, and turning tiering off needs the operator's consent.
+    #[default(RemoteTierFlags::DEFAULT)]
     pub remote_tier: RemoteTierFlags,
 
     /// Local-disk time-retention window for tiered partitions (KIP-405).
@@ -285,10 +301,14 @@ pub struct LogConfig {
     /// KIP-534. After a tombstone or transaction marker first becomes
     /// compaction-eligible, the log retains it for at least this long before
     /// deletion. This is the delete-horizon grace window. Default 24h.
+    #[default(DEFAULT_DELETE_RETENTION)]
     pub delete_retention: Time,
 
     /// When a durable record becomes visible. Defaults to
     /// [`DeliveryPolicy::Immediate`]. See [`DeliveryPolicy`].
+    // Scheduled delivery is opt-in per topic; an ordinary topic pays
+    // nothing for it.
+    #[default(DeliveryPolicy::Immediate)]
     pub delivery_policy: DeliveryPolicy,
 
     /// KFC-1 `delivery.schedule.monotonic`, read only under
@@ -301,6 +321,9 @@ pub struct LogConfig {
     /// append can still land out of order, and so can two jobs the writer
     /// batches into one group. Kafka runs its own record-shape rejections in
     /// the same place, under `UnifiedLog.append`'s lock.
+    // Kafka has no such setting, and a scheduled topic accepts a
+    // schedule that runs backwards unless an operator asks otherwise.
+    #[default(ScheduleOrder::Unordered)]
     pub schedule_order: ScheduleOrder,
 
     /// Declared bound on how far this broker's clock can be from true time.
@@ -313,53 +336,8 @@ pub struct LogConfig {
     /// `c >= activation + e` proves true time has reached the activation
     /// instant. Delivery is therefore never early, and it is late by at most
     /// `2 * delivery_clock_uncertainty`.
+    #[default(DEFAULT_DELIVERY_CLOCK_UNCERTAINTY)]
     pub delivery_clock_uncertainty: Time,
-}
-
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            read_buffer_cap: DEFAULT_READ_BUFFER_CAP,
-            timestamp_scan_window: DEFAULT_TIMESTAMP_SCAN_WINDOW,
-            segment_size: DEFAULT_SEGMENT_SIZE,
-            segment_roll_interval: DEFAULT_SEGMENT_ROLL_INTERVAL,
-            retention: Some(DEFAULT_RETENTION),
-            retention_size: None,
-            max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
-            max_decompressed_record: None,
-            index_interval: DEFAULT_INDEX_INTERVAL,
-            segment_index_size: DEFAULT_SEGMENT_INDEX_SIZE,
-            flush_on_append: false,
-            validate_on_open: true,
-            cleanup_policy: CleanupPolicy::Delete,
-            // Kafka's cleaner defaults: no minimum lag, no maximum lag, and
-            // half the log dirty before a pass is worth running.
-            min_compaction_lag: Time::ZERO,
-            max_compaction_lag: None,
-            min_cleanable_dirty_ratio: DEFAULT_MIN_CLEANABLE_DIRTY_RATIO,
-            // The producer's own timestamps are what the records carry.
-            message_timestamp_type: TimestampType::CreateTime,
-            // Pass-through: producers' compression choice wins. Kafka's
-            // default. Operators flip this to a specific codec on
-            // topics where they want broker-side enforcement.
-            compression_type: None,
-            // Tiered storage is opt-in per topic (Kafka default false).
-            remote_storage_enable: false,
-            // Both KIP-950 controls default off, as in Kafka: a tiered topic
-            // copies, and turning tiering off needs the operator's consent.
-            remote_tier: RemoteTierFlags::DEFAULT,
-            local_retention: None,
-            local_retention_size: None,
-            delete_retention: DEFAULT_DELETE_RETENTION,
-            // Scheduled delivery is opt-in per topic; an ordinary topic pays
-            // nothing for it.
-            delivery_policy: DeliveryPolicy::Immediate,
-            // Kafka has no such setting, and a scheduled topic accepts a
-            // schedule that runs backwards unless an operator asks otherwise.
-            schedule_order: ScheduleOrder::Unordered,
-            delivery_clock_uncertainty: DEFAULT_DELIVERY_CLOCK_UNCERTAINTY,
-        }
-    }
 }
 
 #[cfg(test)]

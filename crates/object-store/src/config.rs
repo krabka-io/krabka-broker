@@ -51,7 +51,7 @@ pub enum ObjectStoreConfig {
 ///
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
-#[derive(Clone, derive_more::Debug)]
+#[derive(Clone, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct S3Config {
     /// S3 bucket name.
     pub bucket: String,
@@ -76,48 +76,34 @@ pub struct S3Config {
     pub allow_http: bool,
     /// Files of at least this size upload with multipart. Defaults to
     /// [`DEFAULT_MULTIPART_THRESHOLD`].
+    #[default(DEFAULT_MULTIPART_THRESHOLD)]
     pub multipart_threshold: u64,
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
+    #[default(DEFAULT_MULTIPART_CHUNK_SIZE)]
     pub multipart_chunk_size: usize,
     /// Enable conditional puts (`If-None-Match`) so a `PutMode::Create` write
     /// fails instead of silently overwriting. Defaults to `true`.
+    #[default(true)]
     pub conditional_put: bool,
     /// Send `x-amz-checksum-sha256` so the server verifies each object on
     /// ingest. Defaults to `true`.
+    #[default(true)]
     pub checksum_sha256: bool,
     /// How many times one request is retried before the error surfaces.
     /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
+    #[default(DEFAULT_MAX_RETRIES)]
     pub max_retries: usize,
     /// Ceiling on the wall-clock time one request may spend across all of its
     /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
+    #[default(DEFAULT_RETRY_TIMEOUT)]
     pub retry_timeout: Duration,
     /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    #[default(DEFAULT_REQUEST_TIMEOUT)]
     pub request_timeout: Duration,
     /// Ceiling on the connect phase alone. Defaults to
     /// [`DEFAULT_CONNECT_TIMEOUT`].
+    #[default(DEFAULT_CONNECT_TIMEOUT)]
     pub connect_timeout: Duration,
-}
-
-impl Default for S3Config {
-    fn default() -> Self {
-        Self {
-            bucket: String::new(),
-            prefix: None,
-            region: String::new(),
-            endpoint: None,
-            access_key_id: None,
-            secret_access_key: None,
-            allow_http: false,
-            multipart_threshold: DEFAULT_MULTIPART_THRESHOLD,
-            multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
-            conditional_put: true,
-            checksum_sha256: true,
-            max_retries: DEFAULT_MAX_RETRIES,
-            retry_timeout: DEFAULT_RETRY_TIMEOUT,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
-    }
 }
 
 /// Connection and bucket parameters for native Google Cloud Storage.
@@ -127,7 +113,7 @@ impl Default for S3Config {
 ///
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
-#[derive(Clone, PartialEq, Eq, derive_more::Debug)]
+#[derive(Clone, PartialEq, Eq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct GcsConfig {
     /// GCS bucket name.
     pub bucket: String,
@@ -150,40 +136,26 @@ pub struct GcsConfig {
     pub allow_http: bool,
     /// Files of at least this size upload with resumable multipart. Defaults
     /// to [`DEFAULT_MULTIPART_THRESHOLD`].
+    #[default(DEFAULT_MULTIPART_THRESHOLD)]
     pub multipart_threshold: u64,
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
+    #[default(DEFAULT_MULTIPART_CHUNK_SIZE)]
     pub multipart_chunk_size: usize,
     /// How many times one request is retried before the error surfaces.
     /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
+    #[default(DEFAULT_MAX_RETRIES)]
     pub max_retries: usize,
     /// Ceiling on the wall-clock time one request may spend across all of its
     /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
+    #[default(DEFAULT_RETRY_TIMEOUT)]
     pub retry_timeout: Duration,
     /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    #[default(DEFAULT_REQUEST_TIMEOUT)]
     pub request_timeout: Duration,
     /// Ceiling on the connect phase alone. Defaults to
     /// [`DEFAULT_CONNECT_TIMEOUT`].
+    #[default(DEFAULT_CONNECT_TIMEOUT)]
     pub connect_timeout: Duration,
-}
-
-impl Default for GcsConfig {
-    fn default() -> Self {
-        Self {
-            bucket: String::new(),
-            prefix: None,
-            service_account_path: None,
-            service_account_key: None,
-            application_credentials_path: None,
-            endpoint: None,
-            allow_http: false,
-            multipart_threshold: DEFAULT_MULTIPART_THRESHOLD,
-            multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
-            max_retries: DEFAULT_MAX_RETRIES,
-            retry_timeout: DEFAULT_RETRY_TIMEOUT,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
-    }
 }
 
 #[cfg(test)]

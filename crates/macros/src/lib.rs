@@ -271,6 +271,32 @@
 //!     HighlyAvailable,
 //! }
 //! ```
+//!
+//! # `FieldDefaults`
+//!
+//! `#[derive(FieldDefaults)]` goes on a struct with named fields in place of a
+//! hand-written `impl Default` that only fills each field with a fixed
+//! expression. Each field takes one optional `#[default(EXPR)]` attribute and
+//! starts as `EXPR`; a field without one starts as `Default::default()`. The
+//! expression is evaluated each time `default()` runs, so it may call
+//! functions, and it is written out as given, so it must name what it uses in
+//! the scope of the struct. The derive adds no bounds: a generic struct
+//! writes the bounds its fields need on the struct itself.
+//!
+//! The name differs from `Default` because the standard derive owns the bare
+//! name and its own `#[default]` attribute on enum variants. Do not derive
+//! both on one struct.
+//!
+//! ```ignore
+//! #[derive(krabka_macros::FieldDefaults)]
+//! pub struct FreezeConfig {
+//!     #[default(Duration::from_secs(30))]
+//!     pub poll_interval: Duration,
+//!     #[default(true)]
+//!     pub enabled: bool,
+//!     pub owners: Vec<String>,
+//! }
+//! ```
 
 use moxy::{
     ast::{ItemEnum, ItemStruct, ParseError},
@@ -280,6 +306,7 @@ use moxy::{
 mod api_names;
 mod dispatch;
 mod enum_str;
+mod field_defaults;
 mod human_units;
 mod krabka_env;
 mod meta;
@@ -359,4 +386,12 @@ pub fn krabka_env(meta: TokenStream, item: TokenStream) -> Result<TokenStream, P
 #[moxy::derive(EnumStr, attributes(enum_str))]
 pub fn enum_str(item: ItemEnum) -> Result<TokenStream, ParseError> {
     enum_str::expand(item)
+}
+
+/// Derives `Default` from each field's `#[default(EXPR)]`, or
+/// `Default::default()` for a field without one. The crate documentation
+/// describes the expansion.
+#[moxy::derive(FieldDefaults, attributes(default))]
+pub fn field_defaults(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    field_defaults::expand(item)
 }

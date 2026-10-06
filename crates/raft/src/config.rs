@@ -6,7 +6,7 @@
 //! in `limits`, and the router seams the broker installs on a controller live
 //! in `routing`.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use krabka_kraft_core::snapshot_fetch::METADATA_SNAPSHOT_FETCH_HARD_MAX;
 use krabka_units::{
@@ -104,32 +104,25 @@ pub enum BootstrapMode {
 ///
 /// The defaults are Kafka's: 100 MiB requests, ten idle minutes, and no
 /// connection ceiling.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ListenerLimits {
     /// `socket.request.max.bytes`: the largest request frame the listener
     /// reads. A larger size prefix closes the connection before the frame is
     /// read, as `NetworkReceive.readFrom` does.
+    #[default(mebibytes(100))]
     pub max_request_size: ByteSize,
     /// `connections.max.idle.ms`: how long the listener waits for the next
     /// request frame before it closes the connection. `None` expires none.
-    pub max_idle: Option<std::time::Duration>,
+    #[default(Some(Duration::from_mins(10)))]
+    pub max_idle: Option<Duration>,
     /// `max.connections`: live connections the listener accepts, `usize::MAX`
     /// for no ceiling.
+    #[default(usize::MAX)]
     pub max_connections: usize,
     /// `max.connections.per.ip`: live connections per peer address,
     /// `usize::MAX` for no ceiling.
+    #[default(usize::MAX)]
     pub max_connections_per_ip: usize,
-}
-
-impl Default for ListenerLimits {
-    fn default() -> Self {
-        Self {
-            max_request_size: mebibytes(100),
-            max_idle: Some(std::time::Duration::from_mins(10)),
-            max_connections: usize::MAX,
-            max_connections_per_ip: usize::MAX,
-        }
-    }
 }
 
 // Quantities render in the operator form (`1s`, `20MiB`) rather than `uom`'s

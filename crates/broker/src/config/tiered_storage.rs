@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use krabka_client_core::security::ClientSecurity;
 use krabka_units::{ByteSize, Time, convert::TimeExt};
 
 use crate::{
@@ -20,7 +21,7 @@ use crate::{
 /// Does not derive `PartialEq`/`Eq`: the `security` field holds
 /// rustls-adjacent types (a `ClientConfig` connector) that are not
 /// comparable, and nothing compares this config by value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub struct KafkaRlmmConfig {
     /// Capacity of every Kafka metadata-log client dispatch queue.
     pub dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
@@ -32,27 +33,35 @@ pub struct KafkaRlmmConfig {
     pub bootstrap: String,
     /// Partition count to create `__remote_log_metadata` with on first
     /// startup. Ignored when the topic already exists.
+    #[default(DEFAULT_RLMM_TOPIC_NUM_PARTITIONS)]
     pub num_partitions: i32,
     /// Replication factor to create `__remote_log_metadata` with on
     /// first startup. Ignored when the topic already exists.
+    #[default(DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR)]
     pub replication: i32,
     /// `min.insync.replicas` to create `__remote_log_metadata` with on first
     /// startup. Maps to Kafka's `remote.log.metadata.topic.min.isr`. Ignored
     /// when the topic already exists. Default
     /// [`DEFAULT_RLMM_TOPIC_MIN_ISR`].
+    #[default(DEFAULT_RLMM_TOPIC_MIN_ISR)]
     pub min_isr: i32,
     /// How often the topic-backed manager flushes its RLMM cache
     /// snapshot to disk. Maps to Kafka's
     /// `remote.log.metadata.snapshot.interval`. Default
     /// [`DEFAULT_RLMM_SNAPSHOT_INTERVAL`].
+    #[default(DEFAULT_RLMM_SNAPSHOT_INTERVAL)]
     pub snapshot_interval: Time,
     /// Timeout for provisioning each internal metadata topic.
+    #[default(krabka_remote_storage_topic::DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT)]
     pub topic_create_timeout: Time,
     /// Maximum wait for each per-partition metadata fetch.
+    #[default(krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_WAIT)]
     pub fetch_max_wait: Time,
     /// Maximum bytes returned by each per-partition metadata fetch.
+    #[default(krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_BYTES)]
     pub fetch_max_bytes: ByteSize,
     /// Backoff after a failed metadata fetch.
+    #[default(krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_RETRY_BACKOFF)]
     pub fetch_retry_backoff: Time,
     /// Capacity of the shared metadata-event delivery queue.
     pub event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity,
@@ -68,7 +77,7 @@ pub struct KafkaRlmmConfig {
     /// The field is boxed to keep `KafkaRlmmConfig` and the enclosing
     /// `BrokerConfig` small, because `Broker::start` moves `BrokerConfig` by
     /// value into a large future.
-    pub security: Option<Box<krabka_client_core::security::ClientSecurity>>,
+    pub security: Option<Box<ClientSecurity>>,
 }
 
 /// Which `RemoteLogMetadataManager` the broker runs when tiered storage is enabled.
@@ -86,29 +95,6 @@ pub enum RlmmKind {
     TopicBacked(KafkaRlmmConfig),
     /// Non-durable in-process manager. Tests only.
     InMemory,
-}
-
-impl Default for KafkaRlmmConfig {
-    fn default() -> Self {
-        Self {
-            dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            frame_max: krabka_client_core::ClientFrameMax::default(),
-            bootstrap: String::new(),
-            num_partitions: DEFAULT_RLMM_TOPIC_NUM_PARTITIONS,
-            replication: DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR,
-            min_isr: DEFAULT_RLMM_TOPIC_MIN_ISR,
-            snapshot_interval: DEFAULT_RLMM_SNAPSHOT_INTERVAL,
-            topic_create_timeout:
-                krabka_remote_storage_topic::DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
-            fetch_max_wait: krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_WAIT,
-            fetch_max_bytes: krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_BYTES,
-            fetch_retry_backoff: krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_RETRY_BACKOFF,
-            event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity::default(
-            ),
-            snapshot_dir: std::path::PathBuf::new(),
-            security: None,
-        }
-    }
 }
 
 impl KafkaRlmmConfig {

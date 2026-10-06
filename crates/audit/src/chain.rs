@@ -22,19 +22,11 @@ pub fn chain_hash(prev: &[u8; 32], seq: u64, value: &[u8]) -> [u8; 32] {
 }
 
 /// Running per-broker chain state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub struct ChainState {
     next_seq: u64,
+    #[default(GENESIS_HEAD)]
     head: [u8; 32],
-}
-
-impl Default for ChainState {
-    fn default() -> Self {
-        Self {
-            next_seq: 0,
-            head: GENESIS_HEAD,
-        }
-    }
 }
 
 impl ChainState {
