@@ -21,32 +21,17 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_time_millis!(
-            runtime,
-            producer_id_expiration,
-            cfg.producer_id_expiration,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            producer_id_expiration_scan_interval,
-            cfg.producer_id_expiration_scan_interval
-        );
-        set_runtime_usize!(runtime, max_produce_group, cfg.max_produce_group);
-        set_runtime_usize!(
-            runtime,
-            partition_writer_queue_depth,
-            cfg.partition_writer_queue_depth
-        );
+        set_runtime! {
+            runtime => cfg;
+            whole_millis_i64_time: producer_id_expiration;
+            positive_time: producer_id_expiration_scan_interval;
+            positive_usize: max_produce_group, partition_writer_queue_depth;
+        }
         // A topic reports a static `min.insync.replicas` at
         // `STATIC_BROKER_CONFIG` when the operator named it, whatever the value.
         cfg.static_config_origins.log.min_insync_replicas |=
             runtime.default_min_insync_replicas.is_some();
-        set_runtime_i32!(
-            runtime,
-            default_min_insync_replicas,
-            cfg.default_min_insync_replicas
-        );
+        set_runtime! { runtime => cfg; positive_i32: default_min_insync_replicas; }
         // `DescribeConfigs` reports these two as `STATIC_BROKER_CONFIG` when
         // the operator named them, so the loader records the provenance.
         if let Some(value) = runtime.num_partitions {
@@ -59,16 +44,12 @@ impl RuntimeFileConfig {
                 .topic_creation
                 .default_replication_factor = true;
         }
+        set_runtime! { runtime => cfg; whole_bytes_usize: future_log_move_read_chunk; }
         set_runtime_validated!(
             runtime,
-            future_log_move_read_chunk,
-            cfg.future_log_move_read_chunk,
-            whole_bytes_usize
-        );
-        set_runtime_i32!(
-            runtime,
             share_state_num_partitions,
-            cfg.share_coordinator.state_topic_num_partitions
+            cfg.share_coordinator.state_topic_num_partitions,
+            positive_i32
         );
         if let Some(value) = runtime.share_state_replication_factor {
             cfg.share_coordinator.state_topic_replication_factor =
@@ -80,10 +61,11 @@ impl RuntimeFileConfig {
             cfg.share_coordinator.state_topic_segment_bytes,
             kafka_int_bytes
         );
-        set_runtime_i32!(
+        set_runtime_validated!(
             runtime,
             share_state_min_isr,
-            cfg.share_coordinator.state_topic_min_isr
+            cfg.share_coordinator.state_topic_min_isr,
+            positive_i32
         );
         // Kafka's `between(0, 500)`.
         if let Some(value) = runtime.share_snapshot_update_records_per_snapshot {
@@ -158,21 +140,12 @@ impl RuntimeFileConfig {
             cfg.share_coordinator.cached_buffer_max_bytes,
             cached_buffer_max_bytes
         );
-        set_runtime_i32!(
-            runtime,
-            offsets_topic_num_partitions,
-            cfg.offsets_topic_num_partitions
-        );
-        if let Some(value) = runtime.offsets_topic_replication_factor {
-            cfg.offsets_topic_replication_factor =
-                positive_i16("offsets_topic_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            positive_i32: offsets_topic_num_partitions;
+            positive_i16: offsets_topic_replication_factor;
+            kafka_int_bytes: offsets_topic_segment_bytes;
         }
-        set_runtime_validated!(
-            runtime,
-            offsets_topic_segment_bytes,
-            cfg.offsets_topic_segment_bytes,
-            kafka_int_bytes
-        );
         // These two carry the operator's intent, not just a value: `Some`
         // means the key was named, which is what `DescribeConfigs` reports as
         // `STATIC_BROKER_CONFIG`.
@@ -183,43 +156,16 @@ impl RuntimeFileConfig {
             cfg.offsets_retention_check_interval_override =
                 Some(positive_time("offsets_retention_check_interval", value)?);
         }
-        set_runtime_i32!(
-            runtime,
-            transaction_state_num_partitions,
-            cfg.transaction_state_num_partitions
-        );
-        set_runtime_validated!(
-            runtime,
-            transaction_recovery_read_max,
-            cfg.transaction_recovery_read_max,
-            whole_bytes_usize
-        );
-        if let Some(value) = runtime.transaction_state_replication_factor {
-            cfg.transaction_state_replication_factor =
-                positive_i16("transaction_state_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            positive_i32: transaction_state_num_partitions;
+            whole_bytes_usize: transaction_recovery_read_max;
+            positive_i16: transaction_state_replication_factor;
+            kafka_int_bytes: transaction_state_segment_bytes;
+            positive_i32: transaction_state_min_isr;
+            whole_millis_i32_time: transaction_max_timeout;
+            plain: transaction_partition_verification_enable;
         }
-        set_runtime_validated!(
-            runtime,
-            transaction_state_segment_bytes,
-            cfg.transaction_state_segment_bytes,
-            kafka_int_bytes
-        );
-        set_runtime_i32!(
-            runtime,
-            transaction_state_min_isr,
-            cfg.transaction_state_min_isr
-        );
-        set_runtime_time_millis!(
-            runtime,
-            transaction_max_timeout,
-            cfg.transaction_max_timeout,
-            positive_i32
-        );
-        set_runtime_plain!(
-            runtime,
-            transaction_partition_verification_enable,
-            cfg.transaction_partition_verification_enable
-        );
         Ok(())
     }
 
@@ -233,40 +179,15 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_i32!(
-            runtime,
-            barrier_state_num_partitions,
-            cfg.barrier_state_num_partitions
-        );
-        if let Some(value) = runtime.barrier_state_replication_factor {
-            cfg.barrier_state_replication_factor =
-                positive_i16("barrier_state_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            positive_i32: barrier_state_num_partitions;
+            positive_i16: barrier_state_replication_factor;
+            whole_millis_i64_time: barrier_min_injection_interval, barrier_injection_timeout;
+            whole_bytes_usize: barrier_recovery_read_max;
+            positive_i32: barrier_retained_cuts;
+            positive_usize: barrier_max_groups, barrier_max_topics_per_group;
         }
-        set_runtime_time_millis!(
-            runtime,
-            barrier_min_injection_interval,
-            cfg.barrier_min_injection_interval,
-            positive_i64
-        );
-        set_runtime_time_millis!(
-            runtime,
-            barrier_injection_timeout,
-            cfg.barrier_injection_timeout,
-            positive_i64
-        );
-        set_runtime_validated!(
-            runtime,
-            barrier_recovery_read_max,
-            cfg.barrier_recovery_read_max,
-            whole_bytes_usize
-        );
-        set_runtime_i32!(runtime, barrier_retained_cuts, cfg.barrier_retained_cuts);
-        set_runtime_usize!(runtime, barrier_max_groups, cfg.barrier_max_groups);
-        set_runtime_usize!(
-            runtime,
-            barrier_max_topics_per_group,
-            cfg.barrier_max_topics_per_group
-        );
         Ok(())
     }
 }

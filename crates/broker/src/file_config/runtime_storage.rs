@@ -21,92 +21,22 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_time_millis!(
-            runtime,
-            unclean_recovery_aggressive_deadline,
-            cfg.unclean_recovery_aggressive_deadline
-        );
-        set_runtime_time_millis!(
-            runtime,
-            unclean_recovery_balanced_deadline,
-            cfg.unclean_recovery_balanced_deadline
-        );
-        set_runtime_time_millis!(
-            runtime,
-            operator_recovery_deadline,
-            cfg.operator_recovery_deadline
-        );
-        set_runtime_time_millis!(runtime, quota_throttle_max, cfg.quota_throttle_max);
-        set_runtime_time_millis!(runtime, quota_window, cfg.quota_window);
-        set_runtime_time_millis!(
-            runtime,
-            controller_mutation_quota_window,
-            cfg.controller_mutation_quota_window
-        );
-        set_runtime_u32!(
-            runtime,
-            self_registration_max_attempts,
-            cfg.self_registration_max_attempts
-        );
-        set_runtime_validated!(
-            runtime,
-            observer_fetch_max,
-            cfg.observer_fetch_max,
-            whole_bytes_u32
-        );
-        set_runtime_usize!(
-            runtime,
-            audit_event_queue_capacity,
-            cfg.audit_event_queue_capacity
-        );
-        set_runtime_i64!(
-            runtime,
-            audit_tail_window_offsets,
-            cfg.audit_tail_window_offsets
-        );
-        set_runtime_validated!(
-            runtime,
-            audit_tail_read_max,
-            cfg.audit_tail_read_max,
-            whole_bytes_usize
-        );
-        set_runtime_u32!(
-            runtime,
-            client_metrics_stale_push_intervals,
-            cfg.client_metrics_stale_push_intervals
-        );
-        set_runtime_usize!(
-            runtime,
-            client_metrics_otlp_queue_capacity,
-            cfg.client_metrics_otlp_queue_capacity
-        );
-        set_runtime_usize!(
-            runtime,
-            coordinator_actor_mailbox_capacity,
-            cfg.coordinator_actor_mailbox_capacity
-        );
-        set_runtime_usize!(
-            runtime,
-            diskless_wal_local_replica_count,
-            cfg.diskless_wal_local_replica_count
-        );
-        set_runtime_time_millis!(
-            runtime,
-            diskless_wal_flush_interval,
-            cfg.diskless_wal_flush_interval
-        );
-        set_runtime_validated!(
-            runtime,
-            diskless_wal_flush_max_size,
-            cfg.diskless_wal_flush_max_size,
-            whole_bytes_usize
-        );
-        set_runtime_validated!(
-            runtime,
-            diskless_wal_hot_tail_max_size,
-            cfg.diskless_wal_hot_tail_max_size,
-            whole_bytes_usize
-        );
+        set_runtime! {
+            runtime => cfg;
+            positive_time: unclean_recovery_aggressive_deadline,
+                unclean_recovery_balanced_deadline, operator_recovery_deadline, quota_throttle_max,
+                quota_window, controller_mutation_quota_window;
+            positive_u32: self_registration_max_attempts;
+            whole_bytes_u32: observer_fetch_max;
+            positive_usize: audit_event_queue_capacity;
+            positive_i64: audit_tail_window_offsets;
+            whole_bytes_usize: audit_tail_read_max;
+            positive_u32: client_metrics_stale_push_intervals;
+            positive_usize: client_metrics_otlp_queue_capacity,
+                coordinator_actor_mailbox_capacity, diskless_wal_local_replica_count;
+            positive_time: diskless_wal_flush_interval;
+            whole_bytes_usize: diskless_wal_flush_max_size, diskless_wal_hot_tail_max_size;
+        }
         if let Some(value) = runtime.diskless_wal_trim_safety_lag {
             if value.is_negative() {
                 return Err(FileConfigError::InvalidConfig(
@@ -115,27 +45,13 @@ impl RuntimeFileConfig {
             }
             cfg.diskless_wal_trim_safety_lag = value;
         }
-        set_runtime_time_millis!(
-            runtime,
-            diskless_wal_index_projection_timeout,
-            cfg.diskless_wal_index_projection_timeout
-        );
-        set_runtime_usize!(
-            runtime,
-            unclean_recovery_queue_capacity,
-            cfg.unclean_recovery_queue_capacity
-        );
-        set_runtime_validated!(
-            runtime,
-            share_coordinator_load_buffer_size,
-            cfg.share_coordinator_load_buffer_size,
-            whole_bytes_usize
-        );
-        set_runtime_usize!(
-            runtime,
-            share_session_cache_max_when_unlimited,
-            cfg.share_session_cache_max_when_unlimited
-        );
+        set_runtime! {
+            runtime => cfg;
+            positive_time: diskless_wal_index_projection_timeout;
+            positive_usize: unclean_recovery_queue_capacity;
+            whole_bytes_usize: share_coordinator_load_buffer_size;
+            positive_usize: share_session_cache_max_when_unlimited;
+        }
         set_runtime_validated!(
             runtime,
             log_read_buffer_cap,
@@ -177,68 +93,30 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_validated!(
-            runtime,
-            socket_request_max,
-            cfg.socket_request_max,
-            whole_bytes_u32
-        );
+        set_runtime! { runtime => cfg; whole_bytes_u32: socket_request_max; }
         // Neither authentication limit is dynamic, so a named broker reports
         // one at `STATIC_BROKER_CONFIG` when the operator named it.
         let authentication = &mut cfg.static_config_origins.authentication;
         authentication.sasl_server_max_receive |= runtime.sasl_server_max_receive.is_some();
         authentication.connection_failed_authentication_delay |=
             runtime.connection_failed_authentication_delay.is_some();
-        set_runtime_validated!(
-            runtime,
-            sasl_server_max_receive,
-            cfg.sasl_server_max_receive,
-            whole_bytes_u32
-        );
-        set_runtime_validated!(
-            runtime,
-            connection_failed_authentication_delay,
-            cfg.connection_failed_authentication_delay,
-            nonnegative_time
-        );
-        set_runtime_usize!(runtime, queued_max_requests, cfg.queued_max_requests);
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_u32: sasl_server_max_receive;
+            nonnegative_time: connection_failed_authentication_delay;
+            positive_usize: queued_max_requests;
+        }
         if let Some(bytes) = runtime.queued_max_request_bytes.take() {
             cfg.queued_max_request_bytes = Some(bytes);
         }
-        set_runtime_validated!(runtime, sendfile_min, cfg.sendfile_min, whole_bytes_usize);
-        set_runtime_validated!(
-            runtime,
-            socket_send_buffer,
-            cfg.socket_send_buffer,
-            whole_bytes_usize
-        );
-        set_runtime_validated!(
-            runtime,
-            socket_receive_buffer,
-            cfg.socket_receive_buffer,
-            whole_bytes_usize
-        );
-        set_runtime_i32!(
-            runtime,
-            max_request_partition_size_limit,
-            cfg.max_request_partition_size_limit
-        );
-        if let Some(value) = runtime.record_decompression_max_ratio {
-            cfg.record_decompression_max_ratio =
-                positive_ratio("record_decompression_max_ratio", value)?;
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_usize: sendfile_min, socket_send_buffer, socket_receive_buffer;
+            positive_i32: max_request_partition_size_limit;
+            positive_ratio: record_decompression_max_ratio;
+            whole_bytes_u64: record_decompression_output_floor,
+                record_decompression_output_ceiling;
         }
-        set_runtime_validated!(
-            runtime,
-            record_decompression_output_floor,
-            cfg.record_decompression_output_floor,
-            whole_bytes_u64
-        );
-        set_runtime_validated!(
-            runtime,
-            record_decompression_output_ceiling,
-            cfg.record_decompression_output_ceiling,
-            whole_bytes_u64
-        );
         Ok(())
     }
 }

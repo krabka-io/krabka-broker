@@ -24,16 +24,10 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_time_millis!(
-            runtime,
-            coordinator_session_expiry_tick,
-            cfg.coordinator_session_expiry_tick
-        );
-        set_runtime_time_millis!(
-            runtime,
-            coordinator_shutdown_ack_timeout,
-            cfg.coordinator_shutdown_ack_timeout
-        );
+        set_runtime! {
+            runtime => cfg;
+            positive_time: coordinator_session_expiry_tick, coordinator_shutdown_ack_timeout;
+        }
         set_runtime_duration!(
             runtime,
             consumer_group_session_timeout,
@@ -64,18 +58,16 @@ impl RuntimeFileConfig {
             consumer_group_max_heartbeat_interval,
             cfg.next_gen_consumer_group.max_heartbeat_interval
         );
-        set_runtime_usize!(
+        set_runtime_validated!(
             runtime,
             consumer_group_max_size,
-            cfg.next_gen_consumer_group.max_size
+            cfg.next_gen_consumer_group.max_size,
+            positive_usize
         );
         // Zero is Kafka's own development setting for
-        // `group.initial.rebalance.delay.ms`, so this one bypasses the
-        // positive-only macro.
-        if let Some(value) = runtime.classic_group_initial_rebalance_delay {
-            cfg.classic_group_initial_rebalance_delay =
-                nonnegative_time("classic_group_initial_rebalance_delay", value)?;
-        }
+        // `group.initial.rebalance.delay.ms`, so this one is not held to
+        // `positive_time`.
+        set_runtime! { runtime => cfg; nonnegative_time: classic_group_initial_rebalance_delay; }
         set_runtime_duration!(
             runtime,
             classic_group_min_session_timeout,
@@ -86,16 +78,13 @@ impl RuntimeFileConfig {
             classic_group_max_session_timeout,
             cfg.next_gen_consumer_group.classic_max_session_timeout
         );
-        set_runtime_usize!(
+        set_runtime_validated!(
             runtime,
             classic_group_max_size,
-            cfg.next_gen_consumer_group.classic_max_size
+            cfg.next_gen_consumer_group.classic_max_size,
+            positive_usize
         );
-        set_runtime_time_millis!(
-            runtime,
-            sync_group_follower_wait,
-            cfg.sync_group_follower_wait
-        );
+        set_runtime! { runtime => cfg; positive_time: sync_group_follower_wait; }
         Ok(())
     }
 
@@ -269,7 +258,12 @@ impl RuntimeFileConfig {
             streams_group_max_heartbeat_interval,
             cfg.streams_group.max_heartbeat_interval
         );
-        set_runtime_usize!(runtime, streams_group_max_size, cfg.streams_group.max_size);
+        set_runtime_validated!(
+            runtime,
+            streams_group_max_size,
+            cfg.streams_group.max_size,
+            positive_usize
+        );
         if let Some(value) = runtime.streams_group_num_standby_replicas {
             if value < 0 {
                 return Err(invalid_runtime_value(

@@ -13,50 +13,27 @@
 #[cfg(test)]
 mod tests;
 
-/// Declares the constants that carry an Apache Kafka wire code, and collects
-/// them into `KAFKA_RANGE_CODES` for the guard test.
+/// Declares the constants that carry a wire code, and collects them into the
+/// named table for the guard test: `KAFKA_RANGE_CODES` for the Apache Kafka
+/// codes, `KAFKA_TRUNK_CODES` for the codes Kafka trunk assigns and no Kafka
+/// release has yet, and `KRABKA_PRIVATE_CODES` for the krabka-private ones.
 ///
 /// Declaring through the macro is what makes the guard total: a constant that
 /// is not written here is not a wire code, and a constant that is written here
 /// cannot escape the check against the extracted Kafka table.
-macro_rules! kafka_codes {
-    ($( $(#[$meta:meta])* $name:ident = $value:expr; )*) => {
+macro_rules! wire_codes {
+    ($table:ident; $( $(#[$meta:meta])* $name:ident = $value:expr; )*) => {
         $( $(#[$meta])* pub const $name: i16 = $value; )*
 
-        /// Every Kafka-range constant above, with the name a guard-test
-        /// failure reports.
-        #[cfg(test)]
-        const KAFKA_RANGE_CODES: &[(&str, i16)] = &[$( (stringify!($name), $name), )*];
-    };
-}
-
-/// Declares the constants that carry a wire code Kafka trunk assigns and no
-/// Kafka release has yet, and collects them into `KAFKA_TRUNK_CODES` for the
-/// guard test against the trunk table.
-macro_rules! kafka_trunk_codes {
-    ($( $(#[$meta:meta])* $name:ident = $value:expr; )*) => {
-        $( $(#[$meta])* pub const $name: i16 = $value; )*
-
-        /// Every trunk-only constant above, with the name a guard-test failure
+        /// Every constant in this block, with the name a guard-test failure
         /// reports.
         #[cfg(test)]
-        const KAFKA_TRUNK_CODES: &[(&str, i16)] = &[$( (stringify!($name), $name), )*];
+        const $table: &[(&str, i16)] = &[$( (stringify!($name), $name), )*];
     };
 }
 
-/// Declares the krabka-private constants and collects them the same way.
-macro_rules! krabka_private_codes {
-    ($( $(#[$meta:meta])* $name:ident = $value:expr; )*) => {
-        $( $(#[$meta])* pub const $name: i16 = $value; )*
-
-        /// Every krabka-private constant above, with the name a guard-test
-        /// failure reports.
-        #[cfg(test)]
-        const KRABKA_PRIVATE_CODES: &[(&str, i16)] = &[$( (stringify!($name), $name), )*];
-    };
-}
-
-kafka_codes! {
+wire_codes! {
+    KAFKA_RANGE_CODES;
     NONE = 0;
     UNKNOWN_SERVER_ERROR = -1;
     OFFSET_OUT_OF_RANGE = 1;
@@ -517,7 +494,8 @@ kafka_codes! {
 // the trunk `Errors` table recorded in the private `tests` module.
 // ---------------------------------------------------------------------------
 
-kafka_trunk_codes! {
+wire_codes! {
+    KAFKA_TRUNK_CODES;
     /// `STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED` (135, KIP-1331): the
     /// broker could not store a `StreamsGroupTopologyDescriptionUpdate`.
     STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED = 135;
@@ -546,7 +524,8 @@ kafka_trunk_codes! {
 // key are different fields on the wire.
 // ---------------------------------------------------------------------------
 
-krabka_private_codes! {
+wire_codes! {
+    KRABKA_PRIVATE_CODES;
     /// `BARRIER_INJECTION_IN_PROGRESS` (1000): an injection for this barrier
     /// group is already in flight. The caller should retry after a brief
     /// back-off.
