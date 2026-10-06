@@ -101,7 +101,7 @@ fn heartbeat(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatRequest {
 
 /// Send `request` until the coordinator has loaded the group's partition.
 ///
-/// FindCoordinator names a broker once it leads the partition, which can be
+/// `FindCoordinator` names a broker once it leads the partition, which can be
 /// before it has replayed it, and the coordinator answers
 /// `COORDINATOR_LOAD_IN_PROGRESS` until then.
 async fn heartbeat_once_loaded(
