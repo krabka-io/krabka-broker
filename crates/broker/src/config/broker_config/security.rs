@@ -9,7 +9,7 @@
 /// A newtype rather than a bare `HashMap` so that `BrokerConfig`'s derived
 /// `Debug` cannot print a password. The hand-written `Debug` below prints the
 /// usernames alone.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq, derive_more::Deref, derive_more::DerefMut)]
 pub struct PlainCredentials(std::collections::HashMap<String, String>);
 
 impl PlainCredentials {
@@ -26,20 +26,6 @@ impl PlainCredentials {
 impl std::fmt::Debug for PlainCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_set().entries(self.0.keys()).finish()
-    }
-}
-
-impl std::ops::Deref for PlainCredentials {
-    type Target = std::collections::HashMap<String, String>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for PlainCredentials {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 

@@ -27,6 +27,25 @@ mod share_state;
 #[cfg(any(test, feature = "test-helpers"))]
 mod transactions;
 
+/// Polls `condition` every 25ms until it holds, for at most
+/// [`TEST_AWAITER_TIMEOUT`][crate::broker::TEST_AWAITER_TIMEOUT], and answers
+/// whether it held. The test-only awaiters whose state has no
+/// change-notification channel assert on it with their own panic message.
+#[cfg(any(test, feature = "test-helpers"))]
+async fn await_until<F, Fut>(mut condition: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(crate::broker::TEST_AWAITER_TIMEOUT, async {
+        while !condition().await {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 fn take_partition_writer_tasks(partitions: &PartitionRegistry) -> Vec<JoinHandle<()>> {
     partitions
         .arcs()

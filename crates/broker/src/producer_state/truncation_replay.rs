@@ -2,7 +2,7 @@ use assert2::assert;
 use krabka_ids::PartitionIndex;
 use krabka_protocol::records::{Record, RecordBatch};
 
-use super::{Decision, ProducerState, RetainedBatch, SequenceContext};
+use super::{Decision, ProducerState, RetainedBatch, snapshot_tail::check};
 
 #[tokio::test]
 async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
@@ -47,15 +47,7 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
             .await
             .unwrap();
         for sequence in [0, 2] {
-            let checked = state
-                .check_batch(
-                    "t",
-                    PartitionIndex(0),
-                    SequenceContext::RELEASED,
-                    (42, 7),
-                    (sequence, 1),
-                )
-                .await;
+            let checked = check(&state, (42, 7), (sequence, 1)).await;
             if i64::from(sequence) + 2 <= end {
                 assert!(
                     checked.decision
@@ -90,18 +82,15 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
         let recovered = reopened.recovered_producers();
         for producer in &recovered {
             let row = producer.entry;
-            let checked = state
-                .check_batch(
-                    "t",
-                    PartitionIndex(0),
-                    SequenceContext::RELEASED,
-                    (row.producer_id.0, row.producer_epoch),
-                    (
-                        krabka_verified::decrement_sequence(row.last_sequence, row.offset_delta),
-                        row.offset_delta,
-                    ),
-                )
-                .await;
+            let checked = check(
+                &state,
+                (row.producer_id.0, row.producer_epoch),
+                (
+                    krabka_verified::decrement_sequence(row.last_sequence, row.offset_delta),
+                    row.offset_delta,
+                ),
+            )
+            .await;
             let witness = checked.duplicate.unwrap();
             assert!(witness.base_offset == row.last_offset.0 - i64::from(row.offset_delta));
             assert!(witness.last_offset < end);
@@ -133,15 +122,7 @@ async fn deleting_the_tail_reintroduces_an_older_sequence_alias() {
         .rebuild_from_log("t", PartitionIndex(0), &log)
         .await
         .unwrap();
-    let checked = state
-        .check_batch(
-            "t",
-            PartitionIndex(0),
-            SequenceContext::RELEASED,
-            (42, 7),
-            (0, 0),
-        )
-        .await;
+    let checked = check(&state, (42, 7), (0, 0)).await;
     assert!(
         checked.decision
             == Decision::Duplicate {
@@ -157,15 +138,7 @@ async fn deleting_the_tail_reintroduces_an_older_sequence_alias() {
         .rebuild_from_log("t", PartitionIndex(0), &log)
         .await
         .unwrap();
-    let checked = state
-        .check_batch(
-            "t",
-            PartitionIndex(0),
-            SequenceContext::RELEASED,
-            (42, 7),
-            (0, 0),
-        )
-        .await;
+    let checked = check(&state, (42, 7), (0, 0)).await;
     assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
     assert!(
         checked.duplicate
@@ -205,15 +178,7 @@ async fn deleting_a_newer_epoch_restores_the_surviving_epoch() {
         .rebuild_from_log("t", PartitionIndex(0), &log)
         .await
         .unwrap();
-    let checked = state
-        .check_batch(
-            "t",
-            PartitionIndex(0),
-            SequenceContext::RELEASED,
-            (42, 6),
-            (0, 1),
-        )
-        .await;
+    let checked = check(&state, (42, 6), (0, 1)).await;
     assert!(checked.decision == Decision::Fenced);
     log.truncate_to(krabka_log::Offset(3)).unwrap();
     assert!(log.log_end_offset().0 == 2);
@@ -222,15 +187,7 @@ async fn deleting_a_newer_epoch_restores_the_surviving_epoch() {
         .rebuild_from_log("t", PartitionIndex(0), &log)
         .await
         .unwrap();
-    let checked = state
-        .check_batch(
-            "t",
-            PartitionIndex(0),
-            SequenceContext::RELEASED,
-            (42, 6),
-            (0, 1),
-        )
-        .await;
+    let checked = check(&state, (42, 6), (0, 1)).await;
     assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
     assert!(
         checked.duplicate

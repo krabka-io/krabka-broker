@@ -246,17 +246,9 @@ impl BrokerHandle {
     where
         F: FnMut(&crate::metrics::BrokerMetrics) -> bool,
     {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if predicate(&self.broker.metrics) {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await;
+        let held = super::await_until(|| std::future::ready(predicate(&self.broker.metrics))).await;
         assert2::assert!(
-            res.is_ok(),
+            held,
             "wait_for_metrics({what}) timed out after {TEST_AWAITER_TIMEOUT:?}"
         );
     }
@@ -326,14 +318,9 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_broker_alive(&self, node: u64) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            while !self.broker.liveness.is_alive(node).await {
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await;
+        let alive = super::await_until(|| self.broker.liveness.is_alive(node)).await;
         assert2::assert!(
-            res.is_ok(),
+            alive,
             "wait_until_broker_alive({node}) timed out after {TEST_AWAITER_TIMEOUT:?}"
         );
     }
@@ -351,21 +338,15 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_broker_electable(&self, node: u64) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let image = self.broker.controller.current_image();
-                if crate::handlers::offline_replicas::live_brokers(&self.broker, &image)
-                    .await
-                    .contains(&node)
-                {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+        let electable = super::await_until(|| async {
+            let image = self.broker.controller.current_image();
+            crate::handlers::offline_replicas::live_brokers(&self.broker, &image)
+                .await
+                .contains(&node)
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            electable,
             "wait_until_broker_electable({node}) timed out after {TEST_AWAITER_TIMEOUT:?}"
         );
     }
@@ -380,14 +361,12 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_metadata_offset_at_least(&self, offset: i64) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            while self.broker.controller.current_metadata_offset() < offset {
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+        let applied = super::await_until(|| {
+            std::future::ready(self.broker.controller.current_metadata_offset() >= offset)
         })
         .await;
         assert2::assert!(
-            res.is_ok(),
+            applied,
             "wait_until_metadata_offset_at_least({offset}) timed out after \
              {TEST_AWAITER_TIMEOUT:?}; the image is at {}",
             self.broker.controller.current_metadata_offset()

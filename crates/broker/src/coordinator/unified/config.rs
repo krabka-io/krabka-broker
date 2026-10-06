@@ -10,7 +10,8 @@ use super::assignor::{Assignor, RangeAssignor, UniformAssignor};
 /// group conversion. The default is `Bidirectional`, which matches Apache
 /// Kafka 4.0, verified empirically against
 /// `mirror.gcr.io/apache/kafka:4.0.0`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase", parse)]
 pub enum ConsumerGroupMigrationPolicy {
     /// No conversion in either direction.
     Disabled,
@@ -35,29 +36,14 @@ impl ConsumerGroupMigrationPolicy {
     pub fn allows_downgrade(self) -> bool {
         matches!(self, Self::Downgrade | Self::Bidirectional)
     }
-
-    /// The Kafka config string for this policy.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Upgrade => "upgrade",
-            Self::Downgrade => "downgrade",
-            Self::Bidirectional => "bidirectional",
-        }
-    }
 }
 
 impl FromStr for ConsumerGroupMigrationPolicy {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "disabled" => Ok(Self::Disabled),
-            "upgrade" => Ok(Self::Upgrade),
-            "downgrade" => Ok(Self::Downgrade),
-            "bidirectional" => Ok(Self::Bidirectional),
-            other => Err(format!("invalid group.consumer.migration.policy: {other}")),
-        }
+        let lower = s.to_ascii_lowercase();
+        Self::parse(&lower)
+            .ok_or_else(|| format!("invalid group.consumer.migration.policy: {lower}"))
     }
 }
 

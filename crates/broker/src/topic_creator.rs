@@ -94,36 +94,30 @@ impl ForwardedIdentity {
 }
 
 /// Why a `CreateTopics` request to the controller got no response.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum TopicCreatorError {
     /// No response within the retry timeout. Kafka completes the future with
     /// `TimeoutException("CreateTopicsRequest to controller timed out")`.
+    #[error("CreateTopicsRequest to controller timed out")]
     Timeout,
     /// The controller refused the Envelope with this error code. Kafka
     /// completes the future with `envelopeError.exception()`.
+    #[error("{}", envelope_message(*.0))]
     Envelope(i16),
     /// The request or the response could not be encoded or decoded, or the
     /// connection failed in a way that is not retried.
+    #[error("{0}")]
     Protocol(String),
 }
 
-impl std::fmt::Display for TopicCreatorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Timeout => f.write_str("CreateTopicsRequest to controller timed out"),
-            Self::Envelope(codes::CLUSTER_AUTHORIZATION_FAILED) => {
-                f.write_str("Cluster authorization failed.")
-            }
-            Self::Envelope(code) => write!(
-                f,
-                "the controller refused the envelope with error code {code}"
-            ),
-            Self::Protocol(message) => f.write_str(message),
-        }
+/// Kafka's message for an Envelope the controller refused with `code`.
+fn envelope_message(code: i16) -> String {
+    if code == codes::CLUSTER_AUTHORIZATION_FAILED {
+        "Cluster authorization failed.".to_owned()
+    } else {
+        format!("the controller refused the envelope with error code {code}")
     }
 }
-
-impl std::error::Error for TopicCreatorError {}
 
 impl From<ProtocolError> for TopicCreatorError {
     fn from(error: ProtocolError) -> Self {

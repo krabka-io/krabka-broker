@@ -84,7 +84,7 @@ pub struct FutureLogState {
 /// [`crate::codes::LOG_DIR_NOT_FOUND`],
 /// [`crate::codes::REPLICA_NOT_AVAILABLE`], and
 /// [`crate::codes::KAFKA_STORAGE_ERROR`].
-#[derive(Debug)]
+#[derive(Debug, derive_more::From)]
 pub enum MoveError {
     /// Kafka's future directory name for the partition,
     /// `<topic>-<partition>.<uniqueId>-future`, would be longer than 255
@@ -102,25 +102,8 @@ pub enum MoveError {
     /// `krabka_log::Log::open` or `mkdir` failed while staging the future log.
     /// The handler logs the inner error, then maps every storage failure to
     /// `KAFKA_STORAGE_ERROR` on the wire.
+    #[from(BrokerError, krabka_log::LogError, std::io::Error)]
     Storage(BrokerError),
-}
-
-impl From<BrokerError> for MoveError {
-    fn from(e: BrokerError) -> Self {
-        MoveError::Storage(e)
-    }
-}
-
-impl From<krabka_log::LogError> for MoveError {
-    fn from(e: krabka_log::LogError) -> Self {
-        MoveError::Storage(BrokerError::from(e))
-    }
-}
-
-impl From<std::io::Error> for MoveError {
-    fn from(e: std::io::Error) -> Self {
-        MoveError::Storage(BrokerError::from(e))
-    }
 }
 
 #[derive(Debug, Clone)]

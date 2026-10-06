@@ -21,7 +21,6 @@
 //! target.
 
 use std::{
-    fmt,
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
@@ -34,25 +33,18 @@ use tokio::{
 };
 
 /// Blocking work that did not return its value.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum BlockingError {
     /// The work panicked in place, on a multi-thread runtime.
+    #[error("block_in_place panic")]
     PanickedInPlace,
     /// The work panicked inline, on the runtime thread.
+    #[error("inline blocking panic")]
     PanickedInline,
     /// The blocking pool did not return the value: the work panicked there,
     /// or the runtime shut down before it ran.
+    #[error(transparent)]
     Join(tokio::task::JoinError),
-}
-
-impl fmt::Display for BlockingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::PanickedInPlace => f.write_str("block_in_place panic"),
-            Self::PanickedInline => f.write_str("inline blocking panic"),
-            Self::Join(error) => error.fmt(f),
-        }
-    }
 }
 
 /// Where one piece of blocking work runs.

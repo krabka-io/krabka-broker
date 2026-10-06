@@ -23,29 +23,25 @@ impl BrokerHandle {
         partition: i32,
         leader: krabka_raft::NodeId,
     ) {
-        let result = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                let image = self.broker.controller.current_image();
-                if let (Some(record), Some(part)) = (
-                    image.partition(topic, partition),
-                    self.broker.partitions.get(topic, PartitionIndex(partition)),
-                ) && record.leader == leader
-                    && part.current_leader.load(Ordering::Acquire) == leader.0
-                {
-                    let state = part.replica_state.lock().await;
-                    if state.current_leader_epoch.0 == record.leader_epoch.0
-                        && state.isr.len() == record.isr.len()
-                        && record.isr.iter().all(|node| state.isr.contains(node))
-                    {
-                        return;
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let ready = super::await_until(|| async {
+            let image = self.broker.controller.current_image();
+            let (Some(record), Some(part)) = (
+                image.partition(topic, partition),
+                self.broker.partitions.get(topic, PartitionIndex(partition)),
+            ) else {
+                return false;
+            };
+            if record.leader != leader || part.current_leader.load(Ordering::Acquire) != leader.0 {
+                return false;
             }
+            let state = part.replica_state.lock().await;
+            state.current_leader_epoch.0 == record.leader_epoch.0
+                && state.isr.len() == record.isr.len()
+                && record.isr.iter().all(|node| state.isr.contains(node))
         })
         .await;
         assert2::assert!(
-            result.is_ok(),
+            ready,
             "local partition {topic}-{partition} did not become produce-ready with leader {leader} within 30s"
         );
     }
@@ -65,25 +61,20 @@ impl BrokerHandle {
         leader: krabka_raft::NodeId,
         leader_epoch: krabka_metadata::LeaderEpoch,
     ) {
-        let result = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                if self
-                    .broker
+        let installed = super::await_until(|| {
+            std::future::ready(
+                self.broker
                     .partitions
                     .get(topic, PartitionIndex(partition))
                     .is_some_and(|part| {
                         part.current_leader.load(Ordering::Acquire) == leader.0
                             && part.current_leader_epoch.load(Ordering::Acquire) == leader_epoch.0
-                    })
-                {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
+                    }),
+            )
         })
         .await;
         assert2::assert!(
-            result.is_ok(),
+            installed,
             "local partition {topic}-{partition} did not install leader {leader} at epoch {leader_epoch:?} within 30s"
         );
     }

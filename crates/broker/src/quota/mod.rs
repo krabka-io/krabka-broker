@@ -32,8 +32,9 @@ pub use refresh::run;
 
 /// Result of consuming a client quota, carrying the delay and the resolved
 /// entity identity (`user` and `client_id`) that the match was charged to (#418).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, derive_more::Deref)]
 pub struct QuotaDelay {
+    #[deref]
     pub delay: Time,
     pub user: Option<String>,
     pub client_id: Option<String>,
@@ -43,11 +44,7 @@ impl QuotaDelay {
     /// No throttle, charged to nobody.
     #[must_use]
     pub fn zero() -> Self {
-        Self {
-            delay: <Time as TimeExt>::ZERO,
-            user: None,
-            client_id: None,
-        }
+        Self::new(<Time as TimeExt>::ZERO, None, None)
     }
 
     /// A throttle of `delay`, charged to the principal and client id whose
@@ -59,13 +56,6 @@ impl QuotaDelay {
             user,
             client_id,
         }
-    }
-}
-
-impl std::ops::Deref for QuotaDelay {
-    type Target = Time;
-    fn deref(&self) -> &Self::Target {
-        &self.delay
     }
 }
 
