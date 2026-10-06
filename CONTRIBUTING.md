@@ -1,8 +1,10 @@
 # Contributing to Krabka
 
-Keep each change focused. Krabka is greenfield, but Apache Kafka wire behavior
-and KIP semantics are compatibility requirements. Read
-[`CLAUDE.md`](CLAUDE.md) before you change a protocol or persistence boundary.
+Keep each change focused. Apache Kafka wire behavior, KIP semantics, and, from
+1.0.0 on, the on-disk formats in
+[`docs/persisted_formats.md`](docs/persisted_formats.md) are compatibility
+requirements. Read [`CLAUDE.md`](CLAUDE.md) before you change a protocol or
+persistence boundary.
 
 ## Build and Test
 

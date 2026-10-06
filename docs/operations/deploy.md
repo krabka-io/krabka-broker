@@ -335,10 +335,25 @@ A rise in `krabka_broker_unsupported_api_requests_total` during the roll is
 a client that learned a new version range from an upgraded broker and sent it
 to an old one. It clears when the roll completes.
 
-krabka is undeployed and has no persisted-state compatibility guarantee
-between builds. Read the [changelog](../../CHANGELOG.md) entry for a build
-before you roll it. A build that changes an on-disk format needs a fresh
-`krabka-format` on every node and a restore from the topic data, not a roll.
+Within 1.x, a roll is always enough. Any 1.x broker reads every on-disk and
+object-store artifact that an earlier 1.x broker wrote, and
+[Persisted formats](../persisted_formats.md) lists them. A release that
+changes a persisted format keeps writing the old format until you finalize
+the feature level that introduces the new one, so a mixed fleet and a roll
+back to the earlier build both work until then. Read the
+[changelog](../../CHANGELOG.md) entry for a build before you roll it. It names
+any feature level that the release adds.
+
+To finalize, roll every broker and controller onto the new build first. Then
+upgrade the feature level with the JVM tool, for example
+`kafka-features --bootstrap-server <broker>:9092 upgrade --feature metadata.version=<level>`.
+After that, a roll back to a build that does not support the level follows
+Kafka's rules for a downgrade of that feature.
+
+A move from 0.x to 1.0.0 is not a roll. Data that a 0.x broker wrote gets no
+compatibility promise. Run a fresh `krabka-format` on every node and restore
+the topic data, as the [backup and restore](backup-restore.md) guide
+describes.
 
 ## Health checks
 

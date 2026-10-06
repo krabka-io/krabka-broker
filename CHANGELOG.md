@@ -7,9 +7,13 @@ cut one.
 
 krabka versions and tags the whole workspace as one unit. The version comes
 from `[workspace.package]` in the root `Cargo.toml`, and each crate takes it
-from there, so no crate has a release of its own. krabka is before 1.0 and it
-is undeployed, so a minor bump is free to break an interface. Read the entries
-rather than the number.
+from there, so no crate has a release of its own. From 1.0.0 on, the version
+number is a promise about on-disk compatibility: any 1.x broker reads every
+artifact that an earlier 1.x broker wrote, so a rolling upgrade within 1.x
+works, and a new major version is the only release that can break that.
+[Persisted formats](docs/persisted_formats.md) states the contract. The number
+makes no promise about the Rust API, so read the entries for that. Before
+1.0.0, a minor bump was free to break any interface.
 
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
@@ -78,6 +82,16 @@ the `krabka-*` names to crates.io.
 
 ### Changed
 
+- **On-disk compatibility from 1.0.0.** Any 1.x broker reads every on-disk
+  and object-store artifact that an earlier 1.x broker wrote, so a cluster
+  moves from 1.x to 1.y with a rolling upgrade and no reformat. A release that
+  changes a persisted format keeps writing the old format until you finalize
+  the feature level that introduces the new one, as Kafka does for
+  `metadata.version`, so you can roll back until you finalize. Data that a 0.x
+  broker wrote gets no promise: reformat a 0.x data directory with
+  `krabka-format` before you start 1.0.0 on it. [Persisted
+  formats](docs/persisted_formats.md) lists every format and the gaps that
+  remain.
 - **Breaking, on-disk format.** `krabka-format` writes Kafka's
   `meta.properties` into each directory it formats, in place of
   `meta.properties.json`: the Java properties file of `kafka-storage format`,

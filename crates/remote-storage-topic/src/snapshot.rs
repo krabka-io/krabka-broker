@@ -26,8 +26,9 @@ use crate::{
     serde::{MetadataEvent, Reader, read_uvarint, write_uvarint},
 };
 
-/// Format version at the head of every snapshot file. This is greenfield
-/// code: bump it freely, and add no backward-compat decoder arms.
+/// Format version at the head of every snapshot file. The snapshot is a
+/// persisted format, so a change to its layout bumps this version and keeps a
+/// decoder arm for every earlier 1.x version. See `docs/persisted_formats.md`.
 pub const SNAPSHOT_FORMAT_VERSION: u16 = 0;
 
 /// Default snapshot file name under the snapshot directory.
