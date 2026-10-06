@@ -104,6 +104,16 @@ impl GatedBatch {
         Ok(())
     }
 
+    /// The phase and reason of the event that records the append's outcome:
+    /// the committed reason when `failure` is `None`, and a refusal carrying
+    /// the submit error otherwise.
+    fn outcome<'a>(&self, failure: Option<&'a str>) -> (PrivilegedPhase, &'a str) {
+        match failure {
+            None => (PrivilegedPhase::Applied, self.committed_reason),
+            Some(error) => (PrivilegedPhase::Refused, error),
+        }
+    }
+
     /// Audit every transition this append carried.
     ///
     /// `failure` is the submit error when the append did not commit, and the
@@ -115,11 +125,8 @@ impl GatedBatch {
         ctx: &RequestContext<'_>,
         failure: Option<&str>,
     ) {
+        let (phase, reason) = self.outcome(failure);
         for (target, proposal_id) in &self.applied {
-            let (phase, reason) = match failure {
-                None => (PrivilegedPhase::Applied, self.committed_reason),
-                Some(error) => (PrivilegedPhase::Refused, error),
-            };
             audit_transition(
                 &broker.audit_log,
                 &broker.config.break_glass,
@@ -132,6 +139,35 @@ impl GatedBatch {
                     reason,
                 },
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn an_append_that_did_not_commit_is_audited_as_a_refusal() {
+        let batch = GatedBatch::new(
+            BreakGlassAction::UncleanElectLeaders,
+            "admitted before the append",
+            "committed in the append",
+        );
+
+        for (failure, expected) in [
+            (None, (PrivilegedPhase::Applied, "committed in the append")),
+            (
+                Some("submit failed: not the controller"),
+                (
+                    PrivilegedPhase::Refused,
+                    "submit failed: not the controller",
+                ),
+            ),
+        ] {
+            assert!(batch.outcome(failure) == expected, "{failure:?}");
         }
     }
 }

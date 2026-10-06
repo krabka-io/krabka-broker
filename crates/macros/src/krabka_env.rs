@@ -113,8 +113,24 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use moxy::token::TokenStream;
 
-    use super::{env_name, type_arguments};
+    use super::{env_name, expand, type_arguments};
+
+    /// `#[krabka_env($meta)]` on `item`, expanded and printed without
+    /// whitespace, or the message of the error it raises.
+    fn expanded(meta: &str, item: &str) -> Result<String, String> {
+        let meta: TokenStream = meta.parse().expect("meta tokenizes");
+        let item: TokenStream = item.parse().expect("item tokenizes");
+        expand(meta, item)
+            .map(|out| {
+                out.to_string()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect()
+            })
+            .map_err(|error| error.message().to_owned())
+    }
 
     #[test]
     fn env_name_is_the_upper_case_field_name_under_the_prefix() {
@@ -126,6 +142,146 @@ mod tests {
     fn types_without_a_single_parser_have_no_default() {
         for ty in ["usize", "Option<usize>", "Option<Vec<String>>", "Time"] {
             assert!(type_arguments(ty).is_none(), "{ty}");
+        }
+    }
+
+    #[test]
+    fn every_field_gets_the_flag_its_type_names() {
+        let out = expanded(
+            "",
+            "struct Args { \
+               cleaner_interval: Option<Time>, \
+               segment_bytes: Option<ByteSize>, \
+               ratio: Option<Ratio>, \
+               count: Option<PositiveCount>, \
+               small: Option<PositiveI16>, \
+               medium: Option<PositiveI32>, \
+               large: Option<PositiveI64>, \
+               threads: Option<u32>, \
+               offset: Option<i64>, \
+               enabled: Option<bool>, \
+               id: Option<i32>, \
+               name: Option<String>, \
+               log_dir: Option<PathBuf>, \
+             }",
+        );
+        let fields = [
+            (
+                "cleaner_interval",
+                "Option<Time>",
+                ",value_parser=::krabka_units::parse::positive_time",
+            ),
+            (
+                "segment_bytes",
+                "Option<ByteSize>",
+                ",value_parser=::krabka_units::parse::positive_byte_size",
+            ),
+            (
+                "ratio",
+                "Option<Ratio>",
+                ",value_parser=::krabka_units::parse::positive_ratio",
+            ),
+            (
+                "count",
+                "Option<PositiveCount>",
+                ",value_parser=::krabka_broker::config_value::parse_positive_count",
+            ),
+            (
+                "small",
+                "Option<PositiveI16>",
+                ",value_parser=::krabka_broker::config_value::parse_positive_i16",
+            ),
+            (
+                "medium",
+                "Option<PositiveI32>",
+                ",value_parser=::krabka_broker::config_value::parse_positive_i32",
+            ),
+            (
+                "large",
+                "Option<PositiveI64>",
+                ",value_parser=::krabka_broker::config_value::parse_positive_i64",
+            ),
+            (
+                "threads",
+                "Option<u32>",
+                ",value_parser=::clap::value_parser!(u32).range(1..)",
+            ),
+            (
+                "offset",
+                "Option<i64>",
+                ",value_parser=::clap::value_parser!(i64).range(0..)",
+            ),
+            ("enabled", "Option<bool>", ",action=::clap::ArgAction::Set"),
+            ("id", "Option<i32>", ""),
+            ("name", "Option<String>", ""),
+            ("log_dir", "Option<PathBuf>", ""),
+        ]
+        .map(|(field, ty, arguments)| {
+            format!(
+                "#[arg(long,env=\"KRABKA_{}\"{arguments})]{field}:{ty},",
+                field.to_ascii_uppercase()
+            )
+        })
+        .concat();
+        assert!(out == Ok(format!("structArgs{{{fields}}}")));
+    }
+
+    #[test]
+    fn the_prefix_argument_names_the_environment_variables() {
+        assert!(
+            expanded(
+                "prefix = \"BENCH_\"",
+                "struct Args { tls_ca_path: Option<PathBuf> }"
+            ) == Ok(
+                "structArgs{#[arg(long,env=\"BENCH_TLS_CA_PATH\")]tls_ca_path:Option<PathBuf>}"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn a_field_with_its_own_arg_or_command_keeps_it() {
+        let item = "struct Args { \
+               #[arg(long, value_parser = custom)] window: usize, \
+               #[command(flatten)] common: Common, \
+             }";
+        assert!(
+            expanded("", item)
+                == Ok(
+                    "structArgs{#[arg(long,value_parser=custom)]window:usize,#[command(flatten)]common:Common,}"
+                        .to_owned()
+                )
+        );
+    }
+
+    #[test]
+    fn bad_arguments_and_items_are_errors() {
+        let one_argument = "`krabka_env` takes one argument, `prefix = \"...\"`";
+        for (meta, item, message) in [
+            ("name = \"X_\"", "struct Args {}", one_argument),
+            (
+                "prefix = \"A_\", prefix = \"B_\"",
+                "struct Args {}",
+                one_argument,
+            ),
+            ("prefix", "struct Args {}", ""),
+            ("prefix = 3", "struct Args {}", ""),
+            (
+                "",
+                "struct Args(Option<u32>);",
+                "`krabka_env` needs a struct with named fields",
+            ),
+            (
+                "",
+                "struct Args { window: usize }",
+                "`krabka_env` has no value parser for `usize`; give the field its own `#[arg(...)]`",
+            ),
+        ] {
+            assert!(let Err(error) = expanded(meta, item), "{meta} {item}");
+            assert!(
+                message.is_empty() || error == message,
+                "{meta} {item}: {error}"
+            );
         }
     }
 }

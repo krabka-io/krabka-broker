@@ -327,4 +327,19 @@ mod tests {
 
         check!(error.to_string().contains("403 Forbidden: denied"));
     }
+
+    #[tokio::test]
+    async fn a_request_that_never_reaches_the_store_is_a_backend_error() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let client = s3_http_client(&config(endpoint.clone())).unwrap();
+        let error = read_ok_body(client.get(endpoint), "ListMultipartUploads")
+            .await
+            .unwrap_err();
+
+        assert2::assert!(let ObjectStoreError::Backend(message) = error);
+        check!(message.contains("error sending request"), "{message}");
+    }
 }
