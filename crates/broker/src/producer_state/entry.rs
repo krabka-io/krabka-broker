@@ -102,21 +102,30 @@ pub(crate) fn earlier_after_completion(
     epoch: i16,
     incoming: RetainedBatch,
 ) -> (bool, EarlierBatches) {
-    let retained: Vec<_> = existing
+    if existing.is_none() {
+        return (true, NO_EARLIER_BATCHES);
+    }
+    let mut retained = [incoming; NUM_BATCHES_TO_RETAIN];
+    let mut ends = [0; NUM_BATCHES_TO_RETAIN];
+    let mut count = 0;
+    for batch in existing
         .into_iter()
         .flat_map(|entry| entry.retained_batches().into_iter().flatten())
-        .collect();
-    let ends: Vec<_> = retained.iter().map(|batch| batch.last_offset).collect();
+    {
+        retained[count] = batch;
+        ends[count] = batch.last_offset;
+        count += 1;
+    }
     let (accepted, selected) = krabka_verified::producer::producer_completion_window(
         existing.map(|entry| entry.epoch),
         epoch,
-        &ends,
+        &ends[..count],
         incoming.last_offset,
     );
     let mut earlier = NO_EARLIER_BATCHES;
     if accepted {
         for (slot, &source) in selected.iter().take(selected.len() - 1).enumerate() {
-            earlier[slot] = Some(if source == retained.len() {
+            earlier[slot] = Some(if source == count {
                 incoming
             } else {
                 retained[source]

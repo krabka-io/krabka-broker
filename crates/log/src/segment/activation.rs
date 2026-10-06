@@ -103,6 +103,7 @@ impl Segment {
             }
             ControlFlow::Continue(())
         })
+        .map(|_| ())
     }
 
     /// `true` when the segment's own maximum proves every batch in it is

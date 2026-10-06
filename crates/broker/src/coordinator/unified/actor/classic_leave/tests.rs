@@ -11,7 +11,7 @@ use crate::coordinator::unified::{
         GroupActorMessage,
         member_state::build_member,
         test_support::{
-            await_until, completing_classic_group, last_classic_metadata, make_coordinator,
+            completing_classic_group, last_classic_metadata, make_coordinator,
             make_coordinator_with_topic_policy, rpc, seed_classic_member,
         },
     },
@@ -205,10 +205,9 @@ async fn classic_leave_consumer_log_failure_stops_the_actor() {
     check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     check!(result.members.is_empty());
 
-    await_until("consumer-kind log failure stops the actor", || {
-        handle.tx.is_closed()
-    })
-    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), handle.tx.closed())
+        .await
+        .expect("consumer-kind log failure stops the actor");
     check!(handle.tx.is_closed());
 }
 
@@ -407,7 +406,9 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
             })
             .collect();
         check!(tombstoned == expected, "{name}");
-        await_until("deleted group actor stops", || handle.tx.is_closed()).await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle.tx.closed())
+            .await
+            .expect("deleted group actor stops");
         check!(!reservation(&handle, keys(&[3]), true).await, "{name}");
     }
 }

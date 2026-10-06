@@ -136,6 +136,10 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- Fetch requests with a small byte budget retain records between sparse index
+  entries, including records before a segment boundary. The reader locates the
+  first eligible batch before spending the payload budget.
+
 - A broker that becomes the leader of a partition decides idempotent and
   transactional produces from the producer state of its log, up to the log
   end. Thus it answers a retry of a batch that it replicated as a follower as

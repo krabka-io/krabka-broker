@@ -16,20 +16,6 @@ use super::{
     streams::{self, config::StreamsGroupConfig},
 };
 
-/// Yield-poll until `cond` holds.
-///
-/// A bounded hang-guard makes a real stall fail the test in a
-/// deterministic way, and the loop does not spin forever.
-pub(crate) async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
-    for _ in 0..200_000 {
-        if cond() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!("condition never held: {what}");
-}
-
 pub(crate) fn make_coord() -> Arc<GroupCoordinator> {
     make_coord_with_log().0
 }

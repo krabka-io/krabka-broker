@@ -24,18 +24,6 @@ use crate::{
     },
 };
 
-/// Yield-polls until `cond` holds. A bounded hang-guard makes a real stall
-/// fail the test deterministically instead of spinning forever.
-pub(super) async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
-    for _ in 0..200_000 {
-        if cond() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!("condition never held: {what}");
-}
-
 #[derive(Debug)]
 pub(super) struct StaticMetadata {
     pub(super) input: ReconcileInput,
