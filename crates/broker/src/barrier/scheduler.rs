@@ -15,7 +15,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::{
-    barrier::coordinator::BarrierCoordinator, metadata_source::MetadataSource, time_util::now_ms,
+    barrier::coordinator::BarrierCoordinator, metadata_source::MetadataSource,
+    task_util::run_every, time_util::now_ms,
 };
 
 /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
@@ -24,17 +25,12 @@ pub(crate) async fn run(
     controller: Arc<dyn MetadataSource>,
     shutdown: CancellationToken,
 ) {
-    let mut tick = tokio::time::interval(coordinator.scheduler_tick().to_std());
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = tick.tick() => inject_due(&coordinator, controller.as_ref()).await,
-            () = shutdown.cancelled() => {
-                info!("barrier scheduler shutting down");
-                return;
-            }
-        }
-    }
+    let tick = tokio::time::interval(coordinator.scheduler_tick().to_std());
+    run_every(tick, &shutdown, || {
+        inject_due(&coordinator, controller.as_ref())
+    })
+    .await;
+    info!("barrier scheduler shutting down");
 }
 
 /// Run one tick. It refreshes the leader-partition view, and then injects into

@@ -25,7 +25,9 @@ use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use crate::{metadata_source::MetadataSource, txn::coordinator::TxnCoordinator};
+use crate::{
+    metadata_source::MetadataSource, task_util::run_every, txn::coordinator::TxnCoordinator,
+};
 
 /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
 ///
@@ -44,17 +46,12 @@ pub(crate) async fn run(
     expiration: Time,
     shutdown: CancellationToken,
 ) {
-    let mut tick = tokio::time::interval(interval.to_std());
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = tick.tick() => sweep_once(&coord, &*controller, expiration).await,
-            () = shutdown.cancelled() => {
-                info!("transactional-id expiry sweep shutting down");
-                return;
-            }
-        }
-    }
+    let tick = tokio::time::interval(interval.to_std());
+    run_every(tick, &shutdown, || {
+        sweep_once(&coord, &*controller, expiration)
+    })
+    .await;
+    info!("transactional-id expiry sweep shutting down");
 }
 
 /// Runs one sweep: refresh the leader-partition view, then expire.

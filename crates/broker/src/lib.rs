@@ -266,6 +266,7 @@ pub(crate) mod site_placement;
 /// election, and `acks=all` durability under a data-bearing witness.
 #[cfg(test)]
 mod stretch_cluster_model;
+pub(crate) mod task_util;
 pub mod telemetry;
 /// Shared scaffolding for the per-handler `#[cfg(test)] mod tests` modules
 /// (deny-all authorizer, principal/peer/context builders, wire codec helpers,

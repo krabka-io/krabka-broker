@@ -7,12 +7,12 @@
 //! flag, and [`CommitFence`] says which rule a `ValidateCommit` runs.
 
 use krabka_protocol::primitives::uuid::Uuid;
-use tokio::sync::oneshot;
 
 use super::{ErrorCode, GroupActorHandle, GroupActorMessage};
 use crate::{
     codes,
     coordinator::unified::{classic_ops, group::CoordinatorGroup},
+    task_util::ask,
 };
 
 /// The request whose rule a `ValidateCommit` runs.
@@ -103,16 +103,12 @@ pub(crate) async fn validate_commit(
     handle: &GroupActorHandle,
     commit: CommitRequest,
 ) -> Option<ErrorCode> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::ValidateCommit { commit, reply: tx })
-        .await
-        .is_err()
+    match ask(&handle.tx, |reply| GroupActorMessage::ValidateCommit {
+        commit,
+        reply,
+    })
+    .await
     {
-        return Some(codes::UNKNOWN_SERVER_ERROR);
-    }
-    match rx.await {
         Ok(Ok(())) => None,
         Ok(Err(code)) => Some(code),
         Err(_) => Some(codes::UNKNOWN_SERVER_ERROR),
