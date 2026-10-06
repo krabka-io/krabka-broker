@@ -44,7 +44,7 @@ struct Cli {
     /// Which Kafka stack this is. This is metadata only and does not change
     /// behaviour.
     #[arg(long, env = "BENCH_STACK", value_enum)]
-    stack: StackArg,
+    stack: Stack,
     /// Topic name. The topic must already exist. The orchestrator creates it
     /// with a `KafkaTopic` CR.
     #[arg(long, env = "BENCH_TOPIC", default_value = "bench-topic")]
@@ -171,21 +171,6 @@ struct Cli {
     tls_client_key: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum StackArg {
-    Krabka,
-    Kafka,
-}
-
-impl StackArg {
-    fn into_stack(self) -> Stack {
-        match self {
-            StackArg::Krabka => Stack::Krabka,
-            StackArg::Kafka => Stack::Kafka,
-        }
-    }
-}
-
 fn parse_client_request_timeout(input: &str) -> Result<Time, String> {
     let value = parse::positive_time(input).map_err(|error| error.to_string())?;
     let millis = value.millis_i64();
@@ -279,7 +264,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    let stack = cli.stack.into_stack();
+    let stack = cli.stack;
     let consumer_request_timeout =
         resolve_consumer_request_timeout(stack, cli.consumer_request_timeout);
     let cfg = DriverConfig {

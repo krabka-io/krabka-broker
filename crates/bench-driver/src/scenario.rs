@@ -148,7 +148,7 @@ mod bounded {
 /// Which Kafka stack the scenario runs against. This is metadata only. The
 /// driver's client behaviour is the same for both, because Krabka's
 /// wire-compatible client speaks to either broker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Stack {
     Krabka,
@@ -156,6 +156,16 @@ pub enum Stack {
 }
 
 impl Stack {
+    /// The lowercase name the stack goes by in reports, matching its serde
+    /// and command-line spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stack::Krabka => "krabka",
+            Stack::Kafka => "kafka",
+        }
+    }
+
     /// Pod-name regex that `prom.rs` uses to pick out the right brokers.
     /// Both regexes match the `StatefulSet` names that each operator
     /// creates with cluster name `demo`.

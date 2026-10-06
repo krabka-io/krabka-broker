@@ -16,14 +16,6 @@ use crate::{
     scenario::{RunOutput, Stack},
 };
 
-/// The name a violation message calls a stack by.
-fn stack_label(stack: Stack) -> &'static str {
-    match stack {
-        Stack::Krabka => "krabka",
-        Stack::Kafka => "kafka",
-    }
-}
-
 fn push_fmt(output: &mut String, args: Arguments<'_>) {
     output
         .write_fmt(args)
@@ -574,7 +566,7 @@ fn failover_gate_violations_for_runs(runs: &[RunOutput]) -> Vec<String> {
             violations.push(format!(
                 "{}: {} failover run is not a measurement: {defect}",
                 CellKey::of(r).label(),
-                stack_label(r.stack),
+                r.stack.as_str(),
             ));
             continue;
         }
@@ -928,13 +920,6 @@ fn collect_runs(input_dir: &Path, strict: bool) -> Result<Vec<(PathBuf, RunOutpu
     Ok(runs)
 }
 
-fn stack_str(s: Stack) -> &'static str {
-    match s {
-        Stack::Krabka => "krabka",
-        Stack::Kafka => "kafka",
-    }
-}
-
 /// The per-run tag from a result filename (`...-run07.json` → `run07`), or
 /// `single` for an untagged one-off run.
 fn run_tag_from_path(path: &Path) -> String {
@@ -969,13 +954,13 @@ pub fn render_csv(input_dir: &Path, strict: bool) -> Result<String> {
         (
             a.scenario.name.as_str(),
             a.topology.broker_count,
-            stack_str(a.stack),
+            a.stack.as_str(),
             run_tag_from_path(pa),
         )
             .cmp(&(
                 b.scenario.name.as_str(),
                 b.topology.broker_count,
-                stack_str(b.stack),
+                b.stack.as_str(),
                 run_tag_from_path(pb),
             ))
     });
@@ -1016,7 +1001,7 @@ notes,errors_count\n",
         let c = &r.consumer_e2e_latency;
         let cols = [
             csv_field(&r.scenario.name),
-            stack_str(r.stack).to_string(),
+            r.stack.as_str().to_string(),
             run_tag_from_path(path),
             r.topology.broker_count.to_string(),
             r.topology.partitions.to_string(),
@@ -1075,13 +1060,13 @@ pub fn render_timeseries_csv(input_dir: &Path, strict: bool) -> Result<String> {
         (
             a.scenario.name.as_str(),
             a.topology.broker_count,
-            stack_str(a.stack),
+            a.stack.as_str(),
             run_tag_from_path(pa),
         )
             .cmp(&(
                 b.scenario.name.as_str(),
                 b.topology.broker_count,
-                stack_str(b.stack),
+                b.stack.as_str(),
                 run_tag_from_path(pb),
             ))
     });
@@ -1092,7 +1077,7 @@ pub fn render_timeseries_csv(input_dir: &Path, strict: bool) -> Result<String> {
         let prefix = format!(
             "{},{},{},{},{},{}",
             csv_field(&r.scenario.name),
-            stack_str(r.stack),
+            r.stack.as_str(),
             r.topology.broker_count,
             r.topology.partitions,
             r.topology.replication_factor,
