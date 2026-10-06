@@ -7,7 +7,10 @@
 
 use krabka_protocol::owned::delete_acls_response::DeleteAclsFilterResult;
 
-use crate::codes;
+use crate::{
+    codes,
+    handlers::{RequestContext, audit_admin_success, audit_resource},
+};
 
 pub(super) fn deleted_acl_resources(
     filter_results: &[DeleteAclsFilterResult],
@@ -16,27 +19,18 @@ pub(super) fn deleted_acl_resources(
         .iter()
         .filter(|r| r.error_code == codes::NONE)
         .flat_map(|r| r.matching_acls.iter())
-        .map(|m| krabka_audit::AuditResource {
-            resource_type: "Acl".to_string(),
-            name: m.resource_name.clone(),
-        })
+        .map(|m| audit_resource("Acl", m.resource_name.clone()))
         .collect()
 }
 
+/// Emits one `DeleteAcls` `AdminOperation` record for the deleted ACLs, or
+/// nothing when the request deleted none.
 pub(super) fn audit_deleted_acls(
     audit_log: &krabka_audit::AuditLog,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     deleted_acls: Vec<krabka_audit::AuditResource>,
 ) {
-    if !deleted_acls.is_empty() {
-        crate::handlers::audit_admin(
-            audit_log,
-            ctx,
-            "DeleteAcls",
-            krabka_audit::AuditOutcome::Success,
-            deleted_acls,
-        );
-    }
+    audit_admin_success(audit_log, ctx, "DeleteAcls", deleted_acls);
 }
 
 #[cfg(test)]
@@ -45,12 +39,9 @@ mod tests {
     use krabka_metadata::AclOperation;
 
     use super::*;
-    use crate::{
-        handlers::delete_acls::{
-            response::{filter_result, matching_acl_result},
-            test_support::{acl, test_context},
-        },
-        test_support::{peer, principal},
+    use crate::handlers::delete_acls::{
+        response::{filter_result, matching_acl_result},
+        test_support::acl,
     };
 
     #[test]
@@ -81,56 +72,5 @@ mod tests {
             name: "orders".into(),
         }];
         assert!(resources == expected);
-    }
-
-    #[test]
-    fn audit_deleted_acls_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
-
-        audit_deleted_acls(log.as_ref(), &ctx, Vec::new());
-        assert!(
-            rx.try_recv().is_err(),
-            "empty audit resource list is a no-op"
-        );
-
-        audit_deleted_acls(
-            log.as_ref(),
-            &ctx,
-            vec![krabka_audit::AuditResource {
-                resource_type: "Acl".into(),
-                name: "orders".into(),
-            }],
-        );
-
-        let event = rx.try_recv().expect("admin audit event");
-        let krabka_audit::AuditEvent::AdminOperation {
-            outcome,
-            principal,
-            operation,
-            resources,
-            ..
-        } = event
-        else {
-            panic!("expected AdminOperation");
-        };
-        assert!(
-            (
-                outcome,
-                principal.name.as_str(),
-                operation.as_str(),
-                resources
-            ) == (
-                krabka_audit::AuditOutcome::Success,
-                "admin",
-                "DeleteAcls",
-                vec![krabka_audit::AuditResource {
-                    resource_type: "Acl".into(),
-                    name: "orders".into(),
-                }],
-            )
-        );
     }
 }

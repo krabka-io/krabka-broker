@@ -6,7 +6,10 @@
 
 use krabka_protocol::owned::delete_topics_response::DeletableTopicResult;
 
-use crate::codes;
+use crate::{
+    codes,
+    handlers::{RequestContext, audit_admin_success, audit_resource},
+};
 
 /// Picks the audit resources for the topics this request actually deleted.
 ///
@@ -18,48 +21,27 @@ pub(super) fn deleted_topic_resources(
     results
         .iter()
         .filter(|t| t.error_code == codes::NONE)
-        .filter_map(|t| {
-            t.name.as_deref().map(|n| krabka_audit::AuditResource {
-                resource_type: "Topic".to_string(),
-                name: n.to_string(),
-            })
-        })
+        .filter_map(|t| t.name.as_deref().map(|n| audit_resource("Topic", n)))
         .collect()
 }
 
-/// Emits one `AdminOperation` audit record for the deleted topics.
-///
-/// A request that deleted nothing emits nothing.
+/// Emits one `DeleteTopics` `AdminOperation` record for the deleted topics,
+/// or nothing when the request deleted none.
 pub(super) fn audit_deleted_topics(
     audit_log: &krabka_audit::AuditLog,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     deleted: Vec<krabka_audit::AuditResource>,
 ) {
-    if !deleted.is_empty() {
-        crate::handlers::audit_admin(
-            audit_log,
-            ctx,
-            "DeleteTopics",
-            krabka_audit::AuditOutcome::Success,
-            deleted,
-        );
-    }
+    audit_admin_success(audit_log, ctx, "DeleteTopics", deleted);
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::assert;
     use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
     use super::*;
-    use crate::{
-        handlers::delete_topics::wire::delete_topic_result,
-        test_support::{peer, principal},
-    };
-
-    // The `RequestContext` the `DeleteTopics` tests share, over the same
-    // `admin-client` client id the handler tests drive the wire path with.
-    crate::test_support::context_helper!(client_id = "admin-client");
+    use crate::handlers::delete_topics::wire::delete_topic_result;
 
     #[test]
     fn deleted_topic_resources_include_only_successful_named_topics() {
@@ -80,48 +62,5 @@ mod tests {
             name: "ok".into(),
         }];
         assert!(resources == expected);
-    }
-
-    #[test]
-    fn audit_deleted_topics_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
-
-        audit_deleted_topics(log.as_ref(), &ctx, Vec::new());
-        assert!(
-            rx.try_recv().is_err(),
-            "empty audit resource list is a no-op"
-        );
-
-        audit_deleted_topics(
-            log.as_ref(),
-            &ctx,
-            vec![krabka_audit::AuditResource {
-                resource_type: "Topic".into(),
-                name: "orders".into(),
-            }],
-        );
-
-        let event = rx.try_recv().expect("admin audit event");
-        let krabka_audit::AuditEvent::AdminOperation {
-            outcome,
-            principal,
-            operation,
-            resources,
-            ..
-        } = event
-        else {
-            panic!("expected AdminOperation");
-        };
-        let expected_resources = vec![krabka_audit::AuditResource {
-            resource_type: "Topic".into(),
-            name: "orders".into(),
-        }];
-        check!(outcome == krabka_audit::AuditOutcome::Success);
-        check!(principal.name.as_str() == "admin");
-        check!(operation.as_str() == "DeleteTopics");
-        check!(resources == expected_resources);
     }
 }

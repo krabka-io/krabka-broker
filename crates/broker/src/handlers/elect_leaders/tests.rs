@@ -23,18 +23,16 @@ use super::{
     partition::elect_one,
 };
 use crate::{
-    break_glass::gate::tests::approval,
+    break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal},
     broker::{Broker, BrokerHandle},
     codes,
     config::BreakGlassConfig,
     handlers::RequestContext,
     leader_election::{ElectionType, test_support::one_partition_change},
     test_support::{peer, principal, start_broker_no_audit_with},
-    time_util::now_ms,
 };
 
 const TOPIC: &str = "orders";
-const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 const VERSION: i16 = elect_leaders_response::MAX_VERSION;
 
 crate::test_support::context_helper!(client_id = "kafka-leader-election");
@@ -43,24 +41,6 @@ fn gated_config() -> BreakGlassConfig {
     BreakGlassConfig {
         approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
         ..BreakGlassConfig::default()
-    }
-}
-
-/// A proposal that two people approved, and that has not expired against
-/// the wall clock the gate reads.
-fn approved_proposal(target: &str) -> BreakGlassProposalRecord {
-    let now = now_ms();
-    BreakGlassProposalRecord {
-        proposal_id: PROPOSAL,
-        action: BreakGlassAction::UncleanElectLeaders,
-        target: target.to_owned(),
-        proposer: "User:carol".to_owned(),
-        reason: "incident 42".to_owned(),
-        created_at_ms: now - 1_000,
-        expires_at_ms: now + 600_000,
-        approvals: vec![approval("User:alice"), approval("User:bob")],
-        consumed_at_ms: 0,
-        withdrawn: false,
     }
 }
 
@@ -145,7 +125,7 @@ async fn elect(
     };
     let mut batch = ElectionBatch::default();
     let row = elect_one(&env, &mut batch, TOPIC, 0).await;
-    (row, batch.records)
+    (row, std::mem::take(&mut batch.records))
 }
 
 #[tokio::test]
@@ -168,7 +148,7 @@ async fn an_unclean_election_with_no_proposal_is_refused_and_appends_nothing() {
 async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_change() {
     let (handle, _dir) = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
-    let proposal = approved_proposal("orders-0");
+    let proposal = approved_proposal(BreakGlassAction::UncleanElectLeaders, "orders-0");
     let image = image_with(std::slice::from_ref(&proposal));
 
     let (row, records) = elect(&broker, &image, ElectionType::Unclean).await;
@@ -177,7 +157,7 @@ async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_chan
     // The consume and the transition it authorized are one raft append.
     assert!(records.len() == 2, "{records:?}");
     assert!(let MetadataRecord::V1BreakGlassProposal(consumed) = &records[0]);
-    check!(consumed.proposal_id == PROPOSAL);
+    check!(consumed.proposal_id == APPROVED_PROPOSAL_ID);
     check!(consumed.consumed_at_ms != 0, "the approval is spent");
     check!(
         *consumed
@@ -198,7 +178,10 @@ async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_chan
 async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
     let (handle, _dir) = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
-    let image = image_with(&[approved_proposal(TOPIC)]);
+    let image = image_with(&[approved_proposal(
+        BreakGlassAction::UncleanElectLeaders,
+        TOPIC,
+    )]);
     let alive = alive();
     let witnesses = HashSet::new();
     let principal = principal("admin");

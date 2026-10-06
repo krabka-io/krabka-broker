@@ -14,7 +14,7 @@ use krabka_units::minutes;
 use uuid::Uuid;
 
 use super::{authorize, is_gated};
-use crate::config::BreakGlassConfig;
+use crate::{config::BreakGlassConfig, time_util::now_ms};
 
 pub(crate) const CREATED_MS: i64 = 1_770_000_000_000;
 pub(crate) const EXPIRES_MS: i64 = 1_770_000_180_000;
@@ -63,6 +63,37 @@ pub(crate) fn proposal(
         created_at_ms: CREATED_MS,
         expires_at_ms: EXPIRES_MS,
         approvals: vec![approval("User:bob"), approval("User:carol")],
+        consumed_at_ms: 0,
+        withdrawn: false,
+    }
+}
+
+/// The id [`approved_proposal`] gives its proposal.
+pub(crate) const APPROVED_PROPOSAL_ID: Uuid =
+    Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+
+/// A proposal for `action` on `target` that two people approved, and that has
+/// not expired against the wall clock a gated handler reads.
+///
+/// The handler tests drive the gate through code that stamps the time itself,
+/// so this fixture is anchored to [`now_ms`] rather than to [`NOW_MS`]. A test
+/// that passes a fixed `now_ms` of its own still finds it usable, because the
+/// gate reads only the expiry and the expiry lies ten minutes past the wall
+/// clock.
+pub(crate) fn approved_proposal(
+    action: BreakGlassAction,
+    target: &str,
+) -> BreakGlassProposalRecord {
+    let now = now_ms();
+    BreakGlassProposalRecord {
+        proposal_id: APPROVED_PROPOSAL_ID,
+        action,
+        target: target.to_owned(),
+        proposer: "User:carol".to_owned(),
+        reason: "incident 42".to_owned(),
+        created_at_ms: now - 1_000,
+        expires_at_ms: now + 600_000,
+        approvals: vec![approval("User:alice"), approval("User:bob")],
         consumed_at_ms: 0,
         withdrawn: false,
     }

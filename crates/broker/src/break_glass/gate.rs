@@ -5,6 +5,7 @@
 //! one function, so one set of rules decides what an approval authorizes.
 
 use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage, MetadataRecord};
+use uuid::Uuid;
 
 use self::{denial::nearer_reason, selection::covers, usability::unusable_because};
 pub(crate) use self::{
@@ -157,5 +158,18 @@ pub(crate) fn consumed_record_matches(
                 && covers(&proposal.target, target, action)
         }
         _ => false,
+    }
+}
+
+/// The proposal that a consumed record names.
+///
+/// [`authorize`] only ever answers with a proposal record, so the `None` arm
+/// costs one match rather than a panic. Every gated handler reads the id back
+/// through this one function, to dedupe a spend and to name the proposal in
+/// its audit event.
+pub(crate) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
+    match record {
+        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
+        _ => None,
     }
 }

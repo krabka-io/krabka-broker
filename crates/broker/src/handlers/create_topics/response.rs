@@ -95,27 +95,8 @@ pub(super) fn created_topic_resources(
     results
         .iter()
         .filter(|t| t.error_code == codes::NONE)
-        .map(|t| krabka_audit::AuditResource {
-            resource_type: "Topic".to_string(),
-            name: t.name.clone(),
-        })
+        .map(|t| crate::handlers::audit_resource("Topic", t.name.clone()))
         .collect()
-}
-
-pub(super) fn audit_created_topics(
-    audit_log: &krabka_audit::AuditLog,
-    ctx: &crate::handlers::RequestContext<'_>,
-    created: Vec<krabka_audit::AuditResource>,
-) {
-    if !created.is_empty() {
-        crate::handlers::audit_admin(
-            audit_log,
-            ctx,
-            "CreateTopics",
-            krabka_audit::AuditOutcome::Success,
-            created,
-        );
-    }
 }
 
 pub(super) fn finish_response(
@@ -125,9 +106,10 @@ pub(super) fn finish_response(
     validate_only: bool,
     delay: Time,
 ) -> CreateTopicsResponse {
-    audit_created_topics(
+    crate::handlers::audit_admin_success(
         broker.audit_log.as_ref(),
         context,
+        "CreateTopics",
         created_topic_resources(&results, validate_only),
     );
     // KIP-599: the controller-mutation delay goes to the dispatch loop, which
@@ -142,13 +124,9 @@ pub(super) fn finish_response(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::assert;
 
     use super::*;
-    use crate::test_support::{peer, principal};
-
-    // These two cases need the handler tests' context but no wire codec.
-    crate::test_support::context_helper!(client_id = "admin-client");
 
     #[test]
     fn created_topic_resources_include_only_successful_topics() {
@@ -183,48 +161,5 @@ mod tests {
         }];
 
         assert!(created_topic_resources(&results, true) == Vec::new());
-    }
-
-    #[test]
-    fn audit_created_topics_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
-
-        audit_created_topics(log.as_ref(), &ctx, Vec::new());
-        assert!(
-            rx.try_recv().is_err(),
-            "empty audit resource list is a no-op"
-        );
-
-        audit_created_topics(
-            log.as_ref(),
-            &ctx,
-            vec![krabka_audit::AuditResource {
-                resource_type: "Topic".into(),
-                name: "orders".into(),
-            }],
-        );
-
-        let event = rx.try_recv().expect("admin audit event");
-        let krabka_audit::AuditEvent::AdminOperation {
-            outcome,
-            principal,
-            operation,
-            resources,
-            ..
-        } = event
-        else {
-            panic!("expected AdminOperation");
-        };
-        check!(outcome == krabka_audit::AuditOutcome::Success);
-        check!(principal.name.as_str() == "admin");
-        check!(operation.as_str() == "CreateTopics");
-        let expected_resources = vec![krabka_audit::AuditResource {
-            resource_type: "Topic".into(),
-            name: "orders".into(),
-        }];
-        assert!(resources == expected_resources);
     }
 }

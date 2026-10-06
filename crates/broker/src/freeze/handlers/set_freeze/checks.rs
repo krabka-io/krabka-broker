@@ -13,6 +13,7 @@ use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
 use uuid::Uuid;
 
 use super::outcome::{Accepted, Refusal};
+pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
     break_glass::{gate, handlers::principal_name},
     codes,
@@ -212,14 +213,6 @@ pub(super) fn check_approval(
 /// passing as an unsigned request.
 pub(super) fn is_signed(key_id: &str, signature: &[u8]) -> bool {
     !key_id.is_empty() || !signature.is_empty()
-}
-
-/// The proposal that a consumed record names.
-pub(super) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
-    match record {
-        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
-        _ => None,
-    }
 }
 
 /// The registry record that the request becomes.

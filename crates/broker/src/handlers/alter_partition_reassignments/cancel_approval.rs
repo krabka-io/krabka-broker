@@ -11,15 +11,17 @@
 //! and it holds back the `Applied` audit events until that append's outcome is
 //! known.
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    ops::{Deref, DerefMut},
+};
 
-use krabka_audit::{AuditError, PrivilegedPhase};
+use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
 use krabka_protocol::owned::{
     alter_partition_reassignments_request::ReassignablePartition,
     alter_partition_reassignments_response::ReassignablePartitionResponse,
 };
-use uuid::Uuid;
 
 use super::{
     process_one_partition,
@@ -28,7 +30,10 @@ use super::{
 use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
-        handlers::audit::{GatedTransition, audit_transition, require_transition},
+        handlers::{
+            audit::{GatedTransition, audit_transition},
+            batch::GatedBatch,
+        },
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -49,18 +54,12 @@ pub(super) struct ReassignEnv<'a> {
 
 /// What one `AlterPartitionReassignments` request accumulates across its rows.
 ///
-/// `records` is the single raft append that carries every consumed proposal
-/// beside every partition record the request makes, so an approval and the
-/// cancel it authorized commit together.
-#[derive(Default)]
+/// The [`GatedBatch`] it derefs to carries every consumed proposal beside every
+/// partition record the request makes in one raft append, so an approval and
+/// the cancel it authorized commit together.
 pub(super) struct ReassignBatch {
-    /// The consumed proposals first, then the partition records.
-    pub(super) records: Vec<MetadataRecord>,
-    /// The proposals this request already spent. One proposal on a bare topic
-    /// name covers every partition of it, and it is spent once.
-    spent: HashSet<Uuid>,
-    /// The cancels waiting on the append, to audit once it commits.
-    applied: Vec<(String, Option<Uuid>)>,
+    /// The append, the spent proposals, and the cancels waiting on its audit.
+    gated: GatedBatch,
     /// The partitions that contributed a record to the append, in the
     /// `"<topic>-<partition>"` spelling the audit resource carries. A row
     /// already at its requested target plans no record and belongs in no audit
@@ -68,71 +67,30 @@ pub(super) struct ReassignBatch {
     pub(super) altered: HashSet<String>,
 }
 
-impl ReassignBatch {
-    /// Take a consumed proposal into the append, and answer the proposal it
-    /// names.
-    fn spend(&mut self, consumed: Option<MetadataRecord>) -> Option<Uuid> {
-        let consumed = consumed?;
-        let proposal_id = consumed_proposal_id(&consumed)?;
-        if self.spent.insert(proposal_id) {
-            self.records.insert(0, consumed);
+impl Default for ReassignBatch {
+    fn default() -> Self {
+        Self {
+            gated: GatedBatch::new(
+                BreakGlassAction::CancelReassignment,
+                "reassignment cancel admitted",
+                "reassignment cancel committed",
+            ),
+            altered: HashSet::new(),
         }
-        Some(proposal_id)
     }
+}
 
-    /// Durably admit every queued cancel before the raft append.
-    pub(super) async fn require_audit(
-        &self,
-        broker: &Broker,
-        ctx: &RequestContext<'_>,
-    ) -> Result<(), AuditError> {
-        for (target, proposal_id) in &self.applied {
-            require_transition(
-                &broker.audit_log,
-                &broker.config.break_glass,
-                ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::CancelReassignment,
-                    target,
-                    phase: PrivilegedPhase::Applied,
-                    proposal_id: *proposal_id,
-                    reason: "reassignment cancel admitted",
-                },
-            )
-            .await?;
-        }
-        Ok(())
+impl Deref for ReassignBatch {
+    type Target = GatedBatch;
+
+    fn deref(&self) -> &GatedBatch {
+        &self.gated
     }
+}
 
-    /// Audit every cancel this append carried.
-    ///
-    /// `failure` is the submit error when the append did not commit, and the
-    /// event then records a refusal with that text rather than a cancel that
-    /// never happened.
-    pub(super) fn audit_applied(
-        &self,
-        broker: &Broker,
-        ctx: &RequestContext<'_>,
-        failure: Option<&str>,
-    ) {
-        for (target, proposal_id) in &self.applied {
-            let (phase, reason) = match failure {
-                None => (PrivilegedPhase::Applied, "reassignment cancel committed"),
-                Some(error) => (PrivilegedPhase::Refused, error),
-            };
-            audit_transition(
-                &broker.audit_log,
-                &broker.config.break_glass,
-                ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::CancelReassignment,
-                    target,
-                    phase,
-                    proposal_id: *proposal_id,
-                    reason,
-                },
-            );
-        }
+impl DerefMut for ReassignBatch {
+    fn deref_mut(&mut self) -> &mut GatedBatch {
+        &mut self.gated
     }
 }
 
@@ -243,54 +201,25 @@ fn cancel_target(topic: &str, partition: i32) -> String {
     format!("{topic}-{partition}")
 }
 
-/// The proposal that a consumed record names.
-///
-/// [`gate::authorize`] only ever answers with a proposal record, so the `None`
-/// arm costs one match rather than a panic.
-fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
-    match record {
-        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
+    use uuid::Uuid;
 
     use super::*;
-    use crate::handlers::alter_partition_reassignments::test_support::img_with;
+    use crate::{
+        break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal},
+        handlers::alter_partition_reassignments::test_support::img_with,
+    };
 
-    const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
     const NOW_MS: i64 = 60_000;
 
     fn gated_config() -> crate::config::BreakGlassConfig {
         crate::config::BreakGlassConfig {
             approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
             ..crate::config::BreakGlassConfig::default()
-        }
-    }
-
-    /// A proposal that two people approved, and that has not expired against
-    /// the wall clock the gate reads.
-    fn approved_proposal(target: &str) -> krabka_metadata::BreakGlassProposalRecord {
-        let now = now_ms();
-        krabka_metadata::BreakGlassProposalRecord {
-            proposal_id: PROPOSAL,
-            action: BreakGlassAction::CancelReassignment,
-            target: target.to_owned(),
-            proposer: "User:carol".to_owned(),
-            reason: "the reassignment is making things worse".to_owned(),
-            created_at_ms: now - 1_000,
-            expires_at_ms: now + 600_000,
-            approvals: vec![
-                crate::break_glass::gate::tests::approval("User:alice"),
-                crate::break_glass::gate::tests::approval("User:bob"),
-            ],
-            consumed_at_ms: 0,
-            withdrawn: false,
         }
     }
 
@@ -305,7 +234,7 @@ mod tests {
 
     #[test]
     fn the_cancel_gate_answers_from_the_proposal_registry() {
-        let approved = approved_proposal("foo-0");
+        let approved = approved_proposal(BreakGlassAction::CancelReassignment, "foo-0");
         let cases: [(
             &'static str,
             MetadataImage,
@@ -320,7 +249,10 @@ mod tests {
             ),
             (
                 "an approved proposal on the whole topic",
-                img_reassigning(&[approved_proposal("foo")]),
+                img_reassigning(&[approved_proposal(
+                    BreakGlassAction::CancelReassignment,
+                    "foo",
+                )]),
                 gated_config(),
                 true,
             ),
@@ -351,7 +283,7 @@ mod tests {
         })
         .await;
         let broker = handle.broker_arc_for_test();
-        let proposal = approved_proposal("foo-0");
+        let proposal = approved_proposal(BreakGlassAction::CancelReassignment, "foo-0");
         let image = img_reassigning(std::slice::from_ref(&proposal));
         let principal = crate::test_support::principal("admin");
         let peer = crate::test_support::peer();
@@ -380,7 +312,7 @@ mod tests {
         // The consume and the cancel it authorized are one raft append.
         assert!(batch.records.len() == 2, "{:?}", batch.records);
         assert!(let MetadataRecord::V1BreakGlassProposal(consumed) = &batch.records[0]);
-        check!(consumed.proposal_id == PROPOSAL);
+        check!(consumed.proposal_id == APPROVED_PROPOSAL_ID);
         check!(consumed.consumed_at_ms != 0, "the approval is spent");
         let reverted = process_one_partition(&image, "foo", 0, None, true, true)
             .expect("ok")
@@ -441,7 +373,10 @@ mod tests {
         })
         .await;
         let broker = handle.broker_arc_for_test();
-        let image = img_reassigning(&[approved_proposal("foo-0")]);
+        let image = img_reassigning(&[approved_proposal(
+            BreakGlassAction::CancelReassignment,
+            "foo-0",
+        )]);
         let principal = crate::test_support::principal("admin");
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
@@ -551,14 +486,14 @@ mod tests {
         let consumed =
             MetadataRecord::V1BreakGlassProposal(krabka_metadata::BreakGlassProposalRecord {
                 consumed_at_ms: NOW_MS,
-                ..approved_proposal("foo")
+                ..approved_proposal(BreakGlassAction::CancelReassignment, "foo")
             });
 
         let first = batch.spend(Some(consumed.clone()));
         let second = batch.spend(Some(consumed.clone()));
 
-        check!(first == Some(PROPOSAL));
-        check!(second == Some(PROPOSAL));
+        check!(first == Some(APPROVED_PROPOSAL_ID));
+        check!(second == Some(APPROVED_PROPOSAL_ID));
         assert!(batch.records == vec![consumed]);
     }
 }
