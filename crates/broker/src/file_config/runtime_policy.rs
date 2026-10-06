@@ -114,18 +114,11 @@ impl RuntimeFileConfig {
         metadata_log: &mut krabka_raft::MetadataLogConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_validated!(
-            runtime,
-            metadata_log_segment_bytes,
-            metadata_log.segment_size,
-            metadata_log_segment_bytes
-        );
-        set_runtime_validated!(
-            runtime,
-            metadata_log_segment_roll_interval,
-            metadata_log.segment_roll_interval,
-            whole_millis_i64_time
-        );
+        set_runtime! {
+            runtime => metadata_log;
+            metadata_log_segment_bytes: metadata_log_segment_bytes => segment_size;
+            whole_millis_i64_time: metadata_log_segment_roll_interval => segment_roll_interval;
+        }
         if let Some(value) = runtime.metadata_max_retention_bytes {
             metadata_log.max_retention_size =
                 Some(kafka_long_bytes("metadata_max_retention_bytes", value)?);

@@ -51,40 +51,19 @@ impl RuntimeFileConfig {
             positive_usize: unclean_recovery_queue_capacity;
             whole_bytes_usize: share_coordinator_load_buffer_size;
             positive_usize: share_session_cache_max_when_unlimited;
+            whole_bytes_usize: log_read_buffer_cap => log_config.read_buffer_cap,
+                log_timestamp_scan_window => log_config.timestamp_scan_window;
         }
-        set_runtime_validated!(
-            runtime,
-            log_read_buffer_cap,
-            cfg.log_config.read_buffer_cap,
-            whole_bytes_usize
-        );
-        set_runtime_validated!(
-            runtime,
-            log_timestamp_scan_window,
-            cfg.log_config.timestamp_scan_window,
-            whole_bytes_usize
-        );
         // A topic reports these two at `STATIC_BROKER_CONFIG` when the
         // operator named them, so the loader records the provenance.
         cfg.static_config_origins.log.log_segment_bytes |= runtime.log_segment_bytes.is_some();
         cfg.static_config_origins.log.message_max_bytes |= runtime.message_max_bytes.is_some();
-        set_runtime_validated!(
-            runtime,
-            log_segment_bytes,
-            cfg.log_config.segment_size,
-            whole_bytes_u64
-        );
-        set_runtime_validated!(
-            runtime,
-            message_max_bytes,
-            cfg.log_config.max_message_size,
-            kafka_int_bytes
-        );
-        set_runtime_time_millis!(
-            runtime,
-            log_delivery_clock_uncertainty,
-            cfg.log_config.delivery_clock_uncertainty
-        );
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_u64: log_segment_bytes => log_config.segment_size;
+            kafka_int_bytes: message_max_bytes => log_config.max_message_size;
+            positive_time: log_delivery_clock_uncertainty => log_config.delivery_clock_uncertainty;
+        }
         Ok(())
     }
 

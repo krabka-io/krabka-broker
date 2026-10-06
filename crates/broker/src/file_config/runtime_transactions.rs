@@ -5,7 +5,7 @@
 //! replication factors, and recovery reads, together with the transaction
 //! timeout bounds. `apply_barrier` covers the KFC-4 barrier group knobs.
 
-use krabka_units::{ByteSize, kibibytes};
+use krabka_units::{ByteSize, Time, convert::TimeExt, kibibytes};
 
 use super::{
     FileConfigError, RuntimeFileConfig,
@@ -44,29 +44,16 @@ impl RuntimeFileConfig {
                 .topic_creation
                 .default_replication_factor = true;
         }
-        set_runtime! { runtime => cfg; whole_bytes_usize: future_log_move_read_chunk; }
-        set_runtime_validated!(
-            runtime,
-            share_state_num_partitions,
-            cfg.share_coordinator.state_topic_num_partitions,
-            positive_i32
-        );
-        if let Some(value) = runtime.share_state_replication_factor {
-            cfg.share_coordinator.state_topic_replication_factor =
-                positive_i16("share_state_replication_factor", value)?;
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_usize: future_log_move_read_chunk;
+            positive_i32: share_state_num_partitions => share_coordinator.state_topic_num_partitions;
+            positive_i16: share_state_replication_factor
+                => share_coordinator.state_topic_replication_factor;
+            kafka_int_bytes: share_state_segment_bytes
+                => share_coordinator.state_topic_segment_bytes;
+            positive_i32: share_state_min_isr => share_coordinator.state_topic_min_isr;
         }
-        set_runtime_validated!(
-            runtime,
-            share_state_segment_bytes,
-            cfg.share_coordinator.state_topic_segment_bytes,
-            kafka_int_bytes
-        );
-        set_runtime_validated!(
-            runtime,
-            share_state_min_isr,
-            cfg.share_coordinator.state_topic_min_isr,
-            positive_i32
-        );
         // Kafka's `between(0, 500)`.
         if let Some(value) = runtime.share_snapshot_update_records_per_snapshot {
             if value > 500 {
@@ -78,27 +65,13 @@ impl RuntimeFileConfig {
             cfg.share_coordinator.snapshot_update_records_per_snapshot = value;
         }
         // Kafka's `atLeast(1)` milliseconds, as an `INT`.
-        for (name, value, target) in [
-            (
-                "share_coordinator_write_timeout",
-                runtime.share_coordinator_write_timeout,
-                &mut cfg.share_coordinator.write_timeout,
-            ),
-            (
-                "share_state_prune_interval",
-                runtime.share_state_prune_interval,
-                &mut cfg.share_coordinator.state_topic_prune_interval,
-            ),
-            (
-                "share_cold_partition_snapshot_interval",
-                runtime.share_cold_partition_snapshot_interval,
-                &mut cfg.share_coordinator.cold_partition_snapshot_interval,
-            ),
-        ] {
-            if let Some(value) = value {
-                *target =
-                    krabka_units::prelude::TimeExt::to_std(whole_millis_i32_time(name, value)?);
-            }
+        set_runtime! {
+            runtime => cfg;
+            whole_millis_i32_duration: share_coordinator_write_timeout
+                    => share_coordinator.write_timeout,
+                share_state_prune_interval => share_coordinator.state_topic_prune_interval,
+                share_cold_partition_snapshot_interval
+                    => share_coordinator.cold_partition_snapshot_interval;
         }
         // `CompressionType.forId` over Kafka's `INT` codec id.
         if let Some(value) = runtime.share_state_compression_codec {
@@ -133,15 +106,11 @@ impl RuntimeFileConfig {
                 }
             };
         }
-        // Kafka's `atLeast(512 * 1024)` over an `INT`.
-        set_runtime_validated!(
-            runtime,
-            share_coordinator_cached_buffer_max_bytes,
-            cfg.share_coordinator.cached_buffer_max_bytes,
-            cached_buffer_max_bytes
-        );
         set_runtime! {
             runtime => cfg;
+            // Kafka's `atLeast(512 * 1024)` over an `INT`.
+            cached_buffer_max_bytes: share_coordinator_cached_buffer_max_bytes
+                => share_coordinator.cached_buffer_max_bytes;
             positive_i32: offsets_topic_num_partitions;
             positive_i16: offsets_topic_replication_factor;
             kafka_int_bytes: offsets_topic_segment_bytes;
@@ -201,6 +170,15 @@ fn cached_buffer_max_bytes(name: &str, value: ByteSize) -> Result<ByteSize, File
     } else {
         Err(invalid_runtime_value(name, "must be at least 524288 bytes"))
     }
+}
+
+/// [`whole_millis_i32_time`] as the [`std::time::Duration`] the share
+/// coordinator's timers hold.
+fn whole_millis_i32_duration(
+    name: &str,
+    value: Time,
+) -> Result<std::time::Duration, FileConfigError> {
+    whole_millis_i32_time(name, value).map(TimeExt::to_std)
 }
 
 #[cfg(test)]

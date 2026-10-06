@@ -27,64 +27,26 @@ impl RuntimeFileConfig {
         set_runtime! {
             runtime => cfg;
             positive_time: coordinator_session_expiry_tick, coordinator_shutdown_ack_timeout;
+            duration: consumer_group_session_timeout => next_gen_consumer_group.session_timeout,
+                consumer_group_heartbeat_interval => next_gen_consumer_group.heartbeat_interval,
+                consumer_group_min_session_timeout => next_gen_consumer_group.min_session_timeout,
+                consumer_group_max_session_timeout => next_gen_consumer_group.max_session_timeout,
+                consumer_group_min_heartbeat_interval
+                    => next_gen_consumer_group.min_heartbeat_interval,
+                consumer_group_max_heartbeat_interval
+                    => next_gen_consumer_group.max_heartbeat_interval;
+            positive_usize: consumer_group_max_size => next_gen_consumer_group.max_size;
+            // Zero is Kafka's own development setting for
+            // `group.initial.rebalance.delay.ms`, so this one is not held to
+            // `positive_time`.
+            nonnegative_time: classic_group_initial_rebalance_delay;
+            duration: classic_group_min_session_timeout
+                    => next_gen_consumer_group.classic_min_session_timeout,
+                classic_group_max_session_timeout
+                    => next_gen_consumer_group.classic_max_session_timeout;
+            positive_usize: classic_group_max_size => next_gen_consumer_group.classic_max_size;
+            positive_time: sync_group_follower_wait;
         }
-        set_runtime_duration!(
-            runtime,
-            consumer_group_session_timeout,
-            cfg.next_gen_consumer_group.session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            consumer_group_heartbeat_interval,
-            cfg.next_gen_consumer_group.heartbeat_interval
-        );
-        set_runtime_duration!(
-            runtime,
-            consumer_group_min_session_timeout,
-            cfg.next_gen_consumer_group.min_session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            consumer_group_max_session_timeout,
-            cfg.next_gen_consumer_group.max_session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            consumer_group_min_heartbeat_interval,
-            cfg.next_gen_consumer_group.min_heartbeat_interval
-        );
-        set_runtime_duration!(
-            runtime,
-            consumer_group_max_heartbeat_interval,
-            cfg.next_gen_consumer_group.max_heartbeat_interval
-        );
-        set_runtime_validated!(
-            runtime,
-            consumer_group_max_size,
-            cfg.next_gen_consumer_group.max_size,
-            positive_usize
-        );
-        // Zero is Kafka's own development setting for
-        // `group.initial.rebalance.delay.ms`, so this one is not held to
-        // `positive_time`.
-        set_runtime! { runtime => cfg; nonnegative_time: classic_group_initial_rebalance_delay; }
-        set_runtime_duration!(
-            runtime,
-            classic_group_min_session_timeout,
-            cfg.next_gen_consumer_group.classic_min_session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            classic_group_max_session_timeout,
-            cfg.next_gen_consumer_group.classic_max_session_timeout
-        );
-        set_runtime_validated!(
-            runtime,
-            classic_group_max_size,
-            cfg.next_gen_consumer_group.classic_max_size,
-            positive_usize
-        );
-        set_runtime! { runtime => cfg; positive_time: sync_group_follower_wait; }
         Ok(())
     }
 
@@ -102,123 +64,34 @@ impl RuntimeFileConfig {
     ) -> Result<(), FileConfigError> {
         let runtime = self;
         let share = &mut *cfg.share_group;
-        for (name, value, target, range) in [
-            (
-                "share_group_session_timeout",
-                runtime.share_group_session_timeout,
-                &mut share.session_timeout,
-                AT_LEAST_ONE_MS,
-            ),
-            (
-                "share_group_heartbeat_interval",
-                runtime.share_group_heartbeat_interval,
-                &mut share.heartbeat_interval,
-                AT_LEAST_ONE_MS,
-            ),
-            (
-                "share_group_min_session_timeout",
-                runtime.share_group_min_session_timeout,
-                &mut share.min_session_timeout,
-                AT_LEAST_ONE_MS,
-            ),
-            (
-                "share_group_max_session_timeout",
-                runtime.share_group_max_session_timeout,
-                &mut share.max_session_timeout,
-                AT_LEAST_ONE_MS,
-            ),
-            (
-                "share_group_min_heartbeat_interval",
-                runtime.share_group_min_heartbeat_interval,
-                &mut share.min_heartbeat_interval,
-                AT_LEAST_ONE_MS,
-            ),
-            (
-                "share_group_max_heartbeat_interval",
-                runtime.share_group_max_heartbeat_interval,
-                &mut share.max_heartbeat_interval,
-                AT_LEAST_ONE_MS,
-            ),
-            (
-                "share_group_record_lock_duration",
-                runtime.share_group_record_lock_duration,
-                &mut share.record_lock_duration,
-                1_000..=3_600_000,
-            ),
-            (
-                "share_group_min_record_lock_duration",
-                runtime.share_group_min_record_lock_duration,
-                &mut share.min_record_lock_duration,
-                1_000..=30_000,
-            ),
-            (
-                "share_group_max_record_lock_duration",
-                runtime.share_group_max_record_lock_duration,
-                &mut share.max_record_lock_duration,
-                30_000..=3_600_000,
-            ),
-        ] {
-            if let Some(value) = value {
-                *target = int_millis(name, value, range)?;
-            }
-        }
-        if let Some(value) = runtime.share_group_max_size {
-            share.max_size = in_range("share_group_max_size", value, 1..=1_000)?;
-        }
-        for (name, value, target, range) in [
-            (
-                "share_group_delivery_count_limit",
-                runtime.share_group_delivery_count_limit,
-                &mut share.max_delivery_attempts,
-                2..=10,
-            ),
-            (
-                "share_group_min_delivery_count_limit",
-                runtime.share_group_min_delivery_count_limit,
-                &mut share.min_delivery_count_limit,
-                2..=5,
-            ),
-            (
-                "share_group_max_delivery_count_limit",
-                runtime.share_group_max_delivery_count_limit,
-                &mut share.max_delivery_count_limit,
-                5..=25,
-            ),
-        ] {
-            if let Some(value) = value {
-                *target = in_range(name, value, range)?;
-            }
-        }
-        for (name, value, target, range) in [
-            (
-                "share_group_partition_max_record_locks",
-                runtime.share_group_partition_max_record_locks,
-                &mut share.max_inflight_records,
-                100..=10_000,
-            ),
-            (
-                "share_group_min_partition_max_record_locks",
-                runtime.share_group_min_partition_max_record_locks,
-                &mut share.min_partition_max_record_locks,
-                100..=2_000,
-            ),
-            (
-                "share_group_max_partition_max_record_locks",
-                runtime.share_group_max_partition_max_record_locks,
-                &mut share.max_partition_max_record_locks,
-                2_000..=10_000,
-            ),
-        ] {
-            if let Some(value) = value {
-                *target = in_range(name, value, range)?;
-            }
+        set_runtime! {
+            runtime => share;
+            int_millis: share_group_session_timeout => session_timeout in AT_LEAST_ONE_MS,
+                share_group_heartbeat_interval => heartbeat_interval in AT_LEAST_ONE_MS,
+                share_group_min_session_timeout => min_session_timeout in AT_LEAST_ONE_MS,
+                share_group_max_session_timeout => max_session_timeout in AT_LEAST_ONE_MS,
+                share_group_min_heartbeat_interval => min_heartbeat_interval in AT_LEAST_ONE_MS,
+                share_group_max_heartbeat_interval => max_heartbeat_interval in AT_LEAST_ONE_MS,
+                share_group_record_lock_duration => record_lock_duration in 1_000..=3_600_000,
+                share_group_min_record_lock_duration
+                    => min_record_lock_duration in 1_000..=30_000,
+                share_group_max_record_lock_duration
+                    => max_record_lock_duration in 30_000..=3_600_000;
+            in_range: share_group_max_size => max_size in 1..=1_000,
+                share_group_delivery_count_limit => max_delivery_attempts in 2..=10,
+                share_group_min_delivery_count_limit => min_delivery_count_limit in 2..=5,
+                share_group_max_delivery_count_limit => max_delivery_count_limit in 5..=25,
+                share_group_partition_max_record_locks => max_inflight_records in 100..=10_000,
+                share_group_min_partition_max_record_locks
+                    => min_partition_max_record_locks in 100..=2_000,
+                share_group_max_partition_max_record_locks
+                    => max_partition_max_record_locks in 2_000..=10_000;
         }
         validate_share_group_order(share)?;
-        set_runtime_duration!(
-            runtime,
-            share_group_backlog_poll_interval,
-            cfg.share_group.backlog_poll_interval
-        );
+        set_runtime! {
+            runtime => share;
+            duration: share_group_backlog_poll_interval => backlog_poll_interval;
+        }
         Ok(())
     }
 
@@ -227,43 +100,17 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_plain!(runtime, streams_group_enable, cfg.streams_group.enable);
-        set_runtime_duration!(
-            runtime,
-            streams_group_session_timeout,
-            cfg.streams_group.session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            streams_group_heartbeat_interval,
-            cfg.streams_group.heartbeat_interval
-        );
-        set_runtime_duration!(
-            runtime,
-            streams_group_min_session_timeout,
-            cfg.streams_group.min_session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            streams_group_max_session_timeout,
-            cfg.streams_group.max_session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            streams_group_min_heartbeat_interval,
-            cfg.streams_group.min_heartbeat_interval
-        );
-        set_runtime_duration!(
-            runtime,
-            streams_group_max_heartbeat_interval,
-            cfg.streams_group.max_heartbeat_interval
-        );
-        set_runtime_validated!(
-            runtime,
-            streams_group_max_size,
-            cfg.streams_group.max_size,
-            positive_usize
-        );
+        set_runtime! {
+            runtime => cfg;
+            plain: streams_group_enable => streams_group.enable;
+            duration: streams_group_session_timeout => streams_group.session_timeout,
+                streams_group_heartbeat_interval => streams_group.heartbeat_interval,
+                streams_group_min_session_timeout => streams_group.min_session_timeout,
+                streams_group_max_session_timeout => streams_group.max_session_timeout,
+                streams_group_min_heartbeat_interval => streams_group.min_heartbeat_interval,
+                streams_group_max_heartbeat_interval => streams_group.max_heartbeat_interval;
+            positive_usize: streams_group_max_size => streams_group.max_size;
+        }
         if let Some(value) = runtime.streams_group_num_standby_replicas {
             if value < 0 {
                 return Err(invalid_runtime_value(
@@ -298,11 +145,10 @@ impl RuntimeFileConfig {
             }
             cfg.streams_group.acceptable_recovery_lag = value;
         }
-        set_runtime_duration!(
-            runtime,
-            streams_group_task_offset_interval,
-            cfg.streams_group.task_offset_interval
-        );
+        set_runtime! {
+            runtime => cfg;
+            duration: streams_group_task_offset_interval => streams_group.task_offset_interval;
+        }
         if let Some(value) = runtime.streams_group_assignor.take() {
             use crate::coordinator::unified::streams::config::StreamsAssignorKind;
             cfg.streams_group.assignor =

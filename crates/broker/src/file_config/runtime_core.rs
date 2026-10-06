@@ -61,59 +61,20 @@ impl RuntimeFileConfig {
             }
             cfg.replication.fetchers = fetchers;
         }
-        set_runtime_validated!(
-            runtime,
-            replication_fetch_max,
-            cfg.replication.fetch_max,
-            whole_bytes_i32
-        );
-        set_runtime_validated!(
-            runtime,
-            replication_fetch_max_wait,
-            cfg.replication.fetch_max_wait,
-            whole_millis_i32_time
-        );
-        set_runtime_validated!(
-            runtime,
-            replication_fetch_min,
-            cfg.replication.fetch_min,
-            whole_bytes_i32
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_throttle_exhausted_backoff,
-            cfg.replication.throttle_exhausted_backoff
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_send_error_backoff,
-            cfg.replication.send_error_backoff
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_unknown_topic_retry_delay,
-            cfg.replication.unknown_topic_retry_delay
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_epoch_fence_backoff,
-            cfg.replication.epoch_fence_backoff
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_unexpected_error_backoff,
-            cfg.replication.unexpected_error_backoff
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_reconnect_initial_delay,
-            cfg.replication.reconnect_initial_delay
-        );
-        set_runtime_time_millis!(
-            runtime,
-            replication_reconnect_delay_cap,
-            cfg.replication.reconnect_delay_cap
-        );
+        set_runtime! {
+            runtime => cfg;
+            whole_bytes_i32: replication_fetch_max => replication.fetch_max;
+            whole_millis_i32_time: replication_fetch_max_wait => replication.fetch_max_wait;
+            whole_bytes_i32: replication_fetch_min => replication.fetch_min;
+            positive_time: replication_throttle_exhausted_backoff
+                    => replication.throttle_exhausted_backoff,
+                replication_send_error_backoff => replication.send_error_backoff,
+                replication_unknown_topic_retry_delay => replication.unknown_topic_retry_delay,
+                replication_epoch_fence_backoff => replication.epoch_fence_backoff,
+                replication_unexpected_error_backoff => replication.unexpected_error_backoff,
+                replication_reconnect_initial_delay => replication.reconnect_initial_delay,
+                replication_reconnect_delay_cap => replication.reconnect_delay_cap;
+        }
         Ok(())
     }
 }
