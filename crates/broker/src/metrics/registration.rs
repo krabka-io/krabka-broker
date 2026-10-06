@@ -1,22 +1,9 @@
 //! Construction of a [`BrokerMetrics`] bundle and its registration with the
-//! Prometheus registry. It holds the histogram bucket boundaries, the
-//! unregistered constructor that gives every family its handle, and the
-//! entry point that walks the registration groups in the children.
+//! Prometheus registry. It holds the histogram bucket boundaries that the
+//! `#[metric(buckets = ...)]` attributes on [`BrokerMetrics`] name, and the
+//! entry point that runs the derived constructor and registration.
 
-use std::sync::Arc;
-
-use prometheus_client::{
-    metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
-    registry::Registry,
-};
-use tokio::sync::Mutex;
-
-use crate::metrics::{BrokerMetrics, SharedRegistry};
-
-mod cluster_and_quorum;
-mod requests_and_resources;
-mod subsystems;
-mod topics_and_replication;
+use crate::metrics::BrokerMetrics;
 
 #[cfg(test)]
 mod tests;
@@ -31,7 +18,7 @@ mod tests;
 /// phase is a part of the total, and an operator checks the phases against the
 /// total bucket by bucket; two bucket sets would make that comparison an
 /// interpolation rather than a subtraction.
-const REQUEST_DURATION_BUCKETS: [f64; 12] = [
+pub(super) const REQUEST_DURATION_BUCKETS: [f64; 12] = [
     0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 10.0,
 ];
 
@@ -40,7 +27,7 @@ const REQUEST_DURATION_BUCKETS: [f64; 12] = [
 /// partition that another broker leads costs an inter-broker round trip. The
 /// span runs from 5ms for a small single-broker group to 30s, which is the
 /// default `barrier_injection_timeout`.
-const BARRIER_INJECTION_DURATION_BUCKETS: [f64; 12] = [
+pub(super) const BARRIER_INJECTION_DURATION_BUCKETS: [f64; 12] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
@@ -51,209 +38,36 @@ const BARRIER_INJECTION_DURATION_BUCKETS: [f64; 12] = [
 /// at 1ms and resolves the sub-second band finely. The tail runs to 30s so a
 /// broker with real clock skew, or one whose scheduler is starved of CPU, still
 /// lands in a bucket instead of in `+Inf`.
-const DELIVERY_ACTIVATION_LATENESS_BUCKETS: [f64; 12] = [
+pub(super) const DELIVERY_ACTIVATION_LATENESS_BUCKETS: [f64; 12] = [
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 10.0, 30.0,
 ];
 
 impl BrokerMetrics {
-    fn unregistered(registry: SharedRegistry) -> Self {
-        Self {
-            registry,
-            topic_bytes_in: Family::default(),
-            topic_bytes_out: Family::default(),
-            topic_messages_in: Family::default(),
-            topic_produce_requests: Family::default(),
-            topic_fetch_requests: Family::default(),
-            topic_failed_produce_requests: Family::default(),
-            topic_failed_fetch_requests: Family::default(),
-            partition_bytes_in: Family::default(),
-            partition_bytes_out: Family::default(),
-            replication_bytes_in: Family::default(),
-            replication_bytes_out: Family::default(),
-            partition_disk_bytes: Family::default(),
-            replica_lag: Family::default(),
-            replica_lag_max: Gauge::default(),
-            consumer_group_lag: Family::default(),
-            share_group_backlog: Family::default(),
-            share_group_dlq_records: Family::default(),
-            share_group_dlq_produce_requests: Family::default(),
-            share_group_dlq_failed_produce_requests: Family::default(),
-            partition_cpu_micros: Family::default(),
-            partitions_led: Gauge::default(),
-            partitions_total: Gauge::default(),
-            under_replicated_partitions: Gauge::default(),
-            under_min_isr_partition_count: Gauge::default(),
-            offline_partitions_count: Gauge::default(),
-            active_controller: Gauge::default(),
-            ignored_static_voters: Gauge::default(),
-            witness_role: Gauge::default(),
-            leader_site_drift_partitions: Gauge::default(),
-            voted_directory: Family::default(),
-            controller_leader_changes_total: Counter::default(),
-            controller_fencing_publications_total: Counter::default(),
-            isr_shrinks_total: Counter::default(),
-            isr_expands_total: Counter::default(),
-            fetch_response_drain: Family::default(),
-            ktls_enabled: Gauge::default(),
-            incremental_fetch_sessions: Gauge::default(),
-            incremental_fetch_session_evictions_total: Counter::default(),
-            incremental_fetch_partitions_cached: Gauge::default(),
-            client_software_versions: Family::default(),
-            successful_authentication: Family::default(),
-            failed_authentication: Family::default(),
-            authorization_denied: Family::default(),
-            api_requests: Family::default(),
-            unsupported_api_requests: Family::default(),
-            request_duration_seconds: Family::new_with_constructor(|| {
-                Histogram::new(REQUEST_DURATION_BUCKETS)
-            }),
-            request_local_duration_seconds: Family::new_with_constructor(|| {
-                Histogram::new(REQUEST_DURATION_BUCKETS)
-            }),
-            request_remote_duration_seconds: Family::new_with_constructor(|| {
-                Histogram::new(REQUEST_DURATION_BUCKETS)
-            }),
-            request_throttle_duration_seconds: Family::new_with_constructor(|| {
-                Histogram::new(REQUEST_DURATION_BUCKETS)
-            }),
-            quota_throttle_duration_seconds: Family::new_with_constructor(|| {
-                Histogram::new(REQUEST_DURATION_BUCKETS)
-            }),
-            in_flight_requests: Gauge::default(),
-            active_connections: Gauge::default(),
-            connection_closes: Family::default(),
-            request_errors: Family::default(),
-            tiered_storage_rlmm_topic_backed: Gauge::default(),
-            tiered_storage_rlmm_bootstrap_attempts: Counter::default(),
-            worm_manifests_sealed_total: Counter::default(),
-            worm_manifest_seal_failures_total: Counter::default(),
-            produce_message_conversions: Family::default(),
-            fetch_message_conversions: Family::default(),
-            unclean_leader_elections_total: Counter::default(),
-            audit_events: Counter::default(),
-            audit_write_failures: Counter::default(),
-            audit_spool_depth: Gauge::default(),
-            audit_spool_bytes: Gauge::default(),
-            audit_records_spooled_total: Counter::default(),
-            audit_records_replayed_total: Counter::default(),
-            audit_records_dropped_total: Counter::default(),
-            client_metrics_otlp_dropped_total: Counter::default(),
-            client_metrics_otlp_failed_total: Counter::default(),
-            log_cleaner_runs_total: Counter::default(),
-            log_cleaner_failures: Family::default(),
-            log_retention_runs_total: Counter::default(),
-            log_retention_failures: Family::default(),
-            log_cleaner_uncleanable_partitions: Gauge::default(),
-            offline_log_dirs: Gauge::default(),
-            log_compactions_total: Family::default(),
-            barrier_epochs_started_total: Family::default(),
-            barrier_epochs_committed_total: Family::default(),
-            barrier_epochs_published_partial_total: Family::default(),
-            barrier_injection_duration_seconds: Family::new_with_constructor(|| {
-                Histogram::new(BARRIER_INJECTION_DURATION_BUCKETS)
-            }),
-            barrier_latest_epoch: Family::default(),
-            barrier_markers_written_total: Family::default(),
-            barrier_groups_coordinated: Gauge::default(),
-            delivery_watermark: Family::default(),
-            delivery_pending_records: Family::default(),
-            delivery_activation_lateness_seconds: Histogram::new(
-                DELIVERY_ACTIVATION_LATENESS_BUCKETS,
-            ),
-            delivery_scheduler_wakeups_total: Counter::default(),
-            schema_validation_rejections: Family::default(),
-            schema_validation_cache_hits: Counter::default(),
-            schema_validation_cache_misses: Counter::default(),
-            delivery_clock_uncertainty_seconds: Gauge::default(),
-            topic_freeze_rejections: Family::default(),
-            topic_freezes_active: Gauge::default(),
-            break_glass_proposals: Family::default(),
-            break_glass_refusals: Family::default(),
-            break_glass_bypassed: Family::default(),
-            lag_series: crate::metrics::LagSeriesIndex::default(),
-            metric_series: crate::metrics::MetricSeriesIndex::default(),
-            diskless_wal_durable_watermark: Family::default(),
-            diskless_wal_voter_lag: Family::default(),
-            diskless_wal_quorum_loss_events_total: Counter::default(),
-            diskless_wal_flush_attempts_total: Counter::default(),
-            diskless_wal_flush_bytes_total: Counter::default(),
-            diskless_wal_flush_failures_total: Counter::default(),
-            diskless_wal_index_decode_failures_total: Counter::default(),
-            diskless_wal_index_projection_lag: Family::default(),
-            diskless_wal_trim_frontier: Family::default(),
-            diskless_wal_expired_ranges_total: Counter::default(),
-            diskless_wal_cold_read_hits_total: Counter::default(),
-            diskless_wal_cold_read_misses_total: Counter::default(),
-            diskless_wal_cold_read_errors_total: Counter::default(),
-            raft_current_state: Family::default(),
-            raft_current_epoch: Gauge::default(),
-            raft_high_watermark: Gauge::default(),
-            raft_log_end_offset: Gauge::default(),
-            raft_voters: Gauge::default(),
-            raft_observers: Gauge::default(),
-            metadata_last_applied_offset: Gauge::default(),
-            metadata_lag_records: Gauge::default(),
-            broker_state: Gauge::default(),
-            active_brokers: Gauge::default(),
-            fenced_brokers: Gauge::default(),
-            global_topics: Gauge::default(),
-            global_partitions: Gauge::default(),
-            at_min_isr_partition_count: Gauge::default(),
-            reassigning_partitions: Gauge::default(),
-            preferred_replica_imbalance: Gauge::default(),
-            remote_copy_bytes_total: Family::default(),
-            remote_fetch_bytes_total: Family::default(),
-            remote_copy_requests_total: Family::default(),
-            remote_fetch_requests_total: Family::default(),
-            remote_delete_requests_total: Family::default(),
-            remote_copy_errors_total: Family::default(),
-            remote_fetch_errors_total: Family::default(),
-            remote_delete_errors_total: Family::default(),
-            remote_copy_lag_bytes: Family::default(),
-            remote_copy_lag_segments: Family::default(),
-            remote_delete_lag_bytes: Family::default(),
-            remote_delete_lag_segments: Family::default(),
-            replication_throttled_bytes_out_total: Counter::default(),
-            replication_throttled_bytes_in_total: Counter::default(),
-            replication_throttle_sleeps_total: Counter::default(),
-            quota_entity_throttle_seconds_total: Family::default(),
-            queued_requests: Gauge::default(),
-            queued_request_bytes: Gauge::default(),
-            remote_log_reader_task_queue_size: Gauge::default(),
-            remote_log_reader_avg_idle_percent: Gauge::default(),
-            remote_log_reader_fetch_duration_seconds: Histogram::new(REQUEST_DURATION_BUCKETS),
-            remote_log_reader_rejected_total: Counter::default(),
-            remote_index_cache_hits_total: Counter::default(),
-            remote_index_cache_misses_total: Counter::default(),
-            remote_index_cache_evictions_total: Counter::default(),
-            remote_index_cache_bytes: Gauge::default(),
-            remote_index_cache_entries: Gauge::default(),
-        }
-    }
-
     /// Build and register every broker metric.
-    #[must_use]
+    ///
     /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
+    ///
+    /// Never in practice: the registry is locked once, before any clone of it
+    /// exists.
+    #[must_use]
     pub fn new() -> Self {
-        let registry = Arc::new(Mutex::new(Registry::with_prefix("krabka_broker")));
-        let metrics = Self::unregistered(registry);
+        let metrics = Self::unregistered();
         {
             let mut registry = metrics
                 .registry
                 .try_lock()
                 .expect("fresh metrics registry cannot be locked");
-            metrics.register_group_1(&mut registry);
-            metrics.register_group_2(&mut registry);
-            metrics.register_group_3(&mut registry);
-            metrics.register_group_4(&mut registry);
-            metrics.register_group_5(&mut registry);
-            metrics.register_group_6(&mut registry);
-            metrics.register_group_7(&mut registry);
-            metrics.register_group_8(&mut registry);
-            metrics.register_group_9(&mut registry);
-            metrics.register_group_10(&mut registry);
-            metrics.register_group_11(&mut registry);
+            metrics.register(&mut registry);
+        }
+        // Create all three series at zero. The drain only ever touches the
+        // path it took, and on some targets it can never take two of them, so
+        // without this a dashboard panel or an alert that names `sendfile` has
+        // no series to read until the first zero-copy fetch — or, on Windows,
+        // ever.
+        for path in crate::metrics::FetchDrainPath::ALL {
+            let _ = metrics
+                .fetch_response_drain
+                .get_or_create(&crate::metrics::FetchDrainPathLabel { path });
         }
         metrics
     }

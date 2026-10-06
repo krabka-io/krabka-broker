@@ -81,6 +81,9 @@ maplit = "1"
 # Dev-dependency only — `#[cfg_attr(test, mockall::automock)]` keeps it out of
 # shipped builds.
 mockall = "0.15"
+# Token, syntax-tree and template layer for the `krabka-macros` derives: one
+# dependency in place of the `proc-macro2` / `syn` / `quote` trio.
+moxy = { version = "0.5.3", features = ["macros", "template"] }
 # mutants: `#[cfg_attr(test, mutants::skip)]` attribute for cargo-mutants. Used
 # only where `exclude_re` cannot reliably suppress a mutant (struct-field-deletion
 # mutants on a live-IO adapter). Dev-dependency only; expands to nothing.

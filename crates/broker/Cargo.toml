@@ -46,6 +46,9 @@ krabka-compression = { version = "0.5.0", default-features = false }
 krabka-raft = { version = "0.7.0", path = "../raft" }
 krabka-kraft-core = { version = "0.7.0", path = "../kraft-core" }
 krabka-verified = { version = "0.7.0", path = "../verified" }
+# `#[derive(RegisterMetrics)]`: `BrokerMetrics` names, helps and constructs each
+# metric once, on its field.
+krabka-macros = { version = "0.7.0", path = "../macros" }
 # Kafka's `meta.properties` is read and written with the formatter's own
 # `MetaProperties`, so the file has one parser and one writer. Tests such as `bootstrap_consumption`,
 # `cli_smoke` and `format_features` also call `krabka_format::run_from_args` to
