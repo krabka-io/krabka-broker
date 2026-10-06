@@ -4,7 +4,7 @@
 //! the IO and reports what the store gave back for each object; the archiver
 //! turns those observations into the manifest bytes and the chain receipt.
 
-use std::{fmt, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_audit::signing::FileEd25519Signer;
@@ -28,7 +28,13 @@ use crate::{
 /// the archiver what it observed for each, and gets back manifest bytes plus a
 /// receipt. Keeping the IO in the backend and the cryptography here makes the
 /// manifest logic testable without an object store.
+///
+/// `Debug` shows the key id and never the key. The archiver holds live
+/// private-key material, and a `Debug` that walked into it would put that key
+/// in every log line that formats a backend.
+#[derive(derive_more::Debug)]
 pub struct WormArchiver {
+    #[debug("{:?}", signer.as_ref().map(|signer| signer.key_id()))]
     signer: Option<Arc<FileEd25519Signer>>,
 }
 
@@ -42,20 +48,6 @@ pub struct SealedManifest {
     /// Receipt for `CopySegmentFinished`; `manifest_version_id` is `None`
     /// until the PUT reports one.
     pub receipt: WormChainRecord,
-}
-
-impl fmt::Debug for WormArchiver {
-    /// Shows the key id and never the key. The archiver holds live private-key
-    /// material, and a `Debug` that walked into it would put that key in every
-    /// log line that formats a backend.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WormArchiver")
-            .field(
-                "key_id",
-                &self.signer.as_ref().map(|signer| signer.key_id()),
-            )
-            .finish_non_exhaustive()
-    }
 }
 
 impl WormArchiver {
