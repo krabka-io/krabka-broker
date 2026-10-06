@@ -61,7 +61,8 @@ pub struct EpochId(pub Uuid);
 /// Head of a partition's manifest hash chain.
 ///
 /// Serialises as a lowercase hex string.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug)]
+#[debug("ChainHead({})", hex::encode(_0))]
 pub struct ChainHead(pub [u8; 32]);
 
 impl ChainHead {
@@ -72,12 +73,6 @@ impl ChainHead {
 impl fmt::Display for ChainHead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&hex::encode(self.0))
-    }
-}
-
-impl fmt::Debug for ChainHead {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ChainHead({})", hex::encode(self.0))
     }
 }
 

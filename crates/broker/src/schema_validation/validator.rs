@@ -67,10 +67,14 @@ pub enum SchemaValidatorError {
 /// One instance per broker, held on [`crate::Broker`] as an `Option`. `None`
 /// is "no `[schema_registry]` section", and then no topic can turn validation
 /// on.
+#[derive(derive_more::Debug)]
 pub struct SchemaValidator {
+    #[debug(skip)]
     client: RegistryClient,
+    #[debug(skip)]
     cache: Mutex<LruCache<u32, Cached>>,
     expire_after: Time,
+    #[debug(skip)]
     operation_timeout: std::time::Duration,
     /// **Security-sensitive.** `true` admits a record the broker could not
     /// validate because the registry was unreachable, which is fail-open: for
@@ -87,16 +91,8 @@ pub struct SchemaValidator {
     /// [`qubit_clock::StdWallClock`]; tests inject a
     /// [`qubit_clock::ManualWallClock`] so an expiry is an assertion rather
     /// than a sleep.
+    #[debug(skip)]
     clock: Arc<dyn qubit_clock::WallClock>,
-}
-
-impl std::fmt::Debug for SchemaValidator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SchemaValidator")
-            .field("expire_after", &self.expire_after)
-            .field("fail_open", &self.fail_open)
-            .finish_non_exhaustive()
-    }
 }
 
 impl SchemaValidator {

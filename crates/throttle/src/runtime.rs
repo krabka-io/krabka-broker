@@ -133,31 +133,21 @@ struct BucketState {
     micro_refill_fraction: u64,
 }
 
+#[derive(derive_more::Debug)]
 pub struct TokenBucket {
     /// The group, and the lock that makes each consume and each reset one
     /// indivisible step on it. See the module documentation.
+    #[debug("{:?}", *self.lock_state())]
     state: Mutex<BucketState>,
     /// A copy of `state.micro_rate_per_sec` for the unthrottled fast path. It
     /// is written only while `state` is locked, right after the locked copy.
+    #[debug(skip)]
     micro_rate_per_sec: AtomicU64,
     /// Monotonic time source. The caller injects it, so tests can drive
     /// refills deterministically with a [`qubit_clock::ManualMonotonicClock`]
     /// instead of sleeping.
+    #[debug(skip)]
     clock: Arc<dyn MonotonicClock>,
-}
-
-impl std::fmt::Debug for TokenBucket {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = *self.lock_state();
-        f.debug_struct("TokenBucket")
-            .field("micro_rate_per_sec", &state.micro_rate_per_sec)
-            .field("micro_burst", &state.micro_burst)
-            .field("micro_available", &state.micro_available)
-            .field("micro_debt", &state.micro_debt)
-            .field("last_refill_nanos", &state.last_refill_nanos)
-            .field("micro_refill_fraction", &state.micro_refill_fraction)
-            .finish_non_exhaustive()
-    }
 }
 
 impl TokenBucket {

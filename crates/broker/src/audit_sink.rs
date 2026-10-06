@@ -17,23 +17,16 @@ use crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry};
 /// broker leads.
 ///
 /// Audit sink construction: the sink resolves the partition index once at construction.
+#[derive(derive_more::Debug)]
 pub struct KafkaTopicAuditSink {
+    #[debug(skip)]
     partitions: Arc<PartitionRegistry>,
     topic: String,
     partition_index: PartitionIndex,
+    #[debug(skip)]
     node_id: krabka_raft::NodeId,
+    #[debug(skip)]
     metrics: BrokerMetrics,
-}
-
-impl std::fmt::Debug for KafkaTopicAuditSink {
-    // cargo-mutants: Debug formatting, no behavioral contract
-    #[cfg_attr(test, mutants::skip)]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KafkaTopicAuditSink")
-            .field("topic", &self.topic)
-            .field("partition_index", &self.partition_index)
-            .finish_non_exhaustive()
-    }
 }
 
 impl KafkaTopicAuditSink {

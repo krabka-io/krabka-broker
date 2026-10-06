@@ -118,27 +118,21 @@ pub(crate) async fn allocate_block(
     }
 }
 
+#[derive(derive_more::Debug)]
 pub struct ProducerIdManager {
+    #[debug(skip)]
     controller: Option<Arc<dyn MetadataSource>>,
     node_id: NodeId,
     /// The broker epoch this process registered at, which every allocation
     /// names, as Kafka's `RPCProducerIdManager` reads `brokerEpochSupplier`
     /// (`BrokerLifecycleManager.brokerEpoch`). -1 when this node never
     /// registered as a broker.
+    #[debug(skip)]
     broker_epoch: i64,
     next: AtomicI64,
     end_exclusive: AtomicI64,
+    #[debug(skip)]
     refill: Mutex<()>,
-}
-
-impl std::fmt::Debug for ProducerIdManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProducerIdManager")
-            .field("node_id", &self.node_id)
-            .field("next", &self.next.load(Ordering::Relaxed))
-            .field("end_exclusive", &self.end_exclusive.load(Ordering::Relaxed))
-            .finish_non_exhaustive()
-    }
 }
 
 impl ProducerIdManager {

@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 /// `SHA-256` digest of one archived object's body.
 ///
 /// Serialises as a lowercase hex string.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug)]
+#[debug("Sha256Digest({})", hex::encode(_0))]
 pub struct Sha256Digest(pub [u8; 32]);
 
 impl Sha256Digest {
@@ -28,7 +29,8 @@ impl Sha256Digest {
 ///
 /// Used for the public key and the signature, neither of which has a fixed
 /// length the type system can pin.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug)]
+#[debug("HexBytes({})", hex::encode(_0))]
 pub struct HexBytes(pub Vec<u8>);
 
 pub(super) fn serialize_hex<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
@@ -53,12 +55,6 @@ impl fmt::Display for Sha256Digest {
     }
 }
 
-impl fmt::Debug for Sha256Digest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Sha256Digest({})", hex::encode(self.0))
-    }
-}
-
 impl Serialize for Sha256Digest {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -80,12 +76,6 @@ impl<'de> Deserialize<'de> for Sha256Digest {
 impl fmt::Display for HexBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&hex::encode(&self.0))
-    }
-}
-
-impl fmt::Debug for HexBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HexBytes({})", hex::encode(&self.0))
     }
 }
 

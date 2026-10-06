@@ -57,8 +57,13 @@ use self::cache::{CacheKey, CachedDecision};
 /// `allow.on.error = false`. Only enable fail-open in environments where
 /// brief over-permission is strictly preferable to a block during an OPA
 /// outage.
+// `Debug` prints the operator-relevant config only. `http_client` would print
+// the whole TLS config, `cache` would lock, and `runtime` prints nothing
+// useful.
+#[derive(derive_more::Debug)]
 pub struct OpaAuthorizer {
     super_users: HashSet<String>,
+    #[debug(skip)]
     http_client: reqwest::Client,
     url: String,
     /// **Security-sensitive.** `true` ⇒ OPA errors authorize the request,
@@ -66,8 +71,11 @@ pub struct OpaAuthorizer {
     /// secure default, which is also the upstream OPA Kafka plugin default,
     /// is `false` (fail-closed).
     allow_on_error: bool,
+    #[debug(skip)]
     cache: Mutex<LruCache<CacheKey, CachedDecision>>,
+    #[debug("{}", expire_after.human())]
     expire_after: Time,
+    #[debug(skip)]
     runtime: tokio::runtime::Handle,
     /// Monotonic clock backing the decision-cache TTL (the `expires_at_ms`
     /// stamp and its expiry comparison). Production uses
@@ -76,25 +84,8 @@ pub struct OpaAuthorizer {
     /// [`qubit_clock::ManualMonotonicClock`] so cache entries expire on a
     /// controlled timeline instead of a real `sleep`. The clock governs *only*
     /// cache freshness, never the authorization decision.
+    #[debug(skip)]
     clock: Arc<dyn MonotonicClock>,
-}
-
-impl std::fmt::Debug for OpaAuthorizer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Skip `http_client`, `cache`, and `runtime` — they're not
-        // `Debug`-friendly (Mutex would lock, Handle prints nothing
-        // useful, Client prints the whole TLS config). Field-list is
-        // operator-relevant config.
-        f.debug_struct("OpaAuthorizer")
-            .field("super_users", &self.super_users)
-            .field("url", &self.url)
-            .field("allow_on_error", &self.allow_on_error)
-            .field(
-                "expire_after",
-                &format_args!("{}", self.expire_after.human()),
-            )
-            .finish_non_exhaustive()
-    }
 }
 
 impl OpaAuthorizer {

@@ -10,15 +10,10 @@ use std::sync::Arc;
 use super::{actor::MetadataProvider, reconciler};
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
+#[derive(derive_more::Debug)]
 pub struct ImageMetadataProvider {
+    #[debug(skip)]
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
-}
-
-impl std::fmt::Debug for ImageMetadataProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ImageMetadataProvider")
-            .finish_non_exhaustive()
-    }
 }
 
 impl MetadataProvider for ImageMetadataProvider {

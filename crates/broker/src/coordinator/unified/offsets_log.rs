@@ -40,18 +40,13 @@ pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
 /// leads the partition at the same leader epoch. A group coordinator that
 /// answered before that point could hand a member an epoch that the next
 /// leader of the partition never sees.
+#[derive(derive_more::Debug)]
 pub(crate) struct ProductionOffsetsLog {
+    #[debug(skip)]
     partitions: Arc<PartitionRegistry>,
+    #[debug(skip)]
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     node_id: NodeId,
-}
-
-impl std::fmt::Debug for ProductionOffsetsLog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProductionOffsetsLog")
-            .field("node_id", &self.node_id)
-            .finish_non_exhaustive()
-    }
 }
 
 impl ProductionOffsetsLog {
@@ -95,23 +90,16 @@ impl OffsetsLog for ProductionOffsetsLog {
 /// appends it, and completes the operation only once the high watermark
 /// passes it. A caller that has state to apply at the append does so between
 /// [`append_as_leader`] and [`Self::committed`].
+#[derive(derive_more::Debug)]
 pub(crate) struct LeaderAppend {
     /// The offset the writer assigned to the batch.
     pub(crate) base_offset: Offset,
+    #[debug(skip)]
     partition: Arc<Partition>,
+    #[debug(skip)]
     images: watch::Receiver<Arc<MetadataImage>>,
     term: LedTerm,
     end_offset: Offset,
-}
-
-impl std::fmt::Debug for LeaderAppend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LeaderAppend")
-            .field("base_offset", &self.base_offset)
-            .field("term", &self.term)
-            .field("end_offset", &self.end_offset)
-            .finish_non_exhaustive()
-    }
 }
 
 impl LeaderAppend {

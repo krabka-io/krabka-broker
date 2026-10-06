@@ -77,7 +77,12 @@ pub type SharedRegistry = Arc<Mutex<Registry>>;
 /// `RegisterMetrics` derives the constructor and the registration from them,
 /// and registers the families in field order, which is the order of the
 /// families on `/metrics`.
-#[derive(Clone, RegisterMetrics)]
+///
+/// `Debug` is opaque, so that a type holding a `BrokerMetrics` can still
+/// derive its own. The bundle is a registry and some seventy metric handles,
+/// and printing them says nothing a scrape does not say better.
+#[derive(Clone, RegisterMetrics, derive_more::Debug)]
+#[debug("BrokerMetrics {{ .. }}")]
 pub struct BrokerMetrics {
     #[metric(skip, new = Arc::new(Mutex::new(Registry::with_prefix("krabka_broker"))))]
     pub registry: SharedRegistry,
@@ -1314,13 +1319,4 @@ pub struct BrokerMetrics {
     /// See [`MetricSeriesIndex`].
     #[metric(skip)]
     pub metric_series: MetricSeriesIndex,
-}
-
-/// Opaque `Debug`, so that a type holding a [`BrokerMetrics`] can still derive
-/// its own. The bundle is a registry and some seventy metric handles, and
-/// printing them says nothing a scrape does not say better.
-impl std::fmt::Debug for BrokerMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BrokerMetrics").finish_non_exhaustive()
-    }
 }

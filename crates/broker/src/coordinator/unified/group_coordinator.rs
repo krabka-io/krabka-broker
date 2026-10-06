@@ -120,15 +120,10 @@ pub struct GroupCoordinator {
 ///
 /// The trait object itself is not `Debug`. This wrapper prints an opaque
 /// placeholder.
-#[derive(Clone)]
-pub(crate) struct MetadataSourceHandle(pub(crate) Arc<dyn crate::metadata_source::MetadataSource>);
-
-impl std::fmt::Debug for MetadataSourceHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MetadataSourceHandle")
-            .finish_non_exhaustive()
-    }
-}
+#[derive(Clone, derive_more::Debug)]
+pub(crate) struct MetadataSourceHandle(
+    #[debug(skip)] pub(crate) Arc<dyn crate::metadata_source::MetadataSource>,
+);
 
 impl GroupCoordinator {
     pub fn new(

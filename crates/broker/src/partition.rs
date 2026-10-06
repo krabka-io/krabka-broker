@@ -74,6 +74,11 @@ pub type LogOffset = i64;
 // `partition_id` mirrors Kafka's wire naming and is the conventional term
 // used throughout the broker; renaming to `id` would shadow `Partition`'s
 // own identity at every call site.
+//
+// `Debug` deliberately leaves out `log`: formatting a `Mutex<Log>` would block
+// on the mutex and dump internal segment state into tracing output.
+#[derive(derive_more::Debug)]
+#[debug("Partition {{ topic: {topic:?}, partition_id: {index:?}, delivery: {delivery:?}, .. }}")]
 pub struct Partition {
     pub topic: String,
     pub index: PartitionIndex,
@@ -214,19 +219,6 @@ impl Partition {
             .map_err(|_| BrokerError::Txn("log mutex poisoned".into()))?
             .read(offset, max_size)
             .map_err(BrokerError::from)
-    }
-}
-
-impl std::fmt::Debug for Partition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Deliberately does NOT include `log` — formatting a `Mutex<Log>`
-        // would block on the mutex and dump internal segment state into
-        // tracing output.
-        f.debug_struct("Partition")
-            .field("topic", &self.topic)
-            .field("partition_id", &self.index)
-            .field("delivery", &self.delivery)
-            .finish_non_exhaustive()
     }
 }
 
