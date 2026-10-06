@@ -49,13 +49,11 @@ pub(super) fn err_entry(entity: &[(String, Option<String>)], code: i16, msg: Str
 }
 
 pub(super) fn apply_submit_error(entry_results: &mut [RespEntry], error: impl std::fmt::Display) {
-    let message = format!("submit failed: {error}");
-    for r in entry_results {
-        if r.error_code == NONE {
-            r.error_code = COORDINATOR_NOT_AVAILABLE;
-            r.error_message = Some(message.clone());
-        }
-    }
+    crate::handlers::stamp_unset(
+        entry_results,
+        COORDINATOR_NOT_AVAILABLE,
+        &format!("submit failed: {error}"),
+    );
 }
 
 pub(super) fn whole_request_error(

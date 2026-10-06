@@ -28,10 +28,7 @@ pub(super) fn err_result(name: String, code: i16, msg: &str) -> AlterUserScramCr
 }
 
 pub(super) fn apply_submit_error(results: &mut [AlterUserScramCredentialsResult], msg: &str) {
-    for r in results.iter_mut().filter(|r| r.error_code == 0) {
-        r.error_code = codes::UNKNOWN_SERVER_ERROR;
-        r.error_message = Some(msg.to_string());
-    }
+    crate::handlers::stamp_unset(results, codes::UNKNOWN_SERVER_ERROR, msg);
 }
 
 #[cfg(test)]

@@ -65,6 +65,7 @@ enum ApiKey {
     Heartbeat = 12,
     ListConfigResources = 74,
     UpdateFeatures = 57,
+    DescribeAcls = 29,
 }
 
 type ContextHandler = for<'a> fn(
@@ -178,6 +179,10 @@ mod krabka_protocol {
         pub mod list_config_resources_request {
             pub use crate::krabka_protocol::Text as ListConfigResourcesRequest;
             pub const FLEXIBLE_MIN: i16 = 0;
+        }
+        pub mod describe_acls_request {
+            pub use crate::krabka_protocol::Text as DescribeAclsRequest;
+            pub const FLEXIBLE_MIN: i16 = 2;
         }
         pub mod update_features_request {
             pub use crate::krabka_protocol::Text as UpdateFeaturesRequest;
@@ -302,7 +307,7 @@ mod handlers {
 
         pub fn handle(
             broker: &Broker,
-            request: ListConfigResourcesRequest,
+            request: &ListConfigResourcesRequest,
             version: ApiVersion,
             ctx: &RequestContext<'_>,
         ) -> Result<String, BrokerError> {
@@ -314,6 +319,27 @@ mod handlers {
                 &ctx.client_id,
                 &text,
             ])
+        }
+    }
+
+    pub mod describe_acls {
+        use crate::{
+            ApiVersion, Broker, RequestContext,
+            krabka_protocol::owned::describe_acls_request::DescribeAclsRequest,
+        };
+
+        /// Answers every request, so an empty body reaches the encoder.
+        pub fn handle(
+            broker: &Broker,
+            request: &DescribeAclsRequest,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> String {
+            let DescribeAclsRequest(text) = request;
+            format!(
+                "describe_acls {} {version} {} {text}",
+                broker.name, ctx.client_id
+            )
         }
     }
 
@@ -450,6 +476,7 @@ krabka_macros::dispatch_table! {
     typed_own_span: UpdateFeatures;
     typed_group: Heartbeat;
     typed_sync: ListConfigResources;
+    typed_infallible: DescribeAcls;
     auth: CreateDelegationToken;
     telemetry: PushTelemetry;
 }
@@ -560,6 +587,13 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
             Err(BrokerError::EmptyBody),
         ),
         (
+            ApiKey::DescribeAcls,
+            "context",
+            2,
+            ok("describe_acls b1 5 c1 v5:body @v5"),
+            ok("describe_acls b1 5 c1 v5: @v5"),
+        ),
+        (
             ApiKey::UpdateFeatures,
             "context",
             0,
@@ -603,6 +637,7 @@ fn a_typed_adapter_maps_a_decode_failure_to_a_broker_error() {
         ApiKey::ListGroups,
         ApiKey::Heartbeat,
         ApiKey::ListConfigResources,
+        ApiKey::DescribeAcls,
     ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, &[0xff]) == Err(BrokerError::Decode), "{api:?}");
@@ -635,6 +670,7 @@ fn a_typed_adapter_returns_the_encoders_error() {
         ApiKey::ListGroups,
         ApiKey::Heartbeat,
         ApiKey::ListConfigResources,
+        ApiKey::DescribeAcls,
     ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, b"nope") == Err(BrokerError::Encode), "{api:?}");
@@ -796,6 +832,14 @@ fn a_generated_adapter_runs_its_handler_in_a_handle_span_and_records_its_error()
             false,
             &[0xff],
             BrokerError::Decode,
+        ),
+        (
+            ApiKey::DescribeAcls,
+            "handle_describe_acls",
+            "DescribeAcls",
+            false,
+            b"nope",
+            BrokerError::Encode,
         ),
         (
             ApiKey::PushTelemetry,

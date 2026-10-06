@@ -63,13 +63,11 @@ pub(super) fn apply_submit_error<E: std::fmt::Display>(
     filter_results: &mut [DeleteAclsFilterResult],
     err: E,
 ) {
-    let msg = format!("submit failed: {err}");
-    for r in filter_results {
-        if r.error_code == codes::NONE {
-            r.error_code = codes::COORDINATOR_NOT_AVAILABLE;
-            r.error_message = Some(msg.clone());
-        }
-    }
+    crate::handlers::stamp_unset(
+        filter_results,
+        codes::COORDINATOR_NOT_AVAILABLE,
+        &format!("submit failed: {err}"),
+    );
 }
 
 #[cfg(test)]

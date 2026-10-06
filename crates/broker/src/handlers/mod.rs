@@ -24,6 +24,7 @@ mod coordinator_routing;
 #[cfg(test)]
 mod group_heartbeat_test_support;
 mod private_api_keys;
+mod raft_voter;
 mod record_strings;
 mod response_encoding;
 mod submit_failure;
@@ -31,9 +32,9 @@ mod wire_types;
 
 pub(crate) use self::{
     acl_gates::{
-        acl_denied, any_topic_describe_denied, cluster_action_denied, cluster_alter_denied,
-        cluster_describe_denied, denied_topics, group_describe_denied, group_read_denied,
-        requested_topic_name, subscribed_names_describe_denied,
+        acl_denied, allowed_topics, any_topic_describe_denied, cluster_action_denied,
+        cluster_alter_denied, cluster_describe_denied, denied_topics, group_describe_denied,
+        group_read_denied, requested_topic_name, subscribed_names_describe_denied, topic_decisions,
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
     coordinator_routing::{
@@ -47,7 +48,7 @@ pub(crate) use self::{
         TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
     },
     record_strings::decode_group_request,
-    response_encoding::{ErrorCodeResponse, ErrorResponse, encode_response},
+    response_encoding::{ErrorCodeResponse, ErrorResponse, encode_response, stamp_unset},
     submit_failure::submit_failure_code,
     wire_types::{ApiKeyCode, ApiVersion, CorrelationId},
 };

@@ -34,7 +34,6 @@ use krabka_protocol::owned::{
     list_groups_request::ListGroupsRequest,
     list_groups_response::{ListGroupsResponse, ListedGroup},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -48,6 +47,7 @@ use crate::{
         cluster_describe_denied, coordinator_routing::any_group_partition_loading,
         group_describe_denied,
     },
+    task_util::ask,
 };
 
 /// Wire `group_type` string for classic (pre-KIP-848) groups.
@@ -144,14 +144,7 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
         let Some(handle) = coordinator.find(&gid) else {
             continue;
         };
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .is_ok()
-            && let Ok(view) = rx.await
-        {
+        if let Ok(view) = ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
             let group = listed(
                 gid,
                 CONSUMER_PROTOCOL_TYPE.into(),
@@ -167,13 +160,10 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
         let Some(handle) = coordinator.find_share(&gid) else {
             continue;
         };
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .is_ok()
-            && let Ok(view) = rx.await
+        if let Ok(view) = ask(&handle.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
         {
             let group = listed(
                 gid,
@@ -194,13 +184,10 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
             let Some(handle) = coordinator.find_streams(&gid) else {
                 continue;
             };
-            let (tx, rx) = oneshot::channel();
-            if handle
-                .tx
-                .send(StreamsGroupActorMessage::Describe { reply: tx })
-                .await
-                .is_ok()
-                && let Ok(view) = rx.await
+            if let Ok(view) = ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
+                reply,
+            })
+            .await
             {
                 let group = listed(
                     gid,

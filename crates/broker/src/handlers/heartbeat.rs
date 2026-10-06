@@ -6,15 +6,16 @@
 use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse,
 };
-use tokio::sync::oneshot;
 
 use crate::{
-    broker::Broker, codes, coordinator::unified::actor::GroupActorMessage, error::BrokerError,
-    handlers::group_read_denied,
+    broker::Broker,
+    codes,
+    coordinator::unified::actor::GroupActorMessage,
+    error::BrokerError,
+    handlers::{ErrorCodeResponse as _, group_read_denied},
+    task_util::ask,
 };
 
-// cargo-mutants: the generated protocol default for throttle_time_ms is zero.
-#[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: HeartbeatRequest,
@@ -34,7 +35,7 @@ pub(crate) async fn handle(
             ctx,
             &req.group_id,
         ) {
-            return Ok(denied());
+            return Ok(HeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED));
         }
     }
 
@@ -54,45 +55,22 @@ pub(crate) async fn handle(
             }
         })
     {
-        return Ok(HeartbeatResponse {
-            error_code,
-            throttle_time_ms: 0,
-            ..Default::default()
-        });
+        return Ok(HeartbeatResponse::error(error_code));
     }
 
     let error_code = match coordinator.find(&req.group_id) {
         None => codes::UNKNOWN_MEMBER_ID,
-        Some(handle) => {
-            let (tx, rx) = oneshot::channel();
-            if handle
-                .tx
-                .send(GroupActorMessage::ClassicHeartbeat { req, reply: tx })
-                .await
-                .is_err()
-            {
-                codes::UNKNOWN_MEMBER_ID
-            } else {
-                rx.await.unwrap_or(codes::UNKNOWN_MEMBER_ID)
-            }
-        }
+        // A closed mailbox and a dropped reply both read as a member the
+        // group no longer knows.
+        Some(handle) => ask(&handle.tx, |reply| GroupActorMessage::ClassicHeartbeat {
+            req,
+            reply,
+        })
+        .await
+        .unwrap_or(codes::UNKNOWN_MEMBER_ID),
     };
 
-    Ok(HeartbeatResponse {
-        error_code,
-        throttle_time_ms: 0,
-        ..Default::default()
-    })
-}
-
-/// Whole-response `GROUP_AUTHORIZATION_FAILED (30)` that the handler builds
-/// on Deny.
-fn denied() -> HeartbeatResponse {
-    HeartbeatResponse {
-        error_code: codes::GROUP_AUTHORIZATION_FAILED,
-        throttle_time_ms: 0,
-        ..Default::default()
-    }
+    Ok(HeartbeatResponse::error(error_code))
 }
 
 #[cfg(test)]
@@ -113,7 +91,7 @@ mod tests {
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 
         assert!(
-            denied()
+            HeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED)
                 == HeartbeatResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     throttle_time_ms: 0,

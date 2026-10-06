@@ -6,7 +6,6 @@ use krabka_protocol::owned::{
     share_group_heartbeat_request::ShareGroupHeartbeatRequest,
     share_group_heartbeat_response::ShareGroupHeartbeatResponse,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -14,6 +13,7 @@ use crate::{
     coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
     handlers::{ErrorResponse as _, group_read_denied},
+    task_util::{AskError, ask},
 };
 
 /// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
@@ -97,24 +97,20 @@ pub(crate) async fn handle(
     ng.mark_share(&req.group_id);
     let handle = ng.get_or_create_share(&req.group_id);
     let group_id = req.group_id.clone();
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(ShareGroupActorMessage::Heartbeat {
-            request: req,
-            client_id: ctx.client_id.unwrap_or_default().to_owned(),
-            client_host: ctx.client_host(),
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None));
-    }
-    let resp = rx.await.unwrap_or_else(|_| {
-        ShareGroupHeartbeatResponse::error(stopped_actor_code(broker, &group_id), None)
-    });
-    Ok(resp)
+    let asked = ask(&handle.tx, |reply| ShareGroupActorMessage::Heartbeat {
+        request: req,
+        client_id: ctx.client_id.unwrap_or_default().to_owned(),
+        client_host: ctx.client_host(),
+        reply,
+    })
+    .await;
+    Ok(match asked {
+        Ok(resp) => resp,
+        Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+        Err(AskError::Dropped) => {
+            ShareGroupHeartbeatResponse::error(stopped_actor_code(broker, &group_id), None)
+        }
+    })
 }
 
 /// The `GROUP_ID_NOT_FOUND` message for a heartbeat that must not reach a
@@ -636,13 +632,11 @@ mod tests {
         );
 
         let actor = broker.group_coordinator.get_or_create_share("g");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .expect("describe share group");
-        let view = rx.await.expect("share group view");
+        let view = crate::task_util::ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("share group view");
         assert!(view.members.is_empty(), "{view:?}");
 
         broker_handle.shutdown().await;
@@ -686,13 +680,11 @@ mod tests {
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
         let actor = broker.group_coordinator.get_or_create_share("g");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .expect("describe share group");
-        let view = rx.await.expect("share group view");
+        let view = crate::task_util::ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("share group view");
         assert!(view.members.len() == 1, "{view:?}");
 
         broker_handle.shutdown().await;
@@ -726,13 +718,11 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_share("identity-group");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .expect("describe share group");
-        let view = rx.await.expect("share group view");
+        let view = crate::task_util::ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("share group view");
 
         assert!(view.members.len() == 1);
         assert!(view.members[0].client_id == "client-a");
@@ -752,13 +742,11 @@ mod tests {
             .expect("ShareGroupHeartbeat identity refresh");
         assert!(resp.error_code == 0);
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .expect("describe refreshed share group");
-        let view = rx.await.expect("refreshed share group view");
+        let view = crate::task_util::ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("refreshed share group view");
         assert!(view.members[0].client_id == "client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 

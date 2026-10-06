@@ -25,7 +25,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
-use tokio::sync::oneshot;
 
 use self::response::ResponseBuilder;
 use crate::{
@@ -44,6 +43,7 @@ use crate::{
         },
     },
     error::BrokerError,
+    task_util::ask,
 };
 
 mod response;
@@ -473,23 +473,13 @@ async fn commit_through_actor(
         tracing::warn!(group_id = %req.group_id, %error, "offset commit records are not encodable");
         codes::UNKNOWN_SERVER_ERROR
     })?;
-    let (reply, result) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::CommitOffsets {
-            batch,
-            entries,
-            reply,
-        })
-        .await
-        .is_err()
-    {
-        return Err(codes::UNKNOWN_SERVER_ERROR);
-    }
-    match result.await {
-        Ok(result) => result,
-        Err(_) => Err(codes::UNKNOWN_SERVER_ERROR),
-    }
+    ask(&handle.tx, |reply| GroupActorMessage::CommitOffsets {
+        batch,
+        entries,
+        reply,
+    })
+    .await
+    .unwrap_or(Err(codes::UNKNOWN_SERVER_ERROR))
 }
 
 fn build_response_all(req: &OffsetCommitRequest, code: i16) -> OffsetCommitResponse {

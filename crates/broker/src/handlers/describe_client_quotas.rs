@@ -95,19 +95,12 @@ fn validate_filter(components: &[ComponentData]) -> Result<(), FilterError> {
     Ok(())
 }
 
-#[tracing::instrument(
-    name = "handle_describe_client_quotas",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeClientQuotas"),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: DescribeClientQuotasRequest,
+    req: &DescribeClientQuotasRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DescribeClientQuotasResponse, crate::error::BrokerError> {
+) -> DescribeClientQuotasResponse {
     let image = broker.controller.current_image();
     // Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes
     // `DescribeConfigs` on the cluster. A denial goes through
@@ -121,25 +114,25 @@ pub(crate) fn handle(
         CLUSTER_RESOURCE_NAME,
         krabka_metadata::AclOperation::DescribeConfigs,
     ) {
-        return Ok(DescribeClientQuotasResponse {
+        return DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
             ..Default::default()
-        });
+        };
     }
 
     // Kafka's `ClientQuotasImage.describe` throws on a bad filter, and
     // `KafkaApis.handleError` answers with `entries = null`.
     if let Err(err) = validate_filter(&req.components) {
-        return Ok(DescribeClientQuotasResponse {
+        return DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: err.code,
             error_message: Some(err.message),
             entries: None,
             ..Default::default()
-        });
+        };
     }
 
     let mut entries: Vec<EntryData> = Vec::new();
@@ -171,13 +164,13 @@ pub(crate) fn handle(
     // Kafka answers from `ClientQuotasImage.describe`, which fills a bare
     // `new DescribeClientQuotasResponseData()`: the message keeps its
     // generated default, the empty string, not null.
-    Ok(DescribeClientQuotasResponse {
+    DescribeClientQuotasResponse {
         throttle_time_ms: 0,
         error_code: NONE,
         error_message: Some(String::new()),
         entries: Some(entries),
         ..Default::default()
-    })
+    }
 }
 
 pub(crate) fn entity_matches_filter(
@@ -317,11 +310,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            request(vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))], true),
+            &request(vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))], true),
             VERSION,
             &ctx,
-        )
-        .expect("handle");
+        );
 
         let expected = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
@@ -408,11 +400,10 @@ mod tests {
 
             let resp = handle(
                 &broker,
-                request(vec![comp("user", MATCH_TYPE_ANY, None)], false),
+                &request(vec![comp("user", MATCH_TYPE_ANY, None)], false),
                 VERSION,
                 &ctx,
-            )
-            .expect("handle");
+            );
 
             check!(resp == *expected, "user {user} with grant {grant:?}");
         }
@@ -444,11 +435,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            request(vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))], false),
+            &request(vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))], false),
             VERSION,
             &ctx,
-        )
-        .expect("handle");
+        );
 
         check!(resp.throttle_time_ms == 0, "{resp:?}");
         check!(resp.error_code == 0, "{resp:?}");
@@ -618,18 +608,17 @@ mod tests {
             ),
         ];
         for (name, components, expected) in rows {
-            let resp = handle(&broker, request(components, true), VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &request(components, true), VERSION, &ctx);
             check!(resp == expected, "row {name}");
         }
 
         // A valid SPECIFIED filter matches every user entity, named or default.
         let resp = handle(
             &broker,
-            request(vec![comp("user", MATCH_TYPE_ANY, None)], true),
+            &request(vec![comp("user", MATCH_TYPE_ANY, None)], true),
             VERSION,
             &ctx,
-        )
-        .expect("handle");
+        );
         let mut names: Vec<Option<String>> = resp
             .entries
             .expect("entries")
@@ -652,11 +641,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            request(vec![comp("user", MATCH_TYPE_EXACT, Some("missing"))], true),
+            &request(vec![comp("user", MATCH_TYPE_EXACT, Some("missing"))], true),
             VERSION,
             &ctx,
-        )
-        .expect("handle");
+        );
 
         let expected = DescribeClientQuotasResponse {
             throttle_time_ms: 0,

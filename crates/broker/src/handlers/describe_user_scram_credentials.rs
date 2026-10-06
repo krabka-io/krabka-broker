@@ -24,23 +24,16 @@ const DESCRIBE_DUPLICATE_USER: &str =
 const DESCRIBE_USER_THAT_DOES_NOT_EXIST: &str =
     "Attempt to describe a user credential that does not exist";
 
-#[tracing::instrument(
-    name = "handle_describe_user_scram_credentials",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeUserScramCredentials"),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: DescribeUserScramCredentialsRequest,
+    req: &DescribeUserScramCredentialsRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DescribeUserScramCredentialsResponse, crate::error::BrokerError> {
+) -> DescribeUserScramCredentialsResponse {
     let image = broker.controller.current_image();
 
     if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return Ok(denied_response(&req));
+        return denied_response(req);
     }
 
     let known_users: std::collections::HashSet<String> =
@@ -49,13 +42,13 @@ pub(crate) fn handle(
 
     let results = build_results(&image, &known_users, targets);
 
-    Ok(DescribeUserScramCredentialsResponse {
+    DescribeUserScramCredentialsResponse {
         throttle_time_ms: 0,
         error_code: 0,
         error_message: None,
         results,
         ..Default::default()
-    })
+    }
 }
 
 /// The refusal Kafka's `DescribeUserScramCredentialsRequest.getErrorResponse`
@@ -430,11 +423,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            DescribeUserScramCredentialsRequest::default(),
+            &DescribeUserScramCredentialsRequest::default(),
             0,
             &ctx,
-        )
-        .expect("describe");
+        );
 
         assert!(
             resp == DescribeUserScramCredentialsResponse {
@@ -462,11 +454,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            DescribeUserScramCredentialsRequest::default(),
+            &DescribeUserScramCredentialsRequest::default(),
             0,
             &ctx,
-        )
-        .expect("describe denial");
+        );
 
         assert!(
             resp == DescribeUserScramCredentialsResponse {

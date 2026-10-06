@@ -206,24 +206,22 @@ krabka_macros::dispatch_table! {
         DeleteShareGroupState => crate::share_coordinator::handlers::delete::handle,
         ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
     // `typed`, for a handler that keeps a `#[tracing::instrument]` of its own
-    // instead of the adapter's span. `AlterUserScramCredentials` and
-    // `UpdateFeatures` record no `Err` as an `ERROR` event; `DescribeProducers`
-    // is an `async fn` with no `.await`, a `clippy::unused_async` the
-    // attribute's expansion hides.
+    // instead of the adapter's span: `AlterUserScramCredentials` and
+    // `UpdateFeatures` record no `Err` as an `ERROR` event.
     typed_own_span:
         AlterUserScramCredentials,
-        DescribeProducers,
         UpdateFeatures;
-    // `typed`, called without awaiting: the result is wrapped in a ready
-    // future. Each handler keeps a `#[tracing::instrument]` of its own instead
-    // of the adapter's span: taking the request by value and returning a
-    // `Result` it never fails trips `clippy::needless_pass_by_value` and
-    // `clippy::unnecessary_wraps`, which the attribute's expansion hides.
-    typed_sync_own_span:
+    // `handle(broker, &request, version, ctx)`, called without awaiting: the
+    // result is wrapped in a ready future.
+    typed_sync:
+        DescribeAcls,
+        DescribeProducers;
+    // The same, for a handler that cannot fail and returns its response
+    // struct itself.
+    typed_infallible:
         OffsetForLeaderEpoch,
         ListConfigResources,
         DescribeConfigs,
-        DescribeAcls,
         ListPartitionReassignments,
         DescribeClientQuotas,
         DescribeUserScramCredentials;

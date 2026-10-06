@@ -1,11 +1,5 @@
 //! Response assembly for `AlterPartitionReassignments`: the per-partition
 //! result rows and the whole-request error envelope.
-//!
-//! `mark_submit_failed` rewrites the rows that were accepted but whose
-//! metadata submit then failed, and it leaves an earlier per-row rejection in
-//! place.
-
-use std::collections::HashMap;
 
 use krabka_protocol::{
     UnknownTaggedFields,
@@ -41,21 +35,6 @@ pub(super) fn err_row(
         error_code: code,
         error_message: Some(msg),
         unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
-}
-
-pub(super) fn mark_submit_failed(
-    by_topic: &mut HashMap<String, Vec<ReassignablePartitionResponse>>,
-    code: i16,
-    msg: &str,
-) {
-    for rows in by_topic.values_mut() {
-        for r in rows.iter_mut() {
-            if r.error_code == 0 {
-                r.error_code = code;
-                r.error_message = Some(msg.to_string());
-            }
-        }
     }
 }
 
@@ -95,7 +74,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes::{CLUSTER_AUTHORIZATION_FAILED, NOT_CONTROLLER, UNKNOWN_TOPIC_OR_PARTITION},
+        codes::{CLUSTER_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_OR_PARTITION},
         handlers::alter_partition_reassignments::test_support::request,
     };
 
@@ -144,36 +123,5 @@ mod tests {
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
-    }
-
-    #[test]
-    fn mark_submit_failed_only_rewrites_successful_rows() {
-        let mut by_topic = maplit::hashmap! {"orders".to_string() => vec![
-            ok_row(7),
-            err_row(8, UNKNOWN_TOPIC_OR_PARTITION, "unknown partition".into()),
-        ]};
-
-        mark_submit_failed(
-            &mut by_topic,
-            NOT_CONTROLLER,
-            "submit failed: not controller",
-        );
-        let rows = by_topic.get("orders").expect("topic rows");
-
-        let expected = vec![
-            ReassignablePartitionResponse {
-                partition_index: 7,
-                error_code: NOT_CONTROLLER,
-                error_message: Some("submit failed: not controller".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ReassignablePartitionResponse {
-                partition_index: 8,
-                error_code: UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: Some("unknown partition".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ];
-        assert!(*rows == expected);
     }
 }

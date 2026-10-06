@@ -80,13 +80,13 @@ use self::{
     records::AcquireMode,
     request::has_acknowledgements,
     resolve::{RowContext, resolve_row},
-    response::{error_response, group_responses, success_response},
+    response::{group_responses, success_response},
 };
 use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::group_read_denied,
+    handlers::{ErrorResponse as _, group_read_denied},
     share_partition::{
         group_settings::GroupShareSettings,
         session::{FetchPartitions, ResponseRow},
@@ -131,7 +131,7 @@ pub(crate) async fn handle(
     // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return Ok(error_response(codes::UNSUPPORTED_VERSION));
+        return Ok(ShareFetchResponse::error(codes::UNSUPPORTED_VERSION, None));
     }
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses a null group id
     // after the feature gate, then checks `Read` on the group, then the
@@ -139,17 +139,20 @@ pub(crate) async fn handle(
     // member: the share session and the acquisition locks are keyed by the
     // member id alone.
     let Some(group) = req.group_id.clone() else {
-        return Ok(error_response(codes::INVALID_REQUEST));
+        return Ok(ShareFetchResponse::error(codes::INVALID_REQUEST, None));
     };
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
-        return Ok(error_response(codes::GROUP_AUTHORIZATION_FAILED));
+        return Ok(ShareFetchResponse::error(
+            codes::GROUP_AUTHORIZATION_FAILED,
+            None,
+        ));
     }
     // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
     // the broker setting as the default.
     let settings = GroupShareSettings::resolve(&image, &group, &cfg);
     let lock_timeout_ms = settings.record_lock_duration_ms();
     let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
-        return Ok(error_response(codes::INVALID_REQUEST));
+        return Ok(ShareFetchResponse::error(codes::INVALID_REQUEST, None));
     };
 
     // KIP-1222: a renew-ack fetch renews locks and fetches no records, so
@@ -157,7 +160,7 @@ pub(crate) async fn handle(
     // records or a wait. The error response carries no message.
     let renew_only = version >= 2 && req.is_renew_ack;
     if renew_only && !renew_fetch_fields_are_zero(&req) {
-        return Ok(error_response(codes::INVALID_REQUEST));
+        return Ok(ShareFetchResponse::error(codes::INVALID_REQUEST, None));
     }
 
     let mgr = broker.share_partition_leaders.clone();
@@ -205,9 +208,12 @@ pub(crate) async fn handle(
             // spin on the broker.
             let wait = u64::try_from(req.max_wait_ms).unwrap_or(0);
             tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
-            return Ok(error_response(codes::SHARE_SESSION_LIMIT_REACHED));
+            return Ok(ShareFetchResponse::error(
+                codes::SHARE_SESSION_LIMIT_REACHED,
+                None,
+            ));
         }
-        Err(code) => return Ok(error_response(code)),
+        Err(code) => return Ok(ShareFetchResponse::error(code, None)),
     };
 
     // The session's partitions in the session's order, then the request

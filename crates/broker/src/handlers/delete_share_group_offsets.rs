@@ -31,6 +31,8 @@ use crate::{
         share::actor::{DeleteTopic, DeleteTopicOutcome, ShareGroupActorMessage},
     },
     error::BrokerError,
+    handlers::ErrorResponse as _,
+    task_util::{AskError, ask},
 };
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`, which
@@ -149,21 +151,20 @@ pub(crate) async fn handle(
         .map(|r| (r.topic_name.clone(), r.topic_id))
         .collect();
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    if actor
-        .tx
-        .send(ShareGroupActorMessage::DeleteOffsets {
-            requests: actor_requests,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None));
-    }
-    let actor_result = rx
-        .await
-        .map_err(|_| BrokerError::Share("share-group delete actor stopped".into()))?;
+    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::DeleteOffsets {
+        requests: actor_requests,
+        reply,
+    })
+    .await;
+    let actor_result = match asked {
+        Ok(actor_result) => actor_result,
+        Err(AskError::Closed) => return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None)),
+        Err(AskError::Dropped) => {
+            return Err(BrokerError::Share(
+                "share-group delete actor stopped".into(),
+            ));
+        }
+    };
     let outcomes = match actor_result {
         Ok(outcomes) => outcomes,
         Err(error_code) => return Ok(top_level(error_code, None)),
@@ -258,13 +259,10 @@ fn kafka_message(error_code: i16) -> Option<&'static str> {
 /// A top-level error response. Kafka's `getErrorResponse` sets the message
 /// to `message`, or to the error's default message.
 fn top_level(error_code: i16, message: Option<String>) -> DeleteShareGroupOffsetsResponse {
-    DeleteShareGroupOffsetsResponse {
-        throttle_time_ms: 0,
+    DeleteShareGroupOffsetsResponse::error(
         error_code,
-        error_message: message.or_else(|| kafka_message(error_code).map(str::to_owned)),
-        responses: Vec::new(),
-        ..Default::default()
-    }
+        message.or_else(|| kafka_message(error_code).map(str::to_owned)),
+    )
 }
 
 #[cfg(test)]

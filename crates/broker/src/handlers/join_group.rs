@@ -10,7 +10,6 @@ use krabka_protocol::owned::{
     join_group_request::JoinGroupRequest,
     join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -20,6 +19,7 @@ use crate::{
         config::NextGenConfig,
     },
     error::BrokerError,
+    task_util::ask,
     time_util::now_ms,
 };
 
@@ -118,28 +118,16 @@ pub(crate) async fn handle(
         .group_coordinator
         .get_or_create_group(&req.group_id, GroupKindTag::Classic);
 
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::ClassicJoin {
-            req,
-            version,
-            client_id: ctx.client_id.unwrap_or_default().to_owned(),
-            client_host: ctx.client_host(),
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(respond(
-            version,
-            JoinGroupResponse {
-                error_code: codes::REBALANCE_IN_PROGRESS,
-                ..Default::default()
-            },
-        ));
-    }
-    let Ok(result) = rx.await else {
+    // A closed mailbox and a dropped reply both answer REBALANCE_IN_PROGRESS.
+    let Ok(result) = ask(&handle.tx, |reply| GroupActorMessage::ClassicJoin {
+        req,
+        version,
+        client_id: ctx.client_id.unwrap_or_default().to_owned(),
+        client_host: ctx.client_host(),
+        reply,
+    })
+    .await
+    else {
         return Ok(respond(
             version,
             JoinGroupResponse {

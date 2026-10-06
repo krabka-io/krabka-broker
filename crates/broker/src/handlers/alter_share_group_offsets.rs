@@ -27,13 +27,14 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
+    handlers::ErrorResponse as _,
+    task_util::{AskError, ask},
 };
 
 pub(crate) async fn handle(
@@ -46,7 +47,10 @@ pub(crate) async fn handle(
     // and below it the RPC is unsupported.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return Ok(top_level(codes::UNSUPPORTED_VERSION));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::UNSUPPORTED_VERSION,
+            None,
+        ));
     }
 
     let ng_opt = Some(broker.group_coordinator.clone());
@@ -58,7 +62,10 @@ pub(crate) async fn handle(
     // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
     // On Deny → top-level `error_code = 30`.
     if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
-        return Ok(top_level(codes::GROUP_AUTHORIZATION_FAILED));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::GROUP_AUTHORIZATION_FAILED,
+            None,
+        ));
     }
     // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
     // empty group id before any group lookup. This structural check runs
@@ -67,10 +74,13 @@ pub(crate) async fn handle(
     // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
     // on which broker happened to receive the request.
     if gid.is_empty() {
-        return Ok(top_level(codes::INVALID_GROUP_ID));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::INVALID_GROUP_ID,
+            None,
+        ));
     }
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return Ok(top_level(error_code));
+        return Ok(AlterShareGroupOffsetsResponse::error(error_code, None));
     }
     // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
     // `GroupIdNotFoundException` for a group id already locked to another
@@ -80,7 +90,10 @@ pub(crate) async fn handle(
     if let Some(existing_type) = existing_type
         && existing_type != GroupType::Share
     {
-        return Ok(top_level(codes::GROUP_ID_NOT_FOUND));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::GROUP_ID_NOT_FOUND,
+            None,
+        ));
     }
     let group_already_exists = existing_type.is_some();
 
@@ -198,27 +211,32 @@ pub(crate) async fn handle(
     let ng = ng_opt.as_ref().expect("group coordinator is installed");
     ng.mark_share(&gid);
     let actor = ng.get_or_create_share(&gid);
-    let (tx, rx) = oneshot::channel();
-    if actor
-        .tx
-        .send(ShareGroupActorMessage::ResetOffsets {
-            requests: actor_requests,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE));
-    }
-    let actor_result = rx
-        .await
-        .map_err(|_| BrokerError::Share("share-group reset actor stopped".into()))?;
+    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
+        requests: actor_requests,
+        reply,
+    })
+    .await;
+    let actor_result = match asked {
+        Ok(actor_result) => actor_result,
+        Err(AskError::Closed) => {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::COORDINATOR_NOT_AVAILABLE,
+                None,
+            ));
+        }
+        Err(AskError::Dropped) => {
+            return Err(BrokerError::Share("share-group reset actor stopped".into()));
+        }
+    };
     let result_codes = match actor_result {
         Ok(result_codes) => result_codes,
-        Err(error_code) => return Ok(top_level(error_code)),
+        Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
     };
     if result_codes.len() != actor_response_slots.len() {
-        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::COORDINATOR_NOT_AVAILABLE,
+            None,
+        ));
     }
     for ((topic_slot, partition_slot), error_code) in
         actor_response_slots.into_iter().zip(result_codes)
@@ -240,15 +258,6 @@ pub(crate) async fn handle(
         ..Default::default()
     };
     Ok(resp)
-}
-
-fn top_level(error_code: i16) -> AlterShareGroupOffsetsResponse {
-    AlterShareGroupOffsetsResponse {
-        throttle_time_ms: 0,
-        error_code,
-        responses: Vec::new(),
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]
@@ -275,7 +284,7 @@ mod tests {
     };
     use krabka_security::Principal;
 
-    use super::{handle, top_level};
+    use super::handle;
     use crate::{
         authorizer::{AuthorizationResult, Authorizer},
         codes,
@@ -389,20 +398,6 @@ mod tests {
         broker_handle
             .wait_until_partition_present(topic_name, 0)
             .await;
-    }
-
-    #[test]
-    fn top_level_preserves_error_fields() {
-        let resp = top_level(codes::UNSUPPORTED_VERSION);
-
-        let expected = AlterShareGroupOffsetsResponse {
-            throttle_time_ms: 0,
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: None,
-            responses: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
     }
 
     #[tokio::test]

@@ -78,7 +78,8 @@
 //!     sync_context: DescribeConfigs;
 //!     typed: ListGroups;
 //!     typed_group: Heartbeat;
-//!     typed_sync: ListConfigResources;
+//!     typed_sync: DescribeAcls;
+//!     typed_infallible: ListConfigResources;
 //!     auth: CreateDelegationToken;
 //!     telemetry: PushTelemetry;
 //! }
@@ -100,16 +101,16 @@
 //!   `crate::handlers::encode_response`. `typed_group` adapters do the same
 //!   but decode through `crate::handlers::decode_group_request`.
 //! - `typed_sync` adapters decode the request, call
-//!   `handler(broker, request, version, ctx)` for a
+//!   `handler(broker, &request, version, ctx)` for a
 //!   `Result<Response, BrokerError>` without awaiting it, encode the response,
-//!   and wrap the result in a ready future.
+//!   and wrap the result in a ready future. `typed_infallible` adapters do the
+//!   same for a handler that returns the `Response` itself.
 //! - `telemetry` adapters pass a `TelemetryContext` and wrap a synchronous
 //!   result.
 //! - `auth` entries generate no adapter: the hand-written `<name>_adapter`
 //!   must be in scope.
-//! - `typed_own_span` and `typed_sync_own_span` generate the `typed` and
-//!   `typed_sync` adapters without the span below, for a handler that keeps a
-//!   `#[tracing::instrument]` of its own.
+//! - `typed_own_span` generates the `typed` adapter without the span below,
+//!   for a handler that keeps a `#[tracing::instrument]` of its own.
 //!
 //! Every other generated adapter runs the decode, the handler and the encode
 //! inside an `info` span named `handle_<snake_name>`, with `api = "<Name>"`,

@@ -13,7 +13,6 @@ use krabka_protocol::owned::{
     sync_group_request::SyncGroupRequest, sync_group_response::SyncGroupResponse,
 };
 use krabka_units::convert::TimeExt as _;
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -21,6 +20,7 @@ use crate::{
     coordinator::unified::actor::GroupActorMessage,
     error::BrokerError,
     handlers::{ErrorCodeResponse as _, group_read_denied},
+    task_util::ask,
 };
 
 pub(crate) async fn handle(
@@ -66,20 +66,17 @@ pub(crate) async fn handle(
         return Ok(SyncGroupResponse::error(codes::UNKNOWN_MEMBER_ID));
     };
 
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::ClassicSync { req, reply: tx })
-        .await
-        .is_err()
-    {
-        return Ok(SyncGroupResponse::error(codes::REBALANCE_IN_PROGRESS));
-    }
     // The leader and the already-Stable follower reply immediately; a
     // not-yet-synced follower is parked and resolved when the leader's
     // SyncGroup installs assignments, bounded by the configured follower wait.
+    // A closed mailbox, a dropped reply and the wait running out all answer
+    // REBALANCE_IN_PROGRESS.
+    let asked = ask(&handle.tx, |reply| GroupActorMessage::ClassicSync {
+        req,
+        reply,
+    });
     let Ok(Ok(result)) =
-        tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), rx).await
+        tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), asked).await
     else {
         return Ok(SyncGroupResponse::error(codes::REBALANCE_IN_PROGRESS));
     };

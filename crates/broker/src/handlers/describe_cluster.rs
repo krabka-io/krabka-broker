@@ -154,8 +154,7 @@ pub(crate) async fn handle(
             authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &image,
-                ctx.principal,
-                ctx.peer,
+                ctx,
                 ResourceType::Cluster,
                 CLUSTER_RESOURCE_NAME,
             )
@@ -465,8 +464,7 @@ mod tests {
         let expected = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
-            &p,
-            &peer,
+            &ctx,
             ResourceType::Cluster,
             CLUSTER_RESOURCE_NAME,
         );

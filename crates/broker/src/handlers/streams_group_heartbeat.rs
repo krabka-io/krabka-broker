@@ -15,11 +15,15 @@ use krabka_protocol::owned::{
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
 };
-use tokio::sync::oneshot;
 
 use crate::{
-    broker::Broker, codes, coordinator::unified::streams::actor::StreamsGroupActorMessage,
-    error::BrokerError, handlers::group_read_denied, time_util::now_ms,
+    broker::Broker,
+    codes,
+    coordinator::unified::streams::actor::StreamsGroupActorMessage,
+    error::BrokerError,
+    handlers::group_read_denied,
+    task_util::{AskError, ask},
+    time_util::now_ms,
 };
 
 mod creation;
@@ -106,23 +110,18 @@ pub(crate) async fn handle(
     let group_id = req.group_id.clone();
     ng.mark_streams(&group_id);
     let handle = ng.get_or_create_streams(&group_id);
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::Heartbeat {
-            request: Box::new(req),
-            version,
-            client_id: ctx.client_id.unwrap_or_default().to_owned(),
-            client_host: ctx.client_host(),
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None));
-    }
-    let Ok(result) = rx.await else {
-        return Ok(reply(codes::UNKNOWN_SERVER_ERROR, None));
+    let asked = ask(&handle.tx, |reply| StreamsGroupActorMessage::Heartbeat {
+        request: Box::new(req),
+        version,
+        client_id: ctx.client_id.unwrap_or_default().to_owned(),
+        client_host: ctx.client_host(),
+        reply,
+    })
+    .await;
+    let result = match asked {
+        Ok(result) => result,
+        Err(AskError::Closed) => return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None)),
+        Err(AskError::Dropped) => return Ok(reply(codes::UNKNOWN_SERVER_ERROR, None)),
     };
     let mut resp = result.response;
     // KafkaApis hands the internal topics that the coordinator asks for to
@@ -1036,13 +1035,11 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_streams("identity-group");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(StreamsGroupActorMessage::Describe { reply: tx })
-            .await
-            .expect("describe streams group");
-        let view = rx.await.expect("streams group view");
+        let view = crate::task_util::ask(&actor.tx, |reply| StreamsGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("streams group view");
 
         assert!(view.members.len() == 1);
         assert!(view.members[0].client_id == "streams-client");
@@ -1061,13 +1058,11 @@ mod tests {
             .expect("StreamsGroupHeartbeat identity refresh");
         assert!(resp.error_code == 0);
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(StreamsGroupActorMessage::Describe { reply: tx })
-            .await
-            .expect("describe refreshed streams group");
-        let view = rx.await.expect("refreshed streams group view");
+        let view = crate::task_util::ask(&actor.tx, |reply| StreamsGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("refreshed streams group view");
         assert!(view.members[0].client_id == "streams-client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 

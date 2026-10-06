@@ -27,14 +27,13 @@
 //! `KafkaRaftClient.hasValidClusterId` returns true for a null cluster id. The
 //! add and remove paths already read it that way.
 
+use std::ops::ControlFlow;
+
 use bytes::Bytes;
 use krabka_metadata::{Voter, VoterEndpoint};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        update_raft_voter_request::UpdateRaftVoterRequest,
-        update_raft_voter_response::UpdateRaftVoterResponse,
-    },
+use krabka_protocol::owned::{
+    update_raft_voter_request::UpdateRaftVoterRequest,
+    update_raft_voter_response::UpdateRaftVoterResponse,
 };
 use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
@@ -42,7 +41,10 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{ErrorCodeResponse as _, cluster_action_denied},
+    handlers::{
+        ErrorCodeResponse as _, cluster_action_denied,
+        raft_voter::{Admitted, Refusals, prelude},
+    },
 };
 
 pub(crate) async fn handle(
@@ -51,28 +53,22 @@ pub(crate) async fn handle(
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = UpdateRaftVoterRequest::decode(&mut cur, version)?;
-
-    let image = broker.controller.current_image();
-
-    if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return refuse(version, codes::CLUSTER_AUTHORIZATION_FAILED);
-    }
-
-    // Broker-only observer forward to the active controller quorum (#392)
-    if let Some(forwarded) = broker
-        .controller
-        .forward_raw(82, version, Bytes::copy_from_slice(req_bytes))
-        .await
+    let Admitted { req, image, quorum } = match prelude::<UpdateRaftVoterRequest, _>(
+        broker,
+        version,
+        req_bytes,
+        ctx,
+        82,
+        cluster_action_denied,
+        Refusals {
+            denied: UpdateRaftVoterResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED),
+            not_leader: UpdateRaftVoterResponse::error(voter_requests::NOT_LEADER_OR_FOLLOWER),
+        },
+    )
+    .await?
     {
-        return forwarded.map_err(BrokerError::from);
-    }
-
-    // The request checks, their order and their codes are the controller
-    // listener's own (`krabka_raft::voter_requests`).
-    let Some(quorum) = broker.controller.quorum_snapshot() else {
-        return refuse(version, voter_requests::NOT_LEADER_OR_FOLLOWER);
+        ControlFlow::Break(answer) => return Ok(answer),
+        ControlFlow::Continue(admitted) => admitted,
     };
     let error_code = if let Some(code) =
         voter_requests::update_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
@@ -120,17 +116,13 @@ pub(crate) async fn handle(
     )
 }
 
-/// Encodes a response that carries nothing but `error_code`.
-fn refuse(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(&UpdateRaftVoterResponse::error(error_code), version)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
     use krabka_protocol::{
+        Decode as _,
         owned::update_raft_voter_request::{KRaftVersionFeature, Listener},
         primitives::uuid::Uuid as ProtoUuid,
     };

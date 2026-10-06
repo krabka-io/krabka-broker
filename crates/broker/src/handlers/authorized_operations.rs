@@ -29,13 +29,13 @@
 //! | TransactionalId  | Describe, Write, TwoPhaseCommit                                    |
 //! | DelegationToken  | Describe                                                          |
 
-use std::net::SocketAddr;
-
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
-use krabka_security::Principal;
 
-use super::acl_wire::operation_to_wire;
-use crate::authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer};
+use super::{RequestContext, acl_wire::operation_to_wire};
+use crate::{
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+    codes,
+};
 
 /// Returns the operations whose Allow decision adds to the
 /// authorized-operations bitfield for `resource_type`. It matches Kafka's
@@ -85,8 +85,8 @@ pub fn supported_operations(resource_type: ResourceType) -> &'static [AclOperati
 }
 
 /// Computes the authorized-operations bitfield for
-/// `(resource_type, resource_name)` from the point of view of
-/// `principal@host`. The bit for an operation is
+/// `(resource_type, resource_name)` from the point of view of the principal
+/// and peer of `ctx`. The bit for an operation is
 /// `1 << operation_to_wire(op)`, which matches Kafka's
 /// `AuthorizationHelper.authorizedOperations(...)`.
 ///
@@ -95,11 +95,10 @@ pub fn supported_operations(resource_type: ResourceType) -> &'static [AclOperati
 /// checks go through [`Authorizer::authorize_quiet`]: a Deny is not audited or
 /// counted.
 #[must_use]
-pub fn authorized_operations_bits(
+pub(crate) fn authorized_operations_bits(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
-    principal: &Principal,
-    host: &SocketAddr,
+    ctx: &RequestContext<'_>,
     resource_type: ResourceType,
     resource_name: &str,
 ) -> i32 {
@@ -108,8 +107,8 @@ pub fn authorized_operations_bits(
         let allow = authorizer.authorize_quiet(
             image,
             &AuthorizationRequest {
-                principal,
-                host,
+                principal: ctx.principal,
+                host: ctx.peer,
                 resource_type,
                 resource_name,
                 operation: op,
@@ -122,9 +121,81 @@ pub fn authorized_operations_bits(
     bits
 }
 
+/// A row of a group describe response: `DescribeGroups`,
+/// `ConsumerGroupDescribe`, `ShareGroupDescribe` or `StreamsGroupDescribe`.
+pub(crate) trait DescribedGroupRow {
+    /// The row that answers `group_id` with `error_code` and `error_message`
+    /// alone, every other field at its generated default.
+    fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> Self;
+    fn group_id(&self) -> &str;
+    fn error_code(&self) -> i16;
+    fn set_authorized_operations(&mut self, bits: i32);
+}
+
+macro_rules! impl_described_group_row {
+    ($($ty:path),* $(,)?) => {
+        $(impl DescribedGroupRow for $ty {
+            fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> Self {
+                Self {
+                    group_id: group_id.into(),
+                    error_code,
+                    error_message,
+                    ..Self::default()
+                }
+            }
+
+            fn group_id(&self) -> &str {
+                &self.group_id
+            }
+
+            fn error_code(&self) -> i16 {
+                self.error_code
+            }
+
+            fn set_authorized_operations(&mut self, bits: i32) {
+                self.authorized_operations = bits;
+            }
+        })*
+    };
+}
+
+impl_described_group_row!(
+    krabka_protocol::owned::consumer_group_describe_response::DescribedGroup,
+    krabka_protocol::owned::describe_groups_response::DescribedGroup,
+    krabka_protocol::owned::share_group_describe_response::DescribedGroup,
+    krabka_protocol::owned::streams_group_describe_response::DescribedGroup,
+);
+
+/// KIP-430: when `include` is set, gives every row whose error is `NONE` the
+/// bitfield of the group operations the principal of `ctx` holds. Every other
+/// row keeps the wire-default `i32::MIN` "not present" sentinel.
+pub(crate) fn fill_group_authorized_operations<R: DescribedGroupRow>(
+    authorizer: &dyn Authorizer,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    include: bool,
+    rows: &mut [R],
+) {
+    if !include {
+        return;
+    }
+    for row in rows {
+        if row.error_code() == codes::NONE {
+            let bits = authorized_operations_bits(
+                authorizer,
+                image,
+                ctx,
+                ResourceType::Group,
+                row.group_id(),
+            );
+            row.set_authorized_operations(bits);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, net::SocketAddr};
 
     use assert2::assert;
     use krabka_metadata::{AclEntry, MetadataRecord, PermissionType, ResourceType};
@@ -136,6 +207,10 @@ mod tests {
 
     fn principal(name: &str) -> Principal {
         crate::test_support::sasl_principal(name)
+    }
+
+    fn ctx<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext<'a> {
+        crate::test_support::request_context(principal, peer, "authorized-operations-test")
     }
 
     fn addr() -> SocketAddr {
@@ -222,7 +297,7 @@ mod tests {
             ResourceType::TransactionalId,
             ResourceType::DelegationToken,
         ] {
-            let bits = authorized_operations_bits(&auth, &img, &p, &h, rt, "name");
+            let bits = authorized_operations_bits(&auth, &img, &ctx(&p, &h), rt, "name");
             let expected = supported_operations(rt)
                 .iter()
                 .copied()
@@ -241,7 +316,8 @@ mod tests {
         let h = addr();
         // alice is not a super-user and the image has no ACLs → every
         // supported op denies → bitfield is 0.
-        let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Topic, "foo");
+        let bits =
+            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
         assert!(bits == 0);
     }
 
@@ -255,14 +331,15 @@ mod tests {
         let h = addr();
 
         let topic_bits =
-            authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Topic, "foo");
+            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
         let topic_want = supported_operations(ResourceType::Topic)
             .iter()
             .copied()
             .fold(0_i32, |acc, op| acc | bit(op));
         assert!(topic_bits == topic_want);
 
-        let group_bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Group, "g");
+        let group_bits =
+            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Group, "g");
         let group_want = supported_operations(ResourceType::Group)
             .iter()
             .copied()
@@ -282,7 +359,8 @@ mod tests {
         let auth = SimpleAclAuthorizer::new(HashSet::new());
         let p = principal("alice");
         let h = addr();
-        let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Topic, "foo");
+        let bits =
+            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
         // Read ACL grants Read directly and Describe via implication.
         // No other supported op should be set.
         let expected = bit(AclOperation::Read) | bit(AclOperation::Describe);
@@ -301,7 +379,8 @@ mod tests {
         let auth = SimpleAclAuthorizer::new(HashSet::new());
         let p = principal("alice");
         let h = addr();
-        let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Topic, "foo");
+        let bits =
+            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
         let expected = bit(AclOperation::Write) | bit(AclOperation::Describe);
         assert!(bits == expected);
     }
@@ -349,7 +428,8 @@ mod tests {
             let auth = SimpleAclAuthorizer::new(HashSet::new());
             let p = principal("alice");
             let h = addr();
-            let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Group, "cg");
+            let bits =
+                authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Group, "cg");
             assert!(bits == expected, "{granted:?}");
         }
     }
@@ -370,7 +450,8 @@ mod tests {
         let auth = SimpleAclAuthorizer::new(HashSet::new());
         let p = principal("alice");
         let h = addr();
-        let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Topic, "foo");
+        let bits =
+            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
         // Read itself is denied: both ACL rows match the exact Read request,
         // and DENY wins precedence. But Kafka's operation-implication table
         // only ever widens what an ALLOW ACL matches -- a DENY Read ACL does
@@ -378,6 +459,49 @@ mod tests {
         // Describe request (via the Read -> Describe arrow); the DENY row
         // does not apply to it at all. So Describe is allowed.
         assert!(bits == bit(AclOperation::Describe));
+    }
+
+    /// The group bitfield goes only on an opted-in row whose error is `NONE`;
+    /// every other row keeps the `i32::MIN` "not present" sentinel.
+    #[test]
+    fn fill_group_authorized_operations_fills_only_clean_opted_in_rows() {
+        use krabka_protocol::owned::consumer_group_describe_response::DescribedGroup;
+
+        let img = MetadataImage::new(Uuid::nil());
+        let p = principal("anyone");
+        let h = addr();
+        let all_group_bits = supported_operations(ResourceType::Group)
+            .iter()
+            .fold(0_i32, |acc, &op| acc | bit(op));
+        let rows = || {
+            vec![
+                DescribedGroup::error_row("clean", codes::NONE, None),
+                DescribedGroup::error_row("missing", codes::GROUP_ID_NOT_FOUND, None),
+            ]
+        };
+        for (include, clean_bits) in [(true, all_group_bits), (false, i32::MIN)] {
+            let mut got = rows();
+            fill_group_authorized_operations(
+                &AllowAllAuthorizer,
+                &img,
+                &ctx(&p, &h),
+                include,
+                &mut got,
+            );
+            let want = vec![
+                DescribedGroup {
+                    group_id: "clean".into(),
+                    authorized_operations: clean_bits,
+                    ..DescribedGroup::default()
+                },
+                DescribedGroup {
+                    group_id: "missing".into(),
+                    error_code: codes::GROUP_ID_NOT_FOUND,
+                    ..DescribedGroup::default()
+                },
+            ];
+            assert!(got == want, "include = {include}");
+        }
     }
 
     #[test]

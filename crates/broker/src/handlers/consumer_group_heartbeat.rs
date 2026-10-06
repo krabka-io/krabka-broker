@@ -6,7 +6,6 @@ use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -17,6 +16,7 @@ use crate::{
     },
     error::BrokerError,
     handlers::{ErrorResponse as _, group_read_denied, group_version_disabled},
+    task_util::{AskError, ask},
 };
 
 pub(crate) async fn handle(
@@ -118,25 +118,19 @@ pub(crate) async fn handle(
     // arm (replying `GROUP_ID_NOT_FOUND`), which is where the per-group kind
     // lock now lives.
     let handle = coordinator.get_or_create_group(&req.group_id, GroupKindTag::Consumer);
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: req,
-            client_id: ctx.client_id.unwrap_or_default().to_owned(),
-            client_host: ctx.client_host(),
-            regex_resolver,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None));
-    }
-    let resp = rx.await.unwrap_or_else(|_| {
-        ConsumerGroupHeartbeatResponse::error(codes::UNKNOWN_SERVER_ERROR, None)
-    });
-    Ok(resp)
+    let asked = ask(&handle.tx, |reply| GroupActorMessage::Heartbeat {
+        request: req,
+        client_id: ctx.client_id.unwrap_or_default().to_owned(),
+        client_host: ctx.client_host(),
+        regex_resolver,
+        reply,
+    })
+    .await;
+    Ok(match asked {
+        Ok(resp) => resp,
+        Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+        Err(AskError::Dropped) => reply(codes::UNKNOWN_SERVER_ERROR, None),
+    })
 }
 
 /// The early refusal: `code` carrying `message`.
@@ -613,13 +607,9 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_group("identity-group", GroupKindTag::Consumer);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
+        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("describe consumer group");
-        let view = rx.await.expect("consumer group view");
+            .expect("consumer group view");
 
         assert!(view.members.len() == 1);
         assert!(view.members[0].client_id == "consumer-group-heartbeat-test");
@@ -644,13 +634,9 @@ mod tests {
             .expect("ConsumerGroupHeartbeat identity refresh");
         assert!(resp.error_code == 0);
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
+        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("describe refreshed consumer group");
-        let view = rx.await.expect("refreshed consumer group view");
+            .expect("refreshed consumer group view");
         assert!(view.members[0].client_id == "consumer-client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
@@ -867,13 +853,9 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_group("g", GroupKindTag::Consumer);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
+        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("describe consumer group");
-        let view = rx.await.expect("consumer group view");
+            .expect("consumer group view");
         assert!(view.members.is_empty(), "{view:?}");
 
         broker_handle.shutdown().await;

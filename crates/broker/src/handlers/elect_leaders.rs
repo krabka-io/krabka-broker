@@ -158,14 +158,13 @@ pub(crate) async fn handle(
         };
         if let Some((code, failure)) = failure {
             tracing::warn!(error = %failure, "elect-leaders submit refused or failed");
-            for topic in &mut by_topic {
-                for r in &mut topic.partition_result {
-                    if r.error_code == 0 {
-                        r.error_code = code;
-                        r.error_message = Some(failure.clone());
-                    }
-                }
-            }
+            crate::handlers::stamp_unset(
+                by_topic
+                    .iter_mut()
+                    .flat_map(|topic| &mut topic.partition_result),
+                code,
+                &failure,
+            );
             submit_failure = Some(failure);
         }
     }

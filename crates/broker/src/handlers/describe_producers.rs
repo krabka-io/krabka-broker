@@ -43,29 +43,17 @@
 use krabka_log::topic_name::validate_topic_name;
 use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
-    describe_producers_request::DescribeProducersRequest,
+    describe_producers_request::{DescribeProducersRequest, TopicRequest},
     describe_producers_response::{
         DescribeProducersResponse, PartitionResponse, ProducerState, TopicResponse,
     },
 };
 
-use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
-    error::BrokerError,
-};
+use crate::{broker::Broker, codes, error::BrokerError};
 
-#[tracing::instrument(
-    name = "handle_describe_producers",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeProducers", version),
-    err
-)]
-pub(crate) async fn handle(
+pub(crate) fn handle(
     broker: &Broker,
-    req: DescribeProducersRequest,
+    req: &DescribeProducersRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<DescribeProducersResponse, BrokerError> {
@@ -74,11 +62,10 @@ pub(crate) async fn handle(
     // Kafka's `checkValidTopic` runs `Topic.validate` before it authorizes
     // anything, so a malformed name never reaches the authorizer. Only the
     // names that pass go into the batch `Read` check below.
-    let topic_decisions = authorize_topics(
+    let allowed = crate::handlers::allowed_topics(
         broker.config.authorizer.as_ref(),
-        &*image,
-        ctx.principal,
-        ctx.peer,
+        &image,
+        ctx,
         AclOperation::Read,
         req.topics
             .iter()
@@ -88,55 +75,32 @@ pub(crate) async fn handle(
 
     let mut topics_out: Vec<TopicResponse> = Vec::with_capacity(req.topics.len());
     for topic_req in &req.topics {
-        let mut parts_out: Vec<PartitionResponse> =
-            Vec::with_capacity(topic_req.partition_indexes.len());
-
         if let Err(invalid) = validate_topic_name(topic_req.name.as_str()) {
             // Kafka answers INVALID_TOPIC_EXCEPTION on every requested
             // partition of a malformed name, regardless of the principal's
             // ACLs, before it even looks the topic up.
-            let message = invalid.to_string();
-            for &idx in &topic_req.partition_indexes {
-                parts_out.push(PartitionResponse {
-                    partition_index: idx,
-                    error_code: codes::INVALID_TOPIC_EXCEPTION,
-                    error_message: Some(message.clone()),
-                    active_producers: Vec::new(),
-                    ..Default::default()
-                });
-            }
-            topics_out.push(TopicResponse {
-                name: topic_req.name.clone(),
-                partitions: parts_out,
-                ..Default::default()
-            });
+            topics_out.push(refused_topic(
+                topic_req,
+                codes::INVALID_TOPIC_EXCEPTION,
+                &invalid.to_string(),
+            ));
             continue;
         }
 
-        let allow = topic_decisions
-            .get(topic_req.name.as_str())
-            .copied()
-            .unwrap_or(AuthorizationResult::Deny);
-
-        if allow == AuthorizationResult::Deny {
-            // KIP-664: per-partition TOPIC_AUTHORIZATION_FAILED on every
-            // requested partition of a denied topic.
-            for &idx in &topic_req.partition_indexes {
-                parts_out.push(PartitionResponse {
-                    partition_index: idx,
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    error_message: Some("Topic authorization failed.".into()),
-                    active_producers: Vec::new(),
-                    ..Default::default()
-                });
-            }
-            topics_out.push(TopicResponse {
-                name: topic_req.name.clone(),
-                partitions: parts_out,
-                ..Default::default()
-            });
+        // KIP-664: per-partition TOPIC_AUTHORIZATION_FAILED on every
+        // requested partition of a denied topic. Every valid name was
+        // authorized above, so one missing from `allowed` was denied.
+        if !allowed.contains(topic_req.name.as_str()) {
+            topics_out.push(refused_topic(
+                topic_req,
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                "Topic authorization failed.",
+            ));
             continue;
         }
+
+        let mut parts_out: Vec<PartitionResponse> =
+            Vec::with_capacity(topic_req.partition_indexes.len());
 
         // Topic-existence + per-partition-bounds check. The image
         // exposes `partition(name, idx) -> Option<&PartitionRecord>`
@@ -181,6 +145,25 @@ pub(crate) async fn handle(
         topics: topics_out,
         ..Default::default()
     })
+}
+
+/// The row of a topic refused before any lookup: every requested partition
+/// carries `error_code` and `error_message`, and no producers.
+fn refused_topic(topic: &TopicRequest, error_code: i16, error_message: &str) -> TopicResponse {
+    TopicResponse {
+        name: topic.name.clone(),
+        partitions: topic
+            .partition_indexes
+            .iter()
+            .map(|&partition_index| PartitionResponse {
+                partition_index,
+                error_code,
+                error_message: Some(error_message.to_owned()),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
 }
 
 /// The row of a partition that the metadata holds: Kafka's
@@ -282,16 +265,14 @@ mod tests {
         }
     }
 
-    async fn drive(
+    fn drive(
         broker: &Broker,
         req: &DescribeProducersRequest,
         principal: &Principal,
         peer: &SocketAddr,
     ) -> DescribeProducersResponse {
         let ctx = test_context(principal, peer);
-        handle(broker, req.clone(), VERSION, &ctx)
-            .await
-            .expect("handle")
+        handle(broker, req, VERSION, &ctx).expect("handle")
     }
 
     /// Kafka's `checkValidTopic` answers `INVALID_TOPIC_EXCEPTION` (17) for
@@ -371,7 +352,7 @@ mod tests {
             let peer = peer();
             let req = request(name, &[0]);
 
-            let resp = drive(&broker, &req, &p, &peer).await;
+            let resp = drive(&broker, &req, &p, &peer);
 
             let expected = DescribeProducersResponse {
                 throttle_time_ms: 0,
@@ -433,7 +414,7 @@ mod tests {
             ),
         ];
         for (name, error_message) in cases {
-            let resp = drive(&broker, &request(name, &[5]), &p, &peer).await;
+            let resp = drive(&broker, &request(name, &[5]), &p, &peer);
             let expected = DescribeProducersResponse {
                 topics: vec![TopicResponse {
                     name: name.to_owned(),
@@ -463,7 +444,7 @@ mod tests {
         let peer = peer();
         let req = request("a/b", &[0, 1, 4]);
 
-        let resp = drive(&broker, &req, &p, &peer).await;
+        let resp = drive(&broker, &req, &p, &peer);
 
         let message =
             krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into()).to_string();
@@ -678,7 +659,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = drive(&broker, &request, &p, &peer).await;
+        let resp = drive(&broker, &request, &p, &peer);
 
         let expected = DescribeProducersResponse {
             throttle_time_ms: 0,
@@ -710,7 +691,7 @@ mod tests {
         broker
             .log_dir_status
             .mark_offline(&leads.log_dir.load(), "test: EIO");
-        let offline = drive(&broker, &request, &p, &peer).await;
+        let offline = drive(&broker, &request, &p, &peer);
         let expected = DescribeProducersResponse {
             topics: vec![
                 topic(

@@ -8,19 +8,19 @@
 
 use std::collections::HashSet;
 
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     share_group_describe_request::ShareGroupDescribeRequest,
     share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
+    task_util::{AskError, ask},
 };
 
 /// The message of the row Kafka substitutes for a group whose assignment
@@ -42,7 +42,7 @@ pub(crate) async fn handle(
         let groups = req
             .group_ids
             .iter()
-            .map(|gid| error_row(gid, codes::UNSUPPORTED_VERSION, None))
+            .map(|gid| DescribedGroup::error_row(gid, codes::UNSUPPORTED_VERSION, None))
             .collect();
         return Ok(response(groups));
     }
@@ -56,18 +56,22 @@ pub(crate) async fn handle(
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for gid in &req.group_ids {
         if crate::handlers::group_describe_denied(authorizer, &image, ctx, gid) {
-            groups.push(error_row(gid, codes::GROUP_AUTHORIZATION_FAILED, None));
+            groups.push(DescribedGroup::error_row(
+                gid,
+                codes::GROUP_AUTHORIZATION_FAILED,
+                None,
+            ));
             continue;
         }
         // GroupCoordinatorService.shareGroupDescribe rejects an empty id
         // before it routes the group to a shard, and its row comes ahead of
         // the shard results.
         if gid.is_empty() {
-            invalid.push(error_row("", codes::INVALID_GROUP_ID, None));
+            invalid.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
             continue;
         }
         if let Some(error_code) = crate::handlers::group_coordinator_error(broker, gid) {
-            described.push(error_row(gid, error_code, None));
+            described.push(DescribedGroup::error_row(gid, error_code, None));
             continue;
         }
         let handle = match coordinator.group_type(gid) {
@@ -75,7 +79,7 @@ pub(crate) async fn handle(
             Some(_) => None,
         };
         let Some(handle) = handle else {
-            described.push(error_row(
+            described.push(DescribedGroup::error_row(
                 gid,
                 codes::GROUP_ID_NOT_FOUND,
                 Some(crate::handlers::share_group_not_found_message(
@@ -86,38 +90,30 @@ pub(crate) async fn handle(
             continue;
         };
 
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .is_err()
-        {
-            described.push(error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None));
-            continue;
-        }
-        match rx.await {
-            Ok(view) => described.push(view.into_described_group(&image)),
-            Err(_) => described.push(error_row(gid, codes::UNKNOWN_SERVER_ERROR, None)),
-        }
+        let asked = ask(&handle.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await;
+        described.push(match asked {
+            Ok(view) => view.into_described_group(&image),
+            Err(AskError::Closed) => {
+                DescribedGroup::error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
+            }
+            Err(AskError::Dropped) => {
+                DescribedGroup::error_row(gid, codes::UNKNOWN_SERVER_ERROR, None)
+            }
+        });
     }
 
     // KIP-430: the group operations bitfield, only on opt-in and only for rows
     // that came back clean.
-    if req.include_authorized_operations {
-        for row in &mut described {
-            if row.error_code == codes::NONE {
-                row.authorized_operations = authorized_operations_bits(
-                    authorizer,
-                    &image,
-                    ctx.principal,
-                    ctx.peer,
-                    ResourceType::Group,
-                    row.group_id.as_str(),
-                );
-            }
-        }
-    }
+    fill_group_authorized_operations(
+        authorizer,
+        &image,
+        ctx,
+        req.include_authorized_operations,
+        &mut described,
+    );
     groups.extend(invalid);
     groups.extend(described);
 
@@ -140,7 +136,7 @@ pub(crate) async fn handle(
                 .flat_map(|m| &m.assignment.topic_partitions)
                 .any(|tp| denied.contains(&tp.topic_name));
             if hides_topic {
-                *group = error_row(
+                *group = DescribedGroup::error_row(
                     &group.group_id,
                     codes::TOPIC_AUTHORIZATION_FAILED,
                     Some(UNAUTHORIZED_TOPICS_MESSAGE.to_owned()),
@@ -160,20 +156,12 @@ fn response(groups: Vec<DescribedGroup>) -> ShareGroupDescribeResponse {
     }
 }
 
-fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> DescribedGroup {
-    DescribedGroup {
-        group_id: group_id.into(),
-        error_code,
-        error_message,
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
+    use krabka_metadata::ResourceType;
     use krabka_protocol::{UnknownTaggedFields, owned::share_group_describe_response};
     use krabka_security::Principal;
 
@@ -432,7 +420,7 @@ mod tests {
 
         let expected = ShareGroupDescribeResponse {
             groups: vec![
-                error_row("denied", codes::GROUP_AUTHORIZATION_FAILED, None),
+                DescribedGroup::error_row("denied", codes::GROUP_AUTHORIZATION_FAILED, None),
                 DescribedGroup {
                     group_id: "g".into(),
                     group_state: "Stable".into(),
@@ -462,12 +450,12 @@ mod tests {
                     authorized_operations: 1 << 8,
                     ..Default::default()
                 },
-                error_row(
+                DescribedGroup::error_row(
                     "h",
                     codes::TOPIC_AUTHORIZATION_FAILED,
                     Some(UNAUTHORIZED_TOPICS_MESSAGE.into()),
                 ),
-                error_row(
+                DescribedGroup::error_row(
                     "missing",
                     codes::GROUP_ID_NOT_FOUND,
                     Some("Group missing not found.".into()),
@@ -498,8 +486,8 @@ mod tests {
 
         let expected = ShareGroupDescribeResponse {
             groups: vec![
-                error_row("", codes::INVALID_GROUP_ID, None),
-                error_row(
+                DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None),
+                DescribedGroup::error_row(
                     "classic",
                     codes::GROUP_ID_NOT_FOUND,
                     Some("Group classic is not a share group.".into()),

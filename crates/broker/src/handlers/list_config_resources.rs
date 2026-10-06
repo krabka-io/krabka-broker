@@ -23,7 +23,6 @@ use krabka_protocol::owned::{
 use crate::{
     broker::Broker,
     codes,
-    error::BrokerError,
     handlers::describe_configs::{
         RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
         RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
@@ -41,19 +40,12 @@ const DEFAULT_RESOURCE_TYPES: [i8; 5] = [
     RESOURCE_TYPE_GROUP,
 ];
 
-#[tracing::instrument(
-    name = "handle_list_config_resources",
-    level = "info",
-    skip_all,
-    fields(api = "ListConfigResources", version),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: ListConfigResourcesRequest,
+    req: &ListConfigResourcesRequest,
     version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ListConfigResourcesResponse, BrokerError> {
+) -> ListConfigResourcesResponse {
     let image = broker.controller.current_image();
 
     // Whole-request gate. Kafka's `KafkaApis.handleListConfigResources`
@@ -68,11 +60,10 @@ pub(crate) fn handle(
         crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
         AclOperation::DescribeConfigs,
     ) {
-        let resp = ListConfigResourcesResponse {
+        return ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             ..Default::default()
         };
-        return Ok(resp);
     }
 
     // Kafka's `KafkaApis.handleListConfigResources`: if any requested type is
@@ -80,13 +71,12 @@ pub(crate) fn handle(
     // request fails with `UNSUPPORTED_VERSION` and no resources, rather than
     // silently dropping the type it does not recognize.
     if version >= 1 && req.resource_types.iter().any(|rt| !is_supported_type(*rt)) {
-        let resp = ListConfigResourcesResponse {
+        return ListConfigResourcesResponse {
             throttle_time_ms: 0,
             error_code: codes::UNSUPPORTED_VERSION,
             config_resources: vec![],
             ..Default::default()
         };
-        return Ok(resp);
     }
 
     let resources = collect_resources(
@@ -96,13 +86,12 @@ pub(crate) fn handle(
         ctx.connection_listener_name,
     );
 
-    let resp = ListConfigResourcesResponse {
+    ListConfigResourcesResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         config_resources: resources,
         ..Default::default()
-    };
-    Ok(resp)
+    }
 }
 
 /// Whether `rt` is one of the types `ListConfigResourcesRequest.
@@ -390,7 +379,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &req, VERSION, &ctx);
 
             assert2::check!(resp == unsupported, "case {name}");
         }
@@ -419,7 +408,7 @@ mod tests {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
         };
-        let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+        let resp = handle(&broker, &req, VERSION, &ctx);
 
         let topics = collect_resources(
             &broker.controller.current_image(),
@@ -450,7 +439,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+        let resp = handle(&broker, &req, VERSION, &ctx);
 
         let expected = ListConfigResourcesResponse {
             throttle_time_ms: 0,
@@ -518,7 +507,7 @@ mod tests {
             let peer = peer();
             let ctx = test_context(&p, &peer);
 
-            let resp = handle(&broker, req.clone(), VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &req, VERSION, &ctx);
 
             assert2::check!(resp == *expected, "user {user} with grant {grant:?}");
         }
@@ -539,7 +528,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+        let resp = handle(&broker, &req, VERSION, &ctx);
 
         assert!(resp.error_code == codes::NONE);
         assert!(resp.throttle_time_ms == 0);

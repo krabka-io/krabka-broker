@@ -67,26 +67,16 @@ fn describe_acls_response(resources: Vec<DescribeAclsResource>) -> DescribeAclsR
     }
 }
 
-// `async` for symmetry with the other ACL wire handlers (CreateAcls /
-// DeleteAcls awaits `controller.submit_change`; read-only
-// DescribeAcls itself never suspends.
-#[tracing::instrument(
-    name = "handle_describe_acls",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeAcls"),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: DescribeAclsRequest,
+    req: &DescribeAclsRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<DescribeAclsResponse, crate::error::BrokerError> {
     // Kafka's `DescribeAclsRequest` constructor refuses an `UNKNOWN` element
     // while the request parses, before any authorization, and the broker
     // closes the connection. The error return is that close.
-    let filter = build_filter(&req).map_err(|UnknownElement| {
+    let filter = build_filter(req).map_err(|UnknownElement| {
         ProtocolError::InvalidValue("DescribeAclsRequest contains UNKNOWN elements")
     })?;
 
@@ -347,7 +337,7 @@ mod tests {
 
         let resp = handle(
             &broker,
-            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &request(Some("orders"), Some("User:alice"), OPERATION_READ),
             VERSION,
             &ctx,
         )
@@ -380,7 +370,7 @@ mod tests {
 
         let resp = handle(
             &broker,
-            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &request(Some("orders"), Some("User:alice"), OPERATION_READ),
             VERSION,
             &ctx,
         )
@@ -410,7 +400,7 @@ mod tests {
         let mut req = request(Some("orders"), Some("User:alice"), OPERATION_READ);
         req.operation = 0;
 
-        let result = handle(&broker, req, VERSION, &ctx);
+        let result = handle(&broker, &req, VERSION, &ctx);
 
         assert!(
             let Err(crate::error::BrokerError::Protocol(ProtocolError::InvalidValue(
@@ -467,7 +457,7 @@ mod tests {
         for (name, edit) in cases {
             let mut req = any.clone();
             edit(&mut req);
-            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
             check!(resp == expected, "{name}");
         }
         broker_handle.shutdown().await;
@@ -568,7 +558,7 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let mut resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let mut resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
             resp.resources
                 .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
 
@@ -631,7 +621,7 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
             check!(
                 resp.resources.len() == want,
                 "principal {principal_filter:?} host {host_filter:?}"
@@ -658,7 +648,7 @@ mod tests {
 
         let resp = handle(
             &broker,
-            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &request(Some("orders"), Some("User:alice"), OPERATION_READ),
             VERSION,
             &ctx,
         )

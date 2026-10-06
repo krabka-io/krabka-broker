@@ -24,7 +24,6 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -157,20 +156,14 @@ pub(crate) async fn handle(
         // Kafka's `handleDescribeTransactionsRequest` removes every topic the
         // principal may not `Describe`, even though the tid itself is
         // authorized. Batch-check the row's topics in one pass.
-        let topic_decisions: std::collections::HashMap<String, AuthorizationResult> =
-            authorize_topics(
-                broker.config.authorizer.as_ref(),
-                &*image,
-                ctx.principal,
-                ctx.peer,
-                AclOperation::Describe,
-                row.topics.iter().map(|t| t.topic.as_str()),
-            )
-            .into_iter()
-            .map(|(topic, decision)| (topic.to_owned(), decision))
-            .collect();
-        row.topics
-            .retain(|t| topic_decisions.get(&t.topic).copied() == Some(AuthorizationResult::Allow));
+        let allowed = crate::handlers::allowed_topics(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            AclOperation::Describe,
+            row.topics.iter().map(|t| t.topic.as_str()),
+        );
+        row.topics.retain(|t| allowed.contains(&t.topic));
 
         rows.push(row);
     }

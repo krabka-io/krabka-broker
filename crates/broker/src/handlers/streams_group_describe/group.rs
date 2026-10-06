@@ -11,7 +11,6 @@
 //! rows sort first in the response.
 
 use krabka_protocol::owned::streams_group_describe_response::DescribedGroup;
-use tokio::sync::oneshot;
 
 use super::{render::render_group, topic_authz};
 use crate::{
@@ -21,7 +20,8 @@ use crate::{
         GroupCoordinator,
         unified::{GroupType, streams::actor::StreamsGroupActorMessage},
     },
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
+    task_util::{AskError, ask},
 };
 
 /// Kafka's `TopologyDescriptionStatus` `NOT_STORED` (1): no description is
@@ -59,11 +59,7 @@ pub(super) async fn describe_group(
     gid: &str,
 ) -> DescribedGroup {
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, gid) {
-        return DescribedGroup {
-            group_id: gid.to_owned(),
-            error_code,
-            ..Default::default()
-        };
+        return DescribedGroup::error_row(gid, error_code, None);
     }
     let Some(handle) = ng.find_streams(gid) else {
         // Kafka's `getStreamsGroupOrThrow` and `castToStreamsGroup` messages.
@@ -76,32 +72,20 @@ pub(super) async fn describe_group(
         } else {
             format!("Streams group {gid} not found.")
         };
-        return DescribedGroup {
-            group_id: gid.to_owned(),
-            error_code: codes::GROUP_ID_NOT_FOUND,
-            error_message: Some(message),
-            ..Default::default()
-        };
+        return DescribedGroup::error_row(gid, codes::GROUP_ID_NOT_FOUND, Some(message));
     };
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::Describe { reply: tx })
-        .await
-        .is_err()
+    let mut view = match ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
+        reply,
+    })
+    .await
     {
-        return DescribedGroup {
-            group_id: gid.to_owned(),
-            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-            ..Default::default()
-        };
-    }
-    let Ok(mut view) = rx.await else {
-        return DescribedGroup {
-            group_id: gid.to_owned(),
-            error_code: codes::UNKNOWN_SERVER_ERROR,
-            ..Default::default()
-        };
+        Ok(view) => view,
+        Err(AskError::Closed) => {
+            return DescribedGroup::error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
+        }
+        Err(AskError::Dropped) => {
+            return DescribedGroup::error_row(gid, codes::UNKNOWN_SERVER_ERROR, None);
+        }
     };
 
     // Kafka hides a group whose topology names a topic the caller cannot
@@ -116,12 +100,11 @@ pub(super) async fn describe_group(
             ctx,
             &required,
         ) {
-            return DescribedGroup {
-                group_id: gid.to_owned(),
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                error_message: Some(TOPIC_AUTHZ_DENIED_MESSAGE.to_owned()),
-                ..Default::default()
-            };
+            return DescribedGroup::error_row(
+                gid,
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some(TOPIC_AUTHZ_DENIED_MESSAGE.to_owned()),
+            );
         }
     }
 
@@ -139,18 +122,12 @@ pub(super) async fn describe_group(
         };
         row.topology_description = description.map(|description| description.to_describe());
     }
-    // KIP-430: fill the bitfield of Group operations the caller is
-    // authorized for only when the request opted in; otherwise leave the
-    // wire-default `i32::MIN` "not set" sentinel `render_group` already set.
-    if included.authorized_operations {
-        row.authorized_operations = authorized_operations_bits(
-            broker.config.authorizer.as_ref(),
-            image,
-            ctx.principal,
-            ctx.peer,
-            krabka_metadata::ResourceType::Group,
-            gid,
-        );
-    }
+    fill_group_authorized_operations(
+        broker.config.authorizer.as_ref(),
+        image,
+        ctx,
+        included.authorized_operations,
+        std::slice::from_mut(&mut row),
+    );
     row
 }

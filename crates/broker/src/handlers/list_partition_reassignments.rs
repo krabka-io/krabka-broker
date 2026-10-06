@@ -13,19 +13,12 @@ use crate::{
     codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
 };
 
-#[tracing::instrument(
-    name = "handle_list_partition_reassignments",
-    level = "info",
-    skip_all,
-    fields(api = "ListPartitionReassignments"),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: ListPartitionReassignmentsRequest,
+    req: &ListPartitionReassignmentsRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ListPartitionReassignmentsResponse, crate::error::BrokerError> {
+) -> ListPartitionReassignmentsResponse {
     let image = broker.controller.current_image();
     if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let topics = match &req.topics {
@@ -49,13 +42,13 @@ pub(crate) fn handle(
                 })
                 .collect(),
         };
-        return Ok(ListPartitionReassignmentsResponse {
+        return ListPartitionReassignmentsResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("list-reassignment denied".into()),
             topics,
             ..Default::default()
-        });
+        };
     }
 
     let topics: Vec<OngoingTopicReassignment> = match &req.topics {
@@ -104,13 +97,13 @@ pub(crate) fn handle(
             })
             .collect(),
     };
-    Ok(ListPartitionReassignmentsResponse {
+    ListPartitionReassignmentsResponse {
         throttle_time_ms: 0,
         error_code: NONE,
         error_message: None,
         topics,
         ..Default::default()
-    })
+    }
 }
 
 fn ongoing(pr: &PartitionRecord) -> OngoingPartitionReassignment {
@@ -254,14 +247,13 @@ mod tests {
 
             let resp = handle(
                 &broker,
-                ListPartitionReassignmentsRequest {
+                &ListPartitionReassignmentsRequest {
                     topics: case.topics,
                     ..Default::default()
                 },
                 VERSION,
                 &ctx,
-            )
-            .expect("handle");
+            );
 
             let expected = ListPartitionReassignmentsResponse {
                 throttle_time_ms: 0,
@@ -369,14 +361,13 @@ mod tests {
         for (name, topics, expected_topics) in cases {
             let resp = handle(
                 &broker,
-                ListPartitionReassignmentsRequest {
+                &ListPartitionReassignmentsRequest {
                     topics,
                     ..Default::default()
                 },
                 VERSION,
                 &ctx,
-            )
-            .expect("handle");
+            );
 
             let expected = ListPartitionReassignmentsResponse {
                 throttle_time_ms: 0,

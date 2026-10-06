@@ -37,7 +37,6 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     authorizer::Authorizer,
@@ -45,7 +44,11 @@ use crate::{
     codes,
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
     error::BrokerError,
-    handlers::{authorized_operations::authorized_operations_bits, group_version_disabled},
+    handlers::{
+        authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
+        group_version_disabled,
+    },
+    task_util::{AskError, ask},
 };
 
 /// `member_type` of a member that speaks the classic protocol inside a
@@ -70,7 +73,7 @@ pub(crate) async fn handle(
         let described = req
             .group_ids
             .iter()
-            .map(|group_id| error_row(group_id, codes::UNSUPPORTED_VERSION, None))
+            .map(|group_id| DescribedGroup::error_row(group_id, codes::UNSUPPORTED_VERSION, None))
             .collect();
         return Ok(response(described));
     }
@@ -92,17 +95,21 @@ pub(crate) async fn handle(
             ctx,
             group_id,
         ) {
-            denied.push(error_row(group_id, codes::GROUP_AUTHORIZATION_FAILED, None));
+            denied.push(DescribedGroup::error_row(
+                group_id,
+                codes::GROUP_AUTHORIZATION_FAILED,
+                None,
+            ));
             continue;
         }
         // GroupCoordinatorService.consumerGroupDescribe rejects an empty id
         // before it routes the group to a shard.
         if group_id.is_empty() {
-            described.push(error_row("", codes::INVALID_GROUP_ID, None));
+            described.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
             continue;
         }
         if let Some(error_code) = crate::handlers::group_coordinator_error(broker, group_id) {
-            described.push(error_row(group_id, error_code, None));
+            described.push(DescribedGroup::error_row(group_id, error_code, None));
             continue;
         }
         // The `Describe` arm dispatches on the actor's LIVE `group.kind`: it
@@ -120,43 +127,27 @@ pub(crate) async fn handle(
             described.push(not_found_row(group_id, "not found"));
             continue;
         };
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .is_err()
-        {
-            described.push(error_row(
-                group_id,
-                codes::COORDINATOR_LOAD_IN_PROGRESS,
-                None,
-            ));
-            continue;
-        }
-        match rx.await {
-            Ok(view) => described.push(described_group(view, default_assignor, &image)),
-            Err(_) => described.push(not_found_row(group_id, "is not a consumer group")),
-        }
+        described.push(
+            match ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
+                Ok(view) => described_group(view, default_assignor, &image),
+                Err(AskError::Closed) => {
+                    DescribedGroup::error_row(group_id, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
+                }
+                Err(AskError::Dropped) => not_found_row(group_id, "is not a consumer group"),
+            },
+        );
     }
 
     // KIP-430: bitfield of group operations the principal is authorized for,
     // filled only on opt-in and only for rows that came back clean. Denied
     // and errored rows keep the wire-default `i32::MIN` sentinel.
-    if req.include_authorized_operations {
-        for row in &mut described {
-            if row.error_code == codes::NONE {
-                row.authorized_operations = authorized_operations_bits(
-                    broker.config.authorizer.as_ref(),
-                    &image,
-                    ctx.principal,
-                    ctx.peer,
-                    krabka_metadata::ResourceType::Group,
-                    row.group_id.as_str(),
-                );
-            }
-        }
-    }
+    fill_group_authorized_operations(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        req.include_authorized_operations,
+        &mut described,
+    );
 
     denied.extend(described);
     hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
@@ -201,7 +192,7 @@ fn hide_undescribable_topics(
     }
     for group in groups {
         if topics(group).any(|topic| undescribable.contains(topic)) {
-            *group = error_row(
+            *group = DescribedGroup::error_row(
                 &group.group_id,
                 codes::TOPIC_AUTHORIZATION_FAILED,
                 Some(UNAUTHORIZED_TOPICS_MESSAGE.to_owned()),
@@ -210,19 +201,10 @@ fn hide_undescribable_topics(
     }
 }
 
-fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> DescribedGroup {
-    DescribedGroup {
-        group_id: group_id.into(),
-        error_code,
-        error_message,
-        ..Default::default()
-    }
-}
-
 /// `GROUP_ID_NOT_FOUND` with the message of Kafka's `consumerGroup` lookup,
 /// `Group <id> not found.` or `Group <id> is not a consumer group.`.
 fn not_found_row(group_id: &str, reason: &str) -> DescribedGroup {
-    error_row(
+    DescribedGroup::error_row(
         group_id,
         codes::GROUP_ID_NOT_FOUND,
         Some(format!("Group {group_id} {reason}.")),
@@ -320,6 +302,7 @@ mod tests {
     use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
     use super::*;
+    use crate::handlers::authorized_operations::authorized_operations_bits;
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
 
@@ -541,8 +524,8 @@ mod tests {
 
     #[test]
     fn response_preserves_group_rows() {
-        let first = error_row("a", codes::GROUP_ID_NOT_FOUND, None);
-        let second = error_row("b", codes::UNSUPPORTED_VERSION, None);
+        let first = DescribedGroup::error_row("a", codes::GROUP_ID_NOT_FOUND, None);
+        let second = DescribedGroup::error_row("b", codes::UNSUPPORTED_VERSION, None);
 
         let resp = response(vec![first, second]);
 
@@ -898,8 +881,7 @@ mod tests {
         let expected_bits = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
-            &principal,
-            &peer,
+            &ctx,
             krabka_metadata::ResourceType::Group,
             "live-group",
         );

@@ -34,7 +34,7 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::{
-        group_read_denied,
+        ErrorResponse as _, group_read_denied,
         share_fetch::{
             AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
             current_leader, leader_endpoints, member_id_is_valid, names_the_leader,
@@ -54,24 +54,36 @@ pub(crate) async fn handle(
     // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return Ok(error_response(codes::UNSUPPORTED_VERSION));
+        return Ok(ShareAcknowledgeResponse::error(
+            codes::UNSUPPORTED_VERSION,
+            None,
+        ));
     }
 
     // Kafka's `KafkaApis.handleShareAcknowledgeRequest` refuses a null group
     // id after the feature gate, then checks `Read` on the group, then the
     // member id format, all before the share session and the topic checks.
     let Some(group) = req.group_id.clone() else {
-        return Ok(error_response(codes::INVALID_REQUEST));
+        return Ok(ShareAcknowledgeResponse::error(
+            codes::INVALID_REQUEST,
+            None,
+        ));
     };
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
-        return Ok(error_response(codes::GROUP_AUTHORIZATION_FAILED));
+        return Ok(ShareAcknowledgeResponse::error(
+            codes::GROUP_AUTHORIZATION_FAILED,
+            None,
+        ));
     }
     // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
     // the broker setting as the default.
     let settings = GroupShareSettings::resolve(&image, &group, &cfg);
     let lock_timeout_ms = settings.record_lock_duration_ms();
     let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
-        return Ok(error_response(codes::INVALID_REQUEST));
+        return Ok(ShareAcknowledgeResponse::error(
+            codes::INVALID_REQUEST,
+            None,
+        ));
     };
 
     let released = match broker.share_partition_leaders.update_acknowledge_session(
@@ -80,7 +92,7 @@ pub(crate) async fn handle(
         req.share_session_epoch,
     ) {
         Ok(released) => released,
-        Err(code) => return Ok(error_response(code)),
+        Err(code) => return Ok(ShareAcknowledgeResponse::error(code, None)),
     };
 
     let now = Instant::now();
@@ -308,24 +320,6 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
     responses
 }
 
-/// A `ShareAcknowledgeResponse` that carries a top-level error and no
-/// per-partition row. The error is a feature-gate, authorization, or session
-/// failure.
-///
-/// This is Kafka's `ShareAcknowledgeRequest.getErrorResponse`, which sets only
-/// the throttle time and the error code. So the acquisition lock timeout keeps
-/// its default, 0.
-fn error_response(error_code: i16) -> ShareAcknowledgeResponse {
-    ShareAcknowledgeResponse {
-        throttle_time_ms: 0,
-        error_code,
-        error_message: None,
-        acquisition_lock_timeout_ms: 0,
-        responses: Vec::new(),
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -377,22 +371,6 @@ mod tests {
 
     fn principal() -> Principal {
         crate::test_support::principal("alice")
-    }
-
-    #[test]
-    fn error_response_preserves_top_level_fields() {
-        let resp = error_response(codes::UNSUPPORTED_VERSION);
-
-        let expected = ShareAcknowledgeResponse {
-            throttle_time_ms: 0,
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: None,
-            acquisition_lock_timeout_ms: 0,
-            responses: Vec::new(),
-            node_endpoints: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
     }
 
     #[tokio::test]

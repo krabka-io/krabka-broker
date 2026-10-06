@@ -236,8 +236,7 @@ pub(crate) async fn handle(
         let topic_authorized_operations = authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             &image,
-            ctx.principal,
-            ctx.peer,
+            ctx,
             ResourceType::Topic,
             name.as_str(),
         );
@@ -359,8 +358,7 @@ fn unknown_topic_row(
         topic_authorized_operations: authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             image,
-            ctx.principal,
-            ctx.peer,
+            ctx,
             ResourceType::Topic,
             name,
         ),
@@ -581,8 +579,7 @@ mod tests {
                         topic_authorized_operations: authorized_operations_bits(
                             broker.config.authorizer.as_ref(),
                             &broker.controller.current_image(),
-                            &p,
-                            &peer,
+                            &ctx,
                             ResourceType::Topic,
                             "a",
                         ),
@@ -638,8 +635,7 @@ mod tests {
                         topic_authorized_operations: authorized_operations_bits(
                             broker.config.authorizer.as_ref(),
                             &broker.controller.current_image(),
-                            &p,
-                            &peer,
+                            &ctx,
                             ResourceType::Topic,
                             "b",
                         ),
@@ -850,8 +846,7 @@ mod tests {
             let expected_ops = authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &broker.controller.current_image(),
-                &p,
-                &peer,
+                &ctx,
                 ResourceType::Topic,
                 name,
             );

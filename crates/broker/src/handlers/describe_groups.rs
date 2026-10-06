@@ -27,12 +27,10 @@
 //! `i32::MIN` "not present" sentinel.
 
 use bytes::Bytes;
-use krabka_metadata::ResourceType;
 use krabka_protocol::owned::{
     describe_groups_request::DescribeGroupsRequest,
     describe_groups_response::{DescribeGroupsResponse, DescribedGroup, DescribedGroupMember},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -43,7 +41,8 @@ use crate::{
         classic_state::GroupState,
     },
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::authorized_operations::fill_group_authorized_operations,
+    task_util::{AskError, ask},
 };
 
 /// The first `DescribeGroups` version whose unknown-group row carries
@@ -92,20 +91,13 @@ pub(crate) async fn handle(
 
     // KIP-430: Kafka fills the bitfield for every coordinator row whose error
     // is NONE, a below-v6 `Dead` row included.
-    if version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations {
-        for row in &mut groups {
-            if row.error_code == codes::NONE {
-                row.authorized_operations = authorized_operations_bits(
-                    broker.config.authorizer.as_ref(),
-                    &image,
-                    ctx.principal,
-                    ctx.peer,
-                    ResourceType::Group,
-                    row.group_id.as_str(),
-                );
-            }
-        }
-    }
+    fill_group_authorized_operations(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations,
+        &mut groups,
+    );
 
     denied.extend(groups);
     Ok(DescribeGroupsResponse {
@@ -132,23 +124,22 @@ async fn describe_one(broker: &Broker, group_id: String, version: i16) -> Descri
         let message = format!("Group {group_id} not found.");
         return dead_row(group_id, version, message);
     };
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::ClassicInspect { reply: tx })
-        .await
-        .is_err()
-    {
-        let message = format!("Group {group_id} not found.");
-        return dead_row(group_id, version, message);
-    }
     // `ClassicInspect` replies only while the live group is classic; a
     // KIP-848 consumer group drops the sender.
-    if let Ok(view) = rx.await {
-        described_classic(view)
-    } else {
-        let message = format!("Group {group_id} is not a classic group.");
-        dead_row(group_id, version, message)
+    match ask(&handle.tx, |reply| GroupActorMessage::ClassicInspect {
+        reply,
+    })
+    .await
+    {
+        Ok(view) => described_classic(view),
+        Err(AskError::Closed) => {
+            let message = format!("Group {group_id} not found.");
+            dead_row(group_id, version, message)
+        }
+        Err(AskError::Dropped) => {
+            let message = format!("Group {group_id} is not a classic group.");
+            dead_row(group_id, version, message)
+        }
     }
 }
 
@@ -210,11 +201,12 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::AclOperation;
+    use krabka_metadata::{AclOperation, ResourceType};
 
     use super::*;
     use crate::{
         coordinator::unified::actor::ClassicMemberView,
+        handlers::authorized_operations::authorized_operations_bits,
         test_support::{DenyAll, peer, principal},
     };
 
@@ -317,8 +309,7 @@ mod tests {
             authorized_operations_bits(
                 &crate::authorizer::AllowAllAuthorizer,
                 &krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
-                &p,
-                &peer(),
+                &crate::test_support::request_context(&p, &peer(), "test-client"),
                 ResourceType::Group,
                 "x",
             )
@@ -501,8 +492,7 @@ mod tests {
         let expected = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
-            &p,
-            &peer,
+            &crate::test_support::request_context(&p, &peer, "test-client"),
             ResourceType::Group,
             "classic-a",
         );

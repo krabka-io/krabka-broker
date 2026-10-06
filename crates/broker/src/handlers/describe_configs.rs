@@ -116,37 +116,28 @@ pub(crate) use self::{
         RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
     },
 };
-use crate::{broker::Broker, error::BrokerError};
+use crate::broker::Broker;
 
-#[tracing::instrument(
-    name = "handle_describe_configs",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeConfigs", version),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: DescribeConfigsRequest,
+    req: &DescribeConfigsRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DescribeConfigsResponse, BrokerError> {
+) -> DescribeConfigsResponse {
     let controller = broker.controller.clone();
 
     if let Some(results) = authz::unexpected_resource_type_results(&req.resources) {
-        let resp = DescribeConfigsResponse {
+        return DescribeConfigsResponse {
             throttle_time_ms: 0,
             results,
             ..Default::default()
         };
-        return Ok(resp);
     }
 
     let image = controller.current_image();
     // KIP-226: the chain of sources behind each value goes out only when
-    // the client asks for it. `req.resources` is consumed below, so the
-    // flags are read off the request first.
-    let options = EntryOptions::from_request(&req);
+    // the client asks for it.
+    let options = EntryOptions::from_request(req);
     // The node answering the request. Kafka refuses a broker resource
     // that names any other node, because everything a broker resource
     // reports beyond the dynamic overrides is read out of the serving
@@ -203,7 +194,7 @@ pub(crate) fn handle(
     // every authorized resource first and every denied one after them.
     let (authorized, denied): (Vec<_>, Vec<_>) = req
         .resources
-        .into_iter()
+        .iter()
         .map(|r| {
             let failure = resource_authz_failure(
                 broker.config.authorizer.as_ref(),
@@ -221,7 +212,7 @@ pub(crate) fn handle(
         .map(|(r, _)| {
             describe_one(
                 &image,
-                &r,
+                r,
                 ServingBroker {
                     node: serving_node,
                     static_broker,
@@ -236,14 +227,13 @@ pub(crate) fn handle(
             )
         })
         .chain(denied.into_iter().filter_map(|(r, failure)| {
-            failure.map(|code| denied_result(r.resource_type, r.resource_name, code))
+            failure.map(|code| denied_result(r.resource_type, r.resource_name.clone(), code))
         }))
         .collect();
 
-    let resp = DescribeConfigsResponse {
+    DescribeConfigsResponse {
         throttle_time_ms: 0,
         results,
         ..Default::default()
-    };
-    Ok(resp)
+    }
 }

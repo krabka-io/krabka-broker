@@ -4,7 +4,7 @@
 //! handler reads as `if <gate>(..) { return <error>; }` and each caller stays
 //! free to choose the error code that its RPC answers with.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{RequestContext, acl_wire};
 use crate::authorizer::{AuthorizationResult, authorize_topics};
@@ -115,11 +115,41 @@ pub(crate) fn cluster_describe_denied(
     )
 }
 
-/// The names among `names` whose `operation` on `Topic` the authorizer
-/// denies to `ctx`'s principal.
+/// The authorizer's decision on `operation` on `Topic(name)` for each of
+/// `names`, for `ctx`'s principal.
 ///
 /// Every name is authorized through [`authorize_topics`], so each denial is
 /// audited the way a per-topic refusal is.
+pub(crate) fn topic_decisions<'a>(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    operation: krabka_metadata::AclOperation,
+    names: impl IntoIterator<Item = &'a str>,
+) -> HashMap<&'a str, AuthorizationResult> {
+    authorize_topics(authorizer, image, ctx.principal, ctx.peer, operation, names)
+}
+
+/// The names among `names` that [`topic_decisions`] decides `decision`.
+fn topics_decided<'a>(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    operation: krabka_metadata::AclOperation,
+    names: impl IntoIterator<Item = &'a str>,
+    decision: AuthorizationResult,
+) -> HashSet<String> {
+    topic_decisions(authorizer, image, ctx, operation, names)
+        .into_iter()
+        .filter(|(_, result)| *result == decision)
+        .map(|(name, _)| name.to_owned())
+        .collect()
+}
+
+/// The names among `names` whose `operation` on `Topic` the authorizer
+/// denies to `ctx`'s principal.
+///
+/// A name the caller never passed is absent, so a lookup reads it as allowed.
 pub(crate) fn denied_topics<'a>(
     authorizer: &dyn crate::authorizer::Authorizer,
     image: &krabka_metadata::MetadataImage,
@@ -127,11 +157,35 @@ pub(crate) fn denied_topics<'a>(
     operation: krabka_metadata::AclOperation,
     names: impl IntoIterator<Item = &'a str>,
 ) -> HashSet<String> {
-    authorize_topics(authorizer, image, ctx.principal, ctx.peer, operation, names)
-        .into_iter()
-        .filter(|(_, result)| *result == AuthorizationResult::Deny)
-        .map(|(name, _)| name.to_owned())
-        .collect()
+    topics_decided(
+        authorizer,
+        image,
+        ctx,
+        operation,
+        names,
+        AuthorizationResult::Deny,
+    )
+}
+
+/// The names among `names` whose `operation` on `Topic` the authorizer
+/// allows to `ctx`'s principal, the twin of [`denied_topics`].
+///
+/// A name the caller never passed is absent, so a lookup reads it as denied.
+pub(crate) fn allowed_topics<'a>(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    operation: krabka_metadata::AclOperation,
+    names: impl IntoIterator<Item = &'a str>,
+) -> HashSet<String> {
+    topics_decided(
+        authorizer,
+        image,
+        ctx,
+        operation,
+        names,
+        AuthorizationResult::Allow,
+    )
 }
 
 /// `true` when `names` is non-empty and at least one of its distinct names is
@@ -295,10 +349,11 @@ mod tests {
         check!(crate::codes::CLUSTER_AUTHORIZATION_FAILED == 31);
     }
 
-    /// [`denied_topics`] keeps exactly the names the authorizer denies, with
-    /// each one owned and every duplicate folded into one entry.
+    /// [`denied_topics`] and [`allowed_topics`] keep exactly the names the
+    /// authorizer denies and allows, with each one owned and every duplicate
+    /// folded into one entry.
     #[test]
-    fn denied_topics_keeps_only_the_denied_names() {
+    fn denied_and_allowed_topics_split_the_names_by_decision() {
         let principal = principal();
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = RequestContext::new(
@@ -320,30 +375,39 @@ mod tests {
         ));
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
 
-        for (label, operation, names, expected) in [
-            ("no names", AclOperation::Write, vec![], vec![]),
+        for (label, operation, names, denied, allowed) in [
+            ("no names", AclOperation::Write, vec![], vec![], vec![]),
             (
                 "the granted name passes",
                 AclOperation::Write,
                 vec!["orders"],
                 vec![],
+                vec!["orders"],
             ),
             (
                 "an ungranted name is denied once",
                 AclOperation::Write,
                 vec!["orders", "shipments", "shipments"],
                 vec!["shipments"],
+                vec!["orders"],
             ),
             (
                 "a grant for another operation does not lend itself",
                 AclOperation::Read,
                 vec!["orders"],
                 vec!["orders"],
+                vec![],
             ),
         ] {
-            let expected: HashSet<String> = expected.into_iter().map(String::from).collect();
+            let owned = |names: Vec<&str>| -> HashSet<String> {
+                names.into_iter().map(String::from).collect()
+            };
             check!(
-                denied_topics(&authorizer, &image, &ctx, operation, names) == expected,
+                denied_topics(&authorizer, &image, &ctx, operation, names.clone()) == owned(denied),
+                "case {label}"
+            );
+            check!(
+                allowed_topics(&authorizer, &image, &ctx, operation, names) == owned(allowed),
                 "case {label}"
             );
         }

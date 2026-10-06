@@ -161,8 +161,7 @@ pub(crate) async fn handle(
             authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &image,
-                ctx.principal,
-                ctx.peer,
+                ctx,
                 ResourceType::Cluster,
                 CLUSTER_RESOURCE_NAME,
             )
@@ -434,8 +433,7 @@ fn build_topic_rows(
             row.topic_authorized_operations = authorized_operations_bits(
                 authorizer,
                 image,
-                ctx.principal,
-                ctx.peer,
+                ctx,
                 ResourceType::Topic,
                 row.name.as_deref().unwrap_or_default(),
             );
