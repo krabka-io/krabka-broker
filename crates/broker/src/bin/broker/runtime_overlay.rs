@@ -11,219 +11,9 @@ use krabka_units::Time;
 use crate::{cli::Args, runtime_args::RuntimeArgs};
 
 impl RuntimeArgs {
-    fn copy_core(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            startup_leader_wait_timeout,
-            self_registration_backoff_min,
-            self_registration_backoff_max,
-            observer_poll_interval,
-            audit_spool_replay_interval,
-            audit_stats_poll_interval,
-            audit_partition_wait_timeout,
-            liveness_tick_interval,
-            gauge_poll_interval,
-            isr_scan_interval,
-            cleaner_interval,
-            log_retention_check_interval,
-            future_log_move_retry_backoff,
-            rlmm_reconcile_tick,
-            rlmm_bootstrap_backoff_initial,
-            rlmm_bootstrap_backoff_max,
-            connection_creation_throttle_max,
-            opa_http_timeout,
-            oauth_jwks_http_timeout,
-            auto_join_retry_backoff,
-            auto_join_voter_request_timeout,
-            self_registration_max_attempts,
-            observer_fetch_max,
-        );
-    }
-
-    fn copy_client_metrics(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            client_metrics_eviction_tick,
-            client_metrics_stale_floor,
-            client_metrics_default_interval,
-            client_metrics_telemetry_max,
-            client_metrics_prom_snapshot_ttl,
-            client_metrics_stale_push_intervals,
-        );
-        copy_refined_runtime!(self, runtime, client_metrics_otlp_queue_capacity,);
-    }
-
-    fn copy_replication(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            replication_fetch_max_wait,
-            replication_fetch_max,
-            replication_fetch_min,
-            replication_throttle_exhausted_backoff,
-            replication_send_error_backoff,
-            replication_unknown_topic_retry_delay,
-            replication_epoch_fence_backoff,
-            replication_unexpected_error_backoff,
-            replication_reconnect_initial_delay,
-            replication_reconnect_delay_cap,
-        );
-    }
-
-    fn copy_coordinators(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            coordinator_session_expiry_tick,
-            coordinator_shutdown_ack_timeout,
-            consumer_group_session_timeout,
-            consumer_group_heartbeat_interval,
-            consumer_group_min_session_timeout,
-            consumer_group_max_session_timeout,
-            consumer_group_min_heartbeat_interval,
-            consumer_group_max_heartbeat_interval,
-            classic_group_initial_rebalance_delay,
-            classic_group_min_session_timeout,
-            classic_group_max_session_timeout,
-            sync_group_follower_wait,
-            share_coordinator_load_buffer_size,
-            diskless_wal_flush_interval,
-            diskless_wal_flush_max_size,
-            diskless_wal_hot_tail_max_size,
-            diskless_wal_trim_safety_lag,
-            diskless_wal_index_projection_timeout,
-            share_state_segment_bytes,
-            share_snapshot_update_records_per_snapshot,
-            share_coordinator_write_timeout,
-            share_state_prune_interval,
-            share_cold_partition_snapshot_interval,
-            share_state_compression_codec,
-            share_coordinator_threads,
-            share_coordinator_append_linger_ms,
-            share_coordinator_cached_buffer_max_bytes,
-        );
-        copy_refined_runtime!(
-            self,
-            runtime,
-            consumer_group_max_size,
-            classic_group_max_size,
-            coordinator_actor_mailbox_capacity,
-            diskless_wal_local_replica_count,
-            share_session_cache_max_when_unlimited,
-            share_state_num_partitions,
-            share_state_replication_factor,
-            share_state_min_isr,
-        );
-    }
-
-    fn copy_storage_and_queues(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            unclean_recovery_aggressive_deadline,
-            unclean_recovery_balanced_deadline,
-            operator_recovery_deadline,
-            quota_throttle_max,
-            quota_window,
-            controller_mutation_quota_window,
-            producer_id_expiration,
-            producer_id_expiration_scan_interval,
-            transaction_max_timeout,
-            transaction_partition_verification_enable,
-            offsets_retention,
-            offsets_retention_check_interval,
-            audit_tail_read_max,
-            future_log_move_read_chunk,
-            transaction_recovery_read_max,
-            offsets_topic_segment_bytes,
-            transaction_state_segment_bytes,
-        );
-        copy_refined_runtime!(
-            self,
-            runtime,
-            audit_event_queue_capacity,
-            audit_tail_window_offsets,
-            unclean_recovery_queue_capacity,
-            max_produce_group,
-            partition_writer_queue_depth,
-            default_min_insync_replicas,
-            num_partitions,
-            default_replication_factor,
-            offsets_topic_num_partitions,
-            offsets_topic_replication_factor,
-            transaction_state_num_partitions,
-            transaction_state_replication_factor,
-            transaction_state_min_isr,
-        );
-    }
-
-    fn copy_network_and_limits(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            socket_request_max,
-            sasl_server_max_receive,
-            connection_failed_authentication_delay,
-            queued_max_requests,
-            queued_max_request_bytes,
-            sendfile_min,
-            socket_send_buffer,
-            socket_receive_buffer,
-            log_read_buffer_cap,
-            log_timestamp_scan_window,
-            log_delivery_clock_uncertainty,
-            message_max_bytes,
-            record_decompression_max_ratio,
-            record_decompression_output_floor,
-            record_decompression_output_ceiling,
-        );
-        copy_refined_runtime!(self, runtime, max_request_partition_size_limit);
-        runtime
-            .inter_broker_server_name
-            .clone_from(&self.inter_broker_server_name);
-    }
-
-    fn copy_group_protocols(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
-        copy_plain_runtime!(
-            self,
-            runtime,
-            share_group_session_timeout,
-            share_group_heartbeat_interval,
-            share_group_min_session_timeout,
-            share_group_max_session_timeout,
-            share_group_min_heartbeat_interval,
-            share_group_max_heartbeat_interval,
-            share_group_record_lock_duration,
-            share_group_min_record_lock_duration,
-            share_group_max_record_lock_duration,
-            streams_group_session_timeout,
-            streams_group_heartbeat_interval,
-            streams_group_min_session_timeout,
-            streams_group_max_session_timeout,
-            streams_group_min_heartbeat_interval,
-            streams_group_max_heartbeat_interval,
-            streams_group_task_offset_interval,
-        );
-        copy_refined_runtime!(self, runtime, share_group_max_size, streams_group_max_size);
-        copy_plain_runtime!(
-            self,
-            runtime,
-            share_group_delivery_count_limit,
-            share_group_min_delivery_count_limit,
-            share_group_max_delivery_count_limit,
-            share_group_partition_max_record_locks,
-            share_group_min_partition_max_record_locks,
-            share_group_max_partition_max_record_locks,
-            streams_group_enable,
-            streams_group_num_standby_replicas,
-            streams_group_num_warmup_replicas,
-            streams_group_acceptable_recovery_lag,
-        );
-        runtime
-            .streams_group_rack_aware_assignment_tags
-            .clone_from(&self.streams_group_rack_aware_assignment_tags);
+    fn as_file_runtime(&self) -> krabka_broker::file_config::RuntimeFileConfig {
+        let mut runtime = krabka_broker::file_config::RuntimeFileConfig::default();
+        self.copy_into(&mut runtime);
         runtime.streams_group_assignor = self.streams_group_assignor.map(|value| {
             use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
             match value {
@@ -233,17 +23,6 @@ impl RuntimeArgs {
             }
             .to_owned()
         });
-    }
-
-    fn as_file_runtime(&self) -> krabka_broker::file_config::RuntimeFileConfig {
-        let mut runtime = krabka_broker::file_config::RuntimeFileConfig::default();
-        self.copy_core(&mut runtime);
-        self.copy_client_metrics(&mut runtime);
-        self.copy_replication(&mut runtime);
-        self.copy_coordinators(&mut runtime);
-        self.copy_storage_and_queues(&mut runtime);
-        self.copy_network_and_limits(&mut runtime);
-        self.copy_group_protocols(&mut runtime);
         runtime
     }
 }
@@ -251,42 +30,40 @@ impl RuntimeArgs {
 impl Args {
     fn runtime_overlay(&self) -> krabka_broker::file_config::RuntimeFileConfig {
         let mut runtime = self.runtime.as_file_runtime();
-        copy_plain_runtime!(
-            self,
-            runtime,
-            partition_disk_scan_interval,
-            observer_lag_bound,
-            metadata_max_bytes_between_snapshots,
-            metadata_max_snapshot_interval,
-            metadata_snapshot_interval_records,
-            metadata_snapshot_fetch_max,
-            metadata_log_segment_bytes,
-            metadata_log_segment_roll_interval,
-            metadata_max_retention_bytes,
-            metadata_max_retention,
-            metadata_max_idle_interval,
-            txn_abort_cleanup_interval,
-            txn_id_expiration,
-            txn_id_expiration_cleanup_interval,
-            leader_imbalance_check_interval,
-            tls_reload_interval,
-            heartbeat_interval,
-            heartbeat_timeout,
-            replica_lag_time_max,
-            controller_election_timeout,
-            controller_heartbeat_interval,
-            controller_fetch_miss_limit,
-            metadata_raft_command_queue_capacity,
-            metadata_raft_fetch_max,
-            controlled_shutdown_drain_timeout,
-            delegation_token_max_lifetime,
-            delegation_token_expiry_check_interval,
-            delegation_token_default_renew_period,
-            remote_log_manager_interval,
-            max_incremental_fetch_session_cache_slots,
-            max_connections,
-            max_connections_per_ip,
-        );
+        runtime.partition_disk_scan_interval = self.partition_disk_scan_interval;
+        runtime.observer_lag_bound = self.observer_lag_bound;
+        runtime.metadata_max_bytes_between_snapshots = self.metadata_max_bytes_between_snapshots;
+        runtime.metadata_max_snapshot_interval = self.metadata_max_snapshot_interval;
+        runtime.metadata_snapshot_interval_records = self.metadata_snapshot_interval_records;
+        runtime.metadata_snapshot_fetch_max = self.metadata_snapshot_fetch_max;
+        runtime.metadata_log_segment_bytes = self.metadata_log_segment_bytes;
+        runtime.metadata_log_segment_roll_interval = self.metadata_log_segment_roll_interval;
+        runtime.metadata_max_retention_bytes = self.metadata_max_retention_bytes;
+        runtime.metadata_max_retention = self.metadata_max_retention;
+        runtime.metadata_max_idle_interval = self.metadata_max_idle_interval;
+        runtime.txn_abort_cleanup_interval = self.txn_abort_cleanup_interval;
+        runtime.txn_id_expiration = self.txn_id_expiration;
+        runtime.txn_id_expiration_cleanup_interval = self.txn_id_expiration_cleanup_interval;
+        runtime.leader_imbalance_check_interval = self.leader_imbalance_check_interval;
+        runtime.tls_reload_interval = self.tls_reload_interval;
+        runtime.heartbeat_interval = self.heartbeat_interval;
+        runtime.heartbeat_timeout = self.heartbeat_timeout;
+        runtime.replica_lag_time_max = self.replica_lag_time_max;
+        runtime.controller_election_timeout = self.controller_election_timeout;
+        runtime.controller_heartbeat_interval = self.controller_heartbeat_interval;
+        runtime.controller_fetch_miss_limit = self.controller_fetch_miss_limit;
+        runtime.metadata_raft_command_queue_capacity = self.metadata_raft_command_queue_capacity;
+        runtime.metadata_raft_fetch_max = self.metadata_raft_fetch_max;
+        runtime.controlled_shutdown_drain_timeout = self.controlled_shutdown_drain_timeout;
+        runtime.delegation_token_max_lifetime = self.delegation_token_max_lifetime;
+        runtime.delegation_token_expiry_check_interval =
+            self.delegation_token_expiry_check_interval;
+        runtime.delegation_token_default_renew_period = self.delegation_token_default_renew_period;
+        runtime.remote_log_manager_interval = self.remote_log_manager_interval;
+        runtime.max_incremental_fetch_session_cache_slots =
+            self.max_incremental_fetch_session_cache_slots;
+        runtime.max_connections = self.max_connections;
+        runtime.max_connections_per_ip = self.max_connections_per_ip;
         runtime
     }
 

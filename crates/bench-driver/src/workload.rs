@@ -4,11 +4,9 @@
 //! the per-task histograms into the public `LatencyPercentiles` shape.
 
 use std::{
-    fmt,
     future::Future,
     path::PathBuf,
     pin::Pin,
-    str::FromStr,
     sync::{
         Arc,
         atomic::{AtomicU8, AtomicU64, Ordering},
@@ -25,6 +23,7 @@ use krabka_client_core::{
     security::{ClientSecurity, KeyStore, TlsConnectorConfig, TrustStore},
 };
 use krabka_client_producer::{Producer, ProducerError, ProducerRecord, RecordMetadata};
+use krabka_macros::RefinedNewtype;
 use krabka_security::ListenerProtocol;
 use krabka_units::prelude::*;
 use refined_type::rule::GreaterU32;
@@ -89,50 +88,16 @@ pub const fn default_consumer_request_timeout(stack: Stack) -> Time {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How many times the driver tries to build a consumer before it gives up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, RefinedNewtype)]
+#[refined(
+    rule(GreaterU32<0>),
+    string_error,
+    default = DEFAULT_CONSUMER_BUILD_ATTEMPTS,
+    from_str,
+    display
+)]
 pub struct ConsumerBuildAttempts(u32);
-
-impl ConsumerBuildAttempts {
-    /// Validate a consumer-build attempt count.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `value` is zero.
-    pub fn new(value: u32) -> Result<Self, String> {
-        GreaterU32::<0>::new(value)
-            .map(|value| Self(value.into_value()))
-            .map_err(|error| error.to_string())
-    }
-
-    #[must_use]
-    pub const fn into_value(self) -> u32 {
-        self.0
-    }
-}
-
-impl Default for ConsumerBuildAttempts {
-    fn default() -> Self {
-        Self::new(DEFAULT_CONSUMER_BUILD_ATTEMPTS)
-            .expect("default consumer-build attempts are positive")
-    }
-}
-
-impl fmt::Display for ConsumerBuildAttempts {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-impl FromStr for ConsumerBuildAttempts {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value
-            .parse()
-            .map_err(|error: std::num::ParseIntError| error.to_string())
-            .and_then(Self::new)
-    }
-}
 
 #[must_use]
 pub const fn default_consumer_build_initial_backoff() -> Time {

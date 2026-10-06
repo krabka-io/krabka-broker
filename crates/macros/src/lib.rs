@@ -38,14 +38,197 @@
 //!     latency_seconds: Family<ApiLabel, Histogram>,
 //! }
 //! ```
+//!
+//! # `human_units`
+//!
+//! `#[human_units]` goes on a file-config struct, above its
+//! `#[derive(Deserialize, Serialize, JsonSchema)]`. Each field typed
+//! `Option<Time>`, `Option<ByteSize>` or `Option<Ratio>` (under any path
+//! prefix) gets two attributes:
+//!
+//! - `#[serde(default, with = "krabka_units::serde_units::human::option_X")]`,
+//!   so that the TOML file writes the value as a string with a unit, such as
+//!   `"5s"` or `"1MiB"`. `default` is left out when the field already has a
+//!   serde `default`.
+//! - `#[schemars(with = "Option<crate::file_config::schema_units::X>")]`, so
+//!   that the JSON Schema names the unit in its `format`.
+//!
+//! A field with its own serde `with`, `deserialize_with` or `serialize_with`
+//! keeps its codec and gets neither attribute. Every other field passes through
+//! unchanged.
+//!
+//! ```ignore
+//! #[krabka_macros::human_units]
+//! #[derive(Deserialize, Serialize, JsonSchema)]
+//! struct FileTimeouts {
+//!     request_timeout: Option<Time>,
+//!     segment_bytes: Option<ByteSize>,
+//! }
+//! ```
+//!
+//! # `dispatch_table!`
+//!
+//! `dispatch_table! { ... }` goes in the broker's dispatch registry module. It
+//! reads sections of `CamelCase` Kafka api names, each a label, a colon, and
+//! comma-separated entries closed by `;`:
+//!
+//! ```ignore
+//! krabka_macros::dispatch_table! {
+//!     context: Metadata, AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle;
+//!     sync_context: DescribeConfigs;
+//!     decoded: CreateAcls;
+//!     decoded_sync: DescribeAcls;
+//!     custom_context: UpdateFeatures;
+//!     auth: CreateDelegationToken;
+//!     telemetry: PushTelemetry;
+//! }
+//! ```
+//!
+//! From each name, such as `CreateAcls`, it derives the adapter
+//! `create_acls_adapter`, the `ApiKey::CreateAcls` variant, the request module
+//! `krabka_protocol::owned::create_acls_request` and its `CreateAclsRequest`
+//! type. The handler is `crate::handlers::create_acls::handle` unless the entry
+//! names another with `=> path`.
+//!
+//! - `context` and `sync_context` adapters pass the raw body to the handler;
+//!   a `sync_context` handler returns its result instead of a future.
+//! - `decoded` and `decoded_sync` adapters decode the request first and call
+//!   `handler(broker, request, ctx, version)`.
+//! - `telemetry` adapters pass a `TelemetryContext` and wrap a synchronous
+//!   result.
+//! - `custom_context` and `auth` entries generate no adapter: the
+//!   hand-written `<name>_adapter` must be in scope.
+//!
+//! It then emits `fn register_dispatch_table(registry: &mut DispatchRegistry)`,
+//! which registers every entry at the request schema's `FLEXIBLE_MIN` and
+//! panics on a duplicate registration. The expansion names `Broker`,
+//! `ApiVersion`, `CorrelationId`, `RequestContext`, `TelemetryContext`,
+//! `BoxFuture`, `Bytes`, `BrokerError`, `ApiKey`, `DispatchEntry` and
+//! `DispatchRegistry` unqualified, so the calling module imports them.
+//!
+//! # `throttle_probes!`
+//!
+//! `throttle_probes! { ... }` is an expression for the KIP-219 throttle-echo
+//! audit: an array of `(API_KEY, probe as Probe)`, one per entry, keyed by the
+//! response module's generated `API_KEY`. Its sections are `throttled` (the
+//! response has `throttle_time_ms`, which the probe sets to `SENTINEL`),
+//! `unthrottled` (it has none), and `legacy_split: Name = version`, whose
+//! probe encodes the `kafka_3_6_2` response below `version`. The probes call
+//! `position`, `ApiVersion`, `ThrottlePosition`, `SENTINEL` and `Probe` from
+//! the calling module.
+//!
+//! ```ignore
+//! let probes: BTreeMap<_, _> = krabka_macros::throttle_probes! {
+//!     throttled: Metadata, ListOffsets;
+//!     unthrottled: SaslHandshake;
+//!     legacy_split: Produce = 3, Fetch = 4;
+//! }
+//! .into_iter()
+//! .collect();
+//! ```
+//!
+//! # `RuntimeOverlay`
+//!
+//! `#[derive(RuntimeOverlay)]` goes on a clap argument group whose fields
+//! overlay the same-named fields of a config struct. The struct names that
+//! config with `#[overlay(target = Type)]`. The derive adds
+//! `pub(crate) fn copy_into(&self, target: &mut Type)`, which assigns every
+//! field in field order:
+//!
+//! - by default, `target.f = self.f`, so the field must be `Copy`;
+//! - with `#[overlay(refined)]`, `target.f = self.f.map(|value| value.into_value())`,
+//!   for an `Option` of a refined newtype;
+//! - with `#[overlay(clone)]`, `target.f.clone_from(&self.f)`;
+//! - with `#[overlay(skip)]`, not at all.
+//!
+//! A field that the target lacks, or whose type differs, fails to compile.
+//!
+//! ```ignore
+//! #[derive(clap::Args, krabka_macros::RuntimeOverlay)]
+//! #[overlay(target = RuntimeFileConfig)]
+//! struct RuntimeArgs {
+//!     cleaner_interval: Option<Time>,
+//!     #[overlay(refined)]
+//!     num_partitions: Option<PositiveI32>,
+//! }
+//! ```
+//!
+//! # `krabka_env`
+//!
+//! `#[krabka_env]` goes on a clap argument struct, above its
+//! `#[derive(clap::Args)]`. Each field without an `#[arg(...)]` of its own gets
+//! `#[arg(long, env = "KRABKA_<FIELD>", ...)]`, where `<FIELD>` is the field
+//! name in upper case and the rest follows from the field type:
+//!
+//! | Field type | Added argument |
+//! |---|---|
+//! | `Option<Time>` | `value_parser = krabka_units::parse::positive_time` |
+//! | `Option<ByteSize>` | `value_parser = krabka_units::parse::positive_byte_size` |
+//! | `Option<Ratio>` | `value_parser = krabka_units::parse::positive_ratio` |
+//! | `Option<PositiveCount>` | `value_parser = krabka_broker::config_value::parse_positive_count` |
+//! | `Option<PositiveI16>`, `I32`, `I64` | the matching `parse_positive_*` |
+//! | `Option<u32>` | `value_parser = clap::value_parser!(u32).range(1..)` |
+//! | `Option<i64>` | `value_parser = clap::value_parser!(i64).range(0..)` |
+//! | `Option<bool>` | `action = clap::ArgAction::Set` |
+//! | `Option<i16>`, `Option<i32>`, `Option<String>` | none |
+//!
+//! The type is matched as written, so a field of any other type, or of one
+//! of these that needs another parser, keeps its own `#[arg(...)]`. Doc
+//! comments stay where they are and remain the help text.
+//!
+//! # `RefinedNewtype`
+//!
+//! `#[derive(RefinedNewtype)]` goes on a tuple struct with one field, the value
+//! a `refined_type` rule checks. It adds `new(value) -> Result<Self, E>`, which
+//! validates through the rule, and a `#[must_use] const` getter that returns
+//! the value. Both take the struct's visibility. One `#[refined(...)]`
+//! attribute configures it:
+//!
+//! - `rule(<type>)` — the `refined_type` rule, such as `GreaterU32<0>`.
+//!   Required. It goes in parentheses because a generic type does not parse
+//!   after `=`.
+//! - `getter = name` — the getter's name. The default is `into_value`.
+//! - `string_error` — `new` returns `String`, the rule's error text, rather
+//!   than `refined_type::result::Error<T>`.
+//! - `label = "..."` — with `string_error`, `new` returns
+//!   `"<label>: <rule error>"`.
+//! - `default = EXPR` — implement `Default` as `Self::new(EXPR)`, which panics
+//!   when `EXPR` breaks the rule.
+//! - `from_str` — implement `FromStr` with `Err = String`: the field type's
+//!   own `parse`, then `new`, each error as its text.
+//! - `display` — implement `Display` as the field's.
+//! - `parse_fn = name` — add a free `fn name(&str) -> Result<Self, String>`
+//!   that parses the way `from_str` does.
+//!
+//! ```ignore
+//! #[derive(Clone, Copy, krabka_macros::RefinedNewtype)]
+//! #[refined(rule(GreaterU32<0>), string_error, label = "fetch miss limit", getter = get,
+//!           default = 3, from_str, display)]
+//! pub struct FetchMissLimit(u32);
+//! ```
+//!
+//! # `PrimitiveCmp`
+//!
+//! `#[derive(PrimitiveCmp)]` goes on a tuple struct with one field. It
+//! implements `PartialEq` and `PartialOrd` between the struct and the field's
+//! type in both directions, so that `Seq(3) == 3_u64` and `2_u64 < Seq(3)`
+//! compile.
 
 use moxy::{
     ast::{ItemStruct, ParseError},
     token::TokenStream,
 };
 
+mod api_names;
+mod dispatch;
+mod human_units;
+mod krabka_env;
 mod meta;
 mod metrics;
+mod primitive_cmp;
+mod refined_newtype;
+mod runtime_overlay;
+mod throttle_probes;
 
 /// Derives `unregistered` and `register` for a struct of metric handles. The
 /// crate documentation lists the field attributes.
@@ -56,3 +239,56 @@ pub fn register_metrics(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 // New macros: put the implementation in its own module under `src/` and add
 // its entry point below this line, one block per macro.
+
+/// Gives every `Option<Time>`, `Option<ByteSize>` and `Option<Ratio>` field of
+/// a file-config struct its human-unit serde codec and schema marker. The
+/// crate documentation describes the expansion.
+#[moxy::attribute(name = "human_units")]
+pub fn human_units(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    human_units::expand(meta, item)
+}
+
+/// Derives `new`, a getter, and optionally `Default`, `FromStr`, `Display` and
+/// a free parse function for a tuple newtype over a `refined_type` rule. The
+/// crate documentation lists the `#[refined(...)]` arguments.
+#[moxy::derive(RefinedNewtype, attributes(refined))]
+pub fn refined_newtype(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    refined_newtype::expand(item)
+}
+
+/// Derives `PartialEq` and `PartialOrd` in both directions between a tuple
+/// newtype and the type of its one field.
+#[moxy::derive(PrimitiveCmp)]
+pub fn primitive_cmp(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    primitive_cmp::expand(item)
+}
+
+/// Generates the broker's dispatch adapters and `register_dispatch_table`
+/// from one table of api names. The crate documentation describes the table.
+#[moxy::function(name = "dispatch_table")]
+pub fn dispatch_table(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    dispatch::expand(tokens)
+}
+
+/// Expands to the throttle-echo audit's `[(API_KEY, Probe); N]` array from one
+/// table of api names. The crate documentation describes the table.
+#[moxy::function(name = "throttle_probes")]
+pub fn throttle_probes(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    throttle_probes::expand(tokens)
+}
+
+/// Derives `copy_into`, which copies each field of a clap argument group onto
+/// the same-named field of its `#[overlay(target = Type)]`. The crate
+/// documentation lists the field attributes.
+#[moxy::derive(RuntimeOverlay, attributes(overlay))]
+pub fn runtime_overlay(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    runtime_overlay::expand(item)
+}
+
+/// Gives every field of a clap argument struct without an `#[arg(...)]` a
+/// `--long` flag, a `KRABKA_<FIELD>` environment variable, and the value
+/// parser its type implies. The crate documentation lists the types.
+#[moxy::attribute(name = "krabka_env")]
+pub fn krabka_env(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    krabka_env::expand(meta, item)
+}

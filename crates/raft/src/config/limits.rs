@@ -11,6 +11,7 @@
 
 use std::{fmt, str::FromStr};
 
+use krabka_macros::RefinedNewtype;
 use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, ByteSizeExt as _},
@@ -22,95 +23,31 @@ use super::{
     DEFAULT_METADATA_RAFT_FETCH_MAX,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The number of consecutive fetch misses a controller tolerates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
+#[refined(
+    rule(GreaterU32<0>),
+    string_error,
+    label = "controller fetch miss limit",
+    getter = get,
+    default = DEFAULT_CONTROLLER_FETCH_MISS_LIMIT,
+    from_str,
+    display
+)]
 pub struct ControllerFetchMissLimit(u32);
 
-impl ControllerFetchMissLimit {
-    /// Validate the consecutive fetch-miss limit.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `value` is zero.
-    pub fn new(value: u32) -> Result<Self, String> {
-        GreaterU32::<0>::new(value)
-            .map(|value| Self(value.into_value()))
-            .map_err(|error| format!("controller fetch miss limit: {error}"))
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
-
-impl Default for ControllerFetchMissLimit {
-    fn default() -> Self {
-        Self::new(DEFAULT_CONTROLLER_FETCH_MISS_LIMIT)
-            .expect("default controller fetch miss limit is positive")
-    }
-}
-
-impl FromStr for ControllerFetchMissLimit {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value
-            .parse()
-            .map_err(|error: std::num::ParseIntError| error.to_string())
-            .and_then(Self::new)
-    }
-}
-
-impl fmt::Display for ControllerFetchMissLimit {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The capacity of the metadata Raft command queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
+#[refined(
+    rule(GreaterUsize<0>),
+    string_error,
+    label = "metadata raft command queue capacity",
+    getter = get,
+    default = DEFAULT_METADATA_RAFT_COMMAND_QUEUE_CAPACITY,
+    from_str,
+    display
+)]
 pub struct MetadataRaftCommandQueueCapacity(usize);
-
-impl MetadataRaftCommandQueueCapacity {
-    /// Validate the metadata Raft command queue capacity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `value` is zero.
-    pub fn new(value: usize) -> Result<Self, String> {
-        GreaterUsize::<0>::new(value)
-            .map(|value| Self(value.into_value()))
-            .map_err(|error| format!("metadata raft command queue capacity: {error}"))
-    }
-
-    #[must_use]
-    pub const fn get(self) -> usize {
-        self.0
-    }
-}
-
-impl Default for MetadataRaftCommandQueueCapacity {
-    fn default() -> Self {
-        Self::new(DEFAULT_METADATA_RAFT_COMMAND_QUEUE_CAPACITY)
-            .expect("default metadata raft command queue capacity is positive")
-    }
-}
-
-impl FromStr for MetadataRaftCommandQueueCapacity {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value
-            .parse()
-            .map_err(|error: std::num::ParseIntError| error.to_string())
-            .and_then(Self::new)
-    }
-}
-
-impl fmt::Display for MetadataRaftCommandQueueCapacity {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MetadataRaftFetchMax(i32);

@@ -24,6 +24,7 @@ use super::{
 /// Exactly one of `storage_dir` (local filesystem), `[remote_storage.s3]`
 /// (S3-compatible object store), or `[remote_storage.gcs]` (native Google
 /// Cloud Storage) should be set. Setting more than one errors at load time.
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageConfig {
@@ -65,8 +66,6 @@ pub struct FileRemoteStorageConfig {
     /// Byte budget of the on-disk cache of remote segment indexes under
     /// `<log_dir>/remote-log-index-cache`. Kafka's
     /// `remote.log.index.file.cache.total.size.bytes`; defaults to 1 GiB.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub index_cache_size: Option<ByteSize>,
     /// Deadline on one segment copy to the remote tier. Defaults to 10
     /// minutes.
@@ -77,13 +76,12 @@ pub struct FileRemoteStorageConfig {
     /// and retried on the next tick; the segment stays in
     /// `CopySegmentStarted`, which local retention refuses to delete
     /// against.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub copy_timeout: Option<Time>,
 }
 
 /// TOML shape of `[remote_storage.kafka_metadata]`. Maps to
 /// [`crate::config::KafkaRlmmConfig`].
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileKafkaRlmmConfig {
@@ -108,27 +106,17 @@ pub struct FileKafkaRlmmConfig {
     #[schemars(range(min = 1))]
     pub min_isr: Option<i32>,
     /// Timeout for provisioning each internal metadata topic.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub topic_create_timeout: Option<Time>,
     /// Maximum wait for each per-partition metadata fetch.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub fetch_max_wait: Option<Time>,
     /// Maximum bytes returned by each per-partition metadata fetch.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub fetch_max_bytes: Option<ByteSize>,
     /// Backoff after a failed metadata fetch.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub fetch_retry_backoff: Option<Time>,
     /// Capacity of the shared metadata-event delivery queue.
     #[schemars(range(min = 1))]
     pub event_queue_capacity: Option<usize>,
     /// RLMM cache snapshot cadence.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub snapshot_interval: Option<Time>,
     /// Explicit opt-out: run the non-durable in-memory RLMM instead of the
     /// topic-backed default. Tests / single-node dev only.

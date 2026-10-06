@@ -3086,6 +3086,7 @@ dependencies = [
  "hex",
  "krabka-ids",
  "krabka-log",
+ "krabka-macros",
  "krabka-protocol",
  "krabka-units",
  "krabka-verified",
@@ -3181,6 +3182,7 @@ dependencies = [
  "krabka-client-consumer",
  "krabka-client-core",
  "krabka-client-producer",
+ "krabka-macros",
  "krabka-protocol",
  "krabka-security",
  "krabka-units",
@@ -3570,8 +3572,14 @@ name = "krabka-macros"
 version = "0.7.0"
 dependencies = [
  "assert2",
+ "clap",
+ "krabka-units",
  "moxy",
  "prometheus-client",
+ "refined_type",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3662,6 +3670,7 @@ dependencies = [
  "krabka-ids",
  "krabka-kraft-core",
  "krabka-log",
+ "krabka-macros",
  "krabka-metadata",
  "krabka-protocol",
  "krabka-security",

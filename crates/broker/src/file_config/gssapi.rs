@@ -21,6 +21,7 @@ fn default_principal_to_local_rules() -> Vec<String> {
 /// TOML shape of `[gssapi]`. Maps to
 /// [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules`
 /// are parsed into `KerberosRule` at `apply_to` time.
+#[krabka_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileGssapiConfig {
@@ -42,8 +43,6 @@ pub struct FileGssapiConfig {
     /// falls back to krb5.conf when omitted.
     pub kdc: Option<String>,
     /// Maximum tolerated difference between client and broker clocks.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub max_time_skew: Option<Time>,
 }
 

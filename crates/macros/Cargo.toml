@@ -18,4 +18,10 @@ moxy = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+krabka-units = { workspace = true }
 prometheus-client = { workspace = true }
+refined_type = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 /// TOML shape of `[remote_storage.s3]`. Maps to
 /// [`krabka_remote_storage::S3Config`].
+#[krabka_macros::human_units]
 #[derive(Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageS3Config {
@@ -66,20 +67,14 @@ pub struct FileRemoteStorageS3Config {
     /// its retries. When `None`,
     /// [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it
     /// under 5 minutes: retries reuse the original request's credentials.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub retry_timeout: Option<Time>,
     /// Ceiling on one HTTP request, connect phase included. When `None`,
     /// [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This
     /// is the bound on a store that accepts the connection and then
     /// answers nothing.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub request_timeout: Option<Time>,
     /// Ceiling on the connect phase alone. When `None`,
     /// [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connect_timeout: Option<Time>,
 }
 
@@ -116,6 +111,7 @@ impl std::fmt::Debug for FileRemoteStorageS3Config {
 /// `service_account_key`, `application_credentials_path`) selects GKE
 /// Workload Identity / Application Default Credentials (keyless) — the
 /// primary production path.
+#[krabka_macros::human_units]
 #[derive(Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageGcsConfig {
@@ -158,20 +154,14 @@ pub struct FileRemoteStorageGcsConfig {
     /// its retries. When `None`,
     /// [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it
     /// under 5 minutes: retries reuse the original request's credentials.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub retry_timeout: Option<Time>,
     /// Ceiling on one HTTP request, connect phase included. When `None`,
     /// [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This
     /// is the bound on a store that accepts the connection and then
     /// answers nothing.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub request_timeout: Option<Time>,
     /// Ceiling on the connect phase alone. When `None`,
     /// [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connect_timeout: Option<Time>,
 }
 

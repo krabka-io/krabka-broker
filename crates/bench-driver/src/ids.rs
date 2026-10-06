@@ -8,9 +8,8 @@
 //! byte-identical to the bare primitive it wraps. The report aggregator and
 //! any external tool that reads the artifacts see no change.
 
-use core::cmp::Ordering;
-
 use derive_more::{Display, From, Into};
+use krabka_macros::PrimitiveCmp;
 use krabka_units::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +31,7 @@ use crate::numeric::saturating_u64_to_i64;
     Into,
     Serialize,
     Deserialize,
+    PrimitiveCmp,
 )]
 #[serde(transparent)]
 pub struct MessageCount(pub u64);
@@ -61,6 +61,7 @@ pub struct MessageCount(pub u64);
     Into,
     Serialize,
     Deserialize,
+    PrimitiveCmp,
 )]
 #[serde(transparent)]
 pub struct TimeOffsetMs(pub u64);
@@ -98,45 +99,10 @@ impl TimeOffsetMs {
     Into,
     Serialize,
     Deserialize,
+    PrimitiveCmp,
 )]
 #[serde(transparent)]
 pub struct WallclockMs(pub i64);
-
-macro_rules! impl_primitive_cmp {
-    ($ty:ty, $inner:ty) => {
-        impl PartialEq<$inner> for $ty {
-            #[inline]
-            fn eq(&self, other: &$inner) -> bool {
-                self.0 == *other
-            }
-        }
-
-        impl PartialEq<$ty> for $inner {
-            #[inline]
-            fn eq(&self, other: &$ty) -> bool {
-                *self == other.0
-            }
-        }
-
-        impl PartialOrd<$inner> for $ty {
-            #[inline]
-            fn partial_cmp(&self, other: &$inner) -> Option<Ordering> {
-                self.0.partial_cmp(other)
-            }
-        }
-
-        impl PartialOrd<$ty> for $inner {
-            #[inline]
-            fn partial_cmp(&self, other: &$ty) -> Option<Ordering> {
-                self.partial_cmp(&other.0)
-            }
-        }
-    };
-}
-
-impl_primitive_cmp!(MessageCount, u64);
-impl_primitive_cmp!(TimeOffsetMs, u64);
-impl_primitive_cmp!(WallclockMs, i64);
 
 #[cfg(test)]
 mod tests {

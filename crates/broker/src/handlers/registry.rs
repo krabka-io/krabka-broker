@@ -1,11 +1,14 @@
 //! Broker API dispatch registry.
 //!
-//! The root holds the handler-signature aliases, the `macro_rules!` generators
-//! that turn a table of api keys into a registration function, and
-//! [`build_registry`], which assembles the whole table. The macros stay in this
-//! file because `macro_rules!` scope is textual: a child module sees a macro
-//! only when the definition comes before the `mod` declaration that pulls the
-//! child in.
+//! The root holds the handler-signature aliases, the [`dispatch_table!`] that
+//! generates an adapter and a registration for every Kafka api whose name
+//! derives the rest, and [`build_registry`], which assembles the whole table.
+//! The krabka-private table keeps a `macro_rules!` generator, which stays in
+//! this file because `macro_rules!` scope is textual: a child module sees a
+//! macro only when the definition comes before the `mod` declaration that
+//! pulls the child in.
+//!
+//! [`dispatch_table!`]: krabka_macros::dispatch_table
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -51,40 +54,6 @@ pub(crate) type AuthHandler = for<'a> fn(
     &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
 
-macro_rules! context_adapter {
-    ($adapter:ident, $handler:expr) => {
-        fn $adapter<'a>(
-            broker: &'a Broker,
-            version: ApiVersion,
-            correlation_id: CorrelationId,
-            body: &'a [u8],
-            ctx: &'a RequestContext<'a>,
-        ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-            Box::pin(($handler)(broker, version, correlation_id, body, ctx))
-        }
-    };
-}
-
-macro_rules! context_dispatches {
-    ($register_fn:ident; $(($adapter:ident, $api:ident, $request:ident, $handler:path)),+ $(,)?) => {
-        $(context_adapter!($adapter, $handler);)+
-
-        pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
-            $(
-                assert2::assert!(
-                    registry.register(DispatchEntry::context(
-                        ApiKey::$api as i16,
-                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
-                        $adapter,
-                    )),
-                    "duplicate dispatch registration for {:?}",
-                    ApiKey::$api
-                );
-            )+
-        }
-    };
-}
-
 /// Registers krabka-private context dispatches by raw wire `api_key`.
 ///
 /// A krabka-private api key sits at or above
@@ -98,7 +67,17 @@ macro_rules! context_dispatches {
 /// receives the [`RequestContext`] and can authorize on the principal.
 macro_rules! krabka_private_context_dispatches {
     ($register_fn:ident; $(($adapter:ident, $api_key:path, $flexible_min:expr, $handler:path)),* $(,)?) => {
-        $(context_adapter!($adapter, $handler);)*
+        $(
+            fn $adapter<'a>(
+                broker: &'a Broker,
+                version: ApiVersion,
+                correlation_id: CorrelationId,
+                body: &'a [u8],
+                ctx: &'a RequestContext<'a>,
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
+                Box::pin($handler(broker, version, correlation_id, body, ctx))
+            }
+        )*
 
         pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
             let entries: &[(ApiKeyCode, ApiVersion, ContextHandler)] = &[
@@ -123,139 +102,10 @@ macro_rules! krabka_private_context_dispatches {
     };
 }
 
-macro_rules! sync_context_dispatches {
-    ($register_fn:ident; $(($adapter:ident, $api:ident, $request:ident, $handler:path)),+ $(,)?) => {
-        $(
-            fn $adapter<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                correlation_id: CorrelationId,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(std::future::ready($handler(
-                    broker, version, correlation_id, body, ctx,
-                )))
-            }
-        )+
-
-        pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
-            $(
-                assert2::assert!(
-                    registry.register(DispatchEntry::context(
-                        ApiKey::$api as i16,
-                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
-                        $adapter,
-                    )),
-                    "duplicate dispatch registration for {:?}",
-                    ApiKey::$api
-                );
-            )+
-        }
-    };
-}
-
-macro_rules! decoded_context_dispatches {
-    ($register_fn:ident; $(($adapter:ident, $api:ident, $request_mod:ident, $request_ty:ident, $handler:path)),+ $(,)?) => {
-        $(
-            fn $adapter<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                _correlation_id: CorrelationId,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(async move {
-                    use krabka_protocol::Decode;
-
-                    let mut cur = body;
-                    let req = krabka_protocol::owned::$request_mod::$request_ty::decode(
-                        &mut cur, version,
-                    )?;
-                    $handler(broker, req, ctx, version).await
-                })
-            }
-        )+
-
-        pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
-            $(
-                assert2::assert!(
-                    registry.register(DispatchEntry::context(
-                        ApiKey::$api as i16,
-                        krabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
-                        $adapter,
-                    )),
-                    "duplicate dispatch registration for {:?}",
-                    ApiKey::$api
-                );
-            )+
-        }
-    };
-}
-
-macro_rules! decoded_sync_context_dispatches {
-    ($register_fn:ident; $(($adapter:ident, $api:ident, $request_mod:ident, $request_ty:ident, $handler:path)),+ $(,)?) => {
-        $(
-            fn $adapter<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                _correlation_id: CorrelationId,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(std::future::ready((|| {
-                    use krabka_protocol::Decode;
-                    let mut cur = body;
-                    let req = krabka_protocol::owned::$request_mod::$request_ty::decode(
-                        &mut cur, version,
-                    )?;
-                    $handler(broker, req, ctx, version)
-                })()))
-            }
-        )+
-
-        pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
-            $(
-                assert2::assert!(
-                    registry.register(DispatchEntry::context(
-                        ApiKey::$api as i16,
-                        krabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
-                        $adapter,
-                    )),
-                    "duplicate dispatch registration for {:?}",
-                    ApiKey::$api
-                );
-            )+
-        }
-    };
-}
-
-macro_rules! telemetry_adapter {
-    ($adapter:ident, $handler:expr) => {
-        pub(super) fn $adapter<'a>(
-            broker: &'a Broker,
-            version: ApiVersion,
-            correlation_id: CorrelationId,
-            body: &'a [u8],
-            ctx: &'a TelemetryContext<'a>,
-        ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-            Box::pin(std::future::ready(($handler)(
-                broker,
-                version,
-                correlation_id,
-                body,
-                ctx,
-            )))
-        }
-    };
-}
-
 mod auth;
-mod context;
 mod decoded;
 mod entry;
 mod krabka_private;
-mod telemetry;
 #[cfg(test)]
 mod tests;
 
@@ -266,14 +116,116 @@ use self::{
         describe_delegation_token_adapter, expire_delegation_token_adapter,
         renew_delegation_token_adapter,
     },
-    context::{register_context_dispatches, register_sync_context_dispatches},
-    decoded::{
-        alter_user_scram_credentials_adapter, register_decoded_context_dispatches,
-        register_decoded_sync_context_dispatches, update_features_adapter,
-    },
+    decoded::{alter_user_scram_credentials_adapter, update_features_adapter},
     krabka_private::register_krabka_private_context_dispatches,
-    telemetry::{get_telemetry_subscriptions_adapter, push_telemetry_adapter},
 };
+
+// One adapter and one `register_dispatch_table` registration per Kafka api.
+// The handler is `crate::handlers::<snake_name>::handle` unless the entry names
+// another after `=>`. `custom_context` and `auth` entries register the
+// hand-written `<snake_name>_adapter` imported above.
+krabka_macros::dispatch_table! {
+    // `handle(broker, version, correlation_id, body, ctx)`, awaited.
+    context:
+        AssignReplicasToDirs,
+        Metadata,
+        DescribeCluster,
+        DescribeTopicPartitions,
+        CreateTopics,
+        DeleteTopics,
+        AlterConfigs,
+        IncrementalAlterConfigs,
+        DeleteRecords,
+        CreatePartitions,
+        DescribeGroups,
+        ListGroups,
+        ShareGroupDescribe,
+        ShareFetch,
+        ShareAcknowledge,
+        DescribeShareGroupOffsets,
+        AlterShareGroupOffsets,
+        DeleteShareGroupOffsets,
+        DeleteGroups,
+        JoinGroup,
+        OffsetCommit,
+        OffsetFetch,
+        OffsetDelete,
+        DescribeProducers,
+        DescribeTransactions,
+        ListTransactions,
+        UnregisterBroker,
+        UnregisterController,
+        AddRaftVoter,
+        RemoveRaftVoter,
+        UpdateRaftVoter,
+        AlterPartition,
+        BrokerHeartbeat,
+        BrokerRegistration,
+        ControllerRegistration,
+        Heartbeat,
+        SyncGroup,
+        LeaveGroup,
+        ConsumerGroupHeartbeat,
+        ShareGroupHeartbeat,
+        StreamsGroupHeartbeat,
+        ConsumerGroupDescribe,
+        StreamsGroupDescribe,
+        StreamsGroupTopologyDescriptionUpdate,
+        FindCoordinator,
+        ListOffsets,
+        DescribeLogDirs,
+        InitProducerId,
+        AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle,
+        EndTxn => crate::txn::handlers::end_txn::handle,
+        TxnOffsetCommit => crate::txn::handlers::txn_offset_commit::handle,
+        DescribeQuorum,
+        AllocateProducerIds,
+        AddOffsetsToTxn => crate::txn::handlers::add_offset_commits_to_txn::handle,
+        WriteTxnMarkers => crate::txn::handlers::write_txn_markers::handle,
+        FetchSnapshot,
+        InitializeShareGroupState => crate::share_coordinator::handlers::initialize::handle,
+        ReadShareGroupState => crate::share_coordinator::handlers::read::handle,
+        WriteShareGroupState => crate::share_coordinator::handlers::write::handle,
+        DeleteShareGroupState => crate::share_coordinator::handlers::delete::handle,
+        ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
+    // The same arguments; the result is wrapped in a ready future.
+    sync_context:
+        ListConfigResources,
+        GetReplicaLogInfo,
+        OffsetForLeaderEpoch,
+        DescribeConfigs;
+    // `handle(broker, request, ctx, version)` on the decoded request, awaited.
+    decoded:
+        CreateAcls,
+        DeleteAcls,
+        ElectLeaders,
+        AlterPartitionReassignments,
+        AlterClientQuotas;
+    // The same arguments; the result is wrapped in a ready future.
+    decoded_sync:
+        DescribeAcls,
+        ListPartitionReassignments,
+        DescribeClientQuotas,
+        DescribeUserScramCredentials;
+    // Hand-written in `decoded`: the handler returns a response struct that
+    // the adapter encodes.
+    custom_context:
+        AlterUserScramCredentials,
+        UpdateFeatures;
+    // Hand-written in `auth`: the adapter receives the `ConnectionAuth` and
+    // the peer address instead of a `RequestContext`.
+    auth:
+        AlterReplicaLogDirs,
+        CreateDelegationToken,
+        RenewDelegationToken,
+        ExpireDelegationToken,
+        DescribeDelegationToken;
+    // KIP-714: the handler takes a `TelemetryContext`; the result is wrapped
+    // in a ready future.
+    telemetry:
+        GetTelemetrySubscriptions,
+        PushTelemetry;
+}
 
 fn produce_adapter<'a>(
     broker: &'a Broker,
@@ -321,56 +273,8 @@ pub(crate) fn build_registry() -> DispatchRegistry {
         ApiKey::SaslAuthenticate as i16,
         krabka_protocol::owned::sasl_authenticate_request::FLEXIBLE_MIN,
     ));
-    register_context_dispatches(&mut registry);
-    register_sync_context_dispatches(&mut registry);
+    register_dispatch_table(&mut registry);
     register_krabka_private_context_dispatches(&mut registry);
-    register_decoded_context_dispatches(&mut registry);
-    register_decoded_sync_context_dispatches(&mut registry);
-    registry.register(DispatchEntry::context(
-        ApiKey::AlterUserScramCredentials as i16,
-        krabka_protocol::owned::alter_user_scram_credentials_request::FLEXIBLE_MIN,
-        alter_user_scram_credentials_adapter,
-    ));
-    registry.register(DispatchEntry::context(
-        ApiKey::UpdateFeatures as i16,
-        krabka_protocol::owned::update_features_request::FLEXIBLE_MIN,
-        update_features_adapter,
-    ));
-    registry.register(DispatchEntry::auth(
-        ApiKey::AlterReplicaLogDirs as i16,
-        krabka_protocol::owned::alter_replica_log_dirs_request::FLEXIBLE_MIN,
-        alter_replica_log_dirs_adapter,
-    ));
-    registry.register(DispatchEntry::auth(
-        ApiKey::CreateDelegationToken as i16,
-        krabka_protocol::owned::create_delegation_token_request::FLEXIBLE_MIN,
-        create_delegation_token_adapter,
-    ));
-    registry.register(DispatchEntry::auth(
-        ApiKey::RenewDelegationToken as i16,
-        krabka_protocol::owned::renew_delegation_token_request::FLEXIBLE_MIN,
-        renew_delegation_token_adapter,
-    ));
-    registry.register(DispatchEntry::auth(
-        ApiKey::ExpireDelegationToken as i16,
-        krabka_protocol::owned::expire_delegation_token_request::FLEXIBLE_MIN,
-        expire_delegation_token_adapter,
-    ));
-    registry.register(DispatchEntry::auth(
-        ApiKey::DescribeDelegationToken as i16,
-        krabka_protocol::owned::describe_delegation_token_request::FLEXIBLE_MIN,
-        describe_delegation_token_adapter,
-    ));
-    registry.register(DispatchEntry::telemetry(
-        ApiKey::GetTelemetrySubscriptions as i16,
-        krabka_protocol::owned::get_telemetry_subscriptions_request::FLEXIBLE_MIN,
-        get_telemetry_subscriptions_adapter,
-    ));
-    registry.register(DispatchEntry::telemetry(
-        ApiKey::PushTelemetry as i16,
-        krabka_protocol::owned::push_telemetry_request::FLEXIBLE_MIN,
-        push_telemetry_adapter,
-    ));
     // The apis Kafka answers through `sendResponseExemptThrottle`, so no
     // request quota holds them: `KafkaApis.handleWriteTxnMarkersRequest`,
     // `ControllerApis.handleAlterPartitionRequest`, and the raft rpcs of
