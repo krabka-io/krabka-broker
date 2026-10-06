@@ -78,3 +78,35 @@ fn the_value_parser_follows_the_field_type() {
         assert!(parsed == accepted, "{flag}");
     }
 }
+
+#[derive(Debug, Args)]
+struct Group {
+    #[arg(long)]
+    grouped: Option<u32>,
+}
+
+#[krabka_macros::krabka_env]
+#[derive(Debug, Args)]
+struct WithFlattened {
+    #[command(flatten)]
+    group: Group,
+    outer: Option<u32>,
+}
+
+#[test]
+fn a_field_with_its_own_command_attribute_is_left_alone() {
+    let shapes = WithFlattened::augment_args(Command::new("flattened"))
+        .get_arguments()
+        .map(|arg| {
+            (
+                arg.get_long().map(str::to_owned),
+                arg.get_env().map(|env| env.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        (Some("grouped".to_owned()), None),
+        (Some("outer".to_owned()), Some("KRABKA_OUTER".to_owned())),
+    ];
+    assert!(shapes == expected);
+}

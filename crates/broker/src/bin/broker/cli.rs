@@ -5,10 +5,13 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use base64::Engine as _;
 use clap::Parser;
+use krabka_raft::NodeId;
 use krabka_units::{ByteSize, Time};
+use uuid::Uuid;
 
 use crate::runtime_args::RuntimeArgs;
 
+#[krabka_macros::krabka_env]
 #[derive(Debug, Parser)]
 #[command(
     name = "krabka-broker",
@@ -110,7 +113,7 @@ pub struct Args {
     /// form -- what `Metadata` and `DescribeCluster` report (#1042) -- or
     /// `java.util.UUID`'s hyphenated form.
     #[arg(long, env = "KRABKA_CLUSTER_ID", value_parser = parse_cluster_id)]
-    pub cluster_id: Option<uuid::Uuid>,
+    pub cluster_id: Option<Uuid>,
 
     /// Bind address for the Prometheus `/metrics` HTTP endpoint.
     /// An empty string or `none` disables it. Default: `0.0.0.0:9404`.
@@ -167,7 +170,7 @@ pub struct Args {
         num_args = 0..,
         value_parser = krabka_broker::file_config::parse_quorum_voter
     )]
-    pub controller_quorum_voters: Vec<(krabka_raft::NodeId, String)>,
+    pub controller_quorum_voters: Vec<(NodeId, String)>,
 
     /// KIP-853: auto-join the quorum as a voter after the node catches up as
     /// an observer. This maps to Kafka's
@@ -180,51 +183,21 @@ pub struct Args {
     pub observer_lag_bound: Option<u64>,
 
     /// Broker heartbeat interval in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_HEARTBEAT_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub heartbeat_interval: Option<Time>,
 
     /// Broker heartbeat timeout in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_HEARTBEAT_TIMEOUT",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub heartbeat_timeout: Option<Time>,
 
     /// Follower lag timeout in milliseconds before ISR shrink.
-    #[arg(
-        long,
-        env = "KRABKA_REPLICA_LAG_TIME_MAX",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub replica_lag_time_max: Option<Time>,
 
     /// Controller election timeout in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLER_ELECTION_TIMEOUT",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub controller_election_timeout: Option<Time>,
 
     /// Controller heartbeat interval in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLER_HEARTBEAT_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub controller_heartbeat_interval: Option<Time>,
 
     /// Consecutive controller fetch misses tolerated before election.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLER_FETCH_MISS_LIMIT",
-        value_parser = clap::value_parser!(u32).range(1..)
-    )]
     pub controller_fetch_miss_limit: Option<u32>,
 
     /// Capacity of the metadata Raft command queue.
@@ -236,27 +209,12 @@ pub struct Args {
     pub metadata_raft_command_queue_capacity: Option<usize>,
 
     /// Per-read and per-snapshot-request metadata Raft byte budget.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_RAFT_FETCH_MAX",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_raft_fetch_max: Option<ByteSize>,
 
     /// Controlled-shutdown leadership drain timeout in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub controlled_shutdown_drain_timeout: Option<Time>,
 
     /// Maximum bytes between metadata-log snapshots.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_max_bytes_between_snapshots: Option<ByteSize>,
 
     /// Maximum time between metadata-log snapshots. `0s` disables the interval cap.
@@ -272,29 +230,14 @@ pub struct Args {
     pub metadata_snapshot_interval_records: Option<u64>,
 
     /// Maximum metadata snapshot size a follower will fetch.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_SNAPSHOT_FETCH_MAX",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_snapshot_fetch_max: Option<ByteSize>,
 
     /// Largest metadata-log segment (`metadata.log.segment.bytes`), from
     /// 8 MiB to 2147483647 bytes.
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_LOG_SEGMENT_BYTES",
-        value_parser = krabka_units::parse::positive_byte_size
-    )]
     pub metadata_log_segment_bytes: Option<ByteSize>,
 
     /// Longest time a metadata-log segment stays active
     /// (`metadata.log.segment.ms`).
-    #[arg(
-        long,
-        env = "KRABKA_METADATA_LOG_SEGMENT_ROLL_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub metadata_log_segment_roll_interval: Option<Time>,
 
     /// Largest combined size of the metadata log and its snapshots
@@ -321,11 +264,6 @@ pub struct Args {
     pub txn_abort_cleanup_interval: Option<Time>,
 
     /// Transactional-id expiry (`transactional.id.expiration.ms`).
-    #[arg(
-        long,
-        env = "KRABKA_TXN_ID_EXPIRATION",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub txn_id_expiration: Option<Time>,
 
     /// Transactional-id expiry sweep cadence
@@ -335,11 +273,6 @@ pub struct Args {
     pub txn_id_expiration_cleanup_interval: Option<Time>,
 
     /// Auto preferred-replica election scan cadence.
-    #[arg(
-        long,
-        env = "KRABKA_LEADER_IMBALANCE_CHECK_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub leader_imbalance_check_interval: Option<Time>,
 
     /// TLS cert/key reload polling interval. `0s` disables the watcher.
@@ -359,19 +292,9 @@ pub struct Args {
     pub max_connections_per_ip: Option<usize>,
 
     /// Delegation-token maximum lifetime.
-    #[arg(
-        long,
-        env = "KRABKA_DELEGATION_TOKEN_MAX_LIFETIME",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub delegation_token_max_lifetime: Option<Time>,
 
     /// Delegation-token expiry sweep interval.
-    #[arg(
-        long,
-        env = "KRABKA_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub delegation_token_expiry_check_interval: Option<Time>,
 
     /// Delegation-token default renew period.
@@ -383,11 +306,6 @@ pub struct Args {
     pub delegation_token_default_renew_period: Option<Time>,
 
     /// `RemoteLogManager` copy/retention cadence in milliseconds.
-    #[arg(
-        long,
-        env = "KRABKA_REMOTE_LOG_MANAGER_INTERVAL",
-        value_parser = krabka_units::parse::positive_time
-    )]
     pub remote_log_manager_interval: Option<Time>,
 
     /// Delegation-token HMAC master key. Prefer secrets managers over shell history.

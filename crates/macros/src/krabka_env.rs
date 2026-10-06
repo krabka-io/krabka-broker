@@ -68,7 +68,11 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         ));
     };
     for field in &mut named.fields.inner {
-        if field.attrs.iter().any(|attr| attr.path.is_ident("arg")) {
+        if field
+            .attrs
+            .iter()
+            .any(|attr| attr.path.is_ident("arg") || attr.path.is_ident("command"))
+        {
             continue;
         }
         let Some(ident) = field.ident.as_ref() else {
