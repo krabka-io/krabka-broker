@@ -12,11 +12,8 @@ use krabka_protocol::records::{HEADER_LEN, RecordBatchHeader};
 use krabka_units::prelude::ByteSizeExt;
 use zerocopy::FromBytes;
 
-use super::{Segment, io::read_full_at};
+use super::Segment;
 use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError};
-
-/// Bytes of a v2 batch up to and including the `batch_length` field.
-const BATCH_PREFIX_LEN: usize = 12;
 
 /// The fields of one v2 batch header that an activation walk reads.
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +41,7 @@ impl Segment {
     /// Otherwise a small read can return empty and the log can advance to the
     /// next segment while records in this one remain unread.
     pub(super) fn read_start_position(&self, target_rel: u32) -> Result<u64, LogError> {
-        let mut position = match self.offset_index.floor_entry(target_rel) {
+        let position = match self.offset_index.floor_entry(target_rel) {
             Some((indexed_last, position)) if indexed_last == target_rel => {
                 return Ok(u64::from(position));
             }
@@ -52,24 +49,13 @@ impl Segment {
             None => 0,
         };
         let target = self.base_offset.0 + i64::from(target_rel);
-        let mut header = [0u8; HEADER_LEN];
-        while position < self.log_size {
-            if read_full_at(&self.log_file, position, &mut header)? < HEADER_LEN {
-                break;
+        self.walk_batch_headers(position, |view| {
+            if view.last_offset.0 >= target {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
             }
-            let batch = RecordBatchHeader::ref_from_bytes(&header)
-                .map_err(|_| LogError::Corrupt("record batch header".into()))?;
-            if batch.base_offset.get() + i64::from(batch.last_offset_delta.get()) >= target {
-                break;
-            }
-            let total =
-                BATCH_PREFIX_LEN as u64 + u64::from(batch.batch_length.get().max(0).unsigned_abs());
-            if total < HEADER_LEN as u64 {
-                break;
-            }
-            position += total;
-        }
-        Ok(position)
+        })
     }
 
     /// Walk the fixed v2 batch headers from `start_pos` forward and hand each
@@ -80,12 +66,12 @@ impl Segment {
     /// window at a time rather than one header per system call, because a
     /// segment full of small batches would otherwise cost one `pread` per
     /// batch. It ends at the end of the file, at a torn trailing batch, or
-    /// when `visit` breaks.
+    /// when `visit` breaks, and returns the byte position where it stopped.
     pub(super) fn walk_batch_headers(
         &self,
         start_pos: u64,
         mut visit: impl FnMut(&BatchHeaderView) -> ControlFlow<()>,
-    ) -> Result<(), LogError> {
+    ) -> Result<u64, LogError> {
         let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize().max(HEADER_LEN);
         let mut buf: Vec<u8> = Vec::new();
         let mut pos = start_pos;
@@ -102,7 +88,7 @@ impl Segment {
                 if total < HEADER_LEN {
                     // A batch cannot be shorter than its own header. The tail
                     // is torn, and a step of `total` would not terminate.
-                    return Ok(());
+                    return Ok(pos + at as u64);
                 }
                 let base = header.base_offset.get();
                 let view = BatchHeaderView {
@@ -111,17 +97,17 @@ impl Segment {
                     max_timestamp: header.max_timestamp.get(),
                 };
                 if visit(&view).is_break() {
-                    return Ok(());
+                    return Ok(pos + at as u64);
                 }
                 at += total;
             }
             if at == 0 {
                 // Less than one header left: a torn trailing batch.
-                return Ok(());
+                return Ok(pos);
             }
             pos += at as u64;
         }
-        Ok(())
+        Ok(pos)
     }
 }
 
@@ -214,5 +200,85 @@ mod tests {
         // The second batch (ending at relative offset 9) is indexed, and the
         // read for relative offset 12 is inside the third.
         assert2::check!(seg.read_start_position(12).unwrap() == third);
+    }
+
+    #[test]
+    fn sparse_reads_find_batches_across_multiple_header_windows() {
+        use krabka_units::prelude::bytes;
+
+        let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
+        let batch_size = sample_batch(10, 3, 1_000).encoded_len();
+        let count = 3 * window / batch_size + 2;
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for interval in [
+            crate::config::DEFAULT_INDEX_INTERVAL,
+            bytes(u32::try_from(4 * window).unwrap()),
+        ] {
+            let dir = tempdir().unwrap();
+            let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
+            let mut positions = Vec::new();
+            for batch in 0..count {
+                positions.push(seg.log_size);
+                let base = 10 + 3 * i64::try_from(batch).unwrap();
+                seg.append(&sample_batch(base, 3, 1_000), interval).unwrap();
+            }
+            for batch in [
+                0,
+                1,
+                window / batch_size - 1,
+                window / batch_size,
+                window / batch_size + 1,
+                count - 1,
+            ] {
+                // The requested offset is inside the batch, before its last
+                // offset (the key a sparse index would store).
+                let relative = u32::try_from(3 * batch + 1).unwrap();
+                actual.push(seg.read_start_position(relative).unwrap());
+                expected.push(positions[batch]);
+            }
+            let beyond_end = u32::try_from(3 * count).unwrap();
+            actual.push(seg.read_start_position(beyond_end).unwrap());
+            expected.push(seg.log_size);
+        }
+        assert2::assert!(actual == expected);
+    }
+
+    #[test]
+    fn sparse_reads_handle_split_headers_large_batches_and_torn_tails() {
+        use bytes::Bytes;
+        use krabka_units::prelude::bytes;
+
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
+        let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
+        let interval = bytes(u32::try_from(4 * window).unwrap());
+        let mut first = sample_batch(10, 1, 1_000);
+        first.records[0].value = Some(Bytes::from(vec![b'x'; window]));
+        let overhead = first.encoded_len() - window;
+        let first_size = window - HEADER_LEN / 2;
+        first.records[0].value = Some(Bytes::from(vec![b'x'; first_size - overhead]));
+        assert2::assert!(first.encoded_len() == first_size);
+        seg.append(&first, interval).unwrap();
+        let split_header = seg.log_size;
+        seg.append(&sample_batch(11, 1, 1_000), interval).unwrap();
+        let large_position = seg.log_size;
+        let mut large = sample_batch(12, 1, 1_000);
+        large.records[0].value = Some(Bytes::from(vec![b'x'; 2 * window]));
+        seg.append(&large, interval).unwrap();
+        let tail = seg.log_size;
+        seg.append(&sample_batch(13, 1, 1_000), interval).unwrap();
+
+        let actual: Vec<_> = (0..=4)
+            .map(|relative| seg.read_start_position(relative).unwrap())
+            .collect();
+        assert2::assert!(actual == vec![0, split_header, large_position, tail, seg.log_size]);
+
+        // A partial final header stops at that header's position, rather than
+        // advancing past it or looping when the next window reaches EOF.
+        seg.log_file
+            .set_len(tail + (HEADER_LEN / 2) as u64)
+            .unwrap();
+        assert2::assert!(seg.read_start_position(3).unwrap() == tail);
     }
 }
