@@ -15,7 +15,6 @@ use krabka_protocol::owned::{
     offset_commit_request::{
         OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     },
-    offset_commit_response::OffsetCommitResponse,
     offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
     offset_fetch_response::OffsetFetchResponse,
 };
@@ -191,16 +190,9 @@ async fn commit_offset(broker: &Broker, offset: i64, retention_time_ms: i64) {
     let principal = principal("admin");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "consumer");
-    let bytes = crate::handlers::offset_commit::handle(
-        broker,
-        COMMIT_VERSION,
-        1,
-        &encode_request(&request, COMMIT_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("OffsetCommit");
-    let response: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
+    let response = crate::handlers::offset_commit::handle(broker, request, COMMIT_VERSION, &ctx)
+        .await
+        .expect("OffsetCommit");
     let code = response.topics[0].partitions[0].error_code;
     assert!(code == codes::NONE, "commit failed with error_code {code}");
 }
@@ -830,16 +822,9 @@ async fn simple_commit(broker: &Broker, group: &str, offset: i64) -> i16 {
     let principal = principal("admin");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "consumer");
-    let bytes = crate::handlers::offset_commit::handle(
-        broker,
-        COMMIT_VERSION,
-        1,
-        &encode_request(&request, COMMIT_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("OffsetCommit");
-    let response: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
+    let response = crate::handlers::offset_commit::handle(broker, request, COMMIT_VERSION, &ctx)
+        .await
+        .expect("OffsetCommit");
     response.topics[0].partitions[0].error_code
 }
 

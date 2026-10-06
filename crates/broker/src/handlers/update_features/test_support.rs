@@ -13,7 +13,7 @@ use krabka_protocol::owned::{
 };
 use krabka_security::Principal;
 
-use super::handle;
+use super::answer;
 use crate::{
     authorizer::Authorizer,
     broker::{Broker, BrokerHandle},
@@ -93,7 +93,7 @@ pub(super) async fn call(
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = context(&principal, &peer);
-    handle(&broker, req, version, &ctx).await
+    answer(&broker, req, version, &ctx).await
 }
 
 pub(super) async fn wait_for_finalized_feature(broker: &Broker, feature: &str, level: i16) {

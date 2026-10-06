@@ -125,7 +125,7 @@ async fn finalize_metadata_version(broker: &Broker, level: i16) {
     let principal = crate::test_support::principal("Cluster:Alter");
     let peer = crate::test_support::peer();
     let ctx = crate::test_support::request_context(&principal, &peer, "kafka-features");
-    let answer = crate::handlers::update_features::handle(
+    let answer = crate::handlers::update_features::answer(
         broker,
         UpdateFeaturesRequest {
             feature_updates: vec![FeatureUpdateKey {

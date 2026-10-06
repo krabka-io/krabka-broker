@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
 use krabka_metadata::AclOperation;
 use krabka_protocol::{
     owned::{
@@ -87,18 +86,15 @@ const FIRST_GROUP_ID_NOT_FOUND_VERSION: i16 = 9;
     name = "handle_offset_commit",
     level = "info",
     skip_all,
-    fields(api = "OffsetCommit", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "OffsetCommit", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    mut req: OffsetCommitRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let mut req: OffsetCommitRequest = crate::handlers::decode_group_request(&mut cur, version)?;
+) -> Result<OffsetCommitResponse, BrokerError> {
     let image = broker.controller.current_image();
 
     if crate::handlers::group_read_denied(
@@ -107,10 +103,7 @@ pub(crate) async fn handle(
         ctx,
         req.group_id.as_str(),
     ) {
-        return crate::handlers::encode_response(
-            &build_response_all(&req, codes::GROUP_AUTHORIZATION_FAILED),
-            version,
-        );
+        return Ok(build_response_all(&req, codes::GROUP_AUTHORIZATION_FAILED));
     }
 
     let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
@@ -154,12 +147,12 @@ pub(crate) async fn handle(
         }
     }
     if accepted.is_empty() {
-        return crate::handlers::encode_response(&response.build(), version);
+        return Ok(response.build());
     }
 
     req.topics = accepted;
     response.merge(commit(broker, &req, version).await);
-    crate::handlers::encode_response(&response.build(), version)
+    Ok(response.build())
 }
 
 /// Keeps the partitions of an authorized `topic` that the image holds.

@@ -63,17 +63,9 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
         .wait_until_transaction_coordinator_ready()
         .await;
 
-    let response = handle(
-        &broker,
-        version,
-        1,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("find transaction coordinator");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("find transaction coordinator");
 
     let image = broker_handle.controller_image_for_test();
     let topic = image
@@ -102,17 +94,9 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        4,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("reject pre-v6 share coordinator lookup");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("reject pre-v6 share coordinator lookup");
 
     assert!(response.coordinators.len() == 1);
     assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
@@ -139,17 +123,9 @@ async fn v4_empty_key_array_stays_empty_without_bootstrap() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        5,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("empty batched coordinator lookup");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("empty batched coordinator lookup");
 
     assert!(response.coordinators.is_empty());
     assert!(
@@ -186,17 +162,9 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        6,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("mixed coordinator lookup");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("mixed coordinator lookup");
 
     assert!(
         response
@@ -230,17 +198,9 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
         ..Default::default()
     };
 
-    let response = handle(
-        &broker,
-        version,
-        3,
-        &crate::test_support::encode_request(&request, version),
-        &context,
-    )
-    .await
-    .expect("reject malformed share coordinator key");
-    let response: FindCoordinatorResponse =
-        crate::test_support::decode_response(&response, version);
+    let response = handle(&broker, request, version, &context)
+        .await
+        .expect("reject malformed share coordinator key");
 
     assert!(response.coordinators.len() == 1);
     assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
@@ -253,7 +213,8 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
     broker_handle.shutdown().await;
 }
 
-/// Drive `handle` with `request` at `version` and decode the answer.
+/// Serve `request` at `version` through the dispatch registry and decode the
+/// answer: below v4 the wire carries the one `key` and the top-level answer.
 async fn find(
     broker: &crate::broker::Broker,
     request: &FindCoordinatorRequest,
@@ -263,16 +224,14 @@ async fn find(
     let principal = principal(principal_name);
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "find-client");
-    let response = handle(
+    crate::test_support::dispatch_wire(
         broker,
+        krabka_protocol::owned::find_coordinator_request::API_KEY,
         version,
-        1,
-        &crate::test_support::encode_request(request, version),
+        request,
         &context,
     )
     .await
-    .expect("find coordinator");
-    crate::test_support::decode_response(&response, version)
 }
 
 fn row(key: &str, error_code: i16, error_message: Option<String>) -> Coordinator {

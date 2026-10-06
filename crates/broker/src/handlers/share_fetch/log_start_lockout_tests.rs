@@ -26,7 +26,6 @@ use krabka_protocol::{
         delete_records_request::{
             DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
         },
-        delete_records_response::DeleteRecordsResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
         share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
@@ -163,17 +162,10 @@ async fn delete_records(
     let user = principal("admin");
     let address = peer();
     let ctx = request_context(&user, &address, "admin-client");
-    let request_bytes = encode_request(&request, DELETE_RECORDS_VERSION);
-    let response_bytes = crate::handlers::delete_records::handle(
-        &shared,
-        DELETE_RECORDS_VERSION,
-        7,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle delete records");
-    let response: DeleteRecordsResponse = decode_response(&response_bytes, DELETE_RECORDS_VERSION);
+    let response =
+        crate::handlers::delete_records::handle(&shared, request, DELETE_RECORDS_VERSION, &ctx)
+            .await
+            .expect("handle delete records");
     response.topics[0].partitions[0].error_code
 }
 

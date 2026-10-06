@@ -32,10 +32,11 @@
 //! the remote-tier snapshot and cascade in `tiering`, and the audit record in
 //! `audit`.
 
-use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
 use krabka_metadata::BreakGlassAction;
-use krabka_protocol::{Decode, owned::delete_topics_request::DeleteTopicsRequest};
+use krabka_protocol::owned::{
+    delete_topics_request::DeleteTopicsRequest, delete_topics_response::DeleteTopicsResponse,
+};
 use krabka_raft::RaftError;
 use krabka_verified::FreezeMutationKind;
 
@@ -81,22 +82,18 @@ use self::{
     name = "handle_delete_topics",
     level = "info",
     skip_all,
-    fields(api = "DeleteTopics", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DeleteTopics", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: DeleteTopicsRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<DeleteTopicsResponse, BrokerError> {
     let controller = &broker.controller;
     let partitions = broker.partitions.clone();
     let log_dirs = broker.config.all_log_dirs();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = DeleteTopicsRequest::decode(&mut cur, version)?;
 
     // Kafka's `ControllerApis.deleteTopics` refuses the whole request when
     // `delete.topic.enable` is false, ahead of every other check: below v3
@@ -107,10 +104,10 @@ pub(crate) async fn handle(
         } else {
             codes::TOPIC_DELETION_DISABLED
         };
-        return crate::handlers::encode_response(
-            &delete_topics_response(request_error_results(&req, error_code), 0),
-            version,
-        );
+        return Ok(delete_topics_response(
+            request_error_results(&req, error_code),
+            0,
+        ));
     }
 
     let image = controller.current_image();
@@ -337,5 +334,5 @@ pub(crate) async fn handle(
     let throttle_time_ms = crate::quota::throttle_time_ms(delay);
 
     let resp = delete_topics_response(results, throttle_time_ms);
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }

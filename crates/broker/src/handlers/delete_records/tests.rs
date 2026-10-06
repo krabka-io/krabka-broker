@@ -44,12 +44,7 @@ fn request(topic: &str, partitions: &[(i32, i64)]) -> DeleteRecordsRequest {
     }
 }
 
-crate::test_support::wire_helpers!(
-    DeleteRecordsRequest,
-    DeleteRecordsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -60,11 +55,9 @@ async fn drive(
     peer: &SocketAddr,
 ) -> DeleteRecordsResponse {
     let ctx = test_context(principal, peer);
-    let req_bytes = encode_request(req);
-    let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+    handle(broker, req.clone(), VERSION, &ctx)
         .await
-        .expect("handle");
-    decode_response(&bytes)
+        .expect("handle")
 }
 
 #[tokio::test]

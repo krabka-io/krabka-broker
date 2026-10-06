@@ -550,11 +550,8 @@ mod unclean_restart {
     use krabka_metadata::{
         LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
     };
-    use krabka_protocol::owned::{
-        alter_partition_request::{
-            AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
-        },
-        alter_partition_response::AlterPartitionResponse,
+    use krabka_protocol::owned::alter_partition_request::{
+        AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
     };
 
     use crate::{
@@ -563,9 +560,7 @@ mod unclean_restart {
         config::BrokerConfig,
         config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
-        test_support::{
-            decode_response, encode_request, request_context, start_broker_with_authorizer,
-        },
+        test_support::{request_context, start_broker_with_authorizer},
     };
 
     const TOPIC: &str = "orders";
@@ -652,16 +647,10 @@ mod unclean_restart {
             }],
             ..Default::default()
         };
-        let bytes = crate::handlers::alter_partition::handle(
-            broker,
-            ALTER_VERSION,
-            1,
-            &encode_request(&request, ALTER_VERSION),
-            &ctx,
-        )
-        .await
-        .expect("AlterPartition");
-        let response: AlterPartitionResponse = decode_response(&bytes, ALTER_VERSION);
+        let response =
+            crate::handlers::alter_partition::handle(broker, request, ALTER_VERSION, &ctx)
+                .await
+                .expect("AlterPartition");
         assert!(
             response.topics[0].partitions[0].error_code == codes::NONE,
             "AlterPartition refused the proposal: {response:?}"

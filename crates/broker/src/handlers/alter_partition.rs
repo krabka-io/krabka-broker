@@ -7,10 +7,9 @@
 //! and submits the updated `PartitionRecord`s through
 //! `controller.submit_change`.
 
-use bytes::Bytes;
 use krabka_metadata::MetadataRecord;
 use krabka_protocol::{
-    Decode, UnknownTaggedFields,
+    UnknownTaggedFields,
     owned::{
         alter_partition_request::AlterPartitionRequest,
         alter_partition_response::{
@@ -33,29 +32,23 @@ use crate::{
     codes,
     elr::ElrPublisher,
     error::BrokerError,
-    handlers::{
-        cluster_action_denied, encode_response, forward_to_controller::is_active_controller,
-    },
+    handlers::{cluster_action_denied, forward_to_controller::is_active_controller},
 };
 
 #[tracing::instrument(
     name = "handle_alter_partition",
     level = "info",
     skip_all,
-    fields(api = "AlterPartition", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "AlterPartition", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: AlterPartitionRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<AlterPartitionResponse, BrokerError> {
     let controller = broker.controller.clone();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = AlterPartitionRequest::decode(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────
     // Inter-broker control-plane RPC: `ClusterAction` on
@@ -75,15 +68,12 @@ pub(crate) async fn handle(
         Some(codes::NOT_CONTROLLER)
     };
     if let Some(error_code) = refusal {
-        return encode_response(
-            &AlterPartitionResponse {
-                throttle_time_ms: 0,
-                error_code,
-                topics: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            version,
-        );
+        return Ok(AlterPartitionResponse {
+            throttle_time_ms: 0,
+            error_code,
+            topics: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        });
     }
 
     let image = controller.current_image();
@@ -95,15 +85,12 @@ pub(crate) async fn handle(
         .ok()
         .and_then(|id| image.broker_epoch(krabka_metadata::NodeId(id)));
     if sender_epoch != Some(req.broker_epoch) {
-        return encode_response(
-            &AlterPartitionResponse {
-                throttle_time_ms: 0,
-                error_code: codes::STALE_BROKER_EPOCH,
-                topics: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            version,
-        );
+        return Ok(AlterPartitionResponse {
+            throttle_time_ms: 0,
+            error_code: codes::STALE_BROKER_EPOCH,
+            topics: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        });
     }
     // One snapshot of the brokers that may sit in an ISR: alive, unfenced
     // and not in controlled shutdown. The registry is seeded for this term
@@ -172,13 +159,10 @@ pub(crate) async fn handle(
         return Err(BrokerError::Replication(format!("submit_change: {e}")));
     }
 
-    encode_response(
-        &AlterPartitionResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NONE,
-            topics: resp_topics,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        },
-        version,
-    )
+    Ok(AlterPartitionResponse {
+        throttle_time_ms: 0,
+        error_code: codes::NONE,
+        topics: resp_topics,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    })
 }

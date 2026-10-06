@@ -117,7 +117,7 @@ mod tests {
     use bytes::Bytes;
     use krabka_protocol::owned::{
         join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-        join_group_response::{self, JoinGroupResponse},
+        join_group_response,
         sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
         sync_group_response::{self, SyncGroupResponse},
     };
@@ -126,16 +126,12 @@ mod tests {
     use crate::{
         authorizer::Authorizer,
         broker::{Broker, BrokerHandle},
-        test_support::{DenyAll, encode_request},
+        test_support::DenyAll,
     };
 
     const GROUP: &str = "sync-group-unit";
     const PROTOCOL_TYPE: &str = "consumer";
     const PROTOCOL_NAME: &str = "range";
-
-    fn decode_join(bytes: &Bytes) -> JoinGroupResponse {
-        crate::test_support::decode_response(bytes, join_group_response::MAX_VERSION)
-    }
 
     fn principal() -> Principal {
         crate::test_support::principal("alice")
@@ -178,29 +174,16 @@ mod tests {
             ..Default::default()
         };
 
-        let r1 = crate::handlers::join_group::handle(
-            broker,
-            version,
-            1,
-            &encode_request(&join(String::new()), version),
-            ctx,
-        )
-        .await
-        .expect("JoinGroup bootstrap");
-        let r1 = decode_join(&r1);
+        let r1 = crate::handlers::join_group::handle(broker, join(String::new()), version, ctx)
+            .await
+            .expect("JoinGroup bootstrap");
         assert!(r1.error_code == codes::MEMBER_ID_REQUIRED, "{r1:?}");
         assert!(!r1.member_id.is_empty());
 
-        let r2 = crate::handlers::join_group::handle(
-            broker,
-            version,
-            2,
-            &encode_request(&join(r1.member_id.clone()), version),
-            ctx,
-        )
-        .await
-        .expect("JoinGroup rejoin");
-        let r2 = decode_join(&r2);
+        let r2 =
+            crate::handlers::join_group::handle(broker, join(r1.member_id.clone()), version, ctx)
+                .await
+                .expect("JoinGroup rejoin");
         assert!(
             (
                 r2.error_code,

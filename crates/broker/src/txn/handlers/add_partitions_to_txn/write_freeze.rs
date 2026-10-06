@@ -97,11 +97,7 @@ mod tests {
         },
     };
 
-    crate::test_support::wire_helpers!(
-        AddPartitionsToTxnRequest,
-        AddPartitionsToTxnResponse,
-        client_id = "producer-client"
-    );
+    crate::test_support::context_helper!(client_id = "producer-client");
 
     /// The transactional id every freeze case drives.
     const TID: &str = "tid-freeze";
@@ -401,12 +397,9 @@ mod tests {
             let principal = principal();
             let peer = peer();
             let ctx = test_context(&principal, &peer);
-            let req_bytes = encode_request(&freeze_case_request(version), version);
-
-            let bytes = handle(&broker, version, 123, &req_bytes, &ctx)
+            let resp = handle(&broker, freeze_case_request(version), version, &ctx)
                 .await
                 .expect("handle");
-            let resp = decode_response(&bytes, version);
 
             let expected = vec![
                 topic_result(
@@ -451,12 +444,9 @@ mod tests {
             let principal = principal();
             let peer = peer();
             let ctx = test_context(&principal, &peer);
-            let req_bytes = encode_request(&freeze_case_request(version), version);
-
-            let bytes = handle(&broker, version, 123, &req_bytes, &ctx)
+            let resp = handle(&broker, freeze_case_request(version), version, &ctx)
                 .await
                 .expect("handle");
-            let resp = decode_response(&bytes, version);
 
             // Both topics report the ACL deny. The frozen one reports 29 and
             // not 44: its freeze state never reaches a caller with no right

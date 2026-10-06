@@ -55,15 +55,13 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
 use krabka_log::Offset;
 use krabka_metadata::{AclOperation, BreakGlassAction, MetadataImage};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest},
-        delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
+use krabka_protocol::owned::{
+    delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest},
+    delete_records_response::{
+        DeleteRecordsPartitionResult, DeleteRecordsResponse, DeleteRecordsTopicResult,
     },
 };
 use krabka_units::convert::TimeExt as _;
@@ -100,19 +98,15 @@ use crate::{
     name = "handle_delete_records",
     level = "info",
     skip_all,
-    fields(api = "DeleteRecords", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DeleteRecords", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DeleteRecordsRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = DeleteRecordsRequest::decode(&mut cur, version)?;
-
+) -> Result<DeleteRecordsResponse, BrokerError> {
     let partitions = broker.partitions.clone();
 
     let image = broker.controller.current_image();
@@ -197,7 +191,7 @@ pub(crate) async fn handle(
     crate::handlers::audit_admin_success(broker.audit_log.as_ref(), ctx, "DeleteRecords", trimmed);
 
     let resp = delete_records_response(topic_results);
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Record the trim as the partition's diskless `DeleteRecords` floor, durably.

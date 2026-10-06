@@ -14,7 +14,6 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
         init_producer_id_request::InitProducerIdRequest,
-        init_producer_id_response::InitProducerIdResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse},
     },
@@ -93,18 +92,9 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         producer_epoch: -1,
         ..Default::default()
     };
-    let init: InitProducerIdResponse = decode_response(
-        &crate::handlers::init_producer_id::handle(
-            &broker,
-            init_version,
-            1,
-            &encode_request(&init, init_version),
-            &ctx,
-        )
+    let init = crate::handlers::init_producer_id::handle(&broker, init, init_version, &ctx)
         .await
-        .expect("InitProducerId"),
-        init_version,
-    );
+        .expect("InitProducerId");
     assert!(init.error_code == codes::NONE, "InitProducerId: {init:?}");
 
     let state_partition = broker

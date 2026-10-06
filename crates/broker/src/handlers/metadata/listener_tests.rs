@@ -15,7 +15,6 @@ use krabka_metadata::{
 };
 use krabka_protocol::owned::{
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
-    describe_topic_partitions_response::DescribeTopicPartitionsResponse,
     metadata_request::{MetadataRequest, MetadataRequestTopic},
     metadata_response::{MetadataResponse, MetadataResponseBroker},
 };
@@ -314,16 +313,9 @@ async fn describe_topic_partitions_answers_no_leader_for_a_leader_without_the_li
         ..Default::default()
     };
 
-    let bytes = crate::handlers::describe_topic_partitions::handle(
-        &broker,
-        0,
-        7,
-        &encode_request(&request, 0),
-        &ctx,
-    )
-    .await
-    .expect("handle describe topic partitions");
-    let response: DescribeTopicPartitionsResponse = decode_response(&bytes, 0);
+    let response = crate::handlers::describe_topic_partitions::handle(&broker, request, 0, &ctx)
+        .await
+        .expect("handle describe topic partitions");
 
     let rows: Vec<_> = response.topics[0]
         .partitions

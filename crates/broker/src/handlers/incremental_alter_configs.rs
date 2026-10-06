@@ -26,15 +26,11 @@
 //! resource type has its own submodule that owns the key whitelist, the value
 //! validation, and the metadata record that it stages.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        incremental_alter_configs_request::{AlterConfigsResource, IncrementalAlterConfigsRequest},
-        incremental_alter_configs_response::{
-            AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
-        },
+use krabka_protocol::owned::{
+    incremental_alter_configs_request::{AlterConfigsResource, IncrementalAlterConfigsRequest},
+    incremental_alter_configs_response::{
+        AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
     },
 };
 use krabka_raft::RaftError;
@@ -71,19 +67,15 @@ const OP_SUBTRACT: i8 = 3;
     name = "handle_incremental_alter_configs",
     level = "info",
     skip_all,
-    fields(api = "IncrementalAlterConfigs", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "IncrementalAlterConfigs", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: IncrementalAlterConfigsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = IncrementalAlterConfigsRequest::decode(&mut cur, version)?;
-
+) -> Result<IncrementalAlterConfigsResponse, BrokerError> {
     let image = broker.controller.current_image();
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
     let validate_only = req.validate_only;
@@ -124,7 +116,7 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Flags each resource named more than once in the request. See

@@ -32,7 +32,7 @@ use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
     coordinator::bootstrap::OFFSETS_TOPIC,
-    test_support::{decode_response, encode_request, peer, principal, request_context},
+    test_support::{peer, principal, request_context},
 };
 
 /// A broker principal: `ClusterAction` on the cluster and nothing else.
@@ -274,21 +274,15 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
         }
         let user = principal(case.caller);
         let ctx = request_context(&user, &address, "add-partitions-authorization");
-        let bytes = handle(
+        let resp = handle(
             &broker,
+            request(case, &tid, producer_id),
             case.version,
-            1,
-            &encode_request(&request(case, &tid, producer_id), case.version),
             &ctx,
         )
         .await
         .expect("handle");
-        check!(
-            decode_response::<AddPartitionsToTxnResponse>(&bytes, case.version)
-                == expected(case, &tid),
-            "{}",
-            case.name
-        );
+        check!(resp == expected(case, &tid), "{}", case.name);
         let enlisted = enlisted(&broker, &tid).await;
         let want: BTreeSet<(String, i32)> = case
             .enlisted

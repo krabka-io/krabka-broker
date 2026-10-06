@@ -37,12 +37,7 @@ const CREATE_VERSION: i16 = 7;
 
 const VERSION: i16 = 6;
 
-crate::test_support::wire_helpers!(
-    DeleteTopicsRequest,
-    DeleteTopicsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 async fn drive(
     broker: &Broker,
@@ -51,11 +46,11 @@ async fn drive(
     peer: &SocketAddr,
 ) -> DeleteTopicsResponse {
     let ctx = test_context(principal, peer);
-    let req_bytes = encode_request(req);
-    let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
-        .await
-        .expect("handle");
-    sorted(decode_response(&bytes))
+    sorted(
+        handle(broker, req.clone(), VERSION, &ctx)
+            .await
+            .expect("handle"),
+    )
 }
 
 /// The response with its rows in a fixed order. The handler shuffles the rows
@@ -163,10 +158,7 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> (DeletableTopicResult, 
         ..Default::default()
     };
 
-    let bytes = handle(&broker, VERSION, 1, &encode_request(&req), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&bytes);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
     let exists = broker.controller.current_image().topic(DOOMED).is_some();
     broker_handle.shutdown().await;
     let row = resp.responses.into_iter().next().expect("one topic row");
@@ -747,16 +739,14 @@ async fn delete_topic_enable_false_refuses_every_row() {
             request(vec![named_state(TOPIC)])
         };
         let ctx = test_context(&p, &peer);
-        let bytes = handle(
+        let resp: DeleteTopicsResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::owned::delete_topics_request::API_KEY,
             version,
-            1,
-            &crate::test_support::encode_request(&req, version),
+            &req,
             &ctx,
         )
-        .await
-        .expect("handle");
-        let resp: DeleteTopicsResponse = crate::test_support::decode_response(&bytes, version);
+        .await;
         let still_there = broker.controller.current_image().topic(TOPIC).is_some();
         actual.push(((enabled, version), resp, still_there));
 

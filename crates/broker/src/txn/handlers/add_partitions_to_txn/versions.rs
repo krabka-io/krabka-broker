@@ -15,7 +15,6 @@ use std::{
     net::SocketAddr,
 };
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use krabka_protocol::owned::{
     add_partitions_to_txn_request::AddPartitionsToTxnRequest,
@@ -36,7 +35,6 @@ use super::{
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
-    error::BrokerError,
 };
 
 /// The request-independent collaborators both version paths need: the
@@ -151,7 +149,7 @@ pub(super) async fn handle_v4(
     dependencies: &HandlerDependencies<'_>,
     version: i16,
     req: &AddPartitionsToTxnRequest,
-) -> Result<Bytes, BrokerError> {
+) -> AddPartitionsToTxnResponse {
     // A request that names one transactional id twice is answered the way
     // Kafka 4.3.1's `KafkaApis.handleAddPartitionsToTxnRequest` answers it
     // (#883). `TransactionalId` is a `mapKey`, but the generated collections
@@ -194,11 +192,10 @@ pub(super) async fn handle_v4(
         });
     }
 
-    let resp = AddPartitionsToTxnResponse {
+    AddPartitionsToTxnResponse {
         results_by_transaction,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 // ── v0-3 path ─────────────────────────────────────────────────────────────────
@@ -207,7 +204,7 @@ pub(super) async fn handle_v3(
     dependencies: &HandlerDependencies<'_>,
     version: i16,
     req: &AddPartitionsToTxnRequest,
-) -> Result<Bytes, BrokerError> {
+) -> AddPartitionsToTxnResponse {
     let topic_results = process_transaction(
         dependencies,
         true,
@@ -224,11 +221,10 @@ pub(super) async fn handle_v3(
     )
     .await;
 
-    let resp = AddPartitionsToTxnResponse {
+    AddPartitionsToTxnResponse {
         results_by_topic_v3_and_below: topic_results,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
@@ -247,11 +243,7 @@ mod tests {
         },
     };
 
-    crate::test_support::wire_helpers!(
-        AddPartitionsToTxnRequest,
-        AddPartitionsToTxnResponse,
-        client_id = "producer-client"
-    );
+    crate::test_support::context_helper!(client_id = "producer-client");
 
     fn principal() -> Principal {
         crate::test_support::principal("ANONYMOUS")
@@ -277,18 +269,9 @@ mod tests {
             }],
             ..Default::default()
         };
-        let req_bytes = encode_request(&req, 4);
-
-        let bytes = handle(
-            &broker_handle.broker_arc_for_test(),
-            4,
-            123,
-            &req_bytes,
-            &ctx,
-        )
-        .await
-        .expect("handle");
-        let resp = decode_response(&bytes, 4);
+        let resp = handle(&broker_handle.broker_arc_for_test(), req, 4, &ctx)
+            .await
+            .expect("handle");
 
         let expected = AddPartitionsToTxnResponse {
             throttle_time_ms: 0,
@@ -437,9 +420,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let bytes = handle(&broker, 4, 123, &encode_request(&req, 4), &ctx)
-                .await
-                .expect("handle");
+            let resp = handle(&broker, req, 4, &ctx).await.expect("handle");
 
             let expected = AddPartitionsToTxnResponse {
                 results_by_transaction: case
@@ -456,7 +437,7 @@ mod tests {
                     .collect(),
                 ..Default::default()
             };
-            assert!(decode_response(&bytes, 4) == expected, "{}", case.name);
+            assert!(resp == expected, "{}", case.name);
             let want: std::collections::BTreeSet<(String, i32)> = case
                 .enlisted
                 .iter()
@@ -480,18 +461,9 @@ mod tests {
             v3_and_below_topics: vec![topic("alpha", &[3, 4])],
             ..Default::default()
         };
-        let req_bytes = encode_request(&req, 3);
-
-        let bytes = handle(
-            &broker_handle.broker_arc_for_test(),
-            3,
-            123,
-            &req_bytes,
-            &ctx,
-        )
-        .await
-        .expect("handle");
-        let resp = decode_response(&bytes, 3);
+        let resp = handle(&broker_handle.broker_arc_for_test(), req, 3, &ctx)
+            .await
+            .expect("handle");
 
         let expected = AddPartitionsToTxnResponse {
             throttle_time_ms: 0,

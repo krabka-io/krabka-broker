@@ -1,14 +1,13 @@
-//! Builders and encoders for the `TxnOffsetCommitResponse`.
+//! Builders for the `TxnOffsetCommitResponse`.
 //!
 //! [`build_response`] is Kafka's `TxnOffsetCommitResponse.Builder` as
 //! `KafkaApis.handleTxnOffsetCommitRequest` fills it: the topic sweep's rows
 //! go in first, with `UNKNOWN_TOPIC_ID`, `TOPIC_AUTHORIZATION_FAILED` or
 //! `UNKNOWN_TOPIC_OR_PARTITION`, and the group coordinator's answer for the
-//! rows that survived the sweep is merged after them. [`encode_err_all`] is
+//! rows that survived the sweep is merged after them. [`error_response`] is
 //! `TxnOffsetCommitRequest.getErrorResponse`, one code on every row of the
 //! request in request order.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     txn_offset_commit_request::{TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
     txn_offset_commit_response::{
@@ -16,7 +15,7 @@ use krabka_protocol::owned::{
     },
 };
 
-use crate::{codes, error::BrokerError};
+use crate::codes;
 
 /// The response to a request whose topic sweep is done: the sweep's rows
 /// first, then `code` on every row that survived it.
@@ -148,8 +147,11 @@ fn row(partition_index: i32, error_code: i16) -> TxnOffsetCommitResponsePartitio
 }
 
 /// Kafka's `TxnOffsetCommitRequest.getErrorResponse`: `code` on every row, one
-/// response topic per request topic, in request order.
-fn error_response(req: &TxnOffsetCommitRequest, code: i16) -> TxnOffsetCommitResponse {
+/// response topic per request topic, in request order. It answers a
+/// whole-request error that precedes the topic sweep: the transactional id
+/// `Write` and group `Read` gates. Every later exit goes through
+/// [`build_response`] with the sweep's rows.
+pub(super) fn error_response(req: &TxnOffsetCommitRequest, code: i16) -> TxnOffsetCommitResponse {
     TxnOffsetCommitResponse {
         throttle_time_ms: 0,
         topics: req
@@ -166,17 +168,6 @@ fn error_response(req: &TxnOffsetCommitRequest, code: i16) -> TxnOffsetCommitRes
             .collect(),
         ..Default::default()
     }
-}
-
-/// Encodes a whole-request error that precedes the topic sweep: the
-/// transactional id `Write` and group `Read` gates. Every later exit goes
-/// through [`build_response`] with the sweep's rows.
-pub(super) fn encode_err_all(
-    version: i16,
-    req: &TxnOffsetCommitRequest,
-    code: i16,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(&error_response(req, code), version)
 }
 
 #[cfg(test)]
@@ -381,8 +372,11 @@ mod tests {
                 crate::test_support::decode_response(&bytes, version);
             assert!(decoded == expected, "build v{version}");
 
-            let bytes = encode_err_all(version, &req, codes::INVALID_TXN_STATE)
-                .expect("encode all-error response");
+            let bytes = crate::handlers::encode_response(
+                &error_response(&req, codes::INVALID_TXN_STATE),
+                version,
+            )
+            .expect("encode all-error response");
             let decoded: TxnOffsetCommitResponse =
                 crate::test_support::decode_response(&bytes, version);
             assert!(decoded == expected, "error v{version}");

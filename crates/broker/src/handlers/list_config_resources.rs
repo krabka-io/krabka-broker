@@ -14,14 +14,10 @@
 //! `CLIENT_METRICS` enumerates configured subscription names from the
 //! metadata image (see `MetadataImage::client_metrics_subscriptions`).
 
-use bytes::Bytes;
 use krabka_metadata::AclOperation;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        list_config_resources_request::ListConfigResourcesRequest,
-        list_config_resources_response::{ConfigResource, ListConfigResourcesResponse},
-    },
+use krabka_protocol::owned::{
+    list_config_resources_request::ListConfigResourcesRequest,
+    list_config_resources_response::{ConfigResource, ListConfigResourcesResponse},
 };
 
 use crate::{
@@ -49,20 +45,16 @@ const DEFAULT_RESOURCE_TYPES: [i8; 5] = [
     name = "handle_list_config_resources",
     level = "info",
     skip_all,
-    fields(api = "ListConfigResources", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ListConfigResources", version),
+    err
 )]
 pub(crate) fn handle(
     broker: &Broker,
+    req: ListConfigResourcesRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<ListConfigResourcesResponse, BrokerError> {
     let image = broker.controller.current_image();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = ListConfigResourcesRequest::decode(&mut cur, version)?;
 
     // Whole-request gate. Kafka's `KafkaApis.handleListConfigResources`
     // authorizes `DescribeConfigs` on the cluster. Only `AlterConfigs` and
@@ -80,7 +72,7 @@ pub(crate) fn handle(
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     // Kafka's `KafkaApis.handleListConfigResources`: if any requested type is
@@ -94,7 +86,7 @@ pub(crate) fn handle(
             config_resources: vec![],
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     let resources = collect_resources(
@@ -110,7 +102,7 @@ pub(crate) fn handle(
         config_resources: resources,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Whether `rt` is one of the types `ListConfigResourcesRequest.
@@ -346,12 +338,7 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        ListConfigResourcesRequest,
-        ListConfigResourcesResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -398,13 +385,12 @@ mod tests {
                 vec![RESOURCE_TYPE_TOPIC, 64, RESOURCE_TYPE_BROKER],
             ),
         ] {
-            let req = encode_request(&ListConfigResourcesRequest {
+            let req = ListConfigResourcesRequest {
                 resource_types,
                 ..Default::default()
-            });
+            };
 
-            let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
-            let resp = decode_response(&bytes);
+            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
 
             assert2::check!(resp == unsupported, "case {name}");
         }
@@ -429,12 +415,11 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let req = encode_request(&ListConfigResourcesRequest {
+        let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
-        });
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
-        let resp = decode_response(&bytes);
+        };
+        let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
 
         let topics = collect_resources(
             &broker.controller.current_image(),
@@ -460,13 +445,12 @@ mod tests {
         let p = principal("alice");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&ListConfigResourcesRequest {
+        let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
-        });
+        };
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
 
         let expected = ListConfigResourcesResponse {
             throttle_time_ms: 0,
@@ -490,10 +474,10 @@ mod tests {
         .await;
         seed_topic(&broker_handle, "orders").await;
         let broker = broker_handle.broker_arc_for_test();
-        let req = encode_request(&ListConfigResourcesRequest {
+        let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
-        });
+        };
         let topics = collect_resources(
             &broker.controller.current_image(),
             VERSION,
@@ -534,8 +518,7 @@ mod tests {
             let peer = peer();
             let ctx = test_context(&p, &peer);
 
-            let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
-            let resp = decode_response(&bytes);
+            let resp = handle(&broker, req.clone(), VERSION, &ctx).expect("handle");
 
             assert2::check!(resp == *expected, "user {user} with grant {grant:?}");
         }
@@ -551,13 +534,12 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&ListConfigResourcesRequest {
+        let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
-        });
+        };
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
-        let resp = decode_response(&bytes);
+        let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
 
         assert!(resp.error_code == codes::NONE);
         assert!(resp.throttle_time_ms == 0);

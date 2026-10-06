@@ -20,9 +20,8 @@
 //! per-resource work lives in `resource`, and the record builders it
 //! dispatches to live in `topic_configs` and `broker_configs`.
 
-use bytes::Bytes;
 use krabka_protocol::{
-    Decode, UnknownTaggedFields,
+    UnknownTaggedFields,
     owned::{
         alter_configs_request::AlterConfigsRequest,
         alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
@@ -54,19 +53,15 @@ use crate::{
     name = "handle_alter_configs",
     level = "info",
     skip_all,
-    fields(api = "AlterConfigs", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "AlterConfigs", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: AlterConfigsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = AlterConfigsRequest::decode(&mut cur, version)?;
-
+) -> Result<AlterConfigsResponse, BrokerError> {
     let image = broker.controller.current_image();
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
     let validate_only = req.validate_only;
@@ -94,7 +89,7 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Names the audited resource and the keys the request changes on it.

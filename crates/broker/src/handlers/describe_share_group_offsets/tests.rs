@@ -54,12 +54,7 @@ fn request(groups: &[RequestGroup<'_>]) -> DescribeShareGroupOffsetsRequest {
     }
 }
 
-crate::test_support::wire_helpers!(
-    DescribeShareGroupOffsetsRequest,
-    DescribeShareGroupOffsetsResponse,
-    version = describe_share_group_offsets_response::MAX_VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 fn principal() -> Principal {
     crate::test_support::principal("alice")
@@ -167,12 +162,9 @@ async fn handle_error_scenarios_preserve_expected_rows() {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&request(&groups));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, request(&groups), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         assert!(resp == expected, "case: {case}");
         broker_handle.shutdown().await;

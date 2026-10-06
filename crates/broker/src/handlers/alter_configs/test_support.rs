@@ -16,11 +16,7 @@ use krabka_protocol::owned::{
 use super::{RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC, handle};
 use crate::{authorizer::Authorizer, test_support::start_broker_with_authorizer as start_broker};
 
-crate::test_support::wire_helpers!(
-    AlterConfigsRequest,
-    AlterConfigsResponse,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 pub(super) fn resource(resource_type: i8, resource_name: &str) -> AlterConfigsResource {
     AlterConfigsResource {
@@ -211,12 +207,7 @@ pub(super) async fn drive_many(
         validate_only: false,
         ..Default::default()
     };
-    let req_bytes = encode_request(&req, version);
-
-    let resp = handle(&broker, version, 123, &req_bytes, &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp, version);
+    let resp = handle(&broker, req, version, &ctx).await.expect("handle");
     broker_handle.shutdown().await;
     resp
 }

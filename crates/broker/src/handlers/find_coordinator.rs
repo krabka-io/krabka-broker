@@ -24,12 +24,9 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        find_coordinator_request::FindCoordinatorRequest, find_coordinator_response::Coordinator,
-    },
+use krabka_protocol::owned::{
+    find_coordinator_request::FindCoordinatorRequest,
+    find_coordinator_response::{Coordinator, FindCoordinatorResponse},
 };
 
 mod authz;
@@ -47,7 +44,7 @@ use self::{
         ResolveTarget, parse_share_key, resolve_partition_coordinator, resolve_transaction_keys,
         unavailable_coordinator,
     },
-    response::{encode_coordinators, encode_request_error},
+    response::{coordinators_response, request_error_response},
 };
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -76,24 +73,21 @@ fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> V
     name = "handle_find_coordinator",
     level = "info",
     skip_all,
-    fields(api = "FindCoordinator", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "FindCoordinator", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: FindCoordinatorRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<FindCoordinatorResponse, BrokerError> {
     // The local broker's advertised `host:port` for the listener this request
     // arrived on (Kafka returns the connection listener's address). Falls back
     // to the legacy top-level `advertised_listener` when the connection
     // listener isn't among this broker's configured listeners.
     let advertised = local_advertised_for_listener(&broker.config, ctx.connection_listener_name);
     let controller = Arc::clone(&broker.controller);
-    let mut cur: &[u8] = req_bytes;
-    let req = FindCoordinatorRequest::decode(&mut cur, version)?;
 
     // For v4+, requests carry `coordinator_keys`. For v0-v3 the single `key`
     // field is what the client cares about; it becomes a one-row list so the
@@ -116,14 +110,22 @@ pub(crate) async fn handle(
             && version >= 6
             && !cluster_action_allowed(broker, &controller.current_image(), ctx)
         {
-            return encode_request_error(version, codes::CLUSTER_AUTHORIZATION_FAILED, keys);
+            return Ok(request_error_response(
+                version,
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                keys,
+            ));
         }
         // `CoordinatorType.forId` throws `InvalidRequestException`.
         if !matches!(
             req.key_type,
             KEY_TYPE_GROUP | KEY_TYPE_TRANSACTION | KEY_TYPE_SHARE
         ) {
-            return encode_request_error(version, codes::INVALID_REQUEST, keys);
+            return Ok(request_error_response(
+                version,
+                codes::INVALID_REQUEST,
+                keys,
+            ));
         }
     }
 
@@ -207,5 +209,8 @@ pub(crate) async fn handle(
     // Re-attach rejected entries in their original request slots. Kafka's
     // batched response preserves input order even when authorization and
     // resolution produce different errors for adjacent keys.
-    encode_coordinators(version, merge_key_slots(key_slots, coordinators))
+    Ok(coordinators_response(
+        version,
+        merge_key_slots(key_slots, coordinators),
+    ))
 }

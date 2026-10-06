@@ -140,7 +140,6 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
-        offset_commit_response::OffsetCommitResponse,
         offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
         offset_fetch_response::OffsetFetchResponse,
     };
@@ -233,16 +232,10 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         let broker = Arc::clone(&broker);
         let ctx = &ctx;
         async move {
-            let bytes = crate::handlers::offset_commit::handle(
-                &broker,
-                COMMIT_VERSION,
-                1,
-                &encode_request(&request, COMMIT_VERSION),
-                ctx,
-            )
-            .await
-            .expect("OffsetCommit");
-            let committed: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
+            let committed =
+                crate::handlers::offset_commit::handle(&broker, request, COMMIT_VERSION, ctx)
+                    .await
+                    .expect("OffsetCommit");
             committed.topics[0].partitions[0].error_code
         }
     };

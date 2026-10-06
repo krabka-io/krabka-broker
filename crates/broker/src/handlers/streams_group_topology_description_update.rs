@@ -24,13 +24,9 @@
 //!    `INVALID_REQUEST` for another topology epoch or a malformed
 //!    description, or success once the description is stored.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        streams_group_topology_description_update_request::StreamsGroupTopologyDescriptionUpdateRequest,
-        streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
-    },
+use krabka_protocol::owned::{
+    streams_group_topology_description_update_request::StreamsGroupTopologyDescriptionUpdateRequest,
+    streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
 };
 use tokio::sync::oneshot;
 
@@ -54,23 +50,20 @@ const NO_PLUGIN_MESSAGE: &str =
     name = "handle_streams_group_topology_description_update",
     level = "info",
     skip_all,
-    fields(api = "StreamsGroupTopologyDescriptionUpdate", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "StreamsGroupTopologyDescriptionUpdate", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: StreamsGroupTopologyDescriptionUpdateRequest,
+    _version: i16,
     ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = StreamsGroupTopologyDescriptionUpdateRequest::decode(&mut cur, version)?;
+) -> Result<StreamsGroupTopologyDescriptionUpdateResponse, BrokerError> {
     let (error_code, error_message) = answer(broker, req, ctx).await;
-    crate::handlers::encode_response(
-        &StreamsGroupTopologyDescriptionUpdateResponse::error(error_code, error_message),
-        version,
-    )
+    Ok(StreamsGroupTopologyDescriptionUpdateResponse::error(
+        error_code,
+        error_message,
+    ))
 }
 
 /// The error code and message that trunk answers `req` with.

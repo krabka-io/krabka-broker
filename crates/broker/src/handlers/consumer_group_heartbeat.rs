@@ -2,7 +2,6 @@
 //! group protocol. It routes the request to the per-group actor in
 //! `GroupCoordinator`.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
@@ -24,16 +23,15 @@ use crate::{
     name = "handle_consumer_group_heartbeat",
     level = "info",
     skip_all,
-    fields(api = "ConsumerGroupHeartbeat", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ConsumerGroupHeartbeat", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: ConsumerGroupHeartbeatRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<ConsumerGroupHeartbeatResponse, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
     // Read the offset BEFORE the image, not after: if a record commits in
     // between, `image` may reflect it while `metadata_offset` does not. The
@@ -42,9 +40,6 @@ pub(crate) async fn handle(
     // later refresh happen once too often, never once too rarely.
     let metadata_offset = broker.controller.current_metadata_offset();
     let image = broker.controller.current_image();
-    let mut cur: &[u8] = req_bytes;
-    let req: ConsumerGroupHeartbeatRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── Protocol gate ───────────────────────────────────────────
     // Kafka's `handleConsumerGroupHeartbeat` checks whether the
@@ -57,7 +52,7 @@ pub(crate) async fn handle(
     // `isConsumerGroupProtocolEnabled` also needs `consumer` among the
     // configured rebalance protocols, and answers the same way without it.
     if group_version_disabled(&image) || !coordinator.config.next_gen_enabled() {
-        return reply(version, codes::UNSUPPORTED_VERSION, None);
+        return Ok(reply(codes::UNSUPPORTED_VERSION, None));
     }
 
     // ── ACL preamble ────────────────────────────────────────────
@@ -69,7 +64,7 @@ pub(crate) async fn handle(
         ctx,
         &req.group_id,
     ) {
-        return reply(version, codes::GROUP_AUTHORIZATION_FAILED, None);
+        return Ok(reply(codes::GROUP_AUTHORIZATION_FAILED, None));
     }
 
     // `Describe` on every distinct name in `subscribed_topic_names`
@@ -87,13 +82,13 @@ pub(crate) async fn handle(
         ctx,
         req.subscribed_topic_names.as_deref(),
     ) {
-        return reply(version, codes::TOPIC_AUTHORIZATION_FAILED, None);
+        return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
     }
 
     // `GroupCoordinatorService.consumerGroupHeartbeat` validates the
     // request before it routes it to a coordinator shard.
     if let Err(refused) = validate_request(&req, version, &coordinator.config) {
-        return crate::handlers::encode_response(&*refused, version);
+        return Ok(*refused);
     }
 
     // `subscribed_topic_regex` (KIP-848 v1+): the actor resolves the
@@ -113,7 +108,7 @@ pub(crate) async fn handle(
     ));
 
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return reply(version, error_code, None);
+        return Ok(reply(error_code, None));
     }
 
     // Kafka creates a consumer group only on a join, and answers
@@ -121,7 +116,7 @@ pub(crate) async fn handle(
     // share or streams group, without touching any group.
     if let Some(message) = coordinator.consumer_group_lookup_error(&req.group_id, req.member_epoch)
     {
-        return reply(version, codes::GROUP_ID_NOT_FOUND, Some(message));
+        return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
     }
 
     // Route to the one actor for this id, spawning a consumer-kind actor if
@@ -143,20 +138,17 @@ pub(crate) async fn handle(
         .await
         .is_err()
     {
-        return reply(version, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
+        return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None));
     }
     let resp = rx.await.unwrap_or_else(|_| {
         ConsumerGroupHeartbeatResponse::error(codes::UNKNOWN_SERVER_ERROR, None)
     });
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
-/// The encoded early refusal: `code` carrying `message`.
-fn reply(version: i16, code: i16, message: Option<String>) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &ConsumerGroupHeartbeatResponse::error(code, message),
-        version,
-    )
+/// The early refusal: `code` carrying `message`.
+fn reply(code: i16, message: Option<String>) -> ConsumerGroupHeartbeatResponse {
+    ConsumerGroupHeartbeatResponse::error(code, message)
 }
 
 /// The version from which a consumer must generate its own member id,
@@ -253,14 +245,13 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use bytes::BytesMut;
     use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
-    use krabka_protocol::{Decode, Encode};
+    use krabka_protocol::Decode;
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
 
-    fn request(group_id: &str) -> Bytes {
-        let req = ConsumerGroupHeartbeatRequest {
+    fn request(group_id: &str) -> ConsumerGroupHeartbeatRequest {
+        ConsumerGroupHeartbeatRequest {
             group_id: group_id.into(),
             member_id: "member-a".into(),
             member_epoch: 0,
@@ -268,18 +259,10 @@ mod tests {
             topic_partitions: Some(vec![]),
             subscribed_topic_names: Some(vec!["topic-a".into()]),
             ..Default::default()
-        };
-        let mut buf = BytesMut::with_capacity(req.encoded_len(VERSION));
-        req.encode(&mut buf, VERSION)
-            .expect("encode ConsumerGroupHeartbeatRequest");
-        buf.freeze()
+        }
     }
 
-    crate::test_support::response_helpers!(
-        ConsumerGroupHeartbeatResponse,
-        version = VERSION,
-        client_id = "consumer-group-heartbeat-test"
-    );
+    crate::test_support::context_helper!(client_id = "consumer-group-heartbeat-test");
 
     /// Start a broker with `authorizer` and wait until its group coordinator
     /// serves `__consumer_offsets`.
@@ -570,10 +553,9 @@ mod tests {
         let ctx = test_context(&principal, &peer);
         let req = request("denied-group");
 
-        let bytes = handle(&broker, VERSION, 5, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat handler");
-        let resp = decode_response(&bytes);
 
         assert!(
             resp.error_code == codes::GROUP_AUTHORIZATION_FAILED,
@@ -611,10 +593,9 @@ mod tests {
         let ctx = test_context(&principal, &peer);
         let req = request("denied-group");
 
-        let bytes = handle(&broker, VERSION, 5, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat handler");
-        let resp = decode_response(&bytes);
 
         assert!(resp.error_code == codes::UNSUPPORTED_VERSION, "{resp:?}");
 
@@ -631,10 +612,10 @@ mod tests {
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = test_context(&principal, &peer);
 
-        let bytes = handle(&broker, VERSION, 5, &request("identity-group"), &ctx)
+        let resp = handle(&broker, request("identity-group"), VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat handler");
-        assert!(decode_response(&bytes).error_code == 0);
+        assert!(resp.error_code == 0);
 
         let actor = broker
             .group_coordinator
@@ -664,12 +645,11 @@ mod tests {
             subscribed_topic_names: Some(vec!["topic-a".into()]),
             ..Default::default()
         };
-        let req = crate::test_support::encode_request(&req, VERSION);
 
-        let bytes = handle(&broker, VERSION, 6, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat identity refresh");
-        assert!(decode_response(&bytes).error_code == 0);
+        assert!(resp.error_code == 0);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         actor
@@ -750,23 +730,19 @@ mod tests {
         ];
 
         for (group_id, member_epoch, expected) in rows {
-            let req = crate::test_support::encode_request(
-                &ConsumerGroupHeartbeatRequest {
-                    group_id: group_id.into(),
-                    member_id: "m1".into(),
-                    instance_id: (member_epoch == -2).then(|| "i1".into()),
-                    member_epoch,
-                    rebalance_timeout_ms: if member_epoch == 0 { 30_000 } else { -1 },
-                    topic_partitions: (member_epoch == 0).then(Vec::new),
-                    subscribed_topic_names: Some(vec!["topic-a".into()]),
-                    ..Default::default()
-                },
-                VERSION,
-            );
-            let bytes = handle(&broker, VERSION, 1, &req, &ctx)
+            let req = ConsumerGroupHeartbeatRequest {
+                group_id: group_id.into(),
+                member_id: "m1".into(),
+                instance_id: (member_epoch == -2).then(|| "i1".into()),
+                member_epoch,
+                rebalance_timeout_ms: if member_epoch == 0 { 30_000 } else { -1 },
+                topic_partitions: (member_epoch == 0).then(Vec::new),
+                subscribed_topic_names: Some(vec!["topic-a".into()]),
+                ..Default::default()
+            };
+            let resp = handle(&broker, req, VERSION, &ctx)
                 .await
                 .expect("ConsumerGroupHeartbeat handler");
-            let resp = decode_response(&bytes);
             match expected {
                 Some(expected) => assert!(resp == expected, "{group_id}: {resp:?}"),
                 None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
@@ -879,21 +855,17 @@ mod tests {
         let principal = alice();
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
-        let req = crate::test_support::encode_request(
-            &ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                rebalance_timeout_ms: 30_000,
-                topic_partitions: Some(vec![]),
-                subscribed_topic_names: Some(vec!["topic-a".into()]),
-                ..Default::default()
-            },
-            VERSION,
-        );
+        let req = ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            rebalance_timeout_ms: 30_000,
+            topic_partitions: Some(vec![]),
+            subscribed_topic_names: Some(vec!["topic-a".into()]),
+            ..Default::default()
+        };
 
-        let bytes = handle(&broker, VERSION, 7, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat handler");
-        let resp = decode_response(&bytes);
         assert!(
             resp.error_code == codes::TOPIC_AUTHORIZATION_FAILED,
             "{resp:?}"
@@ -942,22 +914,18 @@ mod tests {
         let principal = alice();
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
-        let req = crate::test_support::encode_request(
-            &ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "regex-member".into(),
-                rebalance_timeout_ms: 30_000,
-                topic_partitions: Some(vec![]),
-                subscribed_topic_regex: Some("^orders-.*".into()),
-                ..Default::default()
-            },
-            VERSION,
-        );
+        let req = ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "regex-member".into(),
+            rebalance_timeout_ms: 30_000,
+            topic_partitions: Some(vec![]),
+            subscribed_topic_regex: Some("^orders-.*".into()),
+            ..Default::default()
+        };
 
-        let bytes = handle(&broker, VERSION, 7, &req, &ctx)
+        let resp = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat handler");
-        let resp = decode_response(&bytes);
         assert!(resp.error_code == codes::NONE, "{resp:?}");
         let assigned: std::collections::HashSet<uuid::Uuid> = resp
             .assignment
@@ -1000,22 +968,18 @@ mod tests {
             let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
             let ctx = crate::test_support::request_context(&principal, &peer, "c");
             let joining = self.member_epoch == 0;
-            let req = crate::test_support::encode_request(
-                &ConsumerGroupHeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: self.member_id.into(),
-                    member_epoch: self.member_epoch,
-                    rebalance_timeout_ms: if joining { 30_000 } else { -1 },
-                    topic_partitions: joining.then(Vec::new),
-                    subscribed_topic_regex: regex.map(str::to_owned),
-                    ..Default::default()
-                },
-                VERSION,
-            );
-            let bytes = handle(&self.broker, VERSION, 7, &req, &ctx)
+            let req = ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: self.member_id.into(),
+                member_epoch: self.member_epoch,
+                rebalance_timeout_ms: if joining { 30_000 } else { -1 },
+                topic_partitions: joining.then(Vec::new),
+                subscribed_topic_regex: regex.map(str::to_owned),
+                ..Default::default()
+            };
+            let resp = handle(&self.broker, req, VERSION, &ctx)
                 .await
                 .expect("ConsumerGroupHeartbeat handler");
-            let resp = decode_response(&bytes);
             assert!(resp.error_code == codes::NONE, "{resp:?}");
             self.member_epoch = resp.member_epoch;
             if let Some(assignment) = resp.assignment {

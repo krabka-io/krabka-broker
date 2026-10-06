@@ -25,6 +25,9 @@ enum Adapter {
     /// `decode_group_request`, which also refuses a record string over the
     /// coordinator bound.
     Typed { group: bool },
+    /// Decodes the body into the request type, calls the handler, encodes its
+    /// response struct and wraps the result in a ready future.
+    TypedSync,
     /// Hands a telemetry handler the raw body and wraps its result in a ready
     /// future.
     Telemetry,
@@ -72,8 +75,8 @@ const KINDS: [Kind; 9] = [
         constructor: "context",
     },
     Kind {
-        label: "custom_context",
-        adapter: Adapter::HandWritten,
+        label: "typed_sync",
+        adapter: Adapter::TypedSync,
         constructor: "context",
     },
     Kind {
@@ -190,6 +193,26 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                 }
             }
         }
+        Adapter::TypedSync => moxy::template! {
+            fn {{ adapter }}<'a>(
+                broker: &'a Broker,
+                version: ApiVersion,
+                _correlation_id: CorrelationId,
+                body: &'a [u8],
+                ctx: &'a RequestContext<'a>,
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
+                Box::pin(::std::future::ready((|| {
+                    use krabka_protocol::Decode as _;
+
+                    let mut cur = body;
+                    let req = krabka_protocol::owned::{{ request_module }}::{{ request_type }}::decode(
+                        &mut cur, version,
+                    )?;
+                    let resp = {{ handler }}(broker, req, version, ctx)?;
+                    crate::handlers::encode_response(&resp, version)
+                })()))
+            }
+        },
         Adapter::Telemetry => moxy::template! {
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,

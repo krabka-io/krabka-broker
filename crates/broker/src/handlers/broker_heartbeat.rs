@@ -9,13 +9,9 @@
 //! KIP-112 offline-dir
 //! failover in `failover`.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        broker_heartbeat_request::BrokerHeartbeatRequest,
-        broker_heartbeat_response::BrokerHeartbeatResponse,
-    },
+use krabka_protocol::owned::{
+    broker_heartbeat_request::BrokerHeartbeatRequest,
+    broker_heartbeat_response::BrokerHeartbeatResponse,
 };
 use krabka_raft::NodeId;
 
@@ -40,8 +36,7 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::{
-        ErrorCodeResponse as _, cluster_action_denied, encode_response,
-        forward_to_controller::is_active_controller,
+        ErrorCodeResponse as _, cluster_action_denied, forward_to_controller::is_active_controller,
     },
     heartbeat::controller_state::{
         BrokerControlState, HeartbeatFacts, HeartbeatWants, next_broker_state,
@@ -52,23 +47,19 @@ use crate::{
     name = "handle_broker_heartbeat",
     level = "info",
     skip_all,
-    fields(api = "BrokerHeartbeat", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "BrokerHeartbeat", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: BrokerHeartbeatRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<BrokerHeartbeatResponse, BrokerError> {
     let liveness = broker.liveness.clone();
     let controller = broker.controller.clone();
     let metrics = broker.metrics.clone();
     let recovery = broker.unclean_recovery.clone();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = BrokerHeartbeatRequest::decode(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────────
     // Inter-broker control-plane RPC: `ClusterAction` on
@@ -79,26 +70,22 @@ pub(crate) async fn handle(
     // Kafka's `ControllerApis.handleBrokerHeartBeatRequest` does.
     let image = controller.current_image();
     if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_response(
-            &BrokerHeartbeatResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED),
-            version,
-        );
+        return Ok(BrokerHeartbeatResponse::error(
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+        ));
     }
 
     // Only the openraft leader handles heartbeats. NOT_CONTROLLER
     // tells the broker client to redirect.
     if !is_active_controller(broker) {
-        return encode_response(
-            &BrokerHeartbeatResponse::error(codes::NOT_CONTROLLER),
-            version,
-        );
+        return Ok(BrokerHeartbeatResponse::error(codes::NOT_CONTROLLER));
     }
 
     let image = controller.current_image();
     let (broker_id_u64, decision) = match validate_registration(&image, &req) {
         Ok(validated) => validated,
         Err(error_code) => {
-            return encode_response(&BrokerHeartbeatResponse::error(error_code), version);
+            return Ok(BrokerHeartbeatResponse::error(error_code));
         }
     };
 
@@ -167,10 +154,11 @@ pub(crate) async fn handle(
     // calls `handleDirectoriesCordoned` from `metadata.version` `4.3-IV0`.
     record_cordoned_dirs(&controller, NodeId(broker_id_u64), &req).await;
 
-    encode_response(
-        &success_response(decision.caught_up, next.fenced(), next.should_shut_down()),
-        version,
-    )
+    Ok(success_response(
+        decision.caught_up,
+        next.fenced(),
+        next.should_shut_down(),
+    ))
 }
 
 /// Write the cordoned directories a heartbeat reports onto the broker's

@@ -697,16 +697,14 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
             }],
             ..Default::default()
         };
-        let bytes = super::handle(
+        let response: TxnOffsetCommitResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::owned::txn_offset_commit_request::API_KEY,
             version,
-            1,
-            &encode_request(&request, version),
+            &request,
             &ctx,
         )
-        .await
-        .expect("handle");
-        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        .await;
         check!(
             response.topics[0].partitions[0].error_code == want,
             "version {version}"
@@ -824,16 +822,14 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
             }],
             ..Default::default()
         };
-        let bytes = super::handle(
+        let response: TxnOffsetCommitResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::owned::txn_offset_commit_request::API_KEY,
             version,
-            1,
-            &encode_request(&request, version),
+            &request,
             &ctx,
         )
-        .await
-        .expect("handle");
-        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        .await;
         actual.push((version, epoch, response.topics[0].partitions[0].error_code));
     }
     check!(actual == rows);

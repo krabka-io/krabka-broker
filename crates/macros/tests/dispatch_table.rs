@@ -52,11 +52,11 @@ enum ApiKey {
     CreateAcls = 30,
     DescribeAcls = 29,
     AddPartitionsToTxn = 24,
-    UpdateFeatures = 57,
     CreateDelegationToken = 38,
     PushTelemetry = 72,
     ListGroups = 16,
     Heartbeat = 12,
+    ListConfigResources = 74,
 }
 
 type ContextHandler = for<'a> fn(
@@ -176,11 +176,12 @@ mod krabka_protocol {
             pub use crate::krabka_protocol::Text as HeartbeatRequest;
             pub const FLEXIBLE_MIN: i16 = 4;
         }
+        pub mod list_config_resources_request {
+            pub use crate::krabka_protocol::Text as ListConfigResourcesRequest;
+            pub const FLEXIBLE_MIN: i16 = 0;
+        }
         pub mod add_partitions_to_txn_request {
             pub const FLEXIBLE_MIN: i16 = 3;
-        }
-        pub mod update_features_request {
-            pub const FLEXIBLE_MIN: i16 = 0;
         }
         pub mod create_delegation_token_request {
             pub const FLEXIBLE_MIN: i16 = 2;
@@ -287,6 +288,29 @@ mod handlers {
                 &ctx.client_id,
                 &text,
             ]))
+        }
+    }
+
+    pub mod list_config_resources {
+        use crate::{
+            ApiVersion, Broker, BrokerError, RequestContext,
+            krabka_protocol::owned::list_config_resources_request::ListConfigResourcesRequest,
+        };
+
+        pub fn handle(
+            broker: &Broker,
+            request: ListConfigResourcesRequest,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> Result<String, BrokerError> {
+            let ListConfigResourcesRequest(text) = request;
+            super::typed_reply(&[
+                &"list_config_resources",
+                &broker.name,
+                &version,
+                &ctx.client_id,
+                &text,
+            ])
         }
     }
 
@@ -428,24 +452,6 @@ mod txn {
     }
 }
 
-/// The hand-written adapter a `custom_context` entry registers.
-fn update_features_adapter<'a>(
-    broker: &'a Broker,
-    version: ApiVersion,
-    correlation_id: CorrelationId,
-    body: &'a [u8],
-    ctx: &'a RequestContext<'a>,
-) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(std::future::ready(reply(&[
-        &"update_features_adapter",
-        &broker.name,
-        &version,
-        &correlation_id,
-        &ctx.client_id,
-        &text(body),
-    ])))
-}
-
 /// The hand-written adapter an `auth` entry registers.
 fn create_delegation_token_adapter<'a>(
     broker: &'a Broker,
@@ -471,7 +477,7 @@ krabka_macros::dispatch_table! {
     decoded_sync: DescribeAcls;
     typed: ListGroups;
     typed_group: Heartbeat;
-    custom_context: UpdateFeatures;
+    typed_sync: ListConfigResources;
     auth: CreateDelegationToken;
     telemetry: PushTelemetry;
 }
@@ -586,10 +592,10 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
             Err(BrokerError::EmptyBody),
         ),
         (
-            ApiKey::UpdateFeatures,
+            ApiKey::ListConfigResources,
             "context",
             0,
-            ok("update_features_adapter b1 5 7 c1 body"),
+            ok("list_config_resources b1 5 c1 v5:body @v5"),
             Err(BrokerError::EmptyBody),
         ),
         (
@@ -630,6 +636,7 @@ fn a_decoded_adapter_maps_a_decode_failure_to_a_broker_error() {
         ApiKey::DescribeAcls,
         ApiKey::ListGroups,
         ApiKey::Heartbeat,
+        ApiKey::ListConfigResources,
     ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, &[0xff]) == Err(BrokerError::Decode), "{api:?}");
@@ -658,7 +665,11 @@ fn a_typed_adapter_returns_the_encoders_error() {
     let mut registry = DispatchRegistry::default();
     register_dispatch_table(&mut registry);
 
-    for api in [ApiKey::ListGroups, ApiKey::Heartbeat] {
+    for api in [
+        ApiKey::ListGroups,
+        ApiKey::Heartbeat,
+        ApiKey::ListConfigResources,
+    ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, b"nope") == Err(BrokerError::Encode), "{api:?}");
     }

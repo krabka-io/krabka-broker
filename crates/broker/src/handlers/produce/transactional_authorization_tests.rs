@@ -19,7 +19,6 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
         init_producer_id_request::InitProducerIdRequest,
-        init_producer_id_response::InitProducerIdResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
     },
@@ -107,16 +106,9 @@ async fn open_transaction(broker: &Broker) -> (i64, i16) {
         ..Default::default()
     };
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
-    let init_bytes = crate::handlers::init_producer_id::handle(
-        broker,
-        version,
-        1,
-        &encode_request(&init_request, version),
-        &ctx,
-    )
-    .await
-    .expect("InitProducerId");
-    let init: InitProducerIdResponse = decode_response(&init_bytes, version);
+    let init = crate::handlers::init_producer_id::handle(broker, init_request, version, &ctx)
+        .await
+        .expect("InitProducerId");
     assert!(init.error_code == codes::NONE, "InitProducerId: {init:?}");
     (init.producer_id, init.producer_epoch)
 }

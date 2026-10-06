@@ -103,7 +103,6 @@ macro_rules! krabka_private_context_dispatches {
 }
 
 mod auth;
-mod decoded;
 mod entry;
 mod krabka_private;
 #[cfg(test)]
@@ -116,55 +115,37 @@ use self::{
         describe_delegation_token_adapter, expire_delegation_token_adapter,
         renew_delegation_token_adapter,
     },
-    decoded::{alter_user_scram_credentials_adapter, update_features_adapter},
     krabka_private::register_krabka_private_context_dispatches,
 };
 
 // One adapter and one `register_dispatch_table` registration per Kafka api.
 // The handler is `crate::handlers::<snake_name>::handle` unless the entry names
-// another after `=>`. `custom_context` and `auth` entries register the
+// another after `=>`. `auth` entries register the
 // hand-written `<snake_name>_adapter` imported above.
 krabka_macros::dispatch_table! {
     // `handle(broker, version, correlation_id, body, ctx)`, awaited.
     context:
         AssignReplicasToDirs,
         Metadata,
-        DescribeTopicPartitions,
         CreateTopics,
-        DeleteTopics,
-        AlterConfigs,
-        IncrementalAlterConfigs,
-        DeleteRecords,
         CreatePartitions,
         ShareGroupDescribe,
         ShareFetch,
         ShareAcknowledge,
-        DescribeShareGroupOffsets,
         AlterShareGroupOffsets,
         DeleteShareGroupOffsets,
         DeleteGroups,
-        JoinGroup,
-        OffsetCommit,
         OffsetFetch,
         UnregisterBroker,
         UnregisterController,
         AddRaftVoter,
         RemoveRaftVoter,
         UpdateRaftVoter,
-        AlterPartition,
-        BrokerHeartbeat,
         BrokerRegistration,
         ControllerRegistration,
-        ConsumerGroupHeartbeat,
-        ShareGroupHeartbeat,
         StreamsGroupHeartbeat,
-        StreamsGroupTopologyDescriptionUpdate,
-        FindCoordinator,
         ListOffsets,
-        InitProducerId,
-        AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle,
         EndTxn => crate::txn::handlers::end_txn::handle,
-        TxnOffsetCommit => crate::txn::handlers::txn_offset_commit::handle,
         DescribeQuorum,
         AllocateProducerIds,
         AddOffsetsToTxn => crate::txn::handlers::add_offset_commits_to_txn::handle,
@@ -177,10 +158,8 @@ krabka_macros::dispatch_table! {
         ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
     // The same arguments; the result is wrapped in a ready future.
     sync_context:
-        ListConfigResources,
         GetReplicaLogInfo,
-        OffsetForLeaderEpoch,
-        DescribeConfigs;
+        OffsetForLeaderEpoch;
     // `handle(broker, request, ctx, version)` on the decoded request, awaited.
     decoded:
         CreateAcls,
@@ -206,18 +185,36 @@ krabka_macros::dispatch_table! {
         ListTransactions,
         ConsumerGroupDescribe,
         StreamsGroupDescribe,
-        DescribeLogDirs;
+        DescribeLogDirs,
+        DescribeTopicPartitions,
+        DeleteTopics,
+        AlterConfigs,
+        IncrementalAlterConfigs,
+        DeleteRecords,
+        DescribeShareGroupOffsets,
+        AlterPartition,
+        BrokerHeartbeat,
+        StreamsGroupTopologyDescriptionUpdate,
+        FindCoordinator,
+        AlterUserScramCredentials,
+        UpdateFeatures,
+        AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle;
     // The same, with the request decoded by `decode_group_request`, which
     // refuses a string no coordinator record can carry.
     typed_group:
         Heartbeat,
         SyncGroup,
-        LeaveGroup;
-    // Hand-written in `decoded`: the handler returns a response struct that
-    // the adapter encodes.
-    custom_context:
-        AlterUserScramCredentials,
-        UpdateFeatures;
+        LeaveGroup,
+        JoinGroup,
+        OffsetCommit,
+        ConsumerGroupHeartbeat,
+        ShareGroupHeartbeat,
+        InitProducerId,
+        TxnOffsetCommit => crate::txn::handlers::txn_offset_commit::handle;
+    // `typed`, called without awaiting: the result is wrapped in a ready future.
+    typed_sync:
+        ListConfigResources,
+        DescribeConfigs;
     // Hand-written in `auth`: the adapter receives the `ConnectionAuth` and
     // the peer address instead of a `RequestContext`.
     auth:

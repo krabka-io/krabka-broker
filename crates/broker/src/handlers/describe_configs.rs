@@ -90,13 +90,9 @@
 //! `ConfigHelperUtils.toDescribeConfigsResult` does. The synthesised key obeys
 //! that filter like every stored key.
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        describe_configs_request::DescribeConfigsRequest,
-        describe_configs_response::{DescribeConfigsResponse, DescribeConfigsResult},
-    },
+use krabka_protocol::owned::{
+    describe_configs_request::DescribeConfigsRequest,
+    describe_configs_response::{DescribeConfigsResponse, DescribeConfigsResult},
 };
 use krabka_units::convert::TimeExt as _;
 
@@ -126,20 +122,16 @@ use crate::{broker::Broker, error::BrokerError};
     name = "handle_describe_configs",
     level = "info",
     skip_all,
-    fields(api = "DescribeConfigs", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DescribeConfigs", version),
+    err
 )]
 pub(crate) fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DescribeConfigsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<DescribeConfigsResponse, BrokerError> {
     let controller = broker.controller.clone();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
     if let Some(results) = authz::unexpected_resource_type_results(&req.resources) {
         let resp = DescribeConfigsResponse {
@@ -147,7 +139,7 @@ pub(crate) fn handle(
             results,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     let image = controller.current_image();
@@ -253,5 +245,5 @@ pub(crate) fn handle(
         results,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }

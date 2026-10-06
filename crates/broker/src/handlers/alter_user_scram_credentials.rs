@@ -53,11 +53,10 @@ use self::{
     response::{apply_submit_error, err_result},
     validation::{CLUSTER_ALTER_DENIED_MESSAGE, SCRAM_UNSUPPORTED_MESSAGE},
 };
-use crate::{broker::Broker, codes};
+use crate::{broker::Broker, codes, error::BrokerError};
 
-/// Runs the `AlterUserScramCredentials` request and returns the typed
-/// response. The caller, `dispatch.rs`, encodes the response on the wire and
-/// prepends the response header.
+/// The `typed` dispatch entry point: [`answer`] at any version, which the
+/// generated adapter encodes.
 #[tracing::instrument(
     name = "handle_alter_user_scram_credentials",
     level = "info",
@@ -65,6 +64,17 @@ use crate::{broker::Broker, codes};
     fields(api = "AlterUserScramCredentials")
 )]
 pub(crate) async fn handle(
+    broker: &Broker,
+    req: AlterUserScramCredentialsRequest,
+    _version: i16,
+    ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<AlterUserScramCredentialsResponse, BrokerError> {
+    Ok(answer(broker, req, ctx).await)
+}
+
+/// Runs the `AlterUserScramCredentials` request and returns the typed
+/// response.
+async fn answer(
     broker: &Broker,
     req: AlterUserScramCredentialsRequest,
     ctx: &crate::handlers::RequestContext<'_>,

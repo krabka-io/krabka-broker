@@ -18,13 +18,10 @@ use krabka_protocol::owned::{
     alter_partition_request::{
         AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
     },
-    alter_partition_response::AlterPartitionResponse,
     broker_registration_request::{BrokerRegistrationRequest, Feature, Listener},
     broker_registration_response::BrokerRegistrationResponse,
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
-    describe_topic_partitions_response::{
-        DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
-    },
+    describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
 };
 use krabka_security::Principal;
 
@@ -217,16 +214,9 @@ async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
         }],
         ..Default::default()
     };
-    let bytes = crate::handlers::alter_partition::handle(
-        broker,
-        ALTER_VERSION,
-        1,
-        &encode_request(&request, ALTER_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("AlterPartition");
-    let response: AlterPartitionResponse = decode_response(&bytes, ALTER_VERSION);
+    let response = crate::handlers::alter_partition::handle(broker, request, ALTER_VERSION, &ctx)
+        .await
+        .expect("AlterPartition");
 
     assert!(response.error_code == codes::NONE);
     assert!(
@@ -248,16 +238,10 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
         response_partition_limit: 2000,
         ..Default::default()
     };
-    let bytes = crate::handlers::describe_topic_partitions::handle(
-        broker,
-        DESCRIBE_VERSION,
-        2,
-        &encode_request(&request, DESCRIBE_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("DescribeTopicPartitions");
-    let response: DescribeTopicPartitionsResponse = decode_response(&bytes, DESCRIBE_VERSION);
+    let response =
+        crate::handlers::describe_topic_partitions::handle(broker, request, DESCRIBE_VERSION, &ctx)
+            .await
+            .expect("DescribeTopicPartitions");
 
     response
         .topics

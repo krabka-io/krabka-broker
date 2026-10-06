@@ -181,7 +181,7 @@ mod tests {
 
     use super::*;
     use crate::handlers::alter_user_scram_credentials::{
-        handle,
+        answer,
         test_support::{
             KAFKA_MAX_SCRAM_ITERATIONS, KAFKA_UNACCEPTABLE_CREDENTIAL,
             KAFKA_UNSUPPORTED_SASL_MECHANISM, deletion, expected_result, process_deletion,
@@ -380,7 +380,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, &ctx).await;
+        let resp = answer(&broker, req, &ctx).await;
 
         let expected = AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,
@@ -416,7 +416,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, &ctx).await;
+        let resp = answer(&broker, req, &ctx).await;
 
         let expected = AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,

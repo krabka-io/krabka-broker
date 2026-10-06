@@ -6,7 +6,6 @@
 //! membership change. The connection therefore blocks here for exactly as long
 //! as the earlier `Notify`-based wait.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     join_group_request::JoinGroupRequest,
     join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
@@ -28,21 +27,17 @@ use crate::{
     name = "handle_join_group",
     level = "info",
     skip_all,
-    fields(api = "JoinGroup", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "JoinGroup", version),
+    err
 )]
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: JoinGroupRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: JoinGroupRequest = crate::handlers::decode_group_request(&mut cur, version)?;
-
+) -> Result<JoinGroupResponse, BrokerError> {
     // ── ACL preamble ────────────────────────────────────────────
     // `Read` on `Group(group_id)`. On Deny → whole-response
     // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
@@ -54,27 +49,27 @@ pub(crate) async fn handle(
             ctx,
             req.group_id.as_str(),
         ) {
-            return encode(
+            return Ok(respond(
                 version,
                 JoinGroupResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     ..Default::default()
                 },
-            );
+            ));
         }
     }
 
     if let Some(error_code) = request_error(&req, &broker.group_coordinator.config)
         .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
     {
-        return encode(
+        return Ok(respond(
             version,
             JoinGroupResponse {
                 error_code,
                 member_id: req.member_id,
                 ..Default::default()
             },
-        );
+        ));
     }
 
     // Route to the one actor for this id, spawning a classic-kind actor if the
@@ -99,13 +94,13 @@ pub(crate) async fn handle(
         Ok(
             crate::coordinator::unified::streams::migration::DowngradeOutcome::RejectLiveMembers,
         ) => {
-            return encode(
+            return Ok(respond(
                 version,
                 JoinGroupResponse {
                     error_code: codes::GROUP_ID_NOT_FOUND,
                     ..Default::default()
                 },
-            );
+            ));
         }
         Ok(_) => {} // NotStreams | Converted → serve the classic JoinGroup below
         Err(e) => return Err(e),
@@ -115,14 +110,14 @@ pub(crate) async fn handle(
     // of an existing group, so a group that does not exist is not created
     // for it.
     if !req.member_id.is_empty() && broker.group_coordinator.find(&req.group_id).is_none() {
-        return encode(
+        return Ok(respond(
             version,
             JoinGroupResponse {
                 error_code: codes::UNKNOWN_MEMBER_ID,
                 member_id: req.member_id,
                 ..Default::default()
             },
-        );
+        ));
     }
 
     broker.group_coordinator.mark_classic(&req.group_id);
@@ -143,22 +138,22 @@ pub(crate) async fn handle(
         .await
         .is_err()
     {
-        return encode(
+        return Ok(respond(
             version,
             JoinGroupResponse {
                 error_code: codes::REBALANCE_IN_PROGRESS,
                 ..Default::default()
             },
-        );
+        ));
     }
     let Ok(result) = rx.await else {
-        return encode(
+        return Ok(respond(
             version,
             JoinGroupResponse {
                 error_code: codes::REBALANCE_IN_PROGRESS,
                 ..Default::default()
             },
-        );
+        ));
     };
 
     let resp = JoinGroupResponse {
@@ -182,7 +177,7 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         ..Default::default()
     };
-    encode(version, resp)
+    Ok(respond(version, resp))
 }
 
 /// The request checks of Kafka's `GroupCoordinatorService.joinGroup`, which
@@ -202,15 +197,15 @@ fn request_error(req: &JoinGroupRequest, config: &NextGenConfig) -> Option<i16> 
     }
 }
 
-/// Encodes `resp` after the `ProtocolName` normalisation of Kafka's
+/// Answers `resp` after the `ProtocolName` normalisation of Kafka's
 /// `JoinGroupResponse` constructor, which every `JoinGroup` reply passes
 /// through: from v7, where the field is nullable, an empty name goes on the
 /// wire as null. Below v7 a null name already encodes as the empty string.
-fn encode(version: i16, mut resp: JoinGroupResponse) -> Result<Bytes, BrokerError> {
+fn respond(version: i16, mut resp: JoinGroupResponse) -> JoinGroupResponse {
     if version >= 7 && resp.protocol_name.as_deref() == Some("") {
         resp.protocol_name = None;
     }
-    crate::handlers::encode_response(&resp, version)
+    resp
 }
 
 #[cfg(test)]
@@ -256,13 +251,16 @@ mod tests {
                 (None, empty.clone()),
                 (Some("range".to_owned()), Some("range".to_owned())),
             ] {
-                let bytes = encode(
+                let bytes = crate::handlers::encode_response(
+                    &respond(
+                        version,
+                        JoinGroupResponse {
+                            error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                            protocol_name: sent.clone(),
+                            ..Default::default()
+                        },
+                    ),
                     version,
-                    JoinGroupResponse {
-                        error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                        protocol_name: sent.clone(),
-                        ..Default::default()
-                    },
                 )
                 .expect("encode");
                 let mut cur: &[u8] = &bytes;
@@ -286,8 +284,9 @@ mod tests {
         }
     }
 
+    /// A response that names its protocol leaves `respond` unchanged.
     #[test]
-    fn encodes_join_group_response() {
+    fn respond_passes_a_chosen_protocol_through() {
         let resp = JoinGroupResponse {
             error_code: codes::NONE,
             generation_id: 1,
@@ -299,7 +298,6 @@ mod tests {
             throttle_time_ms: 0,
             ..Default::default()
         };
-        let bytes = encode(5, resp).expect("encode");
-        assert2::check!(!bytes.is_empty());
+        assert2::check!(respond(5, resp.clone()) == resp);
     }
 }

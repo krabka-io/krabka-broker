@@ -72,7 +72,7 @@ async fn handle_denies_invalid_rows_before_scram_validation() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, req, &ctx).await;
+    let resp = answer(&broker, req, &ctx).await;
 
     let expected = AlterUserScramCredentialsResponse {
         throttle_time_ms: 0,
@@ -107,7 +107,7 @@ async fn handle_authorizes_and_persists_valid_upsertion() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, req, &ctx).await;
+    let resp = answer(&broker, req, &ctx).await;
 
     let expected = AlterUserScramCredentialsResponse {
         throttle_time_ms: 0,
@@ -136,7 +136,7 @@ async fn handle_denies_valid_upsertion_without_cluster_alter() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, req, &ctx).await;
+    let resp = answer(&broker, req, &ctx).await;
 
     let expected = AlterUserScramCredentialsResponse {
         throttle_time_ms: 0,
@@ -179,7 +179,7 @@ async fn handle_unsupported_metadata_version_reports_every_requested_user() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, req, &ctx).await;
+    let resp = answer(&broker, req, &ctx).await;
 
     let msg = "The current metadata.version does not support SCRAM";
     let expected = AlterUserScramCredentialsResponse {
@@ -222,7 +222,7 @@ async fn handle_low_metadata_version_denied_request_reports_authorization_per_di
         ..Default::default()
     };
 
-    let resp = handle(&broker, req, &ctx).await;
+    let resp = answer(&broker, req, &ctx).await;
 
     let expected = AlterUserScramCredentialsResponse {
         throttle_time_ms: 0,
@@ -270,7 +270,7 @@ async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported
         ..Default::default()
     };
 
-    let resp = handle(&broker, req, &ctx).await;
+    let resp = answer(&broker, req, &ctx).await;
 
     let msg = "The current metadata.version does not support SCRAM";
     let expected = AlterUserScramCredentialsResponse {

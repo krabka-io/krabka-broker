@@ -7,9 +7,8 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use bytes::BytesMut;
 use krabka_protocol::{
-    Encode, owned::broker_heartbeat_response::BrokerHeartbeatResponse,
+    owned::broker_heartbeat_response::BrokerHeartbeatResponse,
     primitives::uuid::Uuid as ProtocolUuid,
 };
 
@@ -20,8 +19,8 @@ fn request(
     broker_epoch: i64,
     current_metadata_offset: i64,
     offline_log_dirs: Vec<uuid::Uuid>,
-) -> Bytes {
-    let req = BrokerHeartbeatRequest {
+) -> BrokerHeartbeatRequest {
+    BrokerHeartbeatRequest {
         broker_id: 1,
         broker_epoch,
         current_metadata_offset,
@@ -33,22 +32,10 @@ fn request(
             .collect(),
         cordoned_log_dirs: None,
         ..Default::default()
-    };
-    let mut buf = BytesMut::with_capacity(
-        req.encoded_len(krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION),
-    );
-    req.encode(
-        &mut buf,
-        krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION,
-    )
-    .expect("encode BrokerHeartbeatRequest");
-    buf.freeze()
+    }
 }
 
-crate::test_support::response_helpers!(
-    BrokerHeartbeatResponse,
-    client_id = "broker-heartbeat-test"
-);
+crate::test_support::context_helper!(client_id = "broker-heartbeat-test");
 
 /// Every heartbeat is authorized against its own principal, on the
 /// controller listener too, as Kafka's
@@ -81,12 +68,9 @@ async fn every_heartbeat_needs_cluster_action() {
     for (name, error_code) in cases {
         let principal = crate::test_support::principal(name);
         let ctx = test_context(&principal, &peer);
-        let response = decode_response(
-            &handle(&broker, version, 11, &req, &ctx)
-                .await
-                .expect("BrokerHeartbeat handler"),
-            version,
-        );
+        let response = handle(&broker, req.clone(), version, &ctx)
+            .await
+            .expect("BrokerHeartbeat handler");
         assert!(response.error_code == error_code, "{name}: {response:?}");
     }
 
@@ -108,10 +92,9 @@ async fn handle_leader_success_preserves_response_shape() {
         .expect("broker registration should be applied");
     let req = request(broker_epoch, broker_epoch, vec![]);
 
-    let bytes = handle(&broker, version, 11, &req, &ctx)
+    let resp = handle(&broker, req, version, &ctx)
         .await
         .expect("BrokerHeartbeat handler");
-    let resp = decode_response(&bytes, version);
 
     let expected = BrokerHeartbeatResponse {
         throttle_time_ms: 0,
@@ -233,16 +216,9 @@ impl Cluster {
             want_shut_down: shut_down,
             ..Default::default()
         };
-        let bytes = handle(
-            &self.broker,
-            version,
-            1,
-            &crate::test_support::encode_request(&req, version),
-            &ctx,
-        )
-        .await
-        .expect("BrokerHeartbeat handler");
-        let response = decode_response(&bytes, version);
+        let response = handle(&self.broker, req, version, &ctx)
+            .await
+            .expect("BrokerHeartbeat handler");
         Answer {
             error_code: response.error_code,
             is_caught_up: response.is_caught_up,

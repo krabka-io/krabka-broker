@@ -21,7 +21,6 @@
 //!   pattern (`authorize_by_resource_type`). Deny of both →
 //!   `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::{
     init_producer_id_request::InitProducerIdRequest,
@@ -54,25 +53,21 @@ const INIT_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
     name = "handle_init_producer_id",
     level = "info",
     skip_all,
-    fields(api = "InitProducerId", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "InitProducerId", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: InitProducerIdRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<InitProducerIdResponse, BrokerError> {
     let producer_ids = broker.producer_ids.clone();
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
     let log_dirs = broker.config.all_log_dirs();
     let log_config = broker.config.log_config.clone();
     let log_dir_status = broker.log_dir_status.clone();
-
-    let mut cur: &[u8] = req_bytes;
-    let req: InitProducerIdRequest = crate::handlers::decode_group_request(&mut cur, version)?;
 
     // ── ACL preamble ────────────────────────────────────────
     // Branch on whether this is an idempotent-only or transactional
@@ -90,7 +85,10 @@ pub(crate) async fn handle(
                 operation: AclOperation::Write,
             };
             if authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-                return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+                return Ok(refusal(
+                    version,
+                    codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                ));
             }
             // KIP-939: `enable_2pc` also needs `TwoPhaseCommit` on the id.
             // Kafka checks it here, before the identity and 2PC-config checks.
@@ -100,7 +98,10 @@ pub(crate) async fn handle(
                     ..acl_req
                 };
                 if authorizer.authorize(&*image, &two_pc_req) == AuthorizationResult::Deny {
-                    return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+                    return Ok(refusal(
+                        version,
+                        codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                    ));
                 }
             }
         } else {
@@ -124,7 +125,7 @@ pub(crate) async fn handle(
                     AclOperation::Write,
                 ) == AuthorizationResult::Allow;
             if !topic_write_allowed {
-                return encode_err(version, codes::CLUSTER_AUTHORIZATION_FAILED);
+                return Ok(refusal(version, codes::CLUSTER_AUTHORIZATION_FAILED));
             }
         }
     }
@@ -133,7 +134,7 @@ pub(crate) async fn handle(
     // halves of the producer identity or neither, whatever the transactional
     // id, and the check runs before the coordinator sees the request.
     if half_identity(req.producer_id, req.producer_epoch) {
-        return encode_err(version, codes::INVALID_REQUEST);
+        return Ok(refusal(version, codes::INVALID_REQUEST));
     }
 
     let resp = match req.transactional_id.as_deref() {
@@ -148,7 +149,7 @@ pub(crate) async fn handle(
                 Err(error) => {
                     let error = BrokerError::from(error);
                     tracing::warn!(%error, "InitProducerId: no producer ID available");
-                    return encode_err(version, codes::from_broker_error(&error));
+                    return Ok(refusal(version, codes::from_broker_error(&error)));
                 }
             };
             InitProducerIdResponse {
@@ -165,7 +166,7 @@ pub(crate) async fn handle(
             // ACL check above like any other transactional id, but the
             // transaction coordinator itself rejects the empty id outright.
             // No producer id is allocated either way.
-            return encode_err(version, codes::INVALID_REQUEST);
+            return Ok(refusal(version, codes::INVALID_REQUEST));
         }
         Some(tid) => {
             // Refresh the coordinator's leader-partition view from the
@@ -187,7 +188,10 @@ pub(crate) async fn handle(
             // UNSUPPORTED_*), so a client can't probe the config.
             let two_phase_commit = broker.config.features.transaction_two_phase_commit_enable;
             if req.enable2_pc && !two_phase_commit {
-                return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+                return Ok(refusal(
+                    version,
+                    codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                ));
             }
             // Kafka 4.3.1's `TransactionCoordinator.handleInitProducerId`
             // answers every `keepPreparedTxn` with UNSUPPORTED_VERSION, after
@@ -202,10 +206,10 @@ pub(crate) async fn handle(
                 && broker.config.features.unstable_api_versions
                     == crate::api_catalog::UnstableApiVersions::Enabled;
             if req.keep_prepared_txn && !prepared_txn_recovery {
-                return encode_err(version, codes::UNSUPPORTED_VERSION);
+                return Ok(refusal(version, codes::UNSUPPORTED_VERSION));
             }
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {
-                return encode_err(version, codes::INVALID_REQUEST);
+                return Ok(refusal(version, codes::INVALID_REQUEST));
             }
             // Kafka validates the timeout before the coordinator lookup, so a
             // broker that does not coordinate the id answers the same code.
@@ -215,7 +219,7 @@ pub(crate) async fn handle(
                 broker.config.transaction_max_timeout.millis_i32(),
             ) {
                 Ok(timeout) => timeout,
-                Err(error_code) => return encode_err(version, error_code),
+                Err(error_code) => return Ok(refusal(version, error_code)),
             };
             drop(coord.refresh_leader_partitions(&image).await);
             let txn_partition = coord.partition_for(tid);
@@ -255,7 +259,7 @@ pub(crate) async fn handle(
             // answers `COORDINATOR_LOAD_IN_PROGRESS`. Later calls do not wait.
             coord.wait_for_load(txn_partition, INIT_LOAD_WAIT).await;
             if let Some(error_code) = coord.coordinator_error(tid).await {
-                return encode_err(version, error_code);
+                return Ok(refusal(version, error_code));
             }
             let handled = handle_transactional(
                 &coord,
@@ -280,20 +284,20 @@ pub(crate) async fn handle(
                         error_code = code,
                         "InitProducerId: the state write did not commit"
                     );
-                    return encode_err(version, code);
+                    return Ok(refusal(version, code));
                 }
                 // An append that ends in a newer coordinator term fails. Kafka
                 // answers the coordinator error in that case.
                 Err(error) => match coord.coordinator_error(tid).await {
                     Some(error_code) => {
                         tracing::warn!(tid, %error, error_code, "InitProducerId: coordinator term changed");
-                        return encode_err(version, error_code);
+                        return Ok(refusal(version, error_code));
                     }
                     // `generateProducerId` failed for a new or rotated
                     // producer id. Kafka answers its error code.
                     None if matches!(error, BrokerError::ProducerIdBlockUnavailable(_)) => {
                         tracing::warn!(tid, %error, "InitProducerId: no producer ID available");
-                        return encode_err(version, codes::from_broker_error(&error));
+                        return Ok(refusal(version, codes::from_broker_error(&error)));
                     }
                     None => return Err(error),
                 },
@@ -301,7 +305,7 @@ pub(crate) async fn handle(
         }
     };
 
-    crate::handlers::encode_response(&downgrade_producer_fenced(resp, version), version)
+    Ok(downgrade_producer_fenced(resp, version))
 }
 
 /// Whether exactly one half of the `(producer_id, producer_epoch)` pair is
@@ -322,7 +326,8 @@ fn downgrade_producer_fenced(
     response
 }
 
-fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
+/// The response that refuses the request with `error_code`.
+fn refusal(version: i16, error_code: i16) -> InitProducerIdResponse {
     let resp = InitProducerIdResponse {
         throttle_time_ms: 0,
         error_code,
@@ -330,5 +335,5 @@ fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
         producer_epoch: -1,
         ..Default::default()
     };
-    crate::handlers::encode_response(&downgrade_producer_fenced(resp, version), version)
+    downgrade_producer_fenced(resp, version)
 }
