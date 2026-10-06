@@ -6,7 +6,6 @@
 //! submit fails, and the whole-request error body an authorization denial
 //! produces.
 
-use bytes::Bytes;
 use krabka_metadata::EntityKey;
 use krabka_protocol::{
     UnknownTaggedFields,
@@ -59,12 +58,11 @@ pub(super) fn apply_submit_error(entry_results: &mut [RespEntry], error: impl st
     }
 }
 
-pub(super) fn encode_whole_request_error(
+pub(super) fn whole_request_error(
     req: &AlterClientQuotasRequest,
     code: i16,
     msg: &str,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> AlterClientQuotasResponse {
     // `AlterClientQuotasRequest.getErrorResponse` answers one row per request
     // entry, with the entity components as the request sent them.
     let entries: Vec<RespEntry> = req
@@ -79,12 +77,11 @@ pub(super) fn encode_whole_request_error(
             err_entry(&entity, code, msg.into())
         })
         .collect();
-    let resp = AlterClientQuotasResponse {
+    AlterClientQuotasResponse {
         throttle_time_ms: 0,
         entries,
         unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    super::encode_response(&resp, api_version)
+    }
 }
 
 #[cfg(test)]

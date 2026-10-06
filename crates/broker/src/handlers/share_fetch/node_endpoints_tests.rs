@@ -34,7 +34,6 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 
-use super::handle;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
@@ -206,10 +205,10 @@ async fn share_fetch_sends_the_endpoint_of_each_remote_leader_once() {
     let user = principal("share-consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
-    let response = handle(
+    let response = crate::test_support::try_dispatch_context(
         &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
         version,
-        7,
         &encode_request(&request, version),
         &ctx,
     )
@@ -306,10 +305,10 @@ async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_
         ..Default::default()
     };
     let version = share_acknowledge_response::MAX_VERSION;
-    let response = crate::handlers::share_acknowledge::handle(
+    let response = crate::test_support::try_dispatch_context(
         &shared,
+        krabka_protocol::owned::share_acknowledge_request::API_KEY,
         version,
-        7,
         &encode_request(&request, version),
         &ctx,
     )

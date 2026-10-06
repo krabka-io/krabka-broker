@@ -27,7 +27,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{cluster_action_denied, encode_response_with_context},
+    handlers::{cluster_action_denied, encode_response},
 };
 
 #[tracing::instrument(
@@ -116,7 +116,7 @@ fn respond(
         topic_partition_log_info_list,
         ..Default::default()
     };
-    encode_response_with_context(&resp, version, "encode GetReplicaLogInfo")
+    encode_response(&resp, version)
 }
 
 /// The row a Deny gives every requested partition: the response carries no

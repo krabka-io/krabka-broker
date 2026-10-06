@@ -4,7 +4,6 @@
 //! keeps the stored state epoch and leader epoch. A key with no state returns
 //! `INVALID_REQUEST`, and epoch fencing returns the per-partition error code.
 
-use bytes::Bytes;
 use futures_util::future::join_all;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
@@ -32,15 +31,11 @@ use crate::{
 /// every requested partition, and the share coordinator does not run.
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: WriteShareGroupStateRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: WriteShareGroupStateRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
-    let resp = if super::cluster_action_denied(broker, ctx) {
+) -> Result<WriteShareGroupStateResponse, BrokerError> {
+    Ok(if super::cluster_action_denied(broker, ctx) {
         super::cluster_authorization_failed!(
             req,
             WriteShareGroupStateResponse,
@@ -54,8 +49,7 @@ pub(crate) async fn handle(
             req,
         )
         .await
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Applies every partition of `req`, as Kafka's

@@ -16,7 +16,6 @@ use krabka_protocol::owned::{
         OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     },
     offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
-    offset_fetch_response::OffsetFetchResponse,
 };
 use krabka_units::mebibytes;
 use tokio::sync::oneshot;
@@ -37,7 +36,7 @@ use crate::{
         },
     },
     test_support::{
-        decode_response, dispatch_context, encode_request, peer, principal, request_context,
+        dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with_authorizer_no_audit,
     },
 };
@@ -211,16 +210,9 @@ async fn fetched_offset(broker: &Broker) -> i64 {
     let principal = principal("admin");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "consumer");
-    let bytes = crate::handlers::offset_fetch::handle(
-        broker,
-        FETCH_VERSION,
-        2,
-        &encode_request(&request, FETCH_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("OffsetFetch");
-    let response: OffsetFetchResponse = decode_response(&bytes, FETCH_VERSION);
+    let response = crate::handlers::offset_fetch::handle(broker, request, FETCH_VERSION, &ctx)
+        .await
+        .expect("OffsetFetch");
     response.topics[0].partitions[0].committed_offset
 }
 
@@ -842,15 +834,8 @@ async fn simple_fetch(broker: &Broker, group: &str) -> i64 {
     let principal = principal("admin");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "consumer");
-    let bytes = crate::handlers::offset_fetch::handle(
-        broker,
-        FETCH_VERSION,
-        2,
-        &encode_request(&request, FETCH_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("OffsetFetch");
-    let response: OffsetFetchResponse = decode_response(&bytes, FETCH_VERSION);
+    let response = crate::handlers::offset_fetch::handle(broker, request, FETCH_VERSION, &ctx)
+        .await
+        .expect("OffsetFetch");
     response.topics[0].partitions[0].committed_offset
 }

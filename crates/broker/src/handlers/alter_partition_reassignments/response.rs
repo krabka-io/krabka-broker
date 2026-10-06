@@ -1,5 +1,5 @@
 //! Response assembly for `AlterPartitionReassignments`: the per-partition
-//! result rows, the whole-request error envelope, and the encode step.
+//! result rows and the whole-request error envelope.
 //!
 //! `mark_submit_failed` rewrites the rows that were accepted but whose
 //! metadata submit then failed, and it leaves an earlier per-row rejection in
@@ -7,9 +7,8 @@
 
 use std::collections::HashMap;
 
-use bytes::Bytes;
 use krabka_protocol::{
-    Encode, UnknownTaggedFields,
+    UnknownTaggedFields,
     owned::{
         alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
         alter_partition_reassignments_response::{
@@ -60,12 +59,11 @@ pub(super) fn mark_submit_failed(
     }
 }
 
-pub(super) fn encode_whole_request_error(
+pub(super) fn whole_request_error(
     req: &AlterPartitionReassignmentsRequest,
     code: i16,
     msg: &str,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> AlterPartitionReassignmentsResponse {
     let responses: Vec<ReassignableTopicResponse> = req
         .topics
         .iter()
@@ -79,7 +77,7 @@ pub(super) fn encode_whole_request_error(
             unknown_tagged_fields: UnknownTaggedFields::default(),
         })
         .collect();
-    let resp = AlterPartitionReassignmentsResponse {
+    AlterPartitionReassignmentsResponse {
         throttle_time_ms: 0,
         // Kafka's `AlterPartitionReassignmentsRequest.getErrorResponse` leaves
         // this at its schema default, `true`, whatever the request asked.
@@ -88,19 +86,7 @@ pub(super) fn encode_whole_request_error(
         error_message: Some(msg.to_string()),
         responses,
         unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    encode_response(&resp, api_version)
-}
-
-pub(super) fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(
-        resp,
-        api_version,
-        "encode AlterPartitionReassignments",
-    )
+    }
 }
 
 #[cfg(test)]
@@ -110,7 +96,7 @@ mod tests {
     use super::*;
     use crate::{
         codes::{CLUSTER_AUTHORIZATION_FAILED, NOT_CONTROLLER, UNKNOWN_TOPIC_OR_PARTITION},
-        handlers::alter_partition_reassignments::test_support::{decode_response, request},
+        handlers::alter_partition_reassignments::test_support::request,
     };
 
     #[test]
@@ -135,14 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn encode_whole_request_error_preserves_request_shape() {
-        let version = 1;
+    fn whole_request_error_preserves_request_shape() {
         let req = request(false, "payments", 8, Some(vec![1, 2]));
 
-        let bytes =
-            encode_whole_request_error(&req, CLUSTER_AUTHORIZATION_FAILED, "denied", version)
-                .expect("encode whole request error");
-        let resp = decode_response(&bytes, version);
+        let resp = whole_request_error(&req, CLUSTER_AUTHORIZATION_FAILED, "denied");
 
         let expected = AlterPartitionReassignmentsResponse {
             throttle_time_ms: 0,

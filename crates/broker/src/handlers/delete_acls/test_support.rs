@@ -1,15 +1,12 @@
 //! Fixtures shared by the `delete_acls` test modules.
 //!
 //! The wire constants, the `AclEntry` and `DeleteAclsFilter` builders, the
-//! request envelope, and the response and context helpers are used from more
+//! request envelope, and the context helper are used from more
 //! than one of the sibling test modules, so they live here rather than being
 //! repeated in each.
 
 use krabka_metadata::{AclEntry, AclOperation, ResourceType};
-use krabka_protocol::owned::{
-    delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest},
-    delete_acls_response::DeleteAclsResponse,
-};
+use krabka_protocol::owned::delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest};
 
 pub(super) const VERSION: i16 = 3;
 pub(super) const RESOURCE_TYPE_TOPIC: i8 = 2;
@@ -47,11 +44,7 @@ pub(super) fn request(filters: Vec<DeleteAclsFilter>) -> DeleteAclsRequest {
     }
 }
 
-crate::test_support::response_helpers!(
-    pub(super) DeleteAclsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
 /// An authorizer an operator actually configured, which lets the `admin` test
 /// principal through as a super user.

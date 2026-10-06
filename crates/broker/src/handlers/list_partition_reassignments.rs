@@ -1,15 +1,10 @@
 //! `ListPartitionReassignments` (`api_key` 46, KIP-455).
 
-use bytes::Bytes;
 use krabka_metadata::PartitionRecord;
-use krabka_protocol::{
-    Encode,
-    owned::{
-        list_partition_reassignments_request::ListPartitionReassignmentsRequest,
-        list_partition_reassignments_response::{
-            ListPartitionReassignmentsResponse, OngoingPartitionReassignment,
-            OngoingTopicReassignment,
-        },
+use krabka_protocol::owned::{
+    list_partition_reassignments_request::ListPartitionReassignmentsRequest,
+    list_partition_reassignments_response::{
+        ListPartitionReassignmentsResponse, OngoingPartitionReassignment, OngoingTopicReassignment,
     },
 };
 
@@ -28,9 +23,9 @@ use crate::{
 pub(crate) fn handle(
     broker: &Broker,
     req: ListPartitionReassignmentsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<ListPartitionReassignmentsResponse, crate::error::BrokerError> {
     let image = broker.controller.current_image();
     if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let topics = match &req.topics {
@@ -54,14 +49,13 @@ pub(crate) fn handle(
                 })
                 .collect(),
         };
-        let resp = ListPartitionReassignmentsResponse {
+        return Ok(ListPartitionReassignmentsResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("list-reassignment denied".into()),
             topics,
             ..Default::default()
-        };
-        return encode_response(&resp, api_version);
+        });
     }
 
     let topics: Vec<OngoingTopicReassignment> = match &req.topics {
@@ -110,14 +104,13 @@ pub(crate) fn handle(
             })
             .collect(),
     };
-    let resp = ListPartitionReassignmentsResponse {
+    Ok(ListPartitionReassignmentsResponse {
         throttle_time_ms: 0,
         error_code: NONE,
         error_message: None,
         topics,
         ..Default::default()
-    };
-    encode_response(&resp, api_version)
+    })
 }
 
 fn ongoing(pr: &PartitionRecord) -> OngoingPartitionReassignment {
@@ -138,17 +131,6 @@ fn wire_node_ids(nodes: &[krabka_metadata::NodeId]) -> Vec<i32> {
         .collect()
 }
 
-fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(
-        resp,
-        api_version,
-        "encode ListPartitionReassignments",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -163,11 +145,7 @@ mod tests {
 
     const VERSION: i16 = krabka_protocol::owned::list_partition_reassignments_response::MAX_VERSION;
 
-    crate::test_support::response_helpers!(
-        ListPartitionReassignmentsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -274,17 +252,16 @@ mod tests {
             let peer = peer();
             let ctx = test_context(&p, &peer);
 
-            let bytes = handle(
+            let resp = handle(
                 &broker,
                 ListPartitionReassignmentsRequest {
                     topics: case.topics,
                     ..Default::default()
                 },
-                &ctx,
                 VERSION,
+                &ctx,
             )
             .expect("handle");
-            let resp = decode_response(&bytes);
 
             let expected = ListPartitionReassignmentsResponse {
                 throttle_time_ms: 0,
@@ -390,17 +367,16 @@ mod tests {
             ),
         ];
         for (name, topics, expected_topics) in cases {
-            let bytes = handle(
+            let resp = handle(
                 &broker,
                 ListPartitionReassignmentsRequest {
                     topics,
                     ..Default::default()
                 },
-                &ctx,
                 VERSION,
+                &ctx,
             )
             .expect("handle");
-            let resp = decode_response(&bytes);
 
             let expected = ListPartitionReassignmentsResponse {
                 throttle_time_ms: 0,

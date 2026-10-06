@@ -35,7 +35,6 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
@@ -181,9 +180,15 @@ async fn share_fetch(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let request_bytes = encode_request(&request, version);
-    let response = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        version,
+        &request_bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     let response: ShareFetchResponse = decode_response(&response, version);
     // An incremental response leaves out a partition with nothing new.
     response
@@ -229,10 +234,15 @@ async fn share_acknowledge(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let request_bytes = encode_request(&request, version);
-    let response =
-        crate::handlers::share_acknowledge::handle(&shared, version, 7, &request_bytes, &ctx)
-            .await
-            .expect("handle share acknowledge");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_acknowledge_request::API_KEY,
+        version,
+        &request_bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share acknowledge");
     let response: ShareAcknowledgeResponse = decode_response(&response, version);
     response.responses[0].partitions[0].error_code
 }

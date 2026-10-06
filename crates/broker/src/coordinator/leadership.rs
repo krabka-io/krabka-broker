@@ -522,7 +522,6 @@ mod tests {
                 OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
             },
             offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestGroup},
-            offset_fetch_response::OffsetFetchResponse,
             txn_offset_commit_request::{
                 TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition,
                 TxnOffsetCommitRequestTopic,
@@ -636,16 +635,11 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::offset_fetch::handle(
-                    broker,
-                    8,
-                    1,
-                    &encode_request(&request, 8),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<OffsetFetchResponse>(&bytes, 8).groups[0].error_code
+                crate::handlers::offset_fetch::handle(broker, request, 8, &ctx)
+                    .await
+                    .unwrap()
+                    .groups[0]
+                    .error_code
             }
             GroupRpc::ListGroups => {
                 crate::handlers::list_groups::handle(broker, ListGroupsRequest::default(), 4, &ctx)

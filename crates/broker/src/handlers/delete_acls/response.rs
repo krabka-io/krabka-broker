@@ -1,19 +1,14 @@
 //! The `DeleteAcls` response rows: the matching-ACL echo Kafka sends back for
 //! every entry a filter removed, the per-filter result that carries them, the
-//! envelope, the bulk stamp a failed controller submit leaves behind, and the
-//! encoder.
+//! envelope, the bulk stamp a failed controller submit leaves behind.
 //!
 //! `kafka-acls --remove` prints the matching-ACL list verbatim, so the wire
 //! bytes here are what the operator reads. Keeping the row constructors
 //! together makes the one-row-per-filter invariant easy to see.
 
-use bytes::Bytes;
 use krabka_metadata::AclEntry;
-use krabka_protocol::{
-    Encode,
-    owned::delete_acls_response::{
-        DeleteAclsFilterResult, DeleteAclsMatchingAcl, DeleteAclsResponse,
-    },
+use krabka_protocol::owned::delete_acls_response::{
+    DeleteAclsFilterResult, DeleteAclsMatchingAcl, DeleteAclsResponse,
 };
 
 use crate::{
@@ -77,13 +72,6 @@ pub(super) fn apply_submit_error<E: std::fmt::Display>(
     }
 }
 
-pub(super) fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(resp, api_version, "encode DeleteAcls")
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -93,7 +81,7 @@ mod tests {
     use super::*;
     use crate::handlers::delete_acls::test_support::{
         OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
-        PERMISSION_ALLOW, RESOURCE_TYPE_TOPIC, VERSION, acl, decode_response,
+        PERMISSION_ALLOW, RESOURCE_TYPE_TOPIC, acl,
     };
 
     #[test]
@@ -144,31 +132,5 @@ mod tests {
             },
         ];
         assert!(results == expected_results);
-    }
-
-    #[test]
-    fn encode_response_writes_decodable_filter_results() {
-        let bytes = encode_response(
-            &delete_acls_response(vec![filter_result(
-                codes::INVALID_REQUEST,
-                Some("Unknown entryFilter.".into()),
-                Vec::new(),
-            )]),
-            VERSION,
-        )
-        .expect("encode");
-        let resp = decode_response(&bytes);
-
-        let expected = DeleteAclsResponse {
-            throttle_time_ms: 0,
-            filter_results: vec![DeleteAclsFilterResult {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some("Unknown entryFilter.".into()),
-                matching_acls: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
-        assert!(resp == expected);
     }
 }

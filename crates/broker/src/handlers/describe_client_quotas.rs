@@ -1,14 +1,10 @@
 //! `DescribeClientQuotas` (`api_key` 48, KIP-13/124).
 
-use bytes::Bytes;
 use krabka_metadata::{EntityKey, ResourceType};
-use krabka_protocol::{
-    Encode,
-    owned::{
-        describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
-        describe_client_quotas_response::{
-            DescribeClientQuotasResponse, EntityData, EntryData, ValueData,
-        },
+use krabka_protocol::owned::{
+    describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
+    describe_client_quotas_response::{
+        DescribeClientQuotasResponse, EntityData, EntryData, ValueData,
     },
 };
 
@@ -109,9 +105,9 @@ fn validate_filter(components: &[ComponentData]) -> Result<(), FilterError> {
 pub(crate) fn handle(
     broker: &Broker,
     req: DescribeClientQuotasRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<DescribeClientQuotasResponse, crate::error::BrokerError> {
     let image = broker.controller.current_image();
     // Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes
     // `DescribeConfigs` on the cluster. A denial goes through
@@ -125,27 +121,25 @@ pub(crate) fn handle(
         CLUSTER_RESOURCE_NAME,
         krabka_metadata::AclOperation::DescribeConfigs,
     ) {
-        let resp = DescribeClientQuotasResponse {
+        return Ok(DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
             ..Default::default()
-        };
-        return encode_response(&resp, api_version);
+        });
     }
 
     // Kafka's `ClientQuotasImage.describe` throws on a bad filter, and
     // `KafkaApis.handleError` answers with `entries = null`.
     if let Err(err) = validate_filter(&req.components) {
-        let resp = DescribeClientQuotasResponse {
+        return Ok(DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: err.code,
             error_message: Some(err.message),
             entries: None,
             ..Default::default()
-        };
-        return encode_response(&resp, api_version);
+        });
     }
 
     let mut entries: Vec<EntryData> = Vec::new();
@@ -177,14 +171,13 @@ pub(crate) fn handle(
     // Kafka answers from `ClientQuotasImage.describe`, which fills a bare
     // `new DescribeClientQuotasResponseData()`: the message keeps its
     // generated default, the empty string, not null.
-    let resp = DescribeClientQuotasResponse {
+    Ok(DescribeClientQuotasResponse {
         throttle_time_ms: 0,
         error_code: NONE,
         error_message: Some(String::new()),
         entries: Some(entries),
         ..Default::default()
-    };
-    encode_response(&resp, api_version)
+    })
 }
 
 pub(crate) fn entity_matches_filter(
@@ -210,13 +203,6 @@ pub(crate) fn entity_matches_filter(
         }
     }
     true
-}
-
-fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(resp, api_version, "encode DescribeClientQuotas")
 }
 
 #[cfg(test)]
@@ -258,11 +244,7 @@ mod tests {
         }
     }
 
-    crate::test_support::response_helpers!(
-        DescribeClientQuotasResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -333,14 +315,13 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
+        let resp = handle(
             &broker,
             request(vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))], true),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&bytes);
 
         let expected = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
@@ -425,14 +406,13 @@ mod tests {
             let peer = peer();
             let ctx = test_context(&p, &peer);
 
-            let bytes = handle(
+            let resp = handle(
                 &broker,
                 request(vec![comp("user", MATCH_TYPE_ANY, None)], false),
-                &ctx,
                 VERSION,
+                &ctx,
             )
             .expect("handle");
-            let resp = decode_response(&bytes);
 
             check!(resp == *expected, "user {user} with grant {grant:?}");
         }
@@ -462,14 +442,13 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
+        let resp = handle(
             &broker,
             request(vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))], false),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&bytes);
 
         check!(resp.throttle_time_ms == 0, "{resp:?}");
         check!(resp.error_code == 0, "{resp:?}");
@@ -639,20 +618,18 @@ mod tests {
             ),
         ];
         for (name, components, expected) in rows {
-            let bytes = handle(&broker, request(components, true), &ctx, VERSION).expect("handle");
-            let resp = decode_response(&bytes);
+            let resp = handle(&broker, request(components, true), VERSION, &ctx).expect("handle");
             check!(resp == expected, "row {name}");
         }
 
         // A valid SPECIFIED filter matches every user entity, named or default.
-        let bytes = handle(
+        let resp = handle(
             &broker,
             request(vec![comp("user", MATCH_TYPE_ANY, None)], true),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&bytes);
         let mut names: Vec<Option<String>> = resp
             .entries
             .expect("entries")
@@ -673,14 +650,13 @@ mod tests {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
+        let resp = handle(
             &broker,
             request(vec![comp("user", MATCH_TYPE_EXACT, Some("missing"))], true),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&bytes);
 
         let expected = DescribeClientQuotasResponse {
             throttle_time_ms: 0,

@@ -7,10 +7,9 @@
 //! A cluster with no authorizer configured has no ACLs to project, and says
 //! so with `SECURITY_DISABLED` rather than an empty listing.
 
-use bytes::Bytes;
 use krabka_metadata::AclEntry;
 use krabka_protocol::{
-    Encode, ProtocolError,
+    ProtocolError,
     owned::{
         describe_acls_request::DescribeAclsRequest,
         describe_acls_response::{AclDescription, DescribeAclsResource, DescribeAclsResponse},
@@ -81,9 +80,9 @@ fn describe_acls_response(resources: Vec<DescribeAclsResource>) -> DescribeAclsR
 pub(crate) fn handle(
     broker: &Broker,
     req: DescribeAclsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<DescribeAclsResponse, crate::error::BrokerError> {
     // Kafka's `DescribeAclsRequest` constructor refuses an `UNKNOWN` element
     // while the request parses, before any authorization, and the broker
     // closes the connection. The error return is that close.
@@ -93,11 +92,10 @@ pub(crate) fn handle(
 
     let image = broker.controller.current_image();
     if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        let resp = DescribeAclsResponse::error(
+        return Ok(DescribeAclsResponse::error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             Some(CLUSTER_DESCRIBE_DENIED_MESSAGE.into()),
-        );
-        return encode_response(&resp, api_version);
+        ));
     }
 
     // No authorizer: there is nothing to describe, and Kafka says so rather
@@ -105,15 +103,16 @@ pub(crate) fn handle(
     // `KafkaApis.handleDescribeAcls` runs the cluster-describe check first
     // and only then matches on `authorizer.isEmpty`, which is the order here.
     if !broker.config.authorizer.is_configured() {
-        let resp = DescribeAclsResponse::error(
+        return Ok(DescribeAclsResponse::error(
             codes::SECURITY_DISABLED,
             Some(NO_AUTHORIZER_MESSAGE.into()),
-        );
-        return encode_response(&resp, api_version);
+        ));
     }
 
-    let resp = describe_acls_response(matching_resources(image.all_acls(), &filter));
-    encode_response(&resp, api_version)
+    Ok(describe_acls_response(matching_resources(
+        image.all_acls(),
+        &filter,
+    )))
 }
 
 /// Groups the ACLs `filter` matches by resource pattern, the nested shape
@@ -153,13 +152,6 @@ fn build_filter(req: &DescribeAclsRequest) -> Result<AclBindingFilter, UnknownEl
         operation: req.operation,
         permission_type: req.permission_type,
     })
-}
-
-fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(resp, api_version, "encode DescribeAcls")
 }
 
 #[cfg(test)]
@@ -214,11 +206,7 @@ mod tests {
         }
     }
 
-    crate::test_support::response_helpers!(
-        DescribeAclsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -360,11 +348,10 @@ mod tests {
         let resp = handle(
             &broker,
             request(Some("orders"), Some("User:alice"), OPERATION_READ),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
@@ -394,11 +381,10 @@ mod tests {
         let resp = handle(
             &broker,
             request(Some("orders"), Some("User:alice"), OPERATION_READ),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
@@ -424,7 +410,7 @@ mod tests {
         let mut req = request(Some("orders"), Some("User:alice"), OPERATION_READ);
         req.operation = 0;
 
-        let result = handle(&broker, req, &ctx, VERSION);
+        let result = handle(&broker, req, VERSION, &ctx);
 
         assert!(
             let Err(crate::error::BrokerError::Protocol(ProtocolError::InvalidValue(
@@ -481,8 +467,8 @@ mod tests {
         for (name, edit) in cases {
             let mut req = any.clone();
             edit(&mut req);
-            let resp = handle(&broker, req, &ctx, VERSION).expect("handle");
-            check!(decode_response(&resp) == expected, "{name}");
+            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            check!(resp == expected, "{name}");
         }
         broker_handle.shutdown().await;
     }
@@ -582,8 +568,7 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let resp = handle(&broker, req, &ctx, VERSION).expect("handle");
-            let mut resp = decode_response(&resp);
+            let mut resp = handle(&broker, req, VERSION, &ctx).expect("handle");
             resp.resources
                 .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
 
@@ -646,9 +631,9 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let resp = handle(&broker, req, &ctx, VERSION).expect("handle");
+            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
             check!(
-                decode_response(&resp).resources.len() == want,
+                resp.resources.len() == want,
                 "principal {principal_filter:?} host {host_filter:?}"
             );
         }
@@ -674,11 +659,10 @@ mod tests {
         let resp = handle(
             &broker,
             request(Some("orders"), Some("User:alice"), OPERATION_READ),
-            &ctx,
             VERSION,
+            &ctx,
         )
         .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,

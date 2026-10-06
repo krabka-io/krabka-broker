@@ -12,7 +12,6 @@
 //! A key this broker leads but does not know returns Kafka's uninitialized
 //! summary: start offset and delivery-complete count `-1`, epochs `0`.
 
-use bytes::Bytes;
 use futures_util::future::join_all;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
@@ -37,15 +36,11 @@ use crate::{
 /// every requested partition, and the share coordinator does not run.
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ReadShareGroupStateSummaryRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: ReadShareGroupStateSummaryRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
-    let resp = if super::cluster_action_denied(broker, ctx) {
+) -> Result<ReadShareGroupStateSummaryResponse, BrokerError> {
+    Ok(if super::cluster_action_denied(broker, ctx) {
         super::cluster_authorization_failed!(
             req,
             ReadShareGroupStateSummaryResponse,
@@ -59,8 +54,7 @@ pub(crate) async fn handle(
             req,
         )
         .await
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Serves every partition of `req`, as Kafka's

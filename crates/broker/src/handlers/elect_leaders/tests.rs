@@ -37,11 +37,7 @@ const TOPIC: &str = "orders";
 const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 const VERSION: i16 = elect_leaders_response::MAX_VERSION;
 
-crate::test_support::response_helpers!(
-    ElectLeadersResponse,
-    version = VERSION,
-    client_id = "kafka-leader-election"
-);
+crate::test_support::context_helper!(client_id = "kafka-leader-election");
 
 fn gated_config() -> BreakGlassConfig {
     BreakGlassConfig {
@@ -390,7 +386,7 @@ fn a_whole_request_refusal_sets_the_top_level_code_and_every_named_row() {
             ..Default::default()
         };
         let refusal = super::admit(&request, denied).expect_err("the request is refused");
-        let bytes = super::response::encode_response(&refusal, version).expect("encode");
+        let bytes = crate::handlers::encode_response(&refusal, version).expect("encode");
         let decoded: ElectLeadersResponse = crate::test_support::decode_response(&bytes, version);
         check!(decoded == expected, "v{version}, denied={denied}");
     }
@@ -481,11 +477,11 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
             timeout_ms: 5_000,
             ..Default::default()
         };
-        let bytes = handle(&broker, request, &ctx, VERSION)
+        let response = handle(&broker, request, VERSION, &ctx)
             .await
             .expect("handle");
         check!(
-            decode_response(&bytes)
+            response
                 == ElectLeadersResponse {
                     replica_election_results: expected,
                     ..Default::default()
@@ -496,7 +492,7 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
 
     // A null topic list answers every topic, and drops the partitions that
     // need no election rather than the topic row.
-    let bytes = handle(
+    let response = handle(
         &broker,
         ElectLeadersRequest {
             election_type: WIRE_ELECTION_PREFERRED,
@@ -504,12 +500,11 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
             timeout_ms: 5_000,
             ..Default::default()
         },
-        &ctx,
         VERSION,
+        &ctx,
     )
     .await
     .expect("handle");
-    let response = decode_response(&bytes);
     check!(response.error_code == codes::NONE);
     check!(
         response
@@ -527,7 +522,6 @@ async fn handle_request(
     req: ElectLeadersRequest,
     ctx: &RequestContext<'_>,
 ) -> i16 {
-    let bytes = handle(broker, req, ctx, VERSION).await.expect("handle");
-    let response = decode_response(&bytes);
+    let response = handle(broker, req, VERSION, ctx).await.expect("handle");
     response.replica_election_results[0].partition_result[0].error_code
 }

@@ -24,9 +24,8 @@
 //! Request fields: `transactional_id`, `producer_id`, `producer_epoch`, `committed`.
 //! Response fields: `throttle_time_ms`, `error_code`.
 
-use bytes::Bytes;
 use krabka_log::ProducerId;
-use krabka_protocol::{Decode, owned::end_txn_request::EndTxnRequest};
+use krabka_protocol::owned::{end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse};
 
 use crate::{
     broker::Broker,
@@ -65,7 +64,7 @@ pub(crate) use self::{
 use self::{
     markers::{MarkerFanOutOutcome, dispatch_transaction_markers},
     prepare::prepare_transaction,
-    response::{encode_err, encode_ok},
+    response::{err_response, ok_response},
     validation::{EndTxnValidation, validate_end_txn},
 };
 
@@ -73,21 +72,18 @@ use self::{
     name = "handle_end_txn",
     level = "info",
     skip_all,
-    fields(api = "EndTxn", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "EndTxn", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: EndTxnRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<EndTxnResponse, BrokerError> {
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
     let authorizer = broker.config.authorizer.as_ref();
-    let mut cur: &[u8] = req_bytes;
-    let req = EndTxnRequest::decode(&mut cur, version)?;
 
     // Refresh leader-partition view from the current metadata image
     // before checking coordinator-ness.
@@ -123,9 +119,9 @@ pub(crate) async fn handle(
             no_partition_added,
         }) => (entry, no_partition_added),
         Ok(EndTxnValidation::AlreadyComplete(pid, epoch)) => {
-            return encode_ok(version, pid.get(), epoch);
+            return Ok(ok_response(pid.get(), epoch));
         }
-        Err(code) => return encode_err(version, code),
+        Err(code) => return Ok(err_response(version, code)),
     };
 
     // ── Phase 1: Ongoing → Prepare{Commit,Abort} ──────────────────────
@@ -140,7 +136,7 @@ pub(crate) async fn handle(
     .await
     {
         Ok(prepared) => prepared,
-        Err(code) => return encode_err(version, code),
+        Err(code) => return Ok(err_response(version, code)),
     };
 
     // The Prepare record is durable. From here Kafka answers NONE with the
@@ -156,22 +152,20 @@ pub(crate) async fn handle(
         MarkerFanOutOutcome::Complete => {}
         MarkerFanOutOutcome::Retry => {
             coord.request_completion(tid);
-            return encode_ok(
-                version,
+            return Ok(ok_response(
                 prepared_completion_pid.get(),
                 prepared_completion_epoch,
-            );
+            ));
         }
         // A fenced generation has already superseded this fan-out attempt
         // (#882): retrying cannot succeed, so the transaction is left in
         // Prepare* for whatever superseded it to resolve, rather than queued
         // for a completion retry that would never converge.
         MarkerFanOutOutcome::GivenUp => {
-            return encode_ok(
-                version,
+            return Ok(ok_response(
                 prepared_completion_pid.get(),
                 prepared_completion_epoch,
-            );
+            ));
         }
     }
 
@@ -199,7 +193,7 @@ pub(crate) async fn handle(
         // The entry vanished while markers were in flight: an unload of the
         // coordinator partition answers its retriable coordinator error, and
         // anything else is a producer-mapping loss.
-        return encode_err(version, coord.missing_entry_error(tid).await);
+        return Ok(err_response(version, coord.missing_entry_error(tid).await));
     };
 
     // The completion identity was selected and persisted with the Prepare
@@ -253,7 +247,7 @@ pub(crate) async fn handle(
             // race). Report success without re-writing, returning the
             // persisted (possibly already-bumped) identity so a KIP-890
             // client that retried picks up the authoritative value.
-            return encode_ok(version, pid.get(), epoch);
+            return Ok(ok_response(pid.get(), epoch));
         }
         CompletionDecision::Reject(code) => {
             tracing::warn!(
@@ -266,7 +260,7 @@ pub(crate) async fn handle(
                 "EndTxn: entry changed underneath the marker fan-out; \
                  aborting Complete write"
             );
-            return encode_err(version, code);
+            return Ok(err_response(version, code));
         }
     };
 
@@ -285,5 +279,5 @@ pub(crate) async fn handle(
     drop(entry);
 
     // Unwrap the post-completion `ProducerId` into the raw-`i64` wire response.
-    encode_ok(version, response_pid.get(), response_epoch)
+    Ok(ok_response(response_pid.get(), response_epoch))
 }

@@ -1,6 +1,5 @@
 //! The wire shape of an `ElectLeaders` answer: the error code and text each
-//! election failure carries, and the encoder both the whole-request refusals
-//! and the successful path share.
+//! election failure carries, and the refusal of a whole request.
 //!
 //! A refusal of the whole request (authorization, an unknown election type)
 //! answers the way Kafka's `ElectLeadersRequest.getErrorResponse` does: the
@@ -8,14 +7,10 @@
 //! partition row the client named. A request with `topic_partitions = null`
 //! named no row, so its refusal carries none.
 
-use bytes::Bytes;
 use krabka_metadata::MetadataImage;
-use krabka_protocol::{
-    Encode,
-    owned::{
-        elect_leaders_request::ElectLeadersRequest,
-        elect_leaders_response::{ElectLeadersResponse, PartitionResult, ReplicaElectionResult},
-    },
+use krabka_protocol::owned::{
+    elect_leaders_request::ElectLeadersRequest,
+    elect_leaders_response::{ElectLeadersResponse, PartitionResult, ReplicaElectionResult},
 };
 
 use crate::{codes, leader_election::ElectError};
@@ -108,11 +103,4 @@ pub(super) fn whole_request_error(
         replica_election_results: results,
         ..Default::default()
     }
-}
-
-pub(super) fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(resp, api_version, "encode ElectLeaders")
 }

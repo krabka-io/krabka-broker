@@ -18,9 +18,7 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
-    handlers::alter_partition_reassignments::test_support::{
-        decode_response, request, test_context,
-    },
+    handlers::alter_partition_reassignments::test_support::{request, test_context},
     test_support::{DenyAll, start_broker_with_authorizer as start_broker},
 };
 
@@ -132,10 +130,9 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let peer: SocketAddr = "127.0.0.1:9092".parse().expect("peer address");
     let ctx = test_context(&principal, &peer);
 
-    let bytes = handle(&broker, request(true, "orders", 7, None), &ctx, version)
+    let resp = handle(&broker, request(true, "orders", 7, None), version, &ctx)
         .await
         .expect("handle");
-    let resp = decode_response(&bytes, version);
     assert!(resp.responses[0].partitions[0].error_code == 0, "{resp:?}");
 
     let image = broker.controller.current_image();
@@ -161,15 +158,14 @@ async fn handle_preserves_unknown_partition_response_shape() {
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
-    let bytes = handle(
+    let resp = handle(
         &broker,
         request(false, "payments", 8, Some(vec![1, 2])),
-        &ctx,
         version,
+        &ctx,
     )
     .await
     .expect("handle");
-    let resp = decode_response(&bytes, version);
 
     let expected = AlterPartitionReassignmentsResponse {
         throttle_time_ms: 0,
@@ -209,15 +205,14 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
             let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let ctx = test_context(&principal, &peer);
 
-            let bytes = handle(
+            let resp = handle(
                 &broker,
                 request(allow_rf_change, "payments", 8, Some(vec![1, 2])),
-                &ctx,
                 version,
+                &ctx,
             )
             .await
             .expect("handle");
-            let resp = decode_response(&bytes, version);
 
             let expected = AlterPartitionReassignmentsResponse {
                 throttle_time_ms: 0,
@@ -256,15 +251,14 @@ async fn handle_submits_successful_reassignment_records() {
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
-    let bytes = handle(
+    let resp = handle(
         &broker,
         request(true, "orders", 7, Some(vec![1, 2])),
-        &ctx,
         version,
+        &ctx,
     )
     .await
     .expect("handle");
-    let resp = decode_response(&bytes, version);
 
     let expected = AlterPartitionReassignmentsResponse {
         throttle_time_ms: 0,
@@ -324,15 +318,14 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
-    let bytes = handle(
+    let response = handle(
         &broker,
         request(true, "orders", 7, Some(vec![1, 2])),
-        &ctx,
         version,
+        &ctx,
     )
     .await
     .expect("handle");
-    let response = decode_response(&bytes, version);
     let row = &response.responses[0].partitions[0];
     check!(row.error_code == POLICY_VIOLATION);
     check!(

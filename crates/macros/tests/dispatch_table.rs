@@ -49,8 +49,6 @@ impl From<krabka_protocol::DecodeError> for BrokerError {
 enum ApiKey {
     Metadata = 3,
     DescribeConfigs = 32,
-    CreateAcls = 30,
-    DescribeAcls = 29,
     AddPartitionsToTxn = 24,
     CreateDelegationToken = 38,
     PushTelemetry = 72,
@@ -133,7 +131,7 @@ impl DispatchRegistry {
 }
 
 /// The request schemas the table names: a `FLEXIBLE_MIN` per api, and a
-/// decodable request type for the `decoded` sections.
+/// decodable request type for the `typed` sections.
 mod krabka_protocol {
     pub struct DecodeError;
 
@@ -159,14 +157,6 @@ mod krabka_protocol {
         }
         pub mod describe_configs_request {
             pub const FLEXIBLE_MIN: i16 = 4;
-        }
-        pub mod create_acls_request {
-            pub use crate::krabka_protocol::Text as CreateAclsRequest;
-            pub const FLEXIBLE_MIN: i16 = 2;
-        }
-        pub mod describe_acls_request {
-            pub use crate::krabka_protocol::Text as DescribeAclsRequest;
-            pub const FLEXIBLE_MIN: i16 = 2;
         }
         pub mod list_groups_request {
             pub use crate::krabka_protocol::Text as ListGroupsRequest;
@@ -358,52 +348,6 @@ mod handlers {
         }
     }
 
-    pub mod create_acls {
-        use crate::{
-            ApiVersion, BoxFuture, Broker, BrokerError, Bytes, RequestContext,
-            krabka_protocol::owned::create_acls_request::CreateAclsRequest,
-        };
-
-        pub fn handle<'a>(
-            broker: &'a Broker,
-            request: CreateAclsRequest,
-            ctx: &'a RequestContext<'a>,
-            version: ApiVersion,
-        ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-            let CreateAclsRequest(text) = request;
-            Box::pin(std::future::ready(crate::reply(&[
-                &"create_acls",
-                &broker.name,
-                &version,
-                &ctx.client_id,
-                &text,
-            ])))
-        }
-    }
-
-    pub mod describe_acls {
-        use crate::{
-            ApiVersion, Broker, BrokerError, Bytes, RequestContext,
-            krabka_protocol::owned::describe_acls_request::DescribeAclsRequest,
-        };
-
-        pub fn handle(
-            broker: &Broker,
-            request: DescribeAclsRequest,
-            ctx: &RequestContext<'_>,
-            version: ApiVersion,
-        ) -> Result<Bytes, BrokerError> {
-            let DescribeAclsRequest(text) = request;
-            crate::reply(&[
-                &"describe_acls",
-                &broker.name,
-                &version,
-                &ctx.client_id,
-                &text,
-            ])
-        }
-    }
-
     pub mod push_telemetry {
         use crate::{ApiVersion, Broker, BrokerError, Bytes, CorrelationId, TelemetryContext};
 
@@ -473,8 +417,6 @@ fn create_delegation_token_adapter<'a>(
 krabka_macros::dispatch_table! {
     context: Metadata, AddPartitionsToTxn => crate::txn::add_partitions_to_txn::handle;
     sync_context: DescribeConfigs;
-    decoded: CreateAcls;
-    decoded_sync: DescribeAcls;
     typed: ListGroups;
     typed_group: Heartbeat;
     typed_sync: ListConfigResources;
@@ -564,20 +506,6 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
             Err(BrokerError::EmptyBody),
         ),
         (
-            ApiKey::CreateAcls,
-            "context",
-            2,
-            ok("create_acls b1 5 c1 v5:body"),
-            Err(BrokerError::EmptyBody),
-        ),
-        (
-            ApiKey::DescribeAcls,
-            "context",
-            2,
-            ok("describe_acls b1 5 c1 v5:body"),
-            Err(BrokerError::EmptyBody),
-        ),
-        (
             ApiKey::ListGroups,
             "context",
             3,
@@ -627,13 +555,11 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
 }
 
 #[test]
-fn a_decoded_adapter_maps_a_decode_failure_to_a_broker_error() {
+fn a_typed_adapter_maps_a_decode_failure_to_a_broker_error() {
     let mut registry = DispatchRegistry::default();
     register_dispatch_table(&mut registry);
 
     for api in [
-        ApiKey::CreateAcls,
-        ApiKey::DescribeAcls,
         ApiKey::ListGroups,
         ApiKey::Heartbeat,
         ApiKey::ListConfigResources,

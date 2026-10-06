@@ -6,7 +6,6 @@
 //! `INVALID_REQUEST`. A request leader epoch above the stored one is persisted
 //! before the answer, so the older share-partition leader is fenced.
 
-use bytes::Bytes;
 use futures_util::future::join_all;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
@@ -25,14 +24,11 @@ use crate::{broker::Broker, error::BrokerError, share_coordinator::coordinator::
 /// every requested partition, and the share coordinator does not run.
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ReadShareGroupStateRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: ReadShareGroupStateRequest = crate::handlers::decode_group_request(&mut cur, version)?;
-    let resp = if super::cluster_action_denied(broker, ctx) {
+) -> Result<ReadShareGroupStateResponse, BrokerError> {
+    Ok(if super::cluster_action_denied(broker, ctx) {
         super::cluster_authorization_failed!(
             req,
             ReadShareGroupStateResponse,
@@ -46,8 +42,7 @@ pub(crate) async fn handle(
             req,
         )
         .await
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Serves every partition of `req`, as Kafka's

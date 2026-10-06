@@ -30,7 +30,6 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
@@ -214,9 +213,15 @@ async fn share_fetch(broker: &BrokerHandle, fetch: &Fetch<'_>) -> ShareFetchResp
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let bytes = encode_request(&request, VERSION);
-    let response = handle(&shared, VERSION, 7, &bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        VERSION,
+        &bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     decode_response(&response, VERSION)
 }
 
@@ -498,10 +503,10 @@ async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
         let user = principal("share-consumer");
         let address = peer();
         let ctx = request_context(&user, &address, "share-client");
-        let response = handle(
+        let response = crate::test_support::try_dispatch_context(
             &shared,
+            krabka_protocol::owned::share_fetch_request::API_KEY,
             version,
-            7,
             &encode_request(&request, version),
             &ctx,
         )
@@ -559,10 +564,10 @@ async fn fetch_with_limits(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let started = Instant::now();
-    let response = handle(
+    let response = crate::test_support::try_dispatch_context(
         &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
         VERSION,
-        7,
         &encode_request(&request, VERSION),
         &ctx,
     )

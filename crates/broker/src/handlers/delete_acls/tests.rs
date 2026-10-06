@@ -27,7 +27,7 @@ use crate::{
     handlers::delete_acls::test_support::{
         OPERATION_ANY, OPERATION_READ, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_MATCH,
         PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC, VERSION, acl,
-        configured_authorizer, decode_response, filter, request, test_context,
+        configured_authorizer, filter, request, test_context,
     },
     test_support::{
         DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
@@ -73,8 +73,7 @@ async fn handle_denies_cluster_alter_for_each_filter() {
         filter(Some("payments"), Some("User:bob")),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let denied = DeleteAclsFilterResult {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
@@ -109,8 +108,7 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
     let ctx = test_context(&p, &peer);
     let req = request(vec![filter(Some("orders"), Some("User:alice"))]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = DeleteAclsResponse {
         throttle_time_ms: 0,
@@ -161,8 +159,7 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
         filter(Some("payments"), Some("User:bob")),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let disabled = DeleteAclsFilterResult {
         error_code: codes::SECURITY_DISABLED,
@@ -324,10 +321,9 @@ async fn handle_deletes_exactly_what_kafka_matches() {
     for (name, f, want_deleted) in cases {
         seed_acls(&broker_handle, seeded.clone()).await;
 
-        let resp = handle(&broker, request(vec![f]), &ctx, VERSION)
+        let mut resp = handle(&broker, request(vec![f]), VERSION, &ctx)
             .await
             .expect("handle");
-        let mut resp = decode_response(&resp);
         resp.filter_results[0].matching_acls.sort_by(|a, b| {
             (&a.resource_name, &a.principal).cmp(&(&b.resource_name, &b.principal))
         });
@@ -377,8 +373,7 @@ async fn handle_lists_an_acl_under_every_filter_that_matches_it() {
         topic_filter(PATTERN_TYPE_MATCH, Some("orders"), Some("User:alice")),
     ]);
 
-    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
-    let resp = decode_response(&resp);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let row = DeleteAclsFilterResult {
         error_code: codes::NONE,
@@ -437,10 +432,9 @@ async fn handle_refuses_a_filter_with_an_undefined_byte_and_runs_the_rest() {
         .collect();
     filters.push(topic_filter(PATTERN_TYPE_ANY, Some("orders"), None));
 
-    let resp = handle(&broker, request(filters), &ctx, VERSION)
+    let resp = handle(&broker, request(filters), VERSION, &ctx)
         .await
         .expect("handle");
-    let resp = decode_response(&resp);
 
     let mut filter_results: Vec<DeleteAclsFilterResult> = cases
         .iter()
@@ -490,7 +484,7 @@ async fn handle_closes_the_connection_on_an_unknown_element() {
     unknown.permission_type = 0;
     let req = request(vec![filter(Some("orders"), Some("User:alice")), unknown]);
 
-    let result = handle(&broker, req, &ctx, VERSION).await;
+    let result = handle(&broker, req, VERSION, &ctx).await;
 
     assert!(
         let Err(BrokerError::Protocol(ProtocolError::InvalidValue(
@@ -539,10 +533,9 @@ async fn handle_bounds_a_request_to_ten_thousand_removals() {
         let ctx = test_context(&p, &peer);
         let filter_count = filters.len();
 
-        let resp = handle(&broker, request(filters), &ctx, VERSION)
+        let resp = handle(&broker, request(filters), VERSION, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let bound = DeleteAclsFilterResult {
             error_code: codes::INVALID_REQUEST,

@@ -1,15 +1,12 @@
 //! Fixtures shared by the `create_acls` test modules.
 //!
 //! The wire constants, the `AclCreation` and `CreateAclsRequest` builders, the
-//! one-argument `validate` shim that allows CIDR hosts, and the response and
-//! context helpers are used from more than one of the sibling test modules, so
-//! they live here rather than being repeated in each.
+//! one-argument `validate` shim that allows CIDR hosts, and the context helper
+//! are used from more than one of the sibling test modules, so they live here
+//! rather than being repeated in each.
 
 use krabka_metadata::AclEntry;
-use krabka_protocol::owned::{
-    create_acls_request::{AclCreation, CreateAclsRequest},
-    create_acls_response::CreateAclsResponse,
-};
+use krabka_protocol::owned::create_acls_request::{AclCreation, CreateAclsRequest};
 
 use crate::broker::BrokerHandle;
 
@@ -40,11 +37,7 @@ pub(super) fn request(creations: Vec<AclCreation>) -> CreateAclsRequest {
     }
 }
 
-crate::test_support::response_helpers!(
-    pub(super) CreateAclsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
 pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> {
     handle

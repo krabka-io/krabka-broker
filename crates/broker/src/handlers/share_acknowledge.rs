@@ -14,22 +14,18 @@
 //! An acknowledge that targets records the member does not currently hold
 //! fails that partition row with `INVALID_RECORD_STATE`.
 //!
-//! `network::dispatch` intercepts this request inline, so the handler receives
-//! the per-connection principal and the peer `SocketAddr` for the group `Read`
-//! and per-topic `Read` ACL gates.
+//! The handler receives the per-connection principal and the peer
+//! `SocketAddr` in its `RequestContext`, for the group `Read` and per-topic
+//! `Read` ACL gates.
 
 use std::time::Instant;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        share_acknowledge_request::ShareAcknowledgeRequest,
-        share_acknowledge_response::{
-            LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareAcknowledgeResponse,
-            ShareAcknowledgeTopicResponse,
-        },
+use krabka_protocol::owned::{
+    share_acknowledge_request::ShareAcknowledgeRequest,
+    share_acknowledge_response::{
+        LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareAcknowledgeResponse,
+        ShareAcknowledgeTopicResponse,
     },
 };
 
@@ -51,42 +47,38 @@ use crate::{
     name = "handle_share_acknowledge",
     level = "info",
     skip_all,
-    fields(api = "ShareAcknowledge", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ShareAcknowledge", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: ShareAcknowledgeRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ShareAcknowledgeRequest::decode(&mut cur, version)?;
-
+) -> Result<ShareAcknowledgeResponse, BrokerError> {
     let cfg = broker.config.share_group.clone();
 
     // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return encode_error_response(version, codes::UNSUPPORTED_VERSION);
+        return Ok(error_response(codes::UNSUPPORTED_VERSION));
     }
 
     // Kafka's `KafkaApis.handleShareAcknowledgeRequest` refuses a null group
     // id after the feature gate, then checks `Read` on the group, then the
     // member id format, all before the share session and the topic checks.
     let Some(group) = req.group_id.clone() else {
-        return encode_error_response(version, codes::INVALID_REQUEST);
+        return Ok(error_response(codes::INVALID_REQUEST));
     };
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
-        return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
+        return Ok(error_response(codes::GROUP_AUTHORIZATION_FAILED));
     }
     // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
     // the broker setting as the default.
     let settings = GroupShareSettings::resolve(&image, &group, &cfg);
     let lock_timeout_ms = settings.record_lock_duration_ms();
     let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
-        return encode_error_response(version, codes::INVALID_REQUEST);
+        return Ok(error_response(codes::INVALID_REQUEST));
     };
 
     let released = match broker.share_partition_leaders.update_acknowledge_session(
@@ -95,7 +87,7 @@ pub(crate) async fn handle(
         req.share_session_epoch,
     ) {
         Ok(released) => released,
-        Err(code) => return encode_error_response(version, code),
+        Err(code) => return Ok(error_response(code)),
     };
 
     let now = Instant::now();
@@ -116,7 +108,7 @@ pub(crate) async fn handle(
         .await;
 
     let node_endpoints = hint_current_leaders(broker, ctx, &mut responses);
-    let resp = ShareAcknowledgeResponse {
+    Ok(ShareAcknowledgeResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         error_message: None,
@@ -124,8 +116,7 @@ pub(crate) async fn handle(
         responses,
         node_endpoints,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Kafka's `processShareAcknowledgeResponse`: sets the current leader on
@@ -324,23 +315,22 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
     responses
 }
 
-/// Encodes a `ShareAcknowledgeResponse` that carries a top-level error and no
+/// A `ShareAcknowledgeResponse` that carries a top-level error and no
 /// per-partition row. The error is a feature-gate, authorization, or session
 /// failure.
 ///
 /// This is Kafka's `ShareAcknowledgeRequest.getErrorResponse`, which sets only
 /// the throttle time and the error code. So the acquisition lock timeout keeps
 /// its default, 0.
-fn encode_error_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    let resp = ShareAcknowledgeResponse {
+fn error_response(error_code: i16) -> ShareAcknowledgeResponse {
+    ShareAcknowledgeResponse {
         throttle_time_ms: 0,
         error_code,
         error_message: None,
         acquisition_lock_timeout_ms: 0,
         responses: Vec::new(),
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
@@ -362,12 +352,7 @@ mod tests {
     use super::*;
     use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
-    crate::test_support::wire_helpers!(
-        ShareAcknowledgeRequest,
-        ShareAcknowledgeResponse,
-        version = share_acknowledge_response::MAX_VERSION,
-        client_id = "client-a"
-    );
+    crate::test_support::context_helper!(client_id = "client-a");
 
     fn request(topic_id: ProtoUuid, partitions: &[i32]) -> ShareAcknowledgeRequest {
         ShareAcknowledgeRequest {
@@ -402,13 +387,8 @@ mod tests {
     }
 
     #[test]
-    fn encode_error_response_preserves_top_level_fields() {
-        let resp = encode_error_response(
-            share_acknowledge_response::MAX_VERSION,
-            codes::UNSUPPORTED_VERSION,
-        )
-        .expect("encode");
-        let resp = decode_response(&resp);
+    fn error_response_preserves_top_level_fields() {
+        let resp = error_response(codes::UNSUPPORTED_VERSION);
 
         let expected = ShareAcknowledgeResponse {
             throttle_time_ms: 0,
@@ -430,12 +410,10 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&request(ProtoUuid([7; 16]), &[0]));
 
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, request(ProtoUuid([7; 16]), &[0]), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = ShareAcknowledgeResponse {
             throttle_time_ms: 0,
@@ -540,11 +518,15 @@ mod tests {
         let mut request = request(topic_id, &[0]);
         request.member_id = Some(member.into());
         request.share_session_epoch = 1;
-        let req_bytes = crate::test_support::encode_request(&request, version);
-        let resp = handle(&shared, version, 1, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        crate::test_support::decode_response(&resp, version)
+        // Both ends of the version range: the response is read off the wire.
+        crate::test_support::dispatch_wire(
+            &shared,
+            krabka_protocol::owned::share_acknowledge_request::API_KEY,
+            version,
+            &request,
+            &ctx,
+        )
+        .await
     }
 
     /// Run one case per (version, topic reference) on `broker`, each in its

@@ -128,14 +128,10 @@ krabka_macros::dispatch_table! {
         AssignReplicasToDirs,
         Metadata,
         CreateTopics,
-        CreatePartitions,
         ShareGroupDescribe,
-        ShareFetch,
-        ShareAcknowledge,
         AlterShareGroupOffsets,
         DeleteShareGroupOffsets,
         DeleteGroups,
-        OffsetFetch,
         UnregisterBroker,
         UnregisterController,
         AddRaftVoter,
@@ -145,34 +141,15 @@ krabka_macros::dispatch_table! {
         ControllerRegistration,
         StreamsGroupHeartbeat,
         ListOffsets,
-        EndTxn => crate::txn::handlers::end_txn::handle,
         DescribeQuorum,
         AllocateProducerIds,
         AddOffsetsToTxn => crate::txn::handlers::add_offset_commits_to_txn::handle,
         WriteTxnMarkers => crate::txn::handlers::write_txn_markers::handle,
-        FetchSnapshot,
-        InitializeShareGroupState => crate::share_coordinator::handlers::initialize::handle,
-        ReadShareGroupState => crate::share_coordinator::handlers::read::handle,
-        WriteShareGroupState => crate::share_coordinator::handlers::write::handle,
-        DeleteShareGroupState => crate::share_coordinator::handlers::delete::handle,
-        ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
+        FetchSnapshot;
     // The same arguments; the result is wrapped in a ready future.
     sync_context:
         GetReplicaLogInfo,
         OffsetForLeaderEpoch;
-    // `handle(broker, request, ctx, version)` on the decoded request, awaited.
-    decoded:
-        CreateAcls,
-        DeleteAcls,
-        ElectLeaders,
-        AlterPartitionReassignments,
-        AlterClientQuotas;
-    // The same arguments; the result is wrapped in a ready future.
-    decoded_sync:
-        DescribeAcls,
-        ListPartitionReassignments,
-        DescribeClientQuotas,
-        DescribeUserScramCredentials;
     // `handle(broker, request, version, ctx)` on the decoded request, awaited;
     // the handler returns its response struct, which the adapter encodes.
     typed:
@@ -198,6 +175,16 @@ krabka_macros::dispatch_table! {
         FindCoordinator,
         AlterUserScramCredentials,
         UpdateFeatures,
+        ShareFetch,
+        ShareAcknowledge,
+        CreatePartitions,
+        OffsetFetch,
+        EndTxn => crate::txn::handlers::end_txn::handle,
+        CreateAcls,
+        DeleteAcls,
+        ElectLeaders,
+        AlterPartitionReassignments,
+        AlterClientQuotas,
         AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle;
     // The same, with the request decoded by `decode_group_request`, which
     // refuses a string no coordinator record can carry.
@@ -210,11 +197,20 @@ krabka_macros::dispatch_table! {
         ConsumerGroupHeartbeat,
         ShareGroupHeartbeat,
         InitProducerId,
-        TxnOffsetCommit => crate::txn::handlers::txn_offset_commit::handle;
+        TxnOffsetCommit => crate::txn::handlers::txn_offset_commit::handle,
+        InitializeShareGroupState => crate::share_coordinator::handlers::initialize::handle,
+        ReadShareGroupState => crate::share_coordinator::handlers::read::handle,
+        WriteShareGroupState => crate::share_coordinator::handlers::write::handle,
+        DeleteShareGroupState => crate::share_coordinator::handlers::delete::handle,
+        ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
     // `typed`, called without awaiting: the result is wrapped in a ready future.
     typed_sync:
         ListConfigResources,
-        DescribeConfigs;
+        DescribeConfigs,
+        DescribeAcls,
+        ListPartitionReassignments,
+        DescribeClientQuotas,
+        DescribeUserScramCredentials;
     // Hand-written in `auth`: the adapter receives the `ConnectionAuth` and
     // the peer address instead of a `RequestContext`.
     auth:

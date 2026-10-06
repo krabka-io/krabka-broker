@@ -42,7 +42,6 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::streams_group_heartbeat,
-    share_coordinator::handlers::initialize,
     test_support::{decode_response, encode_request},
 };
 
@@ -664,10 +663,10 @@ async fn initialize_share_group_state_takes_a_32767_byte_group_id_and_refuses_32
             ..Default::default()
         };
 
-        let result = initialize::handle(
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            initialize_share_group_state_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx("record-strings-test"),
         )

@@ -3,7 +3,6 @@
 //! `start_offset`. It gates every partition on local leadership of that
 //! partition's `__share_group_state` partition.
 
-use bytes::Bytes;
 use futures_util::future::join_all;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
@@ -25,15 +24,11 @@ use crate::{
 /// every requested partition, and the share coordinator does not run.
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: InitializeShareGroupStateRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: InitializeShareGroupStateRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
-    let resp = if super::cluster_action_denied(broker, ctx) {
+) -> Result<InitializeShareGroupStateResponse, BrokerError> {
+    Ok(if super::cluster_action_denied(broker, ctx) {
         super::cluster_authorization_failed!(
             req,
             InitializeShareGroupStateResponse,
@@ -47,8 +42,7 @@ pub(crate) async fn handle(
             req,
         )
         .await
-    };
-    crate::handlers::encode_response(&resp, version)
+    })
 }
 
 /// Initializes every partition of `req`, as Kafka's

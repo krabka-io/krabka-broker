@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
 use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
@@ -24,7 +23,6 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::unified::group::GroupOffsets,
-    error::BrokerError,
 };
 
 /// Serves an `OffsetFetch` request in the pre-KIP-516 single-group shape.
@@ -39,35 +37,30 @@ use crate::{
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn handle_legacy(
     broker: &Broker,
-    version: i16,
     req: &OffsetFetchRequest,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> OffsetFetchResponse {
     // ── ACL preamble ────────────────────────────────────────────
     // Step 1: `Describe` on `Group(group_id)`. On Deny → whole-response
     // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
     {
         if !group_authorized(broker, ctx, &req.group_id) {
-            let resp = OffsetFetchResponse {
+            return OffsetFetchResponse {
                 topics: Vec::new(),
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
                 throttle_time_ms: 0,
                 ..Default::default()
             };
-            return crate::handlers::encode_response(&resp, version);
         }
     }
 
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return crate::handlers::encode_response(
-            &OffsetFetchResponse {
-                topics: Vec::new(),
-                error_code,
-                throttle_time_ms: 0,
-                ..Default::default()
-            },
-            version,
-        );
+        return OffsetFetchResponse {
+            topics: Vec::new(),
+            error_code,
+            throttle_time_ms: 0,
+            ..Default::default()
+        };
     }
 
     // Fetch the group's offset state from its actor. An unknown id reads as a
@@ -92,13 +85,12 @@ pub(super) async fn handle_legacy(
         )
     };
 
-    let resp = OffsetFetchResponse {
+    OffsetFetchResponse {
         topics: topics_out,
         error_code: codes::NONE,
         throttle_time_ms: 0,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 /// Builds the response rows for an explicit topic list on the legacy shape.

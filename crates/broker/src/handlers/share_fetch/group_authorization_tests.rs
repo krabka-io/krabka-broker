@@ -198,10 +198,10 @@ async fn share_fetch_checks_group_read_before_topic_read() {
                 }],
                 ..Default::default()
             };
-            let response = super::handle(
+            let response = crate::test_support::try_dispatch_context(
                 &shared,
+                krabka_protocol::owned::share_fetch_request::API_KEY,
                 version,
-                7,
                 &encode_request(&request, version),
                 &ctx,
             )
@@ -302,10 +302,10 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
                 }],
                 ..Default::default()
             };
-            let response = crate::handlers::share_acknowledge::handle(
+            let response = crate::test_support::try_dispatch_context(
                 &shared,
+                krabka_protocol::owned::share_acknowledge_request::API_KEY,
                 version,
-                7,
                 &encode_request(&request, version),
                 &ctx,
             )

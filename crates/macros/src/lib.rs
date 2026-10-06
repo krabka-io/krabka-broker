@@ -76,8 +76,6 @@
 //! krabka_macros::dispatch_table! {
 //!     context: Metadata, AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle;
 //!     sync_context: DescribeConfigs;
-//!     decoded: CreateAcls;
-//!     decoded_sync: DescribeAcls;
 //!     typed: ListGroups;
 //!     typed_group: Heartbeat;
 //!     typed_sync: ListConfigResources;
@@ -94,8 +92,6 @@
 //!
 //! - `context` and `sync_context` adapters pass the raw body to the handler;
 //!   a `sync_context` handler returns its result instead of a future.
-//! - `decoded` and `decoded_sync` adapters decode the request first and call
-//!   `handler(broker, request, ctx, version)`.
 //! - `typed` adapters decode the request, await
 //!   `handler(broker, request, version, ctx)` for a
 //!   `Result<Response, BrokerError>`, and encode the response with

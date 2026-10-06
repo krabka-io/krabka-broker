@@ -35,7 +35,6 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::BrokerHandle,
@@ -238,9 +237,15 @@ async fn share_fetch(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let bytes = encode_request(&request, VERSION);
-    let response = handle(&shared, VERSION, 7, &bytes, &ctx)
-        .await
-        .expect("handle share fetch");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_fetch_request::API_KEY,
+        VERSION,
+        &bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
     decode_response(&response, VERSION)
 }
 
@@ -279,9 +284,15 @@ async fn share_acknowledge(
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
     let bytes = encode_request(&request, VERSION);
-    let response = crate::handlers::share_acknowledge::handle(&shared, VERSION, 7, &bytes, &ctx)
-        .await
-        .expect("handle share acknowledge");
+    let response = crate::test_support::try_dispatch_context(
+        &shared,
+        krabka_protocol::owned::share_acknowledge_request::API_KEY,
+        VERSION,
+        &bytes,
+        &ctx,
+    )
+    .await
+    .expect("handle share acknowledge");
     decode_response(&response, VERSION)
 }
 

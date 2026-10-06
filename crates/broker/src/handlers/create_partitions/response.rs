@@ -1,14 +1,11 @@
-//! Assembly and encoding of the `CreatePartitions` response, including the
+//! Assembly of the `CreatePartitions` response, including the
 //! KIP-599 throttle that the handler records after it has built the per-topic
 //! result rows.
 
-use bytes::Bytes;
 use krabka_protocol::owned::create_partitions_response::{
     CreatePartitionsResponse, CreatePartitionsTopicResult,
 };
 use krabka_units::Time;
-
-use crate::error::BrokerError;
 
 pub(super) fn create_partitions_response(
     results: Vec<CreatePartitionsTopicResult>,
@@ -25,8 +22,7 @@ pub(super) fn finish_response(
     context: &crate::handlers::RequestContext<'_>,
     delay: Time,
     results: Vec<CreatePartitionsTopicResult>,
-    version: i16,
-) -> Result<Bytes, BrokerError> {
+) -> CreatePartitionsResponse {
     // KIP-599: the controller-mutation delay goes to the dispatch loop, which
     // resolves it with the KIP-124 request quota in one metrics call and
     // reports the larger of the two, as Kafka's
@@ -34,46 +30,5 @@ pub(super) fn finish_response(
     // carries the controller-mutation delay now; the dispatch loop raises it
     // when the request quota asks for more.
     context.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
-    let resp = create_partitions_response(results, crate::quota::throttle_time_ms(delay));
-    crate::handlers::encode_response(&resp, version)
-}
-
-#[cfg(test)]
-mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::{codes, handlers::create_partitions::test_support::VERSION};
-
-    crate::test_support::decode_helper!(CreatePartitionsResponse, version = VERSION);
-
-    #[test]
-    fn encode_response_writes_decodable_results_and_throttle() {
-        let bytes = crate::handlers::encode_response(
-            &create_partitions_response(
-                vec![CreatePartitionsTopicResult {
-                    name: "orders".into(),
-                    error_code: codes::INVALID_PARTITIONS,
-                    error_message: Some("bad count".into()),
-                    ..Default::default()
-                }],
-                321,
-            ),
-            VERSION,
-        )
-        .expect("encode");
-        let resp = decode_response(&bytes);
-
-        let expected = CreatePartitionsResponse {
-            throttle_time_ms: 321,
-            results: vec![CreatePartitionsTopicResult {
-                name: "orders".into(),
-                error_code: codes::INVALID_PARTITIONS,
-                error_message: Some("bad count".into()),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
-        assert!(resp == expected);
-    }
+    create_partitions_response(results, crate::quota::throttle_time_ms(delay))
 }

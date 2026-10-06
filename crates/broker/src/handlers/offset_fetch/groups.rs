@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
 use krabka_metadata::AclOperation;
 use krabka_protocol::{
     owned::{
@@ -28,7 +27,6 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::unified::group::GroupOffsets,
-    error::BrokerError,
 };
 
 /// Per-group fetch for v8 and above.
@@ -50,7 +48,7 @@ pub(super) async fn handle_groups(
     version: i16,
     req: &OffsetFetchRequest,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> OffsetFetchResponse {
     let mut groups_out: Vec<OffsetFetchResponseGroup> = Vec::with_capacity(req.groups.len());
 
     for grp in &req.groups {
@@ -128,14 +126,13 @@ pub(super) async fn handle_groups(
         });
     }
 
-    let resp = OffsetFetchResponse {
+    OffsetFetchResponse {
         topics: Vec::new(),
         error_code: codes::NONE,
         throttle_time_ms: 0,
         groups: groups_out,
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 /// The first `OffsetFetch` version that names each topic by `topic_id` only.

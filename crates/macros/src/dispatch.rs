@@ -15,11 +15,6 @@ enum Adapter {
     Context,
     /// Hands the handler the raw body and wraps its result in a ready future.
     SyncContext,
-    /// Decodes the body into the request type and awaits the handler.
-    Decoded,
-    /// Decodes the body into the request type and wraps the handler's result
-    /// in a ready future.
-    DecodedSync,
     /// Decodes the body into the request type, awaits the handler's response
     /// struct and encodes it. `group` decodes through
     /// `decode_group_request`, which also refuses a record string over the
@@ -43,7 +38,7 @@ struct Kind {
     constructor: &'static str,
 }
 
-const KINDS: [Kind; 9] = [
+const KINDS: [Kind; 7] = [
     Kind {
         label: "context",
         adapter: Adapter::Context,
@@ -52,16 +47,6 @@ const KINDS: [Kind; 9] = [
     Kind {
         label: "sync_context",
         adapter: Adapter::SyncContext,
-        constructor: "context",
-    },
-    Kind {
-        label: "decoded",
-        adapter: Adapter::Decoded,
-        constructor: "context",
-    },
-    Kind {
-        label: "decoded_sync",
-        adapter: Adapter::DecodedSync,
         constructor: "context",
     },
     Kind {
@@ -118,44 +103,6 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                 Box::pin(::std::future::ready({{ handler }}(
                     broker, version, correlation_id, body, ctx,
                 )))
-            }
-        },
-        Adapter::Decoded => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                _correlation_id: CorrelationId,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(async move {
-                    use krabka_protocol::Decode;
-
-                    let mut cur = body;
-                    let req = krabka_protocol::owned::{{ request_module }}::{{ request_type }}::decode(
-                        &mut cur, version,
-                    )?;
-                    {{ handler }}(broker, req, ctx, version).await
-                })
-            }
-        },
-        Adapter::DecodedSync => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                _correlation_id: CorrelationId,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready((|| {
-                    use krabka_protocol::Decode;
-
-                    let mut cur = body;
-                    let req = krabka_protocol::owned::{{ request_module }}::{{ request_type }}::decode(
-                        &mut cur, version,
-                    )?;
-                    {{ handler }}(broker, req, ctx, version)
-                })()))
             }
         },
         Adapter::Typed { group } => {

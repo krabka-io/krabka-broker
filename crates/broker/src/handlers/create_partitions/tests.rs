@@ -1,7 +1,6 @@
-//! End-to-end tests of the `CreatePartitions` handler, driven over the wire
-//! encoding against a running broker: the authorization gate, the per-topic
-//! error rows, the `validate_only` dry run, a successful grow, and the
-//! KIP-599 mutation quota.
+//! End-to-end tests of the `CreatePartitions` handler, driven against a
+//! running broker: the authorization gate, the per-topic error rows, the
+//! `validate_only` dry run, a successful grow, and the KIP-599 mutation quota.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -17,12 +16,7 @@ use crate::{
     test_support::{DenyAll, peer, principal},
 };
 
-crate::test_support::wire_helpers!(
-    CreatePartitionsRequest,
-    CreatePartitionsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -33,11 +27,9 @@ async fn drive(
     peer: &SocketAddr,
 ) -> CreatePartitionsResponse {
     let ctx = test_context(principal, peer);
-    let req_bytes = encode_request(req);
-    let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+    handle(broker, req.clone(), VERSION, &ctx)
         .await
-        .expect("handle");
-    decode_response(&bytes)
+        .expect("handle")
 }
 
 #[tokio::test]

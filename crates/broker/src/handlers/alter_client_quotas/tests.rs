@@ -1,6 +1,6 @@
 //! End-to-end tests for the `AlterClientQuotas` handler: the cluster
 //! authorization preamble, the per-entry results a mixed request returns, and
-//! the encoded response body the handler writes.
+//! the response the handler returns.
 //!
 //! Most of them drive a live broker, so they are kept out of the module root.
 
@@ -21,7 +21,7 @@ use crate::{
     test_support::{DenyAll, start_broker_with_authorizer as start_broker},
 };
 
-crate::test_support::response_helpers!(AlterClientQuotasResponse, client_id = "admin-client");
+crate::test_support::context_helper!(client_id = "admin-client");
 
 fn quota_value(handle: &BrokerHandle, user: &str, quota_key: &str) -> Option<f64> {
     let key: krabka_metadata::EntityKey = vec![("user".into(), Some(user.into()))];
@@ -33,8 +33,7 @@ fn quota_value(handle: &BrokerHandle, user: &str, quota_key: &str) -> Option<f64
 }
 
 #[test]
-fn whole_request_error_encodes_all_entries() {
-    let version = 1;
+fn whole_request_error_answers_every_entry() {
     let req = request(
         vec![
             entry(vec![("user", Some("alice"))], vec![]),
@@ -43,9 +42,7 @@ fn whole_request_error_encodes_all_entries() {
         false,
     );
 
-    let bytes = encode_whole_request_error(&req, CLUSTER_AUTHORIZATION_FAILED, "denied", version)
-        .expect("encode");
-    let resp = decode_response(&bytes, version);
+    let resp = whole_request_error(&req, CLUSTER_AUTHORIZATION_FAILED, "denied");
 
     let expected = AlterClientQuotasResponse {
         throttle_time_ms: 0,
@@ -76,39 +73,6 @@ fn whole_request_error_encodes_all_entries() {
     assert!(resp == expected);
 }
 
-#[test]
-fn encode_response_writes_decodable_body() {
-    let version = 1;
-    let resp = AlterClientQuotasResponse {
-        throttle_time_ms: 123,
-        entries: vec![err_entry(
-            &[("user".into(), Some("alice".into()))],
-            INVALID_REQUEST,
-            "bad request".into(),
-        )],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-
-    let bytes = encode_response(&resp, version).expect("encode");
-    let decoded = decode_response(&bytes, version);
-
-    let expected = AlterClientQuotasResponse {
-        throttle_time_ms: 123,
-        entries: vec![RespEntry {
-            error_code: INVALID_REQUEST,
-            error_message: Some("bad request".into()),
-            entity: vec![RespEntity {
-                entity_type: "user".into(),
-                entity_name: Some("alice".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    assert!(decoded == expected);
-}
-
 #[tokio::test]
 async fn handle_denies_cluster_alter_for_each_entry() {
     let version = 1;
@@ -125,8 +89,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
         false,
     );
 
-    let resp = handle(&broker, req, &ctx, version).await.expect("handle");
-    let resp = decode_response(&resp, version);
+    let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
     let expected = AlterClientQuotasResponse {
         throttle_time_ms: 0,
@@ -184,8 +147,7 @@ async fn cluster_alter_configs_gates_the_quota_write() {
             false,
         );
 
-        let resp = handle(&broker, req, &ctx, version).await.expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
         let (error_code, error_message) = if allowed {
             (0, None)
@@ -241,8 +203,7 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
         false,
     );
 
-    let resp = handle(&broker, req, &ctx, version).await.expect("handle");
-    let resp = decode_response(&resp, version);
+    let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
     let expected = AlterClientQuotasResponse {
         throttle_time_ms: 0,
@@ -299,8 +260,7 @@ async fn handle_validate_only_reports_success_without_submitting() {
         true,
     );
 
-    let resp = handle(&broker, req, &ctx, version).await.expect("handle");
-    let resp = decode_response(&resp, version);
+    let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
     let expected = AlterClientQuotasResponse {
         throttle_time_ms: 0,
@@ -375,8 +335,7 @@ async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
             validate_only,
         );
 
-        let resp = handle(&broker, req, &ctx, version).await.expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
         assert2::check!(resp == expected, "validate_only {validate_only}");
         assert2::check!(

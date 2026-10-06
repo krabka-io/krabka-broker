@@ -7,10 +7,9 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 use krabka_protocol::{
-    Encode, UnknownTaggedFields,
+    UnknownTaggedFields,
     owned::{
         alter_client_quotas_request::AlterClientQuotasRequest,
         alter_client_quotas_response::AlterClientQuotasResponse,
@@ -27,7 +26,7 @@ mod tests;
 
 use self::{
     entries::{Alteration, alter_client_quotas},
-    response::{apply_submit_error, encode_whole_request_error, err_entry, ok_entry},
+    response::{apply_submit_error, err_entry, ok_entry, whole_request_error},
 };
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
 use crate::{broker::Broker, codes::CLUSTER_AUTHORIZATION_FAILED};
@@ -42,9 +41,9 @@ use crate::{broker::Broker, codes::CLUSTER_AUTHORIZATION_FAILED};
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterClientQuotasRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<AlterClientQuotasResponse, crate::error::BrokerError> {
     let image = broker.controller.current_image();
     // Kafka's `ControllerApis.handleAlterClientQuotas` authorizes
     // `AlterConfigs` on the cluster. `Alter` does not imply it. A denial
@@ -58,12 +57,11 @@ pub(crate) async fn handle(
         CLUSTER_RESOURCE_NAME,
         AclOperation::AlterConfigs,
     ) {
-        return encode_whole_request_error(
+        return Ok(whole_request_error(
             &req,
             CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",
-            api_version,
-        );
+        ));
     }
 
     let resolvable = resolve_ip_names(&req).await;
@@ -108,12 +106,11 @@ pub(crate) async fn handle(
         );
     }
 
-    let resp = AlterClientQuotasResponse {
+    Ok(AlterClientQuotasResponse {
         throttle_time_ms: 0,
         entries: entry_results,
         unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    encode_response(&resp, api_version)
+    })
 }
 
 /// Resolves every named `ip` entity that is not an IP literal.
@@ -170,11 +167,4 @@ fn quota_entity_name(
         })
         .collect::<Vec<_>>()
         .join(",")
-}
-
-fn encode_response<R: Encode>(
-    resp: &R,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    crate::handlers::encode_response_with_context(resp, api_version, "encode AlterClientQuotas")
 }

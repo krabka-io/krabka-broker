@@ -1,6 +1,6 @@
-//! The response encoders that every handler ends with.
+//! The response encoder that every handler ends with.
 //!
-//! Both size the buffer from `encoded_len` before they encode, so the encode
+//! It sizes the buffer from `encoded_len` before it encodes, so the encode
 //! writes into a buffer that already holds the whole response.
 
 use bytes::{Bytes, BytesMut};
@@ -15,17 +15,6 @@ pub(crate) fn encode_response<R: Encode>(
 ) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
     resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
-}
-
-pub(crate) fn encode_response_with_context<R: Encode>(
-    resp: &R,
-    version: ApiVersion,
-    context: &'static str,
-) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)
-        .map_err(|e| BrokerError::Replication(format!("{context}: {e}")))?;
     Ok(buf.freeze())
 }
 

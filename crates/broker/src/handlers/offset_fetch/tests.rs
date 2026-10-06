@@ -106,12 +106,8 @@ async fn named_topic_fetch_returns_committed_offset() {
         ]),
         ..Default::default()
     };
-    let req_bytes = crate::test_support::encode_request(&req, VERSION);
 
-    let bytes = handle(&broker, VERSION, 123, &req_bytes, &ctx)
-        .await
-        .expect("handle");
-    let resp: OffsetFetchResponse = crate::test_support::decode_response(&bytes, VERSION);
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let topic = resp
         .topics
@@ -193,11 +189,16 @@ async fn fetch(
     let p = principal("admin");
     let peer = peer();
     let ctx = crate::test_support::request_context(&p, &peer, "consumer");
-    let req_bytes = crate::test_support::encode_request(req, version);
-    let bytes = handle(broker, version, 123, &req_bytes, &ctx)
-        .await
-        .expect("handle");
-    crate::test_support::decode_response(&bytes, version)
+    // The response shape changes with the version (KIP-516 moves it into
+    // `groups[]` at v8), so this reads it back off the wire.
+    crate::test_support::dispatch_wire(
+        broker,
+        krabka_protocol::owned::offset_fetch_request::API_KEY,
+        version,
+        req,
+        &ctx,
+    )
+    .await
 }
 
 // KIP-447 on the pre-KIP-516 shape. `orders-0` carries a stable offset that an

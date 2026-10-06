@@ -198,20 +198,22 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         committed: true,
         ..Default::default()
     };
-    let fenced_end_response = crate::txn::handlers::end_txn::handle(
-        &broker,
-        end_version,
-        5,
-        &crate::test_support::encode_request(&fenced_end_request, end_version),
-        &context,
-    )
-    .await
-    .expect("reject fenced recovery client");
-    let fenced_end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
-        crate::test_support::decode_response(&fenced_end_response, end_version);
+    let fenced_end_response =
+        crate::txn::handlers::end_txn::handle(&broker, fenced_end_request, end_version, &context)
+            .await
+            .expect("reject fenced recovery client");
     // Kafka `endTransaction` fences a stale identity with PRODUCER_FENCED at
     // `EndTxn` v2 and above.
-    assert!(fenced_end_response.error_code == codes::PRODUCER_FENCED);
+    assert!(
+        fenced_end_response
+            == krabka_protocol::owned::end_txn_response::EndTxnResponse {
+                throttle_time_ms: 0,
+                error_code: codes::PRODUCER_FENCED,
+                producer_id: -1,
+                producer_epoch: -1,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }
+    );
 
     let end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
         transactional_id: tids[2].to_string(),
@@ -220,32 +222,25 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         committed: true,
         ..Default::default()
     };
-    let end_response = crate::txn::handlers::end_txn::handle(
-        &broker,
-        end_version,
-        6,
-        &crate::test_support::encode_request(&end_request, end_version),
-        &context,
-    )
-    .await
-    .expect("complete recovered transaction");
-    let end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
-        crate::test_support::decode_response(&end_response, end_version);
-    assert!(end_response.error_code == codes::NONE);
-    assert!(end_response.producer_id == second_recovery_response.producer_id);
-    assert!(end_response.producer_epoch == second_recovery_response.producer_epoch + 1);
+    let end_response =
+        crate::txn::handlers::end_txn::handle(&broker, end_request.clone(), end_version, &context)
+            .await
+            .expect("complete recovered transaction");
+    assert!(
+        end_response
+            == krabka_protocol::owned::end_txn_response::EndTxnResponse {
+                throttle_time_ms: 0,
+                error_code: codes::NONE,
+                producer_id: second_recovery_response.producer_id,
+                producer_epoch: second_recovery_response.producer_epoch + 1,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }
+    );
 
-    let retry_response = crate::txn::handlers::end_txn::handle(
-        &broker,
-        end_version,
-        7,
-        &crate::test_support::encode_request(&end_request, end_version),
-        &context,
-    )
-    .await
-    .expect("retry recovered transaction completion");
-    let retry_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
-        crate::test_support::decode_response(&retry_response, end_version);
+    let retry_response =
+        crate::txn::handlers::end_txn::handle(&broker, end_request, end_version, &context)
+            .await
+            .expect("retry recovered transaction completion");
     assert!(retry_response == end_response);
     let completed = broker
         .txn_coordinator
