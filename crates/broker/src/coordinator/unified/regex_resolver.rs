@@ -250,7 +250,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, TopicRecord};
-    use krabka_security::AuthMethod;
 
     use super::*;
     use crate::authorizer::{
@@ -271,23 +270,16 @@ mod tests {
     }
 
     fn alice() -> Principal {
-        Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec![],
-        }
+        crate::test_support::sasl_principal("alice")
     }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-            resource_type: krabka_metadata::ResourceType::Topic,
-            resource_name: topic.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+            krabka_metadata::ResourceType::Topic,
+            topic,
+            "User:alice",
+            AclOperation::Describe,
+        ))
     }
 
     fn resolver(image: MetadataImage, authorizer: Arc<dyn Authorizer>) -> ImageTopicRegexResolver {

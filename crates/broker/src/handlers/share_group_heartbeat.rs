@@ -237,7 +237,7 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::MetadataImage;
     use krabka_protocol::{Decode, UnknownTaggedFields, owned::share_group_heartbeat_response};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::Principal;
 
     use super::*;
 
@@ -250,11 +250,7 @@ mod tests {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        };
+        let principal = crate::test_support::principal("ANONYMOUS");
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
 
         let ctx = crate::test_support::request_context(&principal, &peer, "share-client");
@@ -297,11 +293,7 @@ mod tests {
     };
 
     fn anonymous_principal() -> Principal {
-        Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        }
+        crate::test_support::principal("ANONYMOUS")
     }
 
     fn request(group_id: &str, subscribed: Vec<&str>) -> ShareGroupHeartbeatRequest {

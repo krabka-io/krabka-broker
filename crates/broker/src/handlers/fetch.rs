@@ -486,7 +486,7 @@ mod tests {
         Encode as _,
         records::{Record, RecordBatch, RecordsPayload},
     };
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::Principal;
 
     /// A partition with nothing to serve reaches the wire as an empty record
     /// set at every version the handler encodes, the legacy Fetch v0-3 codec
@@ -607,11 +607,7 @@ mod tests {
 
     /// The peer principal a routed WAL fetch authenticates as.
     fn wal_peer_principal() -> Principal {
-        Principal {
-            name: "broker-2".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        }
+        crate::test_support::sasl_principal("broker-2")
     }
 
     #[tokio::test]
@@ -745,11 +741,7 @@ mod tests {
         request
             .encode(&mut encoded, KIP_595_FETCH_VERSION)
             .expect("encode WAL fetch");
-        let principal = Principal {
-            name: "broker-2".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::sasl_principal("broker-2");
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
         let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
 

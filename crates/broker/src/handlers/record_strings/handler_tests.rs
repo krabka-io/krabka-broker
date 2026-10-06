@@ -35,7 +35,7 @@ use krabka_protocol::owned::{
     sync_group_request::{self, SyncGroupRequest, SyncGroupRequestAssignment},
     sync_group_response::SyncGroupResponse,
 };
-use krabka_security::{AuthMethod, Principal};
+use krabka_security::Principal;
 
 use crate::{
     broker::{Broker, BrokerHandle},
@@ -146,11 +146,7 @@ impl Env {
             handle,
             broker,
             _dir: dir,
-            principal: Principal {
-                name: "ANONYMOUS".into(),
-                auth_method: AuthMethod::Anonymous,
-                groups: vec![],
-            },
+            principal: crate::test_support::principal("ANONYMOUS"),
             peer: SocketAddr::from(([127, 0, 0, 1], 9092)),
         }
     }

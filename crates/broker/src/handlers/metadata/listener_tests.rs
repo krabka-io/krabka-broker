@@ -8,8 +8,6 @@
 //! `LISTENER_NOT_FOUND`. The tests compare the responses as a client decodes
 //! them.
 
-use std::collections::BTreeMap;
-
 use assert2::assert;
 use krabka_metadata::{
     BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, NodeId, PartitionRecord,
@@ -41,12 +39,7 @@ fn registration(
     listeners: &[(&str, &str, u16)],
 ) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(node_id),
         broker_epoch: -1,
-        incarnation_id: uuid::Uuid::nil(),
         host: "legacy-host".into(),
         port: 1,
         rack: rack.map(str::to_owned),
@@ -59,8 +52,7 @@ fn registration(
                 protocol: krabka_security::ListenerProtocol::Plaintext,
             })
             .collect(),
-        log_dirs: vec![],
-        features: BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 

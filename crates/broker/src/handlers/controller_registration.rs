@@ -224,18 +224,12 @@ mod tests {
     async fn a_controller_that_is_not_a_voter_registers() {
         use std::{net::SocketAddr, sync::Arc};
 
-        use krabka_security::{AuthMethod, Principal};
-
         let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer(Arc::new(
             crate::authorizer::AllowAllAuthorizer,
         ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "controller".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("controller");
         let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let version = krabka_protocol::owned::controller_registration_request::MAX_VERSION;

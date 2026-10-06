@@ -25,18 +25,10 @@ pub(super) fn reg(id: NodeId) -> MetadataRecord {
 /// `host:port`.
 pub(super) fn reg_at(id: NodeId, host: &str, port: u16) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: id,
         broker_epoch: i64::try_from(id.0).unwrap(),
-        incarnation_id: uuid::Uuid::nil(),
         host: host.to_string(),
         port,
-        rack: None,
-        log_dirs: vec![],
-        endpoints: vec![],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(id.0)
     })
 }
 

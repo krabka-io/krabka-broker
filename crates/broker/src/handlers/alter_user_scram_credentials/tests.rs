@@ -12,12 +12,12 @@ use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 use krabka_protocol::{
     UnknownTaggedFields, owned::alter_user_scram_credentials_request::ScramCredentialDeletion,
 };
-use krabka_security::{AuthMethod, Principal, SaslMechanism, scram::MIN_SCRAM_ITERATIONS};
+use krabka_security::{SaslMechanism, scram::MIN_SCRAM_ITERATIONS};
 
 use super::*;
 use crate::{
     handlers::alter_user_scram_credentials::test_support::{
-        deletion, expected_result, start_broker, test_context, valid_upsertion, wait_for_leader,
+        deletion, expected_result, start_broker, test_context, valid_upsertion,
     },
     test_support::DenyAll,
 };
@@ -57,11 +57,7 @@ fn scram_gate_permits_unknown_and_at_or_above_level() {
 async fn handle_denies_invalid_rows_before_scram_validation() {
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let mut invalid_upsertion = valid_upsertion("bob");
@@ -102,12 +98,8 @@ async fn handle_denies_invalid_rows_before_scram_validation() {
 async fn handle_authorizes_and_persists_valid_upsertion() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    crate::test_support::wait_for_controller_leader(&broker).await;
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = AlterUserScramCredentialsRequest {
@@ -136,11 +128,7 @@ async fn handle_authorizes_and_persists_valid_upsertion() {
 async fn handle_denies_valid_upsertion_without_cluster_alter() {
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = AlterUserScramCredentialsRequest {
@@ -173,7 +161,7 @@ async fn handle_denies_valid_upsertion_without_cluster_alter() {
 async fn handle_unsupported_metadata_version_reports_every_requested_user() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -182,11 +170,7 @@ async fn handle_unsupported_metadata_version_reports_every_requested_user() {
         })])
         .await
         .expect("seed low metadata.version");
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = AlterUserScramCredentialsRequest {
@@ -214,7 +198,7 @@ async fn handle_unsupported_metadata_version_reports_every_requested_user() {
 async fn handle_low_metadata_version_denied_request_reports_authorization_per_distinct_user() {
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -223,11 +207,7 @@ async fn handle_low_metadata_version_denied_request_reports_authorization_per_di
         })])
         .await
         .expect("seed low metadata.version");
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let mut invalid_upsertion = valid_upsertion("bob");
@@ -268,7 +248,7 @@ async fn handle_low_metadata_version_denied_request_reports_authorization_per_di
 async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported_users() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -277,11 +257,7 @@ async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported
         })])
         .await
         .expect("seed low metadata.version");
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = AlterUserScramCredentialsRequest {

@@ -62,11 +62,7 @@ fn authed(name: &str) -> ConnectionAuth {
 
 fn anonymous() -> ConnectionAuth {
     ConnectionAuth::Authenticated {
-        principal: Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: vec![],
-        },
+        principal: crate::test_support::principal("ANONYMOUS"),
         mechanism: SaslMechanism::Plain,
         expires_at_ms: None,
         authenticated_via_token: false,
@@ -106,15 +102,12 @@ async fn seed_acl(controller: &ControllerHandle, entry: AclEntry) {
 /// admin tooling use. A resource name of the owner's principal string
 /// instead would grant every token of that owner from one ACL.
 fn describe_token_acl(token_id: &str, principal: &str) -> AclEntry {
-    AclEntry {
-        resource_type: ResourceType::DelegationToken,
-        resource_name: token_id.into(),
-        pattern_type: PatternType::Literal,
-        principal: format!("User:{principal}"),
-        host: "*".into(),
-        operation: AclOperation::Describe,
-        permission_type: PermissionType::Allow,
-    }
+    crate::test_support::allow_acl(
+        ResourceType::DelegationToken,
+        token_id,
+        &format!("User:{principal}"),
+        AclOperation::Describe,
+    )
 }
 
 async fn seed_token(

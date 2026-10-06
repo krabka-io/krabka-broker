@@ -4,7 +4,6 @@
 //! single-broker harness are each used by more than one of the test modules
 //! under this module, so they live in one file instead of once per module.
 
-use assert2::assert;
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::{
     Encode,
@@ -60,10 +59,6 @@ pub(super) fn decode_response(bytes: &Bytes) -> AssignReplicasToDirsResponse {
     crate::test_support::decode_response(bytes, VERSION)
 }
 
-pub(super) async fn start_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|_cfg| {}).await
-}
-
 /// The epoch broker 1 (the started broker itself) registered with. A request
 /// naming this epoch is the current, non-stale one.
 pub(super) fn own_broker_epoch(broker: &Broker) -> i64 {
@@ -86,23 +81,4 @@ pub(super) async fn handle_allowed(
     let address = crate::test_support::peer();
     let ctx = crate::test_support::request_context(&user, &address, "assign-replicas-test");
     handle(broker, version, correlation_id, body, &ctx).await
-}
-
-pub(super) async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
 }

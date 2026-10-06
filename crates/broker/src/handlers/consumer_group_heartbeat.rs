@@ -315,11 +315,7 @@ mod tests {
     }
 
     fn anonymous_principal() -> krabka_security::Principal {
-        krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        }
+        crate::test_support::principal("ANONYMOUS")
     }
 
     #[test]
@@ -522,11 +518,7 @@ mod tests {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        };
+        let principal = crate::test_support::principal("ANONYMOUS");
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
 
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");

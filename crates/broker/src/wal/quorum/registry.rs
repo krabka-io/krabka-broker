@@ -367,11 +367,7 @@ mod tests {
     }
 
     fn broker_principal(id: u64) -> krabka_security::Principal {
-        krabka_security::Principal {
-            name: format!("broker-{id}"),
-            auth_method: krabka_security::AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        }
+        crate::test_support::sasl_principal(&format!("broker-{id}"))
     }
 
     #[tokio::test]
@@ -427,11 +423,7 @@ mod tests {
             0,
             0,
         );
-        let principal = krabka_security::Principal {
-            name: "admin".to_string(),
-            auth_method: krabka_security::AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::sasl_principal("admin");
 
         let response = router
             .route(

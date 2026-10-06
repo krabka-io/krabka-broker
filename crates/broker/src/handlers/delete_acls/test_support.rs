@@ -6,7 +6,7 @@
 //! repeated in each.
 
 use bytes::Bytes;
-use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
+use krabka_metadata::{AclEntry, AclOperation, ResourceType};
 use krabka_protocol::owned::{
     delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest},
     delete_acls_response::DeleteAclsResponse,
@@ -25,15 +25,7 @@ pub(super) const PERMISSION_ANY: i8 = 1;
 pub(super) const PERMISSION_ALLOW: i8 = 3;
 
 pub(super) fn acl(resource_name: &str, principal: &str, operation: AclOperation) -> AclEntry {
-    AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: resource_name.into(),
-        pattern_type: PatternType::Literal,
-        principal: principal.into(),
-        host: "*".into(),
-        operation,
-        permission_type: PermissionType::Allow,
-    }
+    crate::test_support::allow_acl(ResourceType::Topic, resource_name, principal, operation)
 }
 
 pub(super) fn filter(resource_name: Option<&str>, principal: Option<&str>) -> DeleteAclsFilter {

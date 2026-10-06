@@ -205,18 +205,10 @@ mod tests {
 
     fn broker(node_id: u64, features: BTreeMap<String, (i16, i16)>) -> MetadataRecord {
         MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(node_id),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
             host: String::new(),
             port: 0,
-            rack: None,
-            endpoints: vec![],
-            log_dirs: vec![],
             features,
+            ..crate::test_support::broker_registration(node_id)
         })
     }
 

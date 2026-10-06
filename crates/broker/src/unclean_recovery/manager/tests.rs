@@ -99,18 +99,9 @@ fn fallback_to(leader: u64) -> Election {
 fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16) {
     img.apply(&MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(node_id),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
             host: host.into(),
             port,
-            rack: None,
-            log_dirs: vec![],
-            endpoints: vec![],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node_id)
         },
     ));
 }
@@ -120,18 +111,9 @@ fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16)
 /// sees of a wiped disk or a truncated log.
 fn broker_record(node_id: u64, incarnation: Uuid) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(node_id),
-        broker_epoch: 0,
         incarnation_id: incarnation,
-        host: "127.0.0.1".into(),
         port: 1,
-        rack: None,
-        log_dirs: vec![],
-        endpoints: vec![],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id)
     }
 }
 

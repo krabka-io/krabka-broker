@@ -4,7 +4,7 @@
 //! preamble, the response shape for a row the metadata image does not know,
 //! and the metadata a successful alter leaves behind.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_metadata::{
@@ -13,7 +13,6 @@ use krabka_metadata::{
 };
 use krabka_protocol::UnknownTaggedFields;
 use krabka_raft::NodeId;
-use krabka_security::{AuthMethod, Principal};
 use uuid::Uuid;
 
 use super::*;
@@ -25,56 +24,20 @@ use crate::{
     test_support::{DenyAll, start_broker_with_authorizer as start_broker},
 };
 
-async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 async fn seed_reassignable_partition(broker: &Broker) {
     broker
         .controller
         .submit_change(vec![
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(1),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "localhost".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(1)
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(2),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "localhost".into(),
                 port: 9093,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(2)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "orders".into(),
@@ -107,18 +70,10 @@ async fn seed_cancellable_partition(broker: &Broker) {
     let mut records: Vec<MetadataRecord> = (1..=3u64)
         .map(|node| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(node),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "localhost".into(),
                 port: 9092 + u16::try_from(node).expect("node id fits u16"),
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(node)
             })
         })
         .collect();
@@ -170,14 +125,10 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     crate::test_support::finalize_elr_version_on(&broker).await;
     seed_cancellable_partition(&broker).await;
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().expect("peer address");
     let ctx = test_context(&principal, &peer);
 
@@ -206,11 +157,7 @@ async fn handle_preserves_unknown_partition_response_shape() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
@@ -258,11 +205,7 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
         for allow_rf_change in [false, true] {
             let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = Principal {
-                name: "admin".into(),
-                auth_method: AuthMethod::Anonymous,
-                groups: Vec::new(),
-            };
+            let principal = crate::test_support::principal("admin");
             let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let ctx = test_context(&principal, &peer);
 
@@ -307,13 +250,9 @@ async fn handle_submits_successful_reassignment_records() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_reassignable_partition(&broker).await;
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
@@ -358,7 +297,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_reassignable_partition(&broker).await;
     broker
         .controller
@@ -381,11 +320,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
         .partition("orders", 7)
         .expect("seeded partition")
         .clone();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 

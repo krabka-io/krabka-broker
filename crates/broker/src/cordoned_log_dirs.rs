@@ -385,23 +385,16 @@ mod tests {
         cordoned: Option<&[u128]>,
     ) -> krabka_metadata::BrokerRegistrationRecord {
         krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
             cordoned_log_dirs: cordoned
                 .map(|ids| ids.iter().copied().map(uuid::Uuid::from_u128).collect()),
-            node_id: NodeId(1),
             broker_epoch: 7,
             incarnation_id: uuid::Uuid::from_u128(1),
-            host: "127.0.0.1".into(),
-            port: 9_092,
-            rack: None,
-            endpoints: vec![],
             log_dirs: log_dirs
                 .iter()
                 .copied()
                 .map(uuid::Uuid::from_u128)
                 .collect(),
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(1)
         }
     }
 

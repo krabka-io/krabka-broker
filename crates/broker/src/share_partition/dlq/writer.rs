@@ -656,18 +656,8 @@ mod tests {
             if *registered {
                 image.apply(&MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
-                        fenced: false,
-                        in_controlled_shutdown: false,
-                        cordoned_log_dirs: None,
-                        node_id: NodeId(*leader),
-                        broker_epoch: 0,
-                        incarnation_id: uuid::Uuid::nil(),
                         host: "h".into(),
-                        port: 9092,
-                        rack: None,
-                        endpoints: Vec::new(),
-                        log_dirs: Vec::new(),
-                        features: std::collections::BTreeMap::new(),
+                        ..crate::test_support::broker_registration(*leader)
                     },
                 ));
             }

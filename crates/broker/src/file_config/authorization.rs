@@ -177,11 +177,7 @@ super_users = ["operator", "admin"]
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
 
     fn test_principal(name: &str) -> krabka_security::Principal {
-        krabka_security::Principal {
-            name: name.into(),
-            auth_method: krabka_security::AuthMethod::SaslPlain,
-            groups: vec![],
-        }
+        crate::test_support::sasl_principal(name)
     }
     #[test]
     fn authorization_section_simple_builds_simple_acl_authorizer() {

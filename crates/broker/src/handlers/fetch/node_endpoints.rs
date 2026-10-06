@@ -58,7 +58,7 @@ pub(super) fn fetch_node_endpoints(
 mod tests {
     use assert2::assert;
     use krabka_metadata::{
-        BrokerEndpoint, BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId,
+        BrokerEndpoint, BrokerRegistrationRecord, MetadataImage, MetadataRecord,
     };
     use krabka_protocol::owned::fetch_response::{LeaderIdAndEpoch, PartitionData};
 
@@ -80,12 +80,6 @@ mod tests {
         for (node_id, rack) in [(1_u64, None), (2, Some("rack-b".to_string()))] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(node_id),
-                    broker_epoch: 0,
-                    incarnation_id: uuid::Uuid::nil(),
                     host: format!("legacy-{node_id}"),
                     port: 1000,
                     rack,
@@ -93,8 +87,7 @@ mod tests {
                         endpoint("INTERNAL", &format!("internal-{node_id}"), 9092),
                         endpoint("EXTERNAL", &format!("external-{node_id}"), 9093),
                     ],
-                    log_dirs: vec![],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node_id)
                 },
             ));
         }

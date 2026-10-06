@@ -53,18 +53,9 @@ mod tests {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(7),
                 broker_epoch: 42,
-                incarnation_id: Uuid::nil(),
                 host: "localhost".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(7)
             },
         ));
         let mut req = BrokerHeartbeatRequest {
@@ -87,18 +78,9 @@ mod tests {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(7),
                 broker_epoch: 42,
-                incarnation_id: Uuid::nil(),
                 host: "localhost".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(7)
             },
         ));
         let mut req = BrokerHeartbeatRequest {

@@ -12,7 +12,6 @@ use krabka_protocol::owned::{
     alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
     alter_configs_response::AlterConfigsResponse,
 };
-use krabka_security::{AuthMethod, Principal};
 
 use super::{RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC, handle};
 use crate::{authorizer::Authorizer, test_support::start_broker_with_authorizer as start_broker};
@@ -40,20 +39,7 @@ pub(super) fn resource(resource_type: i8, resource_name: &str) -> AlterConfigsRe
 pub(super) fn image_with_broker(node_id: u64) -> krabka_metadata::MetadataImage {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1BrokerRegistration(
-        krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_metadata::NodeId(node_id),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
-            host: "127.0.0.1".into(),
-            port: 9092,
-            rack: None,
-            log_dirs: vec![],
-            endpoints: Vec::new(),
-            features: std::collections::BTreeMap::new(),
-        },
+        crate::test_support::broker_registration(node_id),
     ));
     image
 }
@@ -217,11 +203,7 @@ pub(super) async fn drive_many(
     let version = 2;
     let (broker_handle, _dir) = start_broker(authorizer).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = AlterConfigsRequest {

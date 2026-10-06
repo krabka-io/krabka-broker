@@ -4,7 +4,7 @@
 //! It pins the response shape a controller leader returns for a registered,
 //! caught-up broker.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use bytes::BytesMut;
@@ -50,25 +50,6 @@ crate::test_support::response_helpers!(
     client_id = "broker-heartbeat-test"
 );
 
-async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 /// Every heartbeat is authorized against its own principal, on the
 /// controller listener too, as Kafka's
 /// `ControllerApis.handleBrokerHeartBeatRequest` does (#684). A principal
@@ -79,7 +60,7 @@ async fn every_heartbeat_needs_cluster_action() {
     let (broker_handle, _dir) =
         start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
     let broker_epoch = broker
@@ -116,12 +97,8 @@ async fn every_heartbeat_needs_cluster_action() {
 async fn handle_leader_success_preserves_response_shape() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
-    let principal = krabka_security::Principal {
-        name: "ANONYMOUS".into(),
-        auth_method: krabka_security::AuthMethod::Anonymous,
-        groups: vec![],
-    };
+    crate::test_support::wait_for_controller_leader(&broker).await;
+    let principal = crate::test_support::principal("ANONYMOUS");
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
     let ctx = test_context(&principal, &peer);
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
@@ -174,17 +151,11 @@ fn new_registration(node: u64) -> krabka_metadata::MetadataRecord {
     krabka_metadata::MetadataRecord::V1BrokerRegistration(
         krabka_metadata::BrokerRegistrationRecord {
             fenced: true,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(node),
             broker_epoch: -1,
             incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
-            host: "127.0.0.1".into(),
             port: 19_090 + u16::try_from(node).expect("a small node id"),
-            rack: None,
-            endpoints: vec![],
             log_dirs: vec![uuid::Uuid::from_u128(1000 + u128::from(node))],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node)
         },
     )
 }
@@ -204,7 +175,7 @@ impl Cluster {
 
         let (handle, dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let partition = |index: i32, leader: u64, isr: &[u64]| {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "t".into(),
@@ -251,11 +222,7 @@ impl Cluster {
     }
 
     async fn heartbeat(&self, broker_id: i32, epoch: i64, offset: i64, shut_down: bool) -> Answer {
-        let principal = krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        };
+        let principal = crate::test_support::principal("ANONYMOUS");
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = test_context(&principal, &peer);
         let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
@@ -592,18 +559,11 @@ fn success_response_default() -> Answer {
 fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
     let dir = |n: u128| uuid::Uuid::from_u128(n);
     let registration = krabka_metadata::BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
         cordoned_log_dirs: Some(vec![dir(1)]),
-        node_id: NodeId(2),
         broker_epoch: 5,
         incarnation_id: dir(2),
-        host: "127.0.0.1".into(),
-        port: 9_092,
-        rack: None,
-        endpoints: vec![],
         log_dirs: vec![dir(1), dir(2)],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(2)
     };
     let image_at = |level: i16| {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());

@@ -314,18 +314,8 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: krabka_raft::NodeId(node_id),
                     broker_epoch: -1,
-                    incarnation_id: uuid::Uuid::nil(),
-                    host: "127.0.0.1".into(),
-                    port: 9092,
-                    rack: None,
-                    log_dirs: vec![],
-                    endpoints: vec![],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node_id)
                 },
             )])
             .await
@@ -1939,15 +1929,12 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
 async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
     use crate::metrics::AuthorizationDeniedLabel;
 
-    let literal_a = AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Create,
-        permission_type: PermissionType::Allow,
-    };
+    let literal_a = crate::test_support::allow_acl(
+        ResourceType::Topic,
+        "a",
+        "User:alice",
+        AclOperation::Create,
+    );
     let denied = |operation: &str, resource_type: &str| AuthorizationDeniedLabel {
         operation: operation.into(),
         resource_type: resource_type.into(),

@@ -119,7 +119,7 @@ fn authenticate_plain<S: BuildHasher>(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::AuthMethod;
 
     use super::*;
     use crate::network::auth::{
@@ -156,11 +156,7 @@ mod tests {
 
     fn alice_session() -> AuthenticatedSnapshot {
         AuthenticatedSnapshot {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: AuthMethod::SaslPlain,
-                groups: vec![],
-            },
+            principal: crate::test_support::sasl_principal("alice"),
             mechanism: SaslMechanism::Plain,
             expires_at_ms: Some(9_000),
             authenticated_via_token: false,
@@ -187,11 +183,7 @@ mod tests {
             (
                 "already authenticated as someone else",
                 ConnectionAuth::Authenticated {
-                    principal: Principal {
-                        name: "bob".to_string(),
-                        auth_method: AuthMethod::SaslPlain,
-                        groups: vec![],
-                    },
+                    principal: crate::test_support::sasl_principal("bob"),
                     mechanism: SaslMechanism::Plain,
                     expires_at_ms: None,
                     authenticated_via_token: false,

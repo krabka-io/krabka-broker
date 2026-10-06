@@ -245,16 +245,12 @@ pub(crate) fn privileged_event(
 #[cfg(test)]
 pub(crate) mod tests {
     use assert2::{assert, check};
-    use krabka_security::{AuthMethod, Principal};
+    use krabka_security::Principal;
 
     use super::*;
 
     pub(crate) fn principal(name: &str) -> Principal {
-        Principal {
-            name: name.to_owned(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        }
+        crate::test_support::sasl_principal(name)
     }
 
     pub(crate) fn peer() -> std::net::SocketAddr {

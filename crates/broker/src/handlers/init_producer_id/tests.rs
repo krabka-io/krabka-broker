@@ -21,30 +21,11 @@ use crate::{
     txn::state::TxnState,
 };
 
-async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|node| node == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
-
 /// Waits for the controller, and checks the cluster finalized `TV_2`, the
 /// highest `transaction.version` Kafka defines, which a self-bootstrapped
 /// broker finalizes. KIP-939 needs no higher level.
 async fn wait_for_transaction_version_2(broker_handle: &crate::broker::BrokerHandle) {
-    wait_for_leader(&broker_handle.broker_arc_for_test()).await;
+    crate::test_support::wait_for_controller_leader(&broker_handle.broker_arc_for_test()).await;
     broker_handle
         .wait_for_image(|image| {
             image.finalized_feature(
@@ -1031,7 +1012,7 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;

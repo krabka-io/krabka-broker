@@ -230,18 +230,8 @@ mod tests {
         let mut image = make_image_with_broker(SERVING);
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                node_id: NodeId(2),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
                 port: 9093,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: BTreeMap::new(),
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
+                ..crate::test_support::broker_registration(2)
             },
         ));
         for (node, key, value) in configs {

@@ -788,18 +788,8 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
     broker_handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: krabka_raft::NodeId(FOLLOWER),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(FOLLOWER)
             },
         ))
         .await

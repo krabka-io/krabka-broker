@@ -436,18 +436,10 @@ fn a_feature_unaware_broker_blocks_only_enabling() {
         features.remove(elr);
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(2),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
                 host: String::new(),
                 port: 0,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
                 features,
+                ..crate::test_support::broker_registration(2)
             },
         ));
         image

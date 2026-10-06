@@ -10,7 +10,6 @@ use assert2::assert;
 use krabka_protocol::owned::alter_client_quotas_response::{
     EntityData as RespEntity, EntryData as RespEntry,
 };
-use krabka_security::{AuthMethod, Principal};
 
 use super::{
     test_support::{entry, request},
@@ -115,11 +114,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "alice".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("alice");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = request(
@@ -179,11 +174,7 @@ async fn cluster_alter_configs_gates_the_quota_write() {
         if let Some(operation) = grant {
             crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
         }
-        let principal = Principal {
-            name: user.into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal(user);
         let ctx = test_context(&principal, &peer);
         let req = request(
             vec![entry(
@@ -233,11 +224,7 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = request(
@@ -301,11 +288,7 @@ async fn handle_validate_only_reports_success_without_submitting() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = request(
@@ -344,11 +327,7 @@ async fn handle_validate_only_reports_success_without_submitting() {
 #[tokio::test]
 async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
     let version = 1;
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("admin");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let row = |name: &str, code: i16, message: Option<&str>| RespEntry {

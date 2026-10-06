@@ -175,9 +175,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{
-        AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-    };
+    use krabka_metadata::{AclOperation, MetadataRecord, PatternType, ResourceType};
     use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
@@ -204,15 +202,7 @@ mod tests {
     type PatternRow<'a> = (i8, Option<&'a str>, &'a [(&'a str, i8)]);
 
     fn acl(resource_name: &str, principal: &str, operation: AclOperation) -> AclEntry {
-        AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: resource_name.into(),
-            pattern_type: PatternType::Literal,
-            principal: principal.into(),
-            host: "*".into(),
-            operation,
-            permission_type: PermissionType::Allow,
-        }
+        crate::test_support::allow_acl(ResourceType::Topic, resource_name, principal, operation)
     }
 
     fn request(

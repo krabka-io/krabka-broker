@@ -143,7 +143,6 @@ mod tests {
         owned::update_raft_voter_request::{KRaftVersionFeature, Listener},
         primitives::uuid::Uuid as ProtoUuid,
     };
-    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -205,11 +204,7 @@ mod tests {
         let version = 0;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("alice");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req_bytes = encode_request(&request(2), version);
@@ -229,11 +224,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(-7);
@@ -260,11 +251,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
@@ -348,11 +335,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut named = request(2);
@@ -437,11 +420,7 @@ mod tests {
         for (api_name, api, grant, want_cluster_authorization_failed) in cases {
             let (broker_handle, _dir) = start_broker(Arc::new(GrantOnly(grant))).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = Principal {
-                name: "alice".into(),
-                auth_method: AuthMethod::Anonymous,
-                groups: Vec::new(),
-            };
+            let principal = crate::test_support::principal("alice");
             let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let ctx = test_context(&principal, &peer);
 
@@ -510,11 +489,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("admin");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(2);

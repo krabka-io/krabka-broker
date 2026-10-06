@@ -319,15 +319,12 @@ mod tests {
     }
 
     fn acl(resource_type: ResourceType, name: &str) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
             resource_type,
-            resource_name: name.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+            name,
+            "User:alice",
+            AclOperation::Describe,
+        ))
     }
 
     fn topic(name: &str, topic_id: uuid::Uuid, node: u64) -> Vec<krabka_metadata::MetadataRecord> {

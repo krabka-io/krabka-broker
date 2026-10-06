@@ -65,14 +65,13 @@ async fn handle_stores_long_resource_names_and_principals() {
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
-    let stored = |resource_name: &str, principal: &str| AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: resource_name.into(),
-        pattern_type: PatternType::Literal,
-        principal: principal.into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
+    let stored = |resource_name: &str, principal: &str| {
+        crate::test_support::allow_acl(
+            ResourceType::Topic,
+            resource_name,
+            principal,
+            AclOperation::Read,
+        )
     };
     let mut acls = all_acls(&broker_handle);
     acls.sort_by_key(|acl| std::cmp::Reverse(acl.resource_name.len()));
@@ -142,15 +141,12 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
     assert!(resp == expected);
 
     let acls = all_acls(&broker_handle);
-    let expected_acls = vec![AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "topic-a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
-    }];
+    let expected_acls = vec![crate::test_support::allow_acl(
+        ResourceType::Topic,
+        "topic-a",
+        "User:alice",
+        AclOperation::Read,
+    )];
     assert!(acls == expected_acls);
     broker_handle.shutdown().await;
 }
@@ -418,15 +414,12 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
-    let expected_acls = vec![AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "topic-a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "Group:ops".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
-    }];
+    let expected_acls = vec![crate::test_support::allow_acl(
+        ResourceType::Topic,
+        "topic-a",
+        "Group:ops",
+        AclOperation::Read,
+    )];
     assert!(all_acls(&broker_handle) == expected_acls);
     broker_handle.shutdown().await;
 }
@@ -551,14 +544,13 @@ async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
 /// tens of billions of comparisons on an async worker.
 #[test]
 fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
-    let acl = |n: usize| AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: format!("topic-{n}"),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
+    let acl = |n: usize| {
+        crate::test_support::allow_acl(
+            ResourceType::Topic,
+            &format!("topic-{n}"),
+            "User:alice",
+            AclOperation::Read,
+        )
     };
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     for n in 0..2_000 {

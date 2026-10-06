@@ -8,9 +8,7 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use assert2::{assert, check};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 use krabka_protocol::UnknownTaggedFields;
 
 use super::{
@@ -42,15 +40,14 @@ async fn grant(
     broker_handle
         .broker_arc_for_test()
         .controller
-        .submit_change(vec![MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type,
-            resource_name: resource_name.to_string(),
-            pattern_type: PatternType::Literal,
-            principal: format!("User:{user}"),
-            host: "*".to_string(),
-            operation,
-            permission_type: PermissionType::Allow,
-        })])
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
+            crate::test_support::allow_acl(
+                resource_type,
+                resource_name,
+                &format!("User:{user}"),
+                operation,
+            ),
+        )])
         .await
         .expect("commit acl");
 }

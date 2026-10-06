@@ -605,15 +605,12 @@ mod tests {
     fn a_group_naming_an_undescribable_topic_is_replaced_by_an_error_row() {
         let mut image = image_with_topics();
         image.apply(&MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "orders".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: AclOperation::Describe,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+            crate::test_support::allow_acl(
+                krabka_metadata::ResourceType::Topic,
+                "orders",
+                "User:alice",
+                AclOperation::Describe,
+            ),
         ));
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
         let principal = crate::test_support::principal("alice");
@@ -842,15 +839,12 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                krabka_metadata::AclEntry {
-                    resource_type: krabka_metadata::ResourceType::Group,
-                    resource_name: "allowed".into(),
-                    pattern_type: krabka_metadata::PatternType::Literal,
-                    principal: "User:alice".into(),
-                    host: "*".into(),
-                    operation: krabka_metadata::AclOperation::Describe,
-                    permission_type: krabka_metadata::PermissionType::Allow,
-                },
+                crate::test_support::allow_acl(
+                    krabka_metadata::ResourceType::Group,
+                    "allowed",
+                    "User:alice",
+                    krabka_metadata::AclOperation::Describe,
+                ),
             )])
             .await
             .expect("grant alice Describe on allowed");

@@ -527,18 +527,11 @@ mod tests {
         for (node, directory) in [(1, 500), (2, 600)] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(node),
                     broker_epoch: 10,
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
                     host: "broker".into(),
-                    port: 9092,
-                    rack: None,
-                    endpoints: vec![],
                     log_dirs: vec![uuid::Uuid::from_u128(directory)],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node)
                 },
             ));
         }
@@ -580,7 +573,7 @@ mod wire_tests {
         TopicConfigRecord, TopicRecord,
     };
     use krabka_protocol::owned::broker_registration_request::Feature;
-    use krabka_security::{AuthMethod, ListenerProtocol, Principal};
+    use krabka_security::ListenerProtocol;
 
     use super::*;
     use crate::{
@@ -630,17 +623,11 @@ mod wire_tests {
                 level: 1,
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: REGISTERED,
                 // A new registration carries no epoch; the controller stamps
                 // the offset it commits at.
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(0xdead),
                 host: "broker-2".into(),
-                port: 9092,
-                rack: None,
                 endpoints: vec![BrokerEndpoint {
                     name: "PLAINTEXT".into(),
                     host: "broker-2".into(),
@@ -649,6 +636,7 @@ mod wire_tests {
                 }],
                 log_dirs: vec![uuid::Uuid::from_u128(1011)],
                 features: krabka_metadata::supported_feature_ranges(),
+                ..crate::test_support::broker_registration(REGISTERED.0)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),
@@ -755,11 +743,7 @@ mod wire_tests {
             previous_broker_epoch,
             ..Default::default()
         };
-        let principal = Principal {
-            name: "broker".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("broker");
         let peer = "127.0.0.1:9092".parse().expect("peer address");
         let ctx = request_context(&principal, &peer, "broker-client");
         let bytes = super::handle(

@@ -225,7 +225,6 @@ pub(crate) fn resolve_remote_list_offsets_timeout(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use assert2::assert;
 
@@ -242,24 +241,9 @@ mod tests {
         node_id: u64,
         witness: Option<&str>,
     ) {
-        use krabka_metadata::{
-            BrokerConfigRecord, BrokerRegistrationRecord, MetadataRecord, NodeId,
-        };
+        use krabka_metadata::{BrokerConfigRecord, MetadataRecord, NodeId};
         img.apply(&MetadataRecord::V1BrokerRegistration(
-            BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(node_id),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9_092,
-                rack: None,
-                endpoints: vec![],
-                log_dirs: vec![],
-                features: BTreeMap::new(),
-            },
+            crate::test_support::broker_registration(node_id),
         ));
         if let Some(value) = witness {
             img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {

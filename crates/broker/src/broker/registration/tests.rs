@@ -544,7 +544,7 @@ fn controller_registration_starts_at_kip_919_floor_and_is_idempotent() {
 /// nothing about whether the log this node brings back is the log its ELR
 /// membership claims, and only the clean-shutdown proof does.
 mod unclean_restart {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_metadata::{
@@ -556,7 +556,6 @@ mod unclean_restart {
         },
         alter_partition_response::AlterPartitionResponse,
     };
-    use krabka_security::{AuthMethod, Principal};
 
     use crate::{
         broker::{Broker, registration::register_broker},
@@ -621,33 +620,10 @@ mod unclean_restart {
         ]
     }
 
-    async fn wait_for_leader(broker: &Broker) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if broker
-                .controller
-                .watch_leader()
-                .borrow()
-                .is_some_and(|node| node == broker.config.node_id)
-            {
-                return;
-            }
-            assert!(
-                std::time::Instant::now() <= deadline,
-                "broker did not become controller leader"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    }
-
     /// Shrink the ISR to `new_isr` through the real `AlterPartition` handler,
     /// which is how a real partition's ELR comes to exist at all.
     async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-        let principal = Principal {
-            name: "replica".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("replica");
         let peer = "127.0.0.1:9092".parse().expect("peer address");
         let ctx = request_context(&principal, &peer, "broker-client");
         // The controller checks the sender's broker epoch and the row's
@@ -716,7 +692,7 @@ mod unclean_restart {
     async fn cluster_with_node_two_eligible(
         broker: &Arc<Broker>,
     ) -> (BrokerConfig, tempfile::TempDir, i64) {
-        wait_for_leader(broker).await;
+        crate::test_support::wait_for_controller_leader(broker).await;
         broker
             .controller
             .submit_change(seed_records())
@@ -780,7 +756,7 @@ mod unclean_restart {
         let (handle, dir) =
             start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let node_id = broker.config.node_id;
         let log_dir = broker.config.log_dir.clone();
         let epoch = broker

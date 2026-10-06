@@ -311,15 +311,12 @@ mod tests {
         );
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: ResourceType::Topic,
-                resource_name: "orders".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: AclOperation::Write,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+            crate::test_support::allow_acl(
+                ResourceType::Topic,
+                "orders",
+                "User:alice",
+                AclOperation::Write,
+            ),
         ));
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
 

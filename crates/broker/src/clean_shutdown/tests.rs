@@ -16,15 +16,9 @@ fn image_registering_node_at(broker_epoch: i64) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NODE,
             broker_epoch,
             incarnation_id: uuid::Uuid::from_u128(7),
             host: "broker-2".into(),
-            port: 9092,
-            rack: None,
             endpoints: vec![BrokerEndpoint {
                 name: "PLAINTEXT".into(),
                 host: "broker-2".into(),
@@ -32,7 +26,7 @@ fn image_registering_node_at(broker_epoch: i64) -> MetadataImage {
                 protocol: ListenerProtocol::Plaintext,
             }],
             log_dirs: vec![uuid::Uuid::from_u128(11)],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(NODE.0)
         },
     ));
     image

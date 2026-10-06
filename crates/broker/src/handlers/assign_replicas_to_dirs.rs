@@ -131,10 +131,7 @@ mod tests {
     };
 
     use super::{
-        test_support::{
-            VERSION, decode_response, handle_allowed, own_broker_epoch, request, start_broker,
-            wait_for_leader,
-        },
+        test_support::{VERSION, decode_response, handle_allowed, own_broker_epoch, request},
         *,
     };
 
@@ -157,9 +154,9 @@ mod tests {
     /// topic does not have.
     #[tokio::test]
     async fn handle_answers_each_partition_with_kafkas_error_code() {
-        let (broker_handle, _dir) = start_broker().await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let broker_epoch = own_broker_epoch(&broker);
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
@@ -249,9 +246,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_leader_commits_known_directory_assignment() {
-        let (broker_handle, _dir) = start_broker().await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
         broker
@@ -295,9 +292,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_directory_assignment_below_kip_858_metadata_version() {
-        let (broker_handle, _dir) = start_broker().await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
         broker
             .controller
@@ -374,7 +371,7 @@ mod tests {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let broker_epoch = own_broker_epoch(&broker);
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
@@ -414,9 +411,9 @@ mod tests {
     /// assignment.
     #[tokio::test]
     async fn handle_fences_stale_and_unregistered_brokers() {
-        let (broker_handle, _dir) = start_broker().await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
         let broker_epoch = own_broker_epoch(&broker);
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
@@ -493,9 +490,9 @@ mod tests {
             },
         };
 
-        let (broker_handle, _dir) = start_broker().await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
-        wait_for_leader(&broker).await;
+        crate::test_support::wait_for_controller_leader(&broker).await;
 
         for broker_id in [99i32, -1] {
             let req = AssignReplicasToDirsRequest {

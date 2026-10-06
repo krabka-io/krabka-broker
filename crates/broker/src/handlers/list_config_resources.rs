@@ -225,23 +225,13 @@ mod tests {
 
     fn broker_on(id: u64, listener: &str) -> MetadataRecord {
         MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_audit::NodeId(id),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
-            host: "127.0.0.1".into(),
-            port: 9092,
-            rack: None,
-            log_dirs: vec![],
             endpoints: vec![krabka_metadata::BrokerEndpoint {
                 name: listener.into(),
                 host: "127.0.0.1".into(),
                 port: 9092,
                 protocol: krabka_security::ListenerProtocol::Plaintext,
             }],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(id)
         })
     }
 

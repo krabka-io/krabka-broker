@@ -36,11 +36,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
 
     let authorizer = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
     let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    let principal = krabka_security::Principal {
-        name: "ANONYMOUS".into(),
-        auth_method: krabka_security::AuthMethod::Anonymous,
-        groups: vec![],
-    };
+    let principal = crate::test_support::principal("ANONYMOUS");
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
 
     let ctx = crate::handlers::RequestContext::new(

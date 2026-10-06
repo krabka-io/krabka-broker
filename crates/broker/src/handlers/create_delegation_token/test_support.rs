@@ -82,11 +82,7 @@ pub(super) fn authed(name: &str) -> ConnectionAuth {
 /// listeners without mTLS. It must not be admitted to token APIs.
 pub(super) fn anonymous() -> ConnectionAuth {
     ConnectionAuth::Authenticated {
-        principal: Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: vec![],
-        },
+        principal: crate::test_support::principal("ANONYMOUS"),
         mechanism: SaslMechanism::Plain,
         expires_at_ms: None,
         authenticated_via_token: false,

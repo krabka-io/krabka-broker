@@ -155,14 +155,10 @@ mod tests {
 
     crate::test_support::codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
 
-    async fn start_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|_cfg| {}).await
-    }
-
     #[tokio::test]
     async fn handle_preserves_unknown_target_response_shape() {
         let version = 2;
-        let (broker_handle, _dir) = start_broker().await;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
         let req = AlterReplicaLogDirsRequest {
             dirs: vec![AlterReplicaLogDir {

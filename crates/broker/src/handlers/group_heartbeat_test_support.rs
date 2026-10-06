@@ -6,28 +6,22 @@ use krabka_metadata::MetadataRecord;
 
 /// `Describe` on `Topic(name)`, allowed to `User:alice` from any host.
 pub(super) fn describe_acl(name: &str) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-        resource_type: krabka_metadata::ResourceType::Topic,
-        resource_name: name.into(),
-        pattern_type: krabka_metadata::PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: krabka_metadata::AclOperation::Describe,
-        permission_type: krabka_metadata::PermissionType::Allow,
-    })
+    MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+        krabka_metadata::ResourceType::Topic,
+        name,
+        "User:alice",
+        krabka_metadata::AclOperation::Describe,
+    ))
 }
 
 /// `Read` on `Group(name)`, allowed to `User:alice` from any host.
 pub(super) fn group_read_acl(name: &str) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-        resource_type: krabka_metadata::ResourceType::Group,
-        resource_name: name.into(),
-        pattern_type: krabka_metadata::PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: krabka_metadata::AclOperation::Read,
-        permission_type: krabka_metadata::PermissionType::Allow,
-    })
+    MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+        krabka_metadata::ResourceType::Group,
+        name,
+        "User:alice",
+        krabka_metadata::AclOperation::Read,
+    ))
 }
 
 /// A bare `V1Topic` record of `partitions` partitions.
@@ -73,9 +67,5 @@ pub(super) fn topic_with_partitions(
 
 /// The SASL/PLAIN principal `User:alice` that the ACLs above name.
 pub(super) fn alice() -> krabka_security::Principal {
-    krabka_security::Principal {
-        name: "alice".into(),
-        auth_method: krabka_security::AuthMethod::SaslPlain,
-        groups: vec![],
-    }
+    crate::test_support::sasl_principal("alice")
 }

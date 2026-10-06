@@ -176,11 +176,6 @@ pub(crate) fn controller_peer_allowed(
     std::sync::Arc::new(ControllerPeerAllowed(SharedAuthorizer(authorizer)))
 }
 
-/// Build an anonymous-auth [`Principal`] with the given name and no groups.
-///
-/// The name matters. Authorization decisions and audit records key on this
-/// subject, so each handler passes the identity its scenario expects, such as
-/// `"alice"`, `"admin"`, or `"ANONYMOUS"`.
 /// Finalize `eligible.leader.replicas.version` at 1 in `image`.
 ///
 /// KIP-966 ELR maintenance is gated on the feature, and its release default is
@@ -314,10 +309,25 @@ pub(crate) async fn end_heartbeat_session(broker: &crate::Broker, broker_id: u64
     broker.liveness.end_session(broker_id).await;
 }
 
+/// Build an anonymous-auth [`Principal`] with the given name and no groups.
+///
+/// The name matters. Authorization decisions and audit records key on this
+/// subject, so each handler passes the identity its scenario expects, such as
+/// `"alice"`, `"admin"`, or `"ANONYMOUS"`.
 pub(crate) fn principal(name: &str) -> Principal {
     Principal {
         name: name.into(),
         auth_method: AuthMethod::Anonymous,
+        groups: Vec::new(),
+    }
+}
+
+/// Build a SASL/PLAIN-authenticated [`Principal`] with the given name and no
+/// groups, as a client that logged in over a `SASL_PLAINTEXT` listener is.
+pub(crate) fn sasl_principal(name: &str) -> Principal {
+    Principal {
+        name: name.into(),
+        auth_method: AuthMethod::SaslPlain,
         groups: Vec::new(),
     }
 }
@@ -397,6 +407,47 @@ pub(crate) async fn lead_transaction_state_partitions(
     );
 }
 
+/// The registration of an unfenced broker `node_id` at `127.0.0.1:9092`, at
+/// broker epoch 0, with a nil incarnation id and no rack, log directories,
+/// endpoints, or supported features.
+///
+/// A test spells out each field its scenario depends on and takes the rest
+/// from here: `BrokerRegistrationRecord { fenced: true,
+/// ..broker_registration(2) }`.
+pub(crate) fn broker_registration(node_id: u64) -> krabka_metadata::BrokerRegistrationRecord {
+    krabka_metadata::BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
+        node_id: krabka_raft::NodeId(node_id),
+        broker_epoch: 0,
+        incarnation_id: uuid::Uuid::nil(),
+        host: "127.0.0.1".into(),
+        port: 9092,
+        rack: None,
+        log_dirs: vec![],
+        endpoints: vec![],
+        features: std::collections::BTreeMap::new(),
+    }
+}
+
+/// Wait up to five seconds for `broker` to become the controller leader.
+pub(crate) async fn wait_for_controller_leader(broker: &Broker) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !broker
+        .controller
+        .watch_leader()
+        .borrow()
+        .is_some_and(|node| node == broker.config.node_id)
+    {
+        assert2::assert!(
+            std::time::Instant::now() <= deadline,
+            "broker did not become controller leader"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 /// Register `node_id` as a remote broker in the controller's image.
 pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
     handle
@@ -404,18 +455,8 @@ pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
         .controller
         .submit_change(vec![MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: krabka_raft::NodeId(node_id),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..broker_registration(node_id)
             },
         )])
         .await
@@ -537,6 +578,25 @@ impl crate::authorizer::Authorizer for GrantsInPrincipalName {
     }
 }
 
+/// A literal `Allow` ACL for `principal` (such as `User:alice`) from any host,
+/// to `operation` on the `resource_type` resource named `resource_name`.
+pub(crate) fn allow_acl(
+    resource_type: krabka_metadata::ResourceType,
+    resource_name: &str,
+    principal: &str,
+    operation: krabka_metadata::AclOperation,
+) -> krabka_metadata::AclEntry {
+    krabka_metadata::AclEntry {
+        resource_type,
+        resource_name: resource_name.to_string(),
+        pattern_type: krabka_metadata::PatternType::Literal,
+        principal: principal.to_string(),
+        host: "*".to_string(),
+        operation,
+        permission_type: krabka_metadata::PermissionType::Allow,
+    }
+}
+
 /// Commit one literal `Allow` ACL for `User:<user>` on the cluster resource.
 ///
 /// A test that starts its broker with a [`crate::authorizer::SimpleAclAuthorizer`]
@@ -550,17 +610,12 @@ pub(crate) async fn grant_cluster_operation(
     handle
         .broker_arc_for_test()
         .controller
-        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME.to_string(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: format!("User:{user}"),
-                host: "*".to_string(),
-                operation,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
-        )])
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
+            krabka_metadata::ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            &format!("User:{user}"),
+            operation,
+        ))])
         .await
         .expect("commit cluster acl");
 }
@@ -581,17 +636,12 @@ pub(crate) async fn grant_topic_operation(
     handle
         .broker_arc_for_test()
         .controller
-        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: topic.to_string(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: format!("User:{user}"),
-                host: "*".to_string(),
-                operation,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
-        )])
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
+            krabka_metadata::ResourceType::Topic,
+            topic,
+            &format!("User:{user}"),
+            operation,
+        ))])
         .await
         .expect("commit topic acl");
 }

@@ -202,9 +202,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{
-        AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId,
-    };
+    use krabka_metadata::{AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord};
     use krabka_security::ListenerProtocol;
 
     use super::*;
@@ -238,23 +236,17 @@ mod tests {
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: NodeId(42),
                     broker_epoch: -1,
-                    incarnation_id: uuid::Uuid::nil(),
                     host: "legacy-host".into(),
                     port: 19092,
                     rack: Some("rack-a".into()),
-                    log_dirs: vec![],
                     endpoints: vec![BrokerEndpoint {
                         name: "PLAINTEXT".into(),
                         host: "broker-a".into(),
                         port: 29092,
                         protocol: ListenerProtocol::Plaintext,
                     }],
-                    features: std::collections::BTreeMap::new(),
+                    ..crate::test_support::broker_registration(42)
                 },
             )])
             .await
@@ -535,15 +527,12 @@ mod tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                krabka_metadata::AclEntry {
-                    resource_type: ResourceType::Cluster,
-                    resource_name: CLUSTER_RESOURCE_NAME.into(),
-                    pattern_type: krabka_metadata::PatternType::Literal,
-                    principal: "User:alice".into(),
-                    host: "*".into(),
-                    operation: AclOperation::AlterConfigs,
-                    permission_type: krabka_metadata::PermissionType::Allow,
-                },
+                crate::test_support::allow_acl(
+                    ResourceType::Cluster,
+                    CLUSTER_RESOURCE_NAME,
+                    "User:alice",
+                    AclOperation::AlterConfigs,
+                ),
             )])
             .await
             .expect("seed ACL");
@@ -617,16 +606,9 @@ mod tests {
 
     fn registration(node_id: u64, listeners: &[&str]) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: NodeId(node_id),
             broker_epoch: -1,
-            incarnation_id: uuid::Uuid::nil(),
             host: "legacy-host".into(),
             port: 19092,
-            rack: None,
-            log_dirs: vec![],
             endpoints: listeners
                 .iter()
                 .enumerate()
@@ -637,7 +619,7 @@ mod tests {
                     protocol: ListenerProtocol::Plaintext,
                 })
                 .collect(),
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(node_id)
         }
     }
 

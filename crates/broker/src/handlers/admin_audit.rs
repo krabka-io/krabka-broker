@@ -99,18 +99,13 @@ mod tests {
     use std::net::SocketAddr;
 
     use assert2::assert;
-    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
 
     #[test]
     fn audit_admin_emits_admin_operation_event() {
         let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::sasl_principal("admin");
         let peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
         let ctx = RequestContext::new(
             &principal,
@@ -172,11 +167,7 @@ mod tests {
     #[test]
     fn audit_admin_success_skips_an_empty_resource_list() {
         let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let principal = Principal {
-            name: "admin".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::sasl_principal("admin");
         let peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
         let ctx = RequestContext::new(
             &principal,

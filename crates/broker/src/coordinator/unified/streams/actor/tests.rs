@@ -594,18 +594,8 @@ fn image_of(
     let broker = krabka_audit::NodeId(1);
     let mut records = vec![MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: broker,
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
-            host: "127.0.0.1".into(),
-            port: 9092,
             rack: broker_rack.map(str::to_owned),
-            endpoints: vec![],
-            log_dirs: vec![],
-            features: std::collections::BTreeMap::new(),
+            ..crate::test_support::broker_registration(broker.0)
         },
     )];
     for &(name, id, partitions) in topics {

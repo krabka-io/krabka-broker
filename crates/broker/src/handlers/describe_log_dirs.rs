@@ -199,7 +199,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_protocol::owned::describe_log_dirs_response;
-    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
     use crate::test_support::{DenyAll, start_broker_with_authorizer};
@@ -217,11 +216,7 @@ mod tests {
         let version = describe_log_dirs_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker_with_authorizer(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: AuthMethod::Anonymous,
-            groups: Vec::new(),
-        };
+        let principal = crate::test_support::principal("ANONYMOUS");
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let req_bytes = encode_request(&DescribeLogDirsRequest::default(), version);

@@ -545,15 +545,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
 
 /// One `alice` Allow ACL on a literal resource.
 fn alice_acl(resource_type: ResourceType, name: &str, operation: AclOperation) -> AclEntry {
-    AclEntry {
-        resource_type,
-        resource_name: name.into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation,
-        permission_type: PermissionType::Allow,
-    }
+    crate::test_support::allow_acl(resource_type, name, "User:alice", operation)
 }
 
 /// Kafka's `ControllerApis.deleteTopics` checks `Describe` and `Delete`

@@ -180,18 +180,8 @@ mod tests {
         let mut image = image_with_broker(1);
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                node_id: NodeId(2),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
                 port: 9093,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: Vec::new(),
-                features: BTreeMap::new(),
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
+                ..crate::test_support::broker_registration(2)
             },
         ));
         let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;

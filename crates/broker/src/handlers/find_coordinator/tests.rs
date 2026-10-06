@@ -537,18 +537,10 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
     ] {
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
-                node_id: NodeId(node),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "legacy".into(),
                 port: 1000,
-                rack: None,
                 endpoints,
-                log_dirs: vec![],
-                features: std::collections::BTreeMap::new(),
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
+                ..crate::test_support::broker_registration(node)
             },
         ));
     }
@@ -795,18 +787,10 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
         .controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: other,
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(2),
-                host: "127.0.0.1".into(),
                 port: 9094,
-                rack: None,
-                endpoints: vec![],
-                log_dirs: vec![],
-                features: std::collections::BTreeMap::new(),
+                ..crate::test_support::broker_registration(other.0)
             },
         )])
         .await

@@ -885,7 +885,7 @@ pub(super) async fn build_pending_reads(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_ids::PartitionIndex;
@@ -906,18 +906,9 @@ mod tests {
         for (node_id, rack) in [(1u64, "dc-a"), (2u64, "dc-b")] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: krabka_audit::NodeId(node_id),
-                    broker_epoch: 0,
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
-                    host: "127.0.0.1".into(),
-                    port: 9_092,
                     rack: Some(rack.into()),
-                    endpoints: vec![],
-                    log_dirs: vec![],
-                    features: BTreeMap::new(),
+                    ..crate::test_support::broker_registration(node_id)
                 },
             ));
         }

@@ -10,7 +10,7 @@ use std::{collections::HashSet, net::SocketAddr, time::Duration};
 use assert2::assert;
 use krabka_authz::{AuthorizationRequest, AuthorizationResult, Authorizer};
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
-use krabka_security::{AuthMethod, Principal};
+use krabka_security::Principal;
 use krabka_units::{millis, minutes, secs};
 use qubit_clock::ManualMonotonicClock;
 use uuid::Uuid;
@@ -19,11 +19,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 use super::*;
 
 fn test_principal(name: &str) -> Principal {
-    Principal {
-        name: name.into(),
-        auth_method: AuthMethod::SaslPlain,
-        groups: vec![],
-    }
+    crate::test_support::sasl_principal(name)
 }
 
 fn img() -> MetadataImage {

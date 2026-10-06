@@ -547,15 +547,12 @@ mod tests {
     }
 
     fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
-            resource_type: ResourceType::Group,
-            resource_name: group.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: "User:admin".into(),
-            host: "*".into(),
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+            ResourceType::Group,
+            group,
+            "User:admin",
             operation,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+        ))
     }
 
     fn bit(op: AclOperation) -> i32 {

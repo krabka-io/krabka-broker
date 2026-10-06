@@ -5,9 +5,8 @@
 //! and assert on the same result shape, so the fixtures live in one module
 //! rather than being duplicated per test file.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
-use assert2::assert;
 use bytes::Bytes;
 use krabka_metadata::MetadataRecord;
 use krabka_protocol::{
@@ -86,25 +85,6 @@ pub(super) async fn start_broker(
         cfg.authorizer = authorizer;
     })
     .await
-}
-
-pub(super) async fn wait_for_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if broker
-            .controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| n == broker.config.node_id)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "broker did not become controller leader"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
 }
 
 /// Validates one deletion and accepts it if it is valid. It returns the

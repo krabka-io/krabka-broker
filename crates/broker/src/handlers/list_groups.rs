@@ -371,15 +371,12 @@ mod tests {
     }
 
     fn acl(resource_type: ResourceType, name: &str, user: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
             resource_type,
-            resource_name: name.into(),
-            pattern_type: krabka_metadata::PatternType::Literal,
-            principal: format!("User:{user}"),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: krabka_metadata::PermissionType::Allow,
-        })
+            name,
+            &format!("User:{user}"),
+            AclOperation::Describe,
+        ))
     }
 
     /// Kafka's `handleListGroupsRequest`: cluster `Describe` lists every group

@@ -81,23 +81,15 @@ pub(super) fn partition_record(
 
 pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id,
-        broker_epoch: 0,
         incarnation_id: Uuid::new_v4(),
         host: "legacy-host".into(),
-        port: 9092,
-        rack: None,
-        log_dirs: vec![],
         endpoints: vec![BrokerEndpoint {
             name: "INTERNAL".into(),
             host: "internal-host".into(),
             port: 19092,
             protocol: krabka_security::ListenerProtocol::Plaintext,
         }],
-        features: std::collections::BTreeMap::new(),
+        ..crate::test_support::broker_registration(node_id.0)
     }
 }
 

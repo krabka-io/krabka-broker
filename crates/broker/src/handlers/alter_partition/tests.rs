@@ -11,10 +11,9 @@ use krabka_protocol::owned::{
     alter_partition_request::{PartitionData as ReqPartitionData, TopicData as ReqTopicData},
     alter_partition_response,
 };
-use krabka_security::{AuthMethod, Principal};
 
 use super::{
-    test_support::{request_with_topics, seed_partition, wait_for_leader, wire_topic_id},
+    test_support::{request_with_topics, seed_partition, wire_topic_id},
     *,
 };
 use crate::test_support::{DenyAll, start_broker_with_authorizer as start_broker};
@@ -30,11 +29,7 @@ async fn handle_denies_cluster_action_for_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req_bytes = encode_request(&request_with_topics(&broker, Vec::new()), version);
@@ -59,12 +54,8 @@ async fn leader_accepts_empty_alter_partition_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    crate::test_support::wait_for_controller_leader(&broker).await;
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req_bytes = encode_request(&request_with_topics(&broker, Vec::new()), version);
@@ -89,13 +80,9 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
     let version = 2;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = request_with_topics(
@@ -176,13 +163,9 @@ async fn topic_row_error_follows_version_and_topic_id() {
     ];
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
 
@@ -273,13 +256,9 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    wait_for_leader(&broker).await;
+    crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = Principal {
-        name: "replica".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
+    let principal = crate::test_support::principal("replica");
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let current = request_with_topics(&broker, Vec::new()).broker_epoch;

@@ -122,9 +122,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
         .controller
         .submit_change(vec![
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                node_id: NodeId(2),
                 broker_epoch: -1,
-                incarnation_id: uuid::Uuid::nil(),
                 host: "legacy-2".into(),
                 port: 1000,
                 rack: Some("rack-2".into()),
@@ -134,11 +132,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
                     port: 9192,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                log_dirs: vec![],
-                features: std::collections::BTreeMap::new(),
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
+                ..crate::test_support::broker_registration(2)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "remote".into(),
