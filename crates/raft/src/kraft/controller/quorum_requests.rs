@@ -18,6 +18,11 @@
 //! closes.
 
 use bytes::Bytes;
+use krabka_protocol::owned::{
+    begin_quorum_epoch_request::BeginQuorumEpochRequest,
+    end_quorum_epoch_request::EndQuorumEpochRequest, fetch_snapshot_request::FetchSnapshotRequest,
+    vote_request::VoteRequest,
+};
 
 use super::{
     Engine,
@@ -167,7 +172,7 @@ impl Engine {
             .iter()
             .position(|candidate| {
                 u64::try_from(candidate.candidate_id) == Ok(self.me.0) && {
-                    let directory_id = uuid::Uuid::from_bytes(candidate.candidate_directory_id.0);
+                    let directory_id = wire::uuid_from_wire(candidate.candidate_directory_id);
                     directory_id.is_nil() || local_directory_id.is_none_or(|l| l == directory_id)
                 }
             })
@@ -180,7 +185,7 @@ impl Engine {
 
     /// Answers a `Vote` request. `None` means the body did not decode.
     pub(super) fn answer_vote(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
-        let request = wire::decode_vote_request(body, version)?;
+        let request = wire::decode_request::<VoteRequest>(body, version)?;
         let refuse = |engine: &Self, top: i16, partition: i16| {
             Some(wire::encode_vote_response(
                 top,
@@ -217,7 +222,7 @@ impl Engine {
         {
             return refuse(self, 0, error);
         }
-        let voter_directory_id = uuid::Uuid::from_bytes(partition.voter_directory_id.0);
+        let voter_directory_id = wire::uuid_from_wire(partition.voter_directory_id);
         if !self.is_valid_voter_key(request.voter_id, voter_directory_id) {
             // Kafka moves to the request's epoch before it checks the voter key,
             // so the refusal names the epoch this replica is at afterwards.
@@ -228,7 +233,7 @@ impl Engine {
                 self.advance_epoch_for_vote(
                     ReplicaKey {
                         id: NodeId(candidate),
-                        directory_id: uuid::Uuid::from_bytes(partition.replica_directory_id.0),
+                        directory_id: wire::uuid_from_wire(partition.replica_directory_id),
                     },
                     epoch,
                 );
@@ -257,7 +262,7 @@ impl Engine {
                 .map_or(uuid::Uuid::nil(), |voter| voter.directory_id),
             candidate_epoch,
             candidate: NodeId(candidate),
-            candidate_directory_id: uuid::Uuid::from_bytes(partition.replica_directory_id.0),
+            candidate_directory_id: wire::uuid_from_wire(partition.replica_directory_id),
             candidate_log_end: LogEnd {
                 last_epoch,
                 last_offset: partition.last_offset,
@@ -277,7 +282,7 @@ impl Engine {
     /// Answers a `BeginQuorumEpoch` request. `None` means the body did not
     /// decode.
     pub(super) fn answer_begin_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
-        let request = wire::decode_begin_quorum_epoch_request(body, version)?;
+        let request = wire::decode_request::<BeginQuorumEpochRequest>(body, version)?;
         let respond = |engine: &Self, top: i16, partition: i16| {
             Some(wire::encode_begin_quorum_epoch_response(
                 top,
@@ -325,7 +330,7 @@ impl Engine {
         });
         // Kafka transitions first, then checks that the request was meant for
         // this replica.
-        let voter_directory_id = uuid::Uuid::from_bytes(partition.voter_directory_id.0);
+        let voter_directory_id = wire::uuid_from_wire(partition.voter_directory_id);
         if !self.is_valid_voter_key(request.voter_id, voter_directory_id) {
             return respond(self, 0, INVALID_VOTER_KEY);
         }
@@ -335,7 +340,7 @@ impl Engine {
     /// Answers an `EndQuorumEpoch` request. `None` means the body did not
     /// decode.
     pub(super) fn answer_end_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
-        let request = wire::decode_end_quorum_epoch_request(body, version)?;
+        let request = wire::decode_request::<EndQuorumEpochRequest>(body, version)?;
         let respond = |engine: &Self, top: i16, partition: i16| {
             Some(wire::encode_end_quorum_epoch_response(
                 top,
@@ -389,7 +394,7 @@ impl Engine {
     /// Answers a `FetchSnapshot` request. `None` means the body did not
     /// decode.
     pub(super) fn answer_fetch_snapshot(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
-        let request = wire::decode_fetch_snapshot_request(body, version)?;
+        let request = wire::decode_request::<FetchSnapshotRequest>(body, version)?;
         let top_level = |engine: &Self, error_code: i16| {
             Some(wire::encode_fetch_snapshot_answer(
                 error_code,

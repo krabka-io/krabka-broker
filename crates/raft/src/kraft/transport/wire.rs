@@ -29,14 +29,14 @@ pub use self::codec::{FETCH_SNAPSHOT_VERSION, FETCH_VERSION, QUORUM_EPOCH_VERSIO
 pub(crate) use self::{
     codec::{
         METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, epoch_from_wire, node_from_wire,
+        uuid_from_wire,
     },
-    request::parse_cluster_id,
+    request::{decode_request, parse_cluster_id},
 };
 pub use self::{
     request::{
-        PeerRequest, decode_begin, decode_begin_quorum_epoch_request, decode_end,
-        decode_end_quorum_epoch_request, decode_fetch, decode_fetch_request, decode_fetch_snapshot,
-        decode_fetch_snapshot_request, decode_vote, decode_vote_request, fetch_replica_id,
+        PeerRequest, decode_begin, decode_end, decode_fetch, decode_fetch_snapshot, decode_vote,
+        fetch_replica_id,
     },
     response::{
         FetchAnswer, FetchSnapshotPartition, PeerResponse, QuorumLeader,

@@ -26,6 +26,7 @@ pub mod api_key;
 pub mod wire;
 
 pub use self::{
+    api_key::PeerApi,
     command::{
         Command, Inbound, MetadataFetchSlice, ObserverReplica, QuorumStateSnapshot, TimerTick,
     },

@@ -1,12 +1,13 @@
 //! Constants and integer conversions shared by the peer request and response
 //! codecs.
 //!
-//! The metadata topic identity, the captured wire versions, the `Epoch` and
-//! `NodeId` conversions to and from their wire `int32` forms, and the
+//! The metadata topic identity, the captured wire versions, the `Epoch`,
+//! `NodeId`, uuid and cluster id conversions to and from their wire forms, and the
 //! `encode_body` helper are all needed by both [`request`](super::request) and
 //! [`response`](super::response), so they sit in one place instead of being
 //! duplicated.
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::{Encode, primitives::uuid::Uuid as MetaUuid, records::RecordsPayload};
 
@@ -53,6 +54,17 @@ pub fn node_to_wire(n: NodeId) -> i32 {
 }
 pub fn node_from_wire(n: i32) -> NodeId {
     NodeId(u64::try_from(n).unwrap_or(0))
+}
+/// Converts between a `uuid::Uuid` and the wire `uuid` of the generated codecs.
+pub fn uuid_to_wire(id: uuid::Uuid) -> MetaUuid {
+    MetaUuid(id.into_bytes())
+}
+pub fn uuid_from_wire(id: MetaUuid) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(id.0)
+}
+/// A request `ClusterId` in Kafka's base64 form.
+pub fn cluster_id_to_wire(id: Option<uuid::Uuid>) -> Option<String> {
+    id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes()))
 }
 
 pub fn encode_body<T: Encode>(msg: &T, version: i16) -> Bytes {
