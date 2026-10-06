@@ -4,7 +4,7 @@
 //! large enough to keep apart from the rest of the command line.
 
 use krabka_broker::{
-    config_value::{PositiveCount, PositiveI16, PositiveI32, PositiveI64, parse_positive_count},
+    config_value::{PositiveCount, PositiveI16, PositiveI32, PositiveI64},
     coordinator::unified::streams::config::StreamsAssignorKind,
 };
 use krabka_client_core::{
@@ -137,8 +137,8 @@ pub struct RuntimeArgs {
     pub sasl_server_max_receive: Option<ByteSize>,
     #[arg(long, env = "KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY", value_parser = krabka_units::parse::non_negative_time)]
     pub connection_failed_authentication_delay: Option<Time>,
-    #[arg(long, env = "KRABKA_QUEUED_MAX_REQUESTS", value_parser = parse_positive_count)]
-    pub queued_max_requests: Option<usize>,
+    #[overlay(refined)]
+    pub queued_max_requests: Option<PositiveCount>,
     pub queued_max_request_bytes: Option<ByteSize>,
     pub sendfile_min: Option<ByteSize>,
     pub socket_send_buffer: Option<ByteSize>,
