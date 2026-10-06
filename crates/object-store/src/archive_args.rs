@@ -51,6 +51,9 @@ pub enum ArchiveArgsError {
 /// The fields are public so a test or an embedding tool can build the struct
 /// directly rather than through an argv.
 #[derive(Args, Debug, Default, Clone, PartialEq, Eq)]
+// A flattened struct's implicit group is named after the struct, so a CLI that
+// wraps this in its own `ArchiveArgs` would register the name twice.
+#[group(id = "archive_location")]
 #[command(group(
     ArgGroup::new("archive_backend")
         .required(true)
