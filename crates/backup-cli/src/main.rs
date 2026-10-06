@@ -4,13 +4,4 @@
 //! on `PATH`, the way git resolves `git foo` to `git-foo`, so this binary's
 //! name is what makes `krabka backup` work.
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-    std::process::exit(krabka_backup::run_from_args(std::env::args_os()).await);
-}
+krabka_macros::cli_main!(krabka_backup);

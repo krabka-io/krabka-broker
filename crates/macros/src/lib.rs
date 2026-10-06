@@ -179,11 +179,16 @@
 //! | `Option<u32>` | `value_parser = clap::value_parser!(u32).range(1..)` |
 //! | `Option<i64>` | `value_parser = clap::value_parser!(i64).range(0..)` |
 //! | `Option<bool>` | `action = clap::ArgAction::Set` |
-//! | `Option<i16>`, `Option<i32>`, `Option<String>` | none |
+//! | `Option<i16>`, `Option<i32>`, `Option<String>`, `Option<PathBuf>` | none |
 //!
 //! The type is matched as written, so a field of any other type, or of one
 //! of these that needs another parser, keeps its own `#[arg(...)]`. Doc
 //! comments stay where they are and remain the help text.
+//!
+//! `#[krabka_env(prefix = "BENCH_")]` puts every variable under that prefix in
+//! place of `KRABKA_`, so the field `tls_ca_path` reads `BENCH_TLS_CA_PATH`.
+//! A field whose variable is not its name under the prefix keeps its own
+//! `#[arg(...)]`.
 //!
 //! # `RefinedNewtype`
 //!
@@ -297,6 +302,22 @@
 //!     pub owners: Vec<String>,
 //! }
 //! ```
+//!
+//! # `cli_main!`
+//!
+//! `cli_main!(path)` goes at the top level of an operator binary's
+//! `main.rs`, in place of its `main`. It expands to a `#[tokio::main]`
+//! `async fn main()` that installs a `tracing_subscriber::fmt()` subscriber
+//! filtered by `RUST_LOG`, or at `info` when `RUST_LOG` is unset or does not
+//! parse, then awaits `path::run_from_args(std::env::args_os())` and exits the
+//! process with the `i32` it returns. Any arguments after the path, such as
+//! `flavor = "multi_thread"`, go to `#[tokio::main(...)]` unchanged. The
+//! binary depends on `tokio` with its `macros` feature and on
+//! `tracing-subscriber`.
+//!
+//! ```ignore
+//! krabka_macros::cli_main!(krabka_restore, flavor = "multi_thread");
+//! ```
 
 use moxy::{
     ast::{ItemEnum, ItemStruct, ParseError},
@@ -304,6 +325,7 @@ use moxy::{
 };
 
 mod api_names;
+mod cli_main;
 mod dispatch;
 mod enum_str;
 mod field_defaults;
@@ -373,8 +395,9 @@ pub fn runtime_overlay(item: ItemStruct) -> Result<TokenStream, ParseError> {
 }
 
 /// Gives every field of a clap argument struct without an `#[arg(...)]` a
-/// `--long` flag, a `KRABKA_<FIELD>` environment variable, and the value
-/// parser its type implies. The crate documentation lists the types.
+/// `--long` flag, a `KRABKA_<FIELD>` environment variable (under another
+/// prefix with `prefix = "..."`), and the value parser its type implies. The
+/// crate documentation lists the types.
 #[moxy::attribute(name = "krabka_env")]
 pub fn krabka_env(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     krabka_env::expand(meta, item)
@@ -394,4 +417,12 @@ pub fn enum_str(item: ItemEnum) -> Result<TokenStream, ParseError> {
 #[moxy::derive(FieldDefaults, attributes(default))]
 pub fn field_defaults(item: ItemStruct) -> Result<TokenStream, ParseError> {
     field_defaults::expand(item)
+}
+
+/// Expands to an operator binary's `main`: tracing setup, then
+/// `std::process::exit` with what the named crate's `run_from_args` returns.
+/// The crate documentation describes the expansion.
+#[moxy::function(name = "cli_main")]
+pub fn cli_main(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_main::expand(tokens)
 }

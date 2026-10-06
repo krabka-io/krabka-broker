@@ -18,6 +18,9 @@ use krabka_client_core::{
 use krabka_units::{fmt::Human as _, parse, prelude::*};
 use tracing_subscriber::EnvFilter;
 
+/// The driver's flags. A field without an `#[arg(...)]` of its own gets
+/// `--<field>` and `BENCH_<FIELD>` from `#[krabka_env]`.
+#[krabka_macros::krabka_env(prefix = "BENCH_")]
 #[derive(Debug, Parser)]
 #[command(name = "krabka-bench-driver", version, about)]
 struct Cli {
@@ -150,7 +153,6 @@ struct Cli {
     /// PEM CA bundle that the client trusts to verify the broker serving cert.
     /// This is required when `--tls-enabled`. It is mounted from the per-stack
     /// cluster-CA Secret, for example `/etc/bench-ca/ca.crt`.
-    #[arg(long, env = "BENCH_TLS_CA_PATH")]
     tls_ca_path: Option<PathBuf>,
     /// SNI server name that the client presents in the TLS handshake. The broker
     /// matches it against a SAN on its serving cert. LOAD-BEARING: the client
@@ -158,16 +160,13 @@ struct Cli {
     /// SNI to a SAN name. For krabka that name is
     /// `demo-broker-headless.<ns>.svc.cluster.local`, and for Strimzi it is
     /// `demo-kafka-bootstrap`. This is required when `--tls-enabled`.
-    #[arg(long, env = "BENCH_TLS_SERVER_NAME")]
     tls_server_name: Option<String>,
     /// Optional mTLS client certificate in PEM form. One-way TLS is enough for
     /// the benchmark. Set this, together with `--tls-client-key`, only when the
     /// listener requires client auth.
-    #[arg(long, env = "BENCH_TLS_CLIENT_CERT")]
     tls_client_cert: Option<PathBuf>,
     /// Optional mTLS client private key in PEM form. It pairs with
     /// `--tls-client-cert`.
-    #[arg(long, env = "BENCH_TLS_CLIENT_KEY")]
     tls_client_key: Option<PathBuf>,
 }
 
@@ -733,5 +732,109 @@ mod tests {
         args.extend(["--prometheus-request-timeout", "64s"]);
         let from_cli = Cli::try_parse_from(args).expect("CLI over environment");
         check!(from_cli.prometheus_request_timeout == secs(64));
+    }
+
+    /// Values offered to every flag's value parser by [`flag_shapes`].
+    const PROBES: [&str; 14] = [
+        "0",
+        "1",
+        "-1",
+        "1.5",
+        "0ms",
+        "1ms",
+        "3000000000ms",
+        "1MiB",
+        "true",
+        "maybe",
+        "krabka",
+        "broker:9092",
+        "/tmp/ca.crt",
+        "",
+    ];
+
+    /// One line per flag of [`Cli`]: its long name, its environment variable,
+    /// its default values, its action, and which of [`PROBES`] its value
+    /// parser accepts (`+`) or refuses (`-`).
+    fn flag_shapes() -> String {
+        use clap::CommandFactory as _;
+
+        let command = Cli::command();
+        command
+            .get_arguments()
+            .filter(|arg| {
+                arg.get_long()
+                    .is_some_and(|long| long != "help" && long != "version")
+            })
+            .map(|arg| {
+                let long = arg.get_long().unwrap_or_default();
+                let env = arg
+                    .get_env()
+                    .map(|env| env.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let defaults = arg
+                    .get_default_values()
+                    .iter()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let action = arg.get_action();
+                let accepted = PROBES
+                    .iter()
+                    .map(|probe| {
+                        let required = [
+                            ("scenario", "scenario.yaml"),
+                            ("bootstrap", "broker:9092"),
+                            ("stack", "krabka"),
+                        ]
+                        .into_iter()
+                        .filter(|(flag, _)| *flag != long)
+                        .map(|(flag, value)| format!("--{flag}={value}"));
+                        let args = std::iter::once("krabka-bench-driver".to_owned())
+                            .chain(required)
+                            .chain([format!("--{long}={probe}")]);
+                        if command.clone().try_get_matches_from(args).is_ok() {
+                            '+'
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect::<String>();
+                format!("{long} {env} {defaults:?} {action:?} {accepted}")
+            })
+            .flat_map(|line| [line, "\n".to_owned()])
+            .collect()
+    }
+
+    /// The output of [`flag_shapes`], pinned so that a change to how a flag is
+    /// declared cannot change its name, variable, default or parser unseen.
+    const FLAG_SHAPES: &str = "\
+        scenario BENCH_SCENARIO_PATH [] Set +++++++++++++-\n\
+        bootstrap BENCH_BOOTSTRAP_SERVERS [] Set ++++++++++++++\n\
+        client-dispatch-queue-capacity BENCH_CLIENT_DISPATCH_QUEUE_CAPACITY [\"64\"] Set -+------------\n\
+        client-frame-max BENCH_CLIENT_FRAME_MAX [\"100MiB\"] Set -------+------\n\
+        stack BENCH_STACK [] Set ----------+---\n\
+        topic BENCH_TOPIC [\"bench-topic\"] Set ++++++++++++++\n\
+        namespace BENCH_NAMESPACE [\"default\"] Set ++++++++++++++\n\
+        prometheus BENCH_PROMETHEUS_URL [] Set ++++++++++++++\n\
+        prometheus-request-timeout BENCH_PROMETHEUS_REQUEST_TIMEOUT [\"15s\"] Set -----++-------\n\
+        producer-request-timeout BENCH_PRODUCER_REQUEST_TIMEOUT [\"2s\"] Set -----+--------\n\
+        producer-final-drain-timeout BENCH_PRODUCER_FINAL_DRAIN_TIMEOUT [\"10s\"] Set -----++-------\n\
+        consumer-request-timeout BENCH_CONSUMER_REQUEST_TIMEOUT [] Set -----+--------\n\
+        consumer-build-attempts BENCH_CONSUMER_BUILD_ATTEMPTS [\"6\"] Set -+------------\n\
+        consumer-build-initial-backoff BENCH_CONSUMER_BUILD_INITIAL_BACKOFF [\"100ms\"] Set -----++-------\n\
+        consumer-build-max-backoff BENCH_CONSUMER_BUILD_MAX_BACKOFF [\"2s\"] Set -----++-------\n\
+        consumer-poll-timeout BENCH_CONSUMER_POLL_TIMEOUT [\"50ms\"] Set -----++-------\n\
+        consumer-poll-error-backoff BENCH_CONSUMER_POLL_ERROR_BACKOFF [\"100ms\"] Set -----++-------\n\
+        sample-interval BENCH_SAMPLE_INTERVAL [\"2s\"] Set -----++-------\n\
+        broker-count BENCH_BROKER_COUNT [\"1\"] Set ++------------\n\
+        out BENCH_OUTPUT_PATH [\"/results/run.json\"] Set +++++++++++++-\n\
+        tls-enabled BENCH_TLS_ENABLED [\"false\"] SetTrue --------------\n\
+        tls-ca-path BENCH_TLS_CA_PATH [] Set +++++++++++++-\n\
+        tls-server-name BENCH_TLS_SERVER_NAME [] Set ++++++++++++++\n\
+        tls-client-cert BENCH_TLS_CLIENT_CERT [] Set +++++++++++++-\n\
+        tls-client-key BENCH_TLS_CLIENT_KEY [] Set +++++++++++++-\n";
+
+    #[test]
+    fn flags_keep_their_shape() {
+        assert!(flag_shapes() == FLAG_SHAPES);
     }
 }

@@ -1,6 +1,8 @@
 //! The flags `#[krabka_env]` gives a clap argument struct, read back from the
 //! command clap builds and from what that command parses.
 
+use std::path::PathBuf;
+
 use assert2::assert;
 use clap::{Args, Command};
 use krabka_units::Time;
@@ -109,4 +111,39 @@ fn a_field_with_its_own_command_attribute_is_left_alone() {
         (Some("outer".to_owned()), Some("KRABKA_OUTER".to_owned())),
     ];
     assert!(shapes == expected);
+}
+
+#[krabka_macros::krabka_env(prefix = "BENCH_")]
+#[derive(Debug, Args)]
+struct Prefixed {
+    server_name: Option<String>,
+    ca_path: Option<PathBuf>,
+    #[arg(long, env = "BENCH_OUTPUT_PATH")]
+    out: Option<PathBuf>,
+}
+
+#[test]
+fn the_prefix_argument_replaces_krabka_in_every_variable() {
+    let command = Prefixed::augment_args(Command::new("prefixed"));
+    let shapes = command
+        .get_arguments()
+        .map(|arg| {
+            (
+                arg.get_long().map(str::to_owned),
+                arg.get_env().map(|env| env.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        ("server-name", "BENCH_SERVER_NAME"),
+        ("ca-path", "BENCH_CA_PATH"),
+        ("out", "BENCH_OUTPUT_PATH"),
+    ]
+    .map(|(long, env)| (Some(long.to_owned()), Some(env.to_owned())));
+    assert!(shapes == expected);
+
+    let parsed = command
+        .try_get_matches_from(["prefixed", "--ca-path=/tmp/ca.crt"])
+        .expect("a path flag");
+    assert!(parsed.get_one::<PathBuf>("ca_path") == Some(&PathBuf::from("/tmp/ca.crt")));
 }

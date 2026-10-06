@@ -1,13 +1,32 @@
 //! `#[krabka_env]`: see the crate documentation.
 
 use moxy::{
-    ast::{Attribute, Fields, ItemStruct, ParseError},
+    ast::{Attribute, Fields, FromMeta as _, ItemStruct, List, Meta, ParseError, Parser, Token},
     token::{LitStr, Spanner, ToTokenStream, TokenStream},
 };
 
+/// The prefix of every environment variable when the attribute names none.
+const DEFAULT_PREFIX: &str = "KRABKA_";
+
 /// The name of the environment variable that sets the flag of `field`.
-fn env_name(field: &str) -> String {
-    format!("KRABKA_{}", field.to_ascii_uppercase())
+fn env_name(prefix: &str, field: &str) -> String {
+    format!("{prefix}{}", field.to_ascii_uppercase())
+}
+
+/// The environment-variable prefix that the attribute arguments `meta` name:
+/// `prefix = "..."`, or [`DEFAULT_PREFIX`] when `meta` is empty.
+fn prefix(meta: &TokenStream) -> Result<String, ParseError> {
+    let mut prefix = None;
+    for argument in &List::<Meta, Token![,]>::parse_all(&Parser::from_tokens(meta))? {
+        if !argument.path.is_ident("prefix") || prefix.is_some() {
+            return Err(ParseError::new(
+                argument.span(),
+                "`krabka_env` takes one argument, `prefix = \"...\"`",
+            ));
+        }
+        prefix = Some(String::from_meta(argument)?);
+    }
+    Ok(prefix.unwrap_or_else(|| DEFAULT_PREFIX.to_owned()))
 }
 
 /// The arguments after `long, env = ...` that a field of type `ty` gets, as
@@ -38,7 +57,7 @@ fn type_arguments(ty: &str) -> Option<TokenStream> {
         "Option<u32>" => moxy::template! { value_parser = ::clap::value_parser!(u32).range(1..) },
         "Option<i64>" => moxy::template! { value_parser = ::clap::value_parser!(i64).range(0..) },
         "Option<bool>" => moxy::template! { action = ::clap::ArgAction::Set },
-        "Option<i16>" | "Option<i32>" | "Option<String>" => TokenStream::new(),
+        "Option<i16>" | "Option<i32>" | "Option<String>" | "Option<PathBuf>" => TokenStream::new(),
         _ => return None,
     })
 }
@@ -54,12 +73,7 @@ fn type_key(ty: &impl ToTokenStream) -> String {
 
 /// Expands `#[krabka_env]` on `item`.
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
-    if let Some(argument) = meta.into_iter().next() {
-        return Err(ParseError::new(
-            argument.span(),
-            "`krabka_env` takes no arguments",
-        ));
-    }
+    let prefix = prefix(&{ meta })?;
     let mut item = moxy::parse!({ item } as ItemStruct)?;
     let Fields::Named(named) = &mut item.fields else {
         return Err(ParseError::new(
@@ -87,7 +101,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
                 ),
             ));
         };
-        let env = LitStr::new(&env_name(ident.text()), ident.span());
+        let env = LitStr::new(&env_name(&prefix, ident.text()), ident.span());
         let attribute = moxy::template! {
             #[arg(long, env = {{ env }} @if !arguments.is_empty() { , {{ arguments }} })]
         };
@@ -103,8 +117,9 @@ mod tests {
     use super::{env_name, type_arguments};
 
     #[test]
-    fn env_name_is_the_upper_case_field_name_under_krabka() {
-        assert!(env_name("cleaner_interval") == "KRABKA_CLEANER_INTERVAL");
+    fn env_name_is_the_upper_case_field_name_under_the_prefix() {
+        assert!(env_name("KRABKA_", "cleaner_interval") == "KRABKA_CLEANER_INTERVAL");
+        assert!(env_name("BENCH_", "tls_ca_path") == "BENCH_TLS_CA_PATH");
     }
 
     #[test]
