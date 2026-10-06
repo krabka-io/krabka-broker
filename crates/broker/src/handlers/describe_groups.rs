@@ -53,13 +53,6 @@ const GROUP_ID_NOT_FOUND_MIN_VERSION: i16 = 6;
 /// The first `DescribeGroups` version with `authorized_operations`.
 const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
 
-#[tracing::instrument(
-    name = "handle_describe_groups",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeGroups", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeGroupsRequest,

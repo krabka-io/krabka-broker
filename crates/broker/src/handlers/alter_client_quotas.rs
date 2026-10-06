@@ -31,13 +31,6 @@ use self::{
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
 use crate::{broker::Broker, codes::CLUSTER_AUTHORIZATION_FAILED};
 
-#[tracing::instrument(
-    name = "handle_alter_client_quotas",
-    level = "info",
-    skip_all,
-    fields(api = "AlterClientQuotas"),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterClientQuotasRequest,

@@ -63,13 +63,6 @@ const OP_DELETE: i8 = 1;
 const OP_APPEND: i8 = 2;
 const OP_SUBTRACT: i8 = 3;
 
-#[tracing::instrument(
-    name = "handle_incremental_alter_configs",
-    level = "info",
-    skip_all,
-    fields(api = "IncrementalAlterConfigs", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: IncrementalAlterConfigsRequest,

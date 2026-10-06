@@ -56,13 +56,6 @@ fn wire_broker_id(node_id: u64) -> i32 {
     i32::try_from(node_id).unwrap_or(-1)
 }
 
-#[tracing::instrument(
-    name = "handle_describe_cluster",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeCluster", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeClusterRequest,

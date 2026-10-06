@@ -19,13 +19,6 @@ use crate::{
 /// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
 const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
 
-#[tracing::instrument(
-    name = "handle_share_group_heartbeat",
-    level = "info",
-    skip_all,
-    fields(api = "ShareGroupHeartbeat", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ShareGroupHeartbeatRequest,

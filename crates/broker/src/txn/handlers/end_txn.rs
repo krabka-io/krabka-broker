@@ -68,13 +68,6 @@ use self::{
     validation::{EndTxnValidation, validate_end_txn},
 };
 
-#[tracing::instrument(
-    name = "handle_end_txn",
-    level = "info",
-    skip_all,
-    fields(api = "EndTxn", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: EndTxnRequest,

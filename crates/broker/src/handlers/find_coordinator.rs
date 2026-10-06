@@ -69,13 +69,6 @@ fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> V
         .collect()
 }
 
-#[tracing::instrument(
-    name = "handle_find_coordinator",
-    level = "info",
-    skip_all,
-    fields(api = "FindCoordinator", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: FindCoordinatorRequest,

@@ -13,13 +13,6 @@ use crate::{
     handlers::group_read_denied,
 };
 
-#[tracing::instrument(
-    name = "handle_heartbeat",
-    level = "info",
-    skip_all,
-    fields(api = "Heartbeat", version),
-    err
-)]
 // cargo-mutants: the generated protocol default for throttle_time_ms is zero.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(

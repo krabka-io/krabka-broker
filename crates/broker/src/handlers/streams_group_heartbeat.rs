@@ -26,13 +26,6 @@ mod creation;
 pub(super) mod topic_authz;
 mod validation;
 
-#[tracing::instrument(
-    name = "handle_streams_group_heartbeat",
-    level = "info",
-    skip_all,
-    fields(api = "StreamsGroupHeartbeat", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: StreamsGroupHeartbeatRequest,

@@ -2,7 +2,7 @@
 
 use moxy::{
     ast::ParseError,
-    token::{Ident, TokenStream},
+    token::{Ident, LitStr, TokenStream},
 };
 
 use crate::api_names::{Entry, Section, Suffixed, parse_sections, section};
@@ -35,72 +35,96 @@ enum Adapter {
 struct Kind {
     label: &'static str,
     adapter: Adapter,
+    /// Whether the generated adapter opens the `handle_<snake>` span. A
+    /// section whose handler opens a span of its own sets this false, so the
+    /// request is not traced twice.
+    traced: bool,
     constructor: &'static str,
 }
 
-const KINDS: [Kind; 7] = [
+const KINDS: [Kind; 9] = [
     Kind {
         label: "context",
         adapter: Adapter::Context,
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "sync_context",
         adapter: Adapter::SyncContext,
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "typed",
         adapter: Adapter::Typed { group: false },
+        traced: true,
+        constructor: "context",
+    },
+    Kind {
+        label: "typed_own_span",
+        adapter: Adapter::Typed { group: false },
+        traced: false,
         constructor: "context",
     },
     Kind {
         label: "typed_group",
         adapter: Adapter::Typed { group: true },
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "typed_sync",
         adapter: Adapter::TypedSync,
+        traced: true,
+        constructor: "context",
+    },
+    Kind {
+        label: "typed_sync_own_span",
+        adapter: Adapter::TypedSync,
+        traced: false,
         constructor: "context",
     },
     Kind {
         label: "auth",
         adapter: Adapter::HandWritten,
+        traced: false,
         constructor: "auth",
     },
     Kind {
         label: "telemetry",
         adapter: Adapter::Telemetry,
+        traced: true,
         constructor: "telemetry",
     },
 ];
 
 /// The adapter function for one generated entry.
-fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry) -> TokenStream {
+///
+/// Unless the entry's section says the handler opens its own span, the adapter
+/// runs the decode, the handler and the encode inside an `info` span named
+/// `handle_<snake_name>` with `api`, `version` and, for an adapter that hands
+/// the handler the raw body, `req_bytes`. On `Err` it emits the `ERROR` event
+/// `#[tracing::instrument(err)]` would: `error` set to the error's `Display`,
+/// inside the span.
+fn adapter(
+    kind: Adapter,
+    traced: bool,
+    adapter: &Ident,
+    handler: &TokenStream,
+    entry: &Entry,
+) -> TokenStream {
     let request_module = &entry.names.request_module;
     let request_type = &entry.names.request_type;
-    match kind {
-        Adapter::Context => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin({{ handler }}(broker, version, body, ctx))
-            }
-        },
-        Adapter::SyncContext => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready({{ handler }}(broker, version, body, ctx)))
-            }
-        },
+    let (raw_body, body) = match kind {
+        Adapter::Context => (
+            true,
+            Body::Future(moxy::template! { {{ handler }}(broker, version, body, ctx) }),
+        ),
+        Adapter::SyncContext => (
+            true,
+            Body::Ready(moxy::template! { {{ handler }}(broker, version, body, ctx) }),
+        ),
         Adapter::Typed { group } => {
             let decode = if group {
                 moxy::template! {
@@ -119,30 +143,22 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                     }
                 }
             };
-            moxy::template! {
-                fn {{ adapter }}<'a>(
-                    broker: &'a Broker,
-                    version: ApiVersion,
-                    body: &'a [u8],
-                    ctx: &'a RequestContext<'a>,
-                ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                    Box::pin(async move {
+            (
+                false,
+                Body::Future(moxy::template! {
+                    async move {
                         let mut cur = body;
                         let req = {{ decode }};
                         let resp = {{ handler }}(broker, req, version, ctx).await?;
                         crate::handlers::encode_response(&resp, version)
-                    })
-                }
-            }
+                    }
+                }),
+            )
         }
-        Adapter::TypedSync => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready((|| {
+        Adapter::TypedSync => (
+            false,
+            Body::Ready(moxy::template! {
+                (|| {
                     use krabka_protocol::Decode as _;
 
                     let mut cur = body;
@@ -151,23 +167,95 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                     )?;
                     let resp = {{ handler }}(broker, req, version, ctx)?;
                     crate::handlers::encode_response(&resp, version)
-                })()))
-            }
-        },
-        Adapter::Telemetry => moxy::template! {
+                })()
+            }),
+        ),
+        Adapter::Telemetry => (
+            true,
+            Body::Ready(moxy::template! {
+                {{ handler }}(broker, version, correlation_id, body, ctx)
+            }),
+        ),
+        Adapter::HandWritten => return TokenStream::new(),
+    };
+    let signature = if matches!(kind, Adapter::Telemetry) {
+        moxy::template! {
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,
                 version: ApiVersion,
                 correlation_id: CorrelationId,
                 body: &'a [u8],
                 ctx: &'a TelemetryContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready({{ handler }}(
-                    broker, version, correlation_id, body, ctx,
-                )))
-            }
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
+        }
+    } else {
+        moxy::template! {
+            fn {{ adapter }}<'a>(
+                broker: &'a Broker,
+                version: ApiVersion,
+                body: &'a [u8],
+                ctx: &'a RequestContext<'a>,
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
+        }
+    };
+    let block = if traced {
+        traced_block(entry, raw_body, body)
+    } else {
+        match body {
+            Body::Future(future) => moxy::template! { Box::pin({{ future }}) },
+            Body::Ready(result) => moxy::template! { Box::pin(::std::future::ready({{ result }})) },
+        }
+    };
+    moxy::template! {
+        {{ signature }} {
+            {{ block }}
+        }
+    }
+}
+
+/// What an adapter computes before it boxes the result.
+enum Body {
+    /// A future of the handler's encoded result.
+    Future(TokenStream),
+    /// The handler's encoded result, computed when the adapter is called.
+    Ready(TokenStream),
+}
+
+/// An adapter's block that runs `body` inside the entry's `handle_<snake>`
+/// span and emits an `ERROR` event with the error's `Display` on `Err`.
+fn traced_block(entry: &Entry, raw_body: bool, body: Body) -> TokenStream {
+    let names = &entry.names;
+    let name = LitStr::new(
+        &format!("handle_{}", names.snake.text()),
+        names.snake.span(),
+    );
+    let api = LitStr::new(names.api.text(), names.api.span());
+    let req_bytes = if raw_body {
+        moxy::template! { req_bytes = body.len(), }
+    } else {
+        TokenStream::new()
+    };
+    let span = moxy::template! {
+        ::tracing::info_span!({{ name }}, api = {{ api }}, version, {{ req_bytes }})
+    };
+    match body {
+        Body::Future(future) => moxy::template! {
+            Box::pin(::tracing::Instrument::instrument(
+                async move {
+                    ({{ future }})
+                        .await
+                        .inspect_err(|error| ::tracing::error!(error = %error))
+                },
+                {{ span }},
+            ))
         },
-        Adapter::HandWritten => TokenStream::new(),
+        Body::Ready(result) => moxy::template! {
+            let span = {{ span }};
+            let _entered = span.enter();
+            Box::pin(::std::future::ready(
+                ({{ result }}).inspect_err(|error| ::tracing::error!(error = %error)),
+            ))
+        },
     }
 }
 
@@ -208,7 +296,13 @@ pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
                         let snake = &names.snake;
                         moxy::template! { crate::handlers::{{ snake }}::handle }
                     });
-                    adapters.push(adapter(generated, &adapter_ident, &handler, entry));
+                    adapters.push(adapter(
+                        generated,
+                        kind.traced,
+                        &adapter_ident,
+                        &handler,
+                        entry,
+                    ));
                 }
             }
             registrations.push(Registration {

@@ -87,13 +87,6 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     }
 }
 
-#[tracing::instrument(
-    name = "handle_describe_transactions",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeTransactions", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeTransactionsRequest,

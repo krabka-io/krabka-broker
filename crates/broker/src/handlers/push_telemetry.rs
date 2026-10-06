@@ -49,13 +49,6 @@ fn compression_for_id(id: i8) -> Option<CompressionType> {
     }
 }
 
-#[tracing::instrument(
-    name = "handle_push_telemetry",
-    level = "info",
-    skip_all,
-    fields(api = "PushTelemetry", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) fn handle(
     broker: &Broker,
     version: i16,

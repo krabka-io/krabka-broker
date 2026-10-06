@@ -62,13 +62,6 @@ const WIRE_ELECTION_UNCLEAN: i8 = 1;
 /// `toString` of the channel request; krabka names the API in its place.
 const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request ElectLeaders needs ALTER permission.";
 
-#[tracing::instrument(
-    name = "handle_elect_leaders",
-    level = "info",
-    skip_all,
-    fields(api = "ElectLeaders"),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ElectLeadersRequest,

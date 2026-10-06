@@ -66,13 +66,6 @@ const SHARE_PROTOCOL_TYPE: &str = "share";
 /// Kafka's `StreamsGroup.PROTOCOL_TYPE`.
 const STREAMS_PROTOCOL_TYPE: &str = "streams";
 
-#[tracing::instrument(
-    name = "handle_list_groups",
-    level = "info",
-    skip_all,
-    fields(api = "ListGroups", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ListGroupsRequest,

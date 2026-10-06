@@ -30,13 +30,6 @@ use crate::{
     handlers::{cluster_action_denied, encode_response},
 };
 
-#[tracing::instrument(
-    name = "handle_get_replica_log_info",
-    level = "info",
-    skip_all,
-    fields(api = "GetReplicaLogInfo", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) fn handle(
     broker: &Broker,
     version: i16,

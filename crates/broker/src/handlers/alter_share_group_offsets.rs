@@ -36,13 +36,6 @@ use crate::{
     error::BrokerError,
 };
 
-#[tracing::instrument(
-    name = "handle_alter_share_group_offsets",
-    level = "info",
-    skip_all,
-    fields(api = "AlterShareGroupOffsets", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterShareGroupOffsetsRequest,

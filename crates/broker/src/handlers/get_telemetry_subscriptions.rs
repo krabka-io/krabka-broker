@@ -23,13 +23,6 @@ use crate::{
     handlers::context::TelemetryContext,
 };
 
-#[tracing::instrument(
-    name = "handle_get_telemetry_subscriptions",
-    level = "info",
-    skip_all,
-    fields(api = "GetTelemetrySubscriptions", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) fn handle(
     broker: &Broker,
     version: i16,

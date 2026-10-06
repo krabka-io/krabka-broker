@@ -19,13 +19,6 @@ use crate::{
     handlers::{ErrorResponse as _, group_read_denied, group_version_disabled},
 };
 
-#[tracing::instrument(
-    name = "handle_consumer_group_heartbeat",
-    level = "info",
-    skip_all,
-    fields(api = "ConsumerGroupHeartbeat", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ConsumerGroupHeartbeatRequest,

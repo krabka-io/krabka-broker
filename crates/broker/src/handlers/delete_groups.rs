@@ -16,13 +16,6 @@ use krabka_protocol::owned::{
 
 use crate::{broker::Broker, codes, coordinator::DeleteGroupError, error::BrokerError};
 
-#[tracing::instrument(
-    name = "handle_delete_groups",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteGroups", version),
-    err
-)]
 // cargo-mutants: coordinator-backed request orchestration; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(

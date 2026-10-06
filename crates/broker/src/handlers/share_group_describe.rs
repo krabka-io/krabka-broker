@@ -28,13 +28,6 @@ use crate::{
 const UNAUTHORIZED_TOPICS_MESSAGE: &str =
     "The group has described topic(s) that the client is not authorized to describe.";
 
-#[tracing::instrument(
-    name = "handle_share_group_describe",
-    level = "info",
-    skip_all,
-    fields(api = "ShareGroupDescribe", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ShareGroupDescribeRequest,

@@ -63,13 +63,6 @@ fn compile_transactional_id_pattern(pattern: Option<&str>) -> Result<Option<rege
         .transpose()
 }
 
-#[tracing::instrument(
-    name = "handle_list_transactions",
-    level = "info",
-    skip_all,
-    fields(api = "ListTransactions", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ListTransactionsRequest,

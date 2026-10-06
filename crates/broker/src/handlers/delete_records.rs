@@ -94,13 +94,6 @@ use crate::{
     handlers::RequestContext,
 };
 
-#[tracing::instrument(
-    name = "handle_delete_records",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteRecords", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteRecordsRequest,

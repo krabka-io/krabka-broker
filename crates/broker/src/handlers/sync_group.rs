@@ -23,13 +23,6 @@ use crate::{
     handlers::{ErrorCodeResponse as _, group_read_denied},
 };
 
-#[tracing::instrument(
-    name = "handle_sync_group",
-    level = "info",
-    skip_all,
-    fields(api = "SyncGroup", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: SyncGroupRequest,

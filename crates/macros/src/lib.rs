@@ -107,6 +107,17 @@
 //!   result.
 //! - `auth` entries generate no adapter: the hand-written `<name>_adapter`
 //!   must be in scope.
+//! - `typed_own_span` and `typed_sync_own_span` generate the `typed` and
+//!   `typed_sync` adapters without the span below, for a handler that keeps a
+//!   `#[tracing::instrument]` of its own.
+//!
+//! Every other generated adapter runs the decode, the handler and the encode
+//! inside an `info` span named `handle_<snake_name>`, with `api = "<Name>"`,
+//! `version` and, for the `context`, `sync_context` and `telemetry` sections,
+//! `req_bytes = body.len()`. On `Err` it emits, inside that span, the event
+//! `#[tracing::instrument(err)]` would: `ERROR` with `error` set to the
+//! error's `Display`. The expansion calls `::tracing`, so the calling crate
+//! depends on it, and `BrokerError` implements `Display`.
 //!
 //! It then emits `fn register_dispatch_table(registry: &mut DispatchRegistry)`,
 //! which registers every entry at the request schema's `FLEXIBLE_MIN` and

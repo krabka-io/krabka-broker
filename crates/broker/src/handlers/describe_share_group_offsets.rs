@@ -33,13 +33,6 @@ mod tests;
 use self::group::describe_group;
 use crate::{broker::Broker, codes, error::BrokerError};
 
-#[tracing::instrument(
-    name = "handle_describe_share_group_offsets",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeShareGroupOffsets", version),
-    err
-)]
 // cargo-mutants: share-coordinator response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(

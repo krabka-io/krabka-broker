@@ -39,13 +39,6 @@ use crate::{
     handlers::cluster_describe_denied, log_dir,
 };
 
-#[tracing::instrument(
-    name = "handle_describe_log_dirs",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeLogDirs", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeLogDirsRequest,

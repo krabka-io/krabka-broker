@@ -46,13 +46,6 @@ use crate::{
 const NO_PLUGIN_MESSAGE: &str =
     "The broker has no streams group topology description plugin configured.";
 
-#[tracing::instrument(
-    name = "handle_streams_group_topology_description_update",
-    level = "info",
-    skip_all,
-    fields(api = "StreamsGroupTopologyDescriptionUpdate", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: StreamsGroupTopologyDescriptionUpdateRequest,

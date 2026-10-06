@@ -27,13 +27,6 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-#[tracing::instrument(
-    name = "handle_leave_group",
-    level = "info",
-    skip_all,
-    fields(api = "LeaveGroup", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: LeaveGroupRequest,

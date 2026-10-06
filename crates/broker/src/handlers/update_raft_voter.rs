@@ -45,13 +45,6 @@ use crate::{
     handlers::{ErrorCodeResponse as _, cluster_action_denied},
 };
 
-#[tracing::instrument(
-    name = "handle_update_raft_voter",
-    level = "info",
-    skip_all,
-    fields(api = "UpdateRaftVoter", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,

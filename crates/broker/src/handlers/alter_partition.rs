@@ -35,13 +35,6 @@ use crate::{
     handlers::{cluster_action_denied, forward_to_controller::is_active_controller},
 };
 
-#[tracing::instrument(
-    name = "handle_alter_partition",
-    level = "info",
-    skip_all,
-    fields(api = "AlterPartition", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterPartitionRequest,

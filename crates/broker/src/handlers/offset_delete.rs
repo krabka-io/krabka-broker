@@ -56,13 +56,6 @@ use crate::{
     handlers::ErrorCodeResponse as _,
 };
 
-#[tracing::instrument(
-    name = "handle_offset_delete",
-    level = "info",
-    skip_all,
-    fields(api = "OffsetDelete", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: OffsetDeleteRequest,

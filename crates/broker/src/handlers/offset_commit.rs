@@ -82,13 +82,6 @@ const FIRST_GROUP_ID_NOT_FOUND_VERSION: i16 = 9;
 /// The error rows come first in the response and the committed rows follow,
 /// as `OffsetCommitResponse.Builder.merge` puts them. The handler writes no
 /// offset for a row that steps 2 to 4 refuse.
-#[tracing::instrument(
-    name = "handle_offset_commit",
-    level = "info",
-    skip_all,
-    fields(api = "OffsetCommit", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     mut req: OffsetCommitRequest,

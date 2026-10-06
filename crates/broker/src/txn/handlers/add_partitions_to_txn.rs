@@ -62,13 +62,6 @@ pub(in crate::txn::handlers) mod test_support;
 use self::versions::{HandlerDependencies, handle_v3, handle_v4};
 use crate::{broker::Broker, error::BrokerError};
 
-#[tracing::instrument(
-    name = "handle_add_partitions_to_txn",
-    level = "info",
-    skip_all,
-    fields(api = "AddPartitionsToTxn", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AddPartitionsToTxnRequest,

@@ -43,13 +43,6 @@ use crate::{
     share_partition::group_settings::GroupShareSettings,
 };
 
-#[tracing::instrument(
-    name = "handle_share_acknowledge",
-    level = "info",
-    skip_all,
-    fields(api = "ShareAcknowledge", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ShareAcknowledgeRequest,

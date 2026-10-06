@@ -120,13 +120,6 @@ fn renew_fetch_fields_are_zero(req: &ShareFetchRequest) -> bool {
     req.max_bytes == 0 && req.min_bytes == 0 && req.max_records == 0 && req.max_wait_ms == 0
 }
 
-#[tracing::instrument(
-    name = "handle_share_fetch",
-    level = "info",
-    skip_all,
-    fields(api = "ShareFetch", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ShareFetchRequest,

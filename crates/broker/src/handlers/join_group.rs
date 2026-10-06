@@ -23,13 +23,6 @@ use crate::{
     time_util::now_ms,
 };
 
-#[tracing::instrument(
-    name = "handle_join_group",
-    level = "info",
-    skip_all,
-    fields(api = "JoinGroup", version),
-    err
-)]
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(

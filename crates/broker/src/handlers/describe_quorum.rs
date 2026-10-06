@@ -44,13 +44,6 @@ use crate::{
     handlers::{ErrorResponse as _, cluster_describe_denied},
 };
 
-#[tracing::instrument(
-    name = "handle_describe_quorum",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeQuorum", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,

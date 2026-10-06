@@ -88,13 +88,6 @@ use crate::{
 // `await`. The single suspension point is the fenced-broker snapshot the
 // `offline_replicas` projection needs.
 // ACL preamble + pagination + cursor logic
-#[tracing::instrument(
-    name = "handle_describe_topic_partitions",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeTopicPartitions", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeTopicPartitionsRequest,

@@ -37,13 +37,6 @@ use crate::{
 /// `handleDeleteShareGroupOffsetsRequest` puts on every denied topic row.
 const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
 
-#[tracing::instrument(
-    name = "handle_delete_share_group_offsets",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteShareGroupOffsets", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteShareGroupOffsetsRequest,

@@ -78,13 +78,6 @@ use self::{
     },
 };
 
-#[tracing::instrument(
-    name = "handle_delete_topics",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteTopics", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteTopicsRequest,

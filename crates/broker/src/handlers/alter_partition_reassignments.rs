@@ -58,13 +58,6 @@ use crate::{
     handlers::RequestContext,
 };
 
-#[tracing::instrument(
-    name = "handle_alter_partition_reassignments",
-    level = "info",
-    skip_all,
-    fields(api = "AlterPartitionReassignments"),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterPartitionReassignmentsRequest,
