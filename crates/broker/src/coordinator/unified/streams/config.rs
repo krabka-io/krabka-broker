@@ -31,33 +31,24 @@ pub const KEY_SHARE_AUTO_OFFSET_RESET: &str = "share.auto.offset.reset";
 /// Every value runs the same assignor, a port of Kafka's `StickyTaskAssignor`,
 /// the only built-in streams assignor in Kafka. The value is kept only for
 /// the configuration surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// `from_config_name` also accepts `highly-available`, the spelling of the
+/// runtime flag and of the file config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", as_str = config_name, parse = from_config_name)]
 pub enum StreamsAssignorKind {
     #[default]
     Auto,
     Sticky,
+    #[enum_str(alias = "highly-available")]
     HighlyAvailable,
 }
 
 impl StreamsAssignorKind {
-    #[must_use]
-    pub fn config_name(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Sticky => "sticky",
-            Self::HighlyAvailable => "highly_available",
-        }
-    }
-
     fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "sticky" => Ok(Self::Sticky),
-            "highly_available" | "highly-available" => Ok(Self::HighlyAvailable),
-            _ => Err(format!(
-                "{KEY_ASSIGNOR_NAME} must be `auto`, `sticky`, or `highly_available`"
-            )),
-        }
+        Self::from_config_name(value).ok_or_else(|| {
+            format!("{KEY_ASSIGNOR_NAME} must be `auto`, `sticky`, or `highly_available`")
+        })
     }
 }
 

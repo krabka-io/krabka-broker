@@ -13,12 +13,8 @@ use krabka_client_core::{
 use krabka_units::{ByteSize, Ratio, Time};
 
 fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
-    match value {
-        "auto" => Ok(StreamsAssignorKind::Auto),
-        "sticky" => Ok(StreamsAssignorKind::Sticky),
-        "highly-available" => Ok(StreamsAssignorKind::HighlyAvailable),
-        _ => Err("expected `auto`, `sticky`, or `highly-available`".into()),
-    }
+    StreamsAssignorKind::from_config_name(value)
+        .ok_or_else(|| "expected `auto`, `sticky`, or `highly-available`".into())
 }
 
 /// A field without an `#[arg(...)]` gets `--field-name`, `KRABKA_FIELD_NAME`

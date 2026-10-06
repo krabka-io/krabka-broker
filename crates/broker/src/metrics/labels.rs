@@ -217,7 +217,10 @@ pub struct SchemaRejectionLabel {
 ///
 /// The four states are the whole lifecycle of a proposal, so a closed enum
 /// bounds the `break_glass_proposals` label set at four series.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+///
+/// `ALL` lists every state, in lifecycle order.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", all, label_value)]
 pub enum BreakGlassState {
     /// The proposal has fewer approvals than the broker needs.
     Pending,
@@ -227,28 +230,6 @@ pub enum BreakGlassState {
     Expired,
     /// A privileged transition used the proposal.
     Consumed,
-}
-
-impl BreakGlassState {
-    /// Every state, in lifecycle order.
-    pub const ALL: [Self; 4] = [Self::Pending, Self::Approved, Self::Expired, Self::Consumed];
-
-    /// The `state` label value this variant renders as.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Approved => "approved",
-            Self::Expired => "expired",
-            Self::Consumed => "consumed",
-        }
-    }
-}
-
-impl EncodeLabelValue for BreakGlassState {
-    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
-        EncodeLabelValue::encode(&self.as_str(), encoder)
-    }
 }
 
 /// KFC-9 privileged transition that a break-glass proposal authorizes, as a
@@ -331,7 +312,10 @@ pub struct BreakGlassActionLabel {
 /// `failed_authentication`. What is left over is the broker
 /// failing to encode or to send its own answer to a SASL frame, which is a
 /// broker fault rather than anything the connection did, and is logged.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+///
+/// `ALL` lists every reason, in the order this documentation gives them.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", all, label_value)]
 pub enum ConnectionCloseReason {
     /// The connection went `connections.max.idle.ms` without a complete frame
     /// — counting a TLS handshake it opened the socket for and never drove,
@@ -352,37 +336,6 @@ pub enum ConnectionCloseReason {
     MaxConnectionsPerIp,
 }
 
-impl ConnectionCloseReason {
-    /// Every reason, in the order the module documents them.
-    pub const ALL: [Self; 6] = [
-        Self::Idle,
-        Self::SaslSessionExpired,
-        Self::DecodeError,
-        Self::PeerClosed,
-        Self::MaxConnections,
-        Self::MaxConnectionsPerIp,
-    ];
-
-    /// The `reason` label value this variant renders as.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::SaslSessionExpired => "sasl_session_expired",
-            Self::DecodeError => "decode_error",
-            Self::PeerClosed => "peer_closed",
-            Self::MaxConnections => "max_connections",
-            Self::MaxConnectionsPerIp => "max_connections_per_ip",
-        }
-    }
-}
-
-impl EncodeLabelValue for ConnectionCloseReason {
-    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
-        EncodeLabelValue::encode(&self.as_str(), encoder)
-    }
-}
-
 /// Connection-close label set, paired with the `connection_closes` counter
 /// family. Cardinality is bounded at six, because the field is the closed
 /// [`ConnectionCloseReason`] enum and no caller can name a seventh reason.
@@ -398,7 +351,8 @@ pub struct ConnectionCloseReasonLabel {
 /// partition however the failure is spelled. The distinction is the one an
 /// operator acts on: a storage failure is a disk to replace, and a writer
 /// failure is a partition whose actor is gone.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", label_value)]
 pub enum CleanerFailureReason {
     /// The log layer returned an `io::Error`. The compaction rewrite, the
     /// swap or an fsync failed against the disk, and the writer arm has
@@ -410,24 +364,6 @@ pub enum CleanerFailureReason {
     /// Any other error the log layer returned, such as a corrupt segment the
     /// rewrite could not read.
     Other,
-}
-
-impl CleanerFailureReason {
-    /// The `reason` label value this variant renders as.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Io => "io",
-            Self::Writer => "writer",
-            Self::Other => "other",
-        }
-    }
-}
-
-impl EncodeLabelValue for CleanerFailureReason {
-    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
-        EncodeLabelValue::encode(&self.as_str(), encoder)
-    }
 }
 
 /// Compaction-failure label set, paired with the `log_cleaner_failures`
@@ -461,7 +397,12 @@ pub struct CleanerFailureLabel {
 /// which stand for Kafka's `LeaderReplication` and `FollowerReplication`
 /// `byte-rate` sensors, with `replication_throttle_sleeps` for the rounds it
 /// held back entirely.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+///
+/// The `quota_type` label value, `as_str`, is Kafka's own `QuotaType` name, so
+/// one dashboard query reads the same against either broker. `ALL` lists
+/// every quota the broker applies a throttle for.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(all, label_value)]
 pub enum QuotaType {
     /// KIP-13 `producer_byte_rate`, charged on the Produce path.
     Produce,
@@ -473,19 +414,11 @@ pub enum QuotaType {
     /// admin apis by the number of partitions the request moves.
     ControllerMutation,
     /// KIP-612 `connection_creation_rate`, charged on the accept path.
+    #[enum_str(name = "connection_creation_rate")]
     ConnectionCreation,
 }
 
 impl QuotaType {
-    /// Every quota the broker applies a throttle for.
-    pub const ALL: [Self; 5] = [
-        Self::Produce,
-        Self::Fetch,
-        Self::Request,
-        Self::ControllerMutation,
-        Self::ConnectionCreation,
-    ];
-
     /// The dynamic-config key this quota is configured under, as
     /// `AlterClientQuotas` spells it.
     ///
@@ -502,26 +435,6 @@ impl QuotaType {
             "connection_creation_rate" => Some(Self::ConnectionCreation),
             _ => None,
         }
-    }
-
-    /// The `quota_type` label value this variant renders as. The spelling is
-    /// Kafka's own `QuotaType` name, so one dashboard query reads the same
-    /// against either broker.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Produce => "Produce",
-            Self::Fetch => "Fetch",
-            Self::Request => "Request",
-            Self::ControllerMutation => "ControllerMutation",
-            Self::ConnectionCreation => "connection_creation_rate",
-        }
-    }
-}
-
-impl EncodeLabelValue for QuotaType {
-    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
-        EncodeLabelValue::encode(&self.as_str(), encoder)
     }
 }
 
@@ -570,7 +483,12 @@ pub struct QuotaEntityLabel {
 /// other series. These three are the complete set, so a closed enum bounds the
 /// `fetch_response_drain` family at three series and no connection can invent
 /// a fourth.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+///
+/// `ALL` lists every path. Registration creates all three series at zero from
+/// it, so a dashboard finds them on a broker that has served no fetch yet, and
+/// on a target where one of them is unreachable.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", all, label_value)]
 pub enum FetchDrainPath {
     /// The kernel `sendfile(2)` moved at least one records region from the
     /// page cache to the socket with no userspace copy. A plaintext or kTLS
@@ -588,29 +506,6 @@ pub enum FetchDrainPath {
     /// arm *inside* the drain, distinct from [`Self::Vectored`], where the
     /// bytes were already in userspace before the plan was built.
     Pread,
-}
-
-impl FetchDrainPath {
-    /// Every path. Registration creates all three series at zero from it, so a
-    /// dashboard finds them on a broker that has served no fetch yet, and on a
-    /// target where one of them is unreachable.
-    pub const ALL: [Self; 3] = [Self::Sendfile, Self::Vectored, Self::Pread];
-
-    /// The `path` label value this variant renders as.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sendfile => "sendfile",
-            Self::Vectored => "vectored",
-            Self::Pread => "pread",
-        }
-    }
-}
-
-impl EncodeLabelValue for FetchDrainPath {
-    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
-        EncodeLabelValue::encode(&self.as_str(), encoder)
-    }
 }
 
 /// Drain-path label set, paired with the `fetch_response_drain` counter

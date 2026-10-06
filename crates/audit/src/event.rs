@@ -47,7 +47,10 @@ pub enum LifecycleKind {
 /// reaches `Applied` directly. A two-person action walks `Proposed` ->
 /// `Approved` -> `Consumed` -> `Applied`. `Refused` records a gate that fell
 /// closed, and `Bypassed` records a gated action that ran without an approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// `as_name` is the stable lowercase name for the OCSF body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase", as_str = as_name, parse = from_name)]
 pub enum PrivilegedPhase {
     Attempted,
     Proposed,
@@ -58,39 +61,12 @@ pub enum PrivilegedPhase {
     Bypassed,
 }
 
-impl PrivilegedPhase {
-    /// Stable lowercase name for the OCSF body.
-    #[must_use]
-    pub fn as_name(self) -> &'static str {
-        match self {
-            PrivilegedPhase::Attempted => "attempted",
-            PrivilegedPhase::Proposed => "proposed",
-            PrivilegedPhase::Approved => "approved",
-            PrivilegedPhase::Consumed => "consumed",
-            PrivilegedPhase::Applied => "applied",
-            PrivilegedPhase::Refused => "refused",
-            PrivilegedPhase::Bypassed => "bypassed",
-        }
-    }
-
-    /// Inverse of [`Self::as_name`].
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "attempted" => Some(PrivilegedPhase::Attempted),
-            "proposed" => Some(PrivilegedPhase::Proposed),
-            "approved" => Some(PrivilegedPhase::Approved),
-            "consumed" => Some(PrivilegedPhase::Consumed),
-            "applied" => Some(PrivilegedPhase::Applied),
-            "refused" => Some(PrivilegedPhase::Refused),
-            "bypassed" => Some(PrivilegedPhase::Bypassed),
-            _ => None,
-        }
-    }
-}
-
 /// OCSF class group for record headers and routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `as_header` is the stable lowercase identifier for the `event_class` record
+/// header value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", as_str = as_header, parse = from_header)]
 pub enum AuditEventClass {
     Authentication,
     Authorization,
@@ -103,19 +79,6 @@ pub enum AuditEventClass {
 }
 
 impl AuditEventClass {
-    /// Stable lowercase identifier for the `event_class` record header value.
-    #[must_use]
-    pub fn as_header(self) -> &'static str {
-        match self {
-            AuditEventClass::Authentication => "authentication",
-            AuditEventClass::Authorization => "authorization",
-            AuditEventClass::ApiActivity => "api_activity",
-            AuditEventClass::ApplicationLifecycle => "application_lifecycle",
-            AuditEventClass::Checkpoint => "checkpoint",
-            AuditEventClass::RecordsLost => "records_lost",
-        }
-    }
-
     /// Compact tag for the spool frame format.
     #[must_use]
     pub fn tag(self) -> u8 {
@@ -139,20 +102,6 @@ impl AuditEventClass {
             3 => Some(AuditEventClass::ApplicationLifecycle),
             4 => Some(AuditEventClass::Checkpoint),
             5 => Some(AuditEventClass::RecordsLost),
-            _ => None,
-        }
-    }
-
-    /// Inverse of [`Self::as_header`].
-    #[must_use]
-    pub fn from_header(s: &str) -> Option<Self> {
-        match s {
-            "authentication" => Some(AuditEventClass::Authentication),
-            "authorization" => Some(AuditEventClass::Authorization),
-            "api_activity" => Some(AuditEventClass::ApiActivity),
-            "application_lifecycle" => Some(AuditEventClass::ApplicationLifecycle),
-            "checkpoint" => Some(AuditEventClass::Checkpoint),
-            "records_lost" => Some(AuditEventClass::RecordsLost),
             _ => None,
         }
     }

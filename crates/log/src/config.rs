@@ -69,12 +69,18 @@ const DEFAULT_MIN_CLEANABLE_DIRTY_RATIO: Ratio = fraction(0.5);
 ///
 /// Ask [`Self::contains_compact`] and [`Self::contains_delete`] rather than
 /// comparing variants: `Compact` and `CompactAndDelete` both run the cleaner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// `as_str` is the `cleanup.policy` value Kafka reports for the policy, which
+/// is what `DescribeConfigs` echoes back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
+#[enum_str(case = "lowercase")]
 pub enum CleanupPolicy {
     #[default]
     Delete,
     Compact,
+    #[enum_str(name = "compact,delete")]
     CompactAndDelete,
+    #[enum_str(name = "")]
     NoCleanup,
 }
 
@@ -92,18 +98,6 @@ impl CleanupPolicy {
     #[must_use]
     pub const fn contains_delete(self) -> bool {
         matches!(self, Self::Delete | Self::CompactAndDelete)
-    }
-
-    /// The `cleanup.policy` value Kafka reports for this policy, which is what
-    /// `DescribeConfigs` echoes back.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Delete => "delete",
-            Self::Compact => "compact",
-            Self::CompactAndDelete => "compact,delete",
-            Self::NoCleanup => "",
-        }
     }
 }
 

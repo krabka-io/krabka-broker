@@ -40,8 +40,8 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::unified::{
-        GroupType, actor::GroupActorMessage, classic_state::GroupState,
-        share::actor::ShareGroupActorMessage, streams::actor::StreamsGroupActorMessage,
+        GroupType, actor::GroupActorMessage, share::actor::ShareGroupActorMessage,
+        streams::actor::StreamsGroupActorMessage,
     },
     error::BrokerError,
     handlers::{
@@ -134,7 +134,7 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
             // Kafka's `ClassicGroup.asListedGroup`: `protocolType.orElse("")`,
             // so a group that only commits offsets reports "".
             s.protocol_type.unwrap_or_default(),
-            state_to_str(s.state).into(),
+            s.state.as_str().into(),
             GROUP_TYPE_CLASSIC,
         );
         push_once(&mut groups, &mut emitted, group);
@@ -276,15 +276,6 @@ fn filter_groups(
         .collect()
 }
 
-fn state_to_str(s: GroupState) -> &'static str {
-    match s {
-        GroupState::Empty => "Empty",
-        GroupState::PreparingRebalance => "PreparingRebalance",
-        GroupState::CompletingRebalance => "CompletingRebalance",
-        GroupState::Stable => "Stable",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -293,7 +284,10 @@ mod tests {
     use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 
     use super::*;
-    use crate::test_support::{peer, principal};
+    use crate::{
+        coordinator::unified::classic_state::GroupState,
+        test_support::{peer, principal},
+    };
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
@@ -485,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn state_to_str_covers_all_classic_states() {
+    fn group_state_as_str_covers_all_classic_states() {
         let cases = [
             (GroupState::Empty, "Empty"),
             (GroupState::PreparingRebalance, "PreparingRebalance"),
@@ -493,7 +487,7 @@ mod tests {
             (GroupState::Stable, "Stable"),
         ];
         for (state, want) in cases {
-            assert!(state_to_str(state) == want, "{state:?}");
+            assert!(state.as_str() == want, "{state:?}");
         }
     }
 }

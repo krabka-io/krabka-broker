@@ -199,7 +199,7 @@ fn described_classic(view: ClassicView) -> DescribedGroup {
         .collect();
     DescribedGroup {
         group_id: view.group_id,
-        group_state: state_to_str(view.state).into(),
+        group_state: view.state.as_str().into(),
         protocol_type: view.protocol_type.unwrap_or_default(),
         protocol_data: if stable {
             view.protocol_name.unwrap_or_default()
@@ -209,15 +209,6 @@ fn described_classic(view: ClassicView) -> DescribedGroup {
         error_code: codes::NONE,
         members,
         ..Default::default()
-    }
-}
-
-fn state_to_str(s: GroupState) -> &'static str {
-    match s {
-        GroupState::Empty => "Empty",
-        GroupState::PreparingRebalance => "PreparingRebalance",
-        GroupState::CompletingRebalance => "CompletingRebalance",
-        GroupState::Stable => "Stable",
     }
 }
 
@@ -643,7 +634,7 @@ mod tests {
                 GroupState::CompletingRebalance,
                 GroupState::Stable,
             ]
-            .map(state_to_str)
+            .map(GroupState::as_str)
                 == [
                     "Empty",
                     "PreparingRebalance",

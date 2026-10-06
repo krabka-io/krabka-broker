@@ -80,7 +80,7 @@
 //!     decoded_sync: DescribeAcls;
 //!     typed: ListGroups;
 //!     typed_group: Heartbeat;
-//!     custom_context: UpdateFeatures;
+//!     typed_sync: ListConfigResources;
 //!     auth: CreateDelegationToken;
 //!     telemetry: PushTelemetry;
 //! }
@@ -101,10 +101,14 @@
 //!   `Result<Response, BrokerError>`, and encode the response with
 //!   `crate::handlers::encode_response`. `typed_group` adapters do the same
 //!   but decode through `crate::handlers::decode_group_request`.
+//! - `typed_sync` adapters decode the request, call
+//!   `handler(broker, request, version, ctx)` for a
+//!   `Result<Response, BrokerError>` without awaiting it, encode the response,
+//!   and wrap the result in a ready future.
 //! - `telemetry` adapters pass a `TelemetryContext` and wrap a synchronous
 //!   result.
-//! - `custom_context` and `auth` entries generate no adapter: the
-//!   hand-written `<name>_adapter` must be in scope.
+//! - `auth` entries generate no adapter: the hand-written `<name>_adapter`
+//!   must be in scope.
 //!
 //! It then emits `fn register_dispatch_table(registry: &mut DispatchRegistry)`,
 //! which registers every entry at the request schema's `FLEXIBLE_MIN` and
@@ -220,14 +224,49 @@
 //! implements `PartialEq` and `PartialOrd` between the struct and the field's
 //! type in both directions, so that `Seq(3) == 3_u64` and `2_u64 < Seq(3)`
 //! compile.
+//!
+//! # `EnumStr`
+//!
+//! `#[derive(EnumStr)]` goes on an enum whose variants each stand for one
+//! fixed text, such as a metric label value or a config value. It adds a
+//! `#[must_use] const fn as_str(self) -> &'static str` with the enum's
+//! visibility. The method takes `&self` when any variant has fields, which
+//! its arm matches with `{ .. }` or `(..)`. One optional `#[enum_str(...)]`
+//! attribute on the enum configures it:
+//!
+//! - `case = "..."` — how a variant name becomes its text: `"snake_case"`,
+//!   `"kebab-case"`, `"lowercase"` or `"UPPERCASE"`. Without it the text is
+//!   the variant name unchanged.
+//! - `as_str = name` — the method's name.
+//! - `parse` or `parse = name` — add `fn parse(&str) -> Option<Self>`, under
+//!   that name, over the unit variants.
+//! - `all` — add `const ALL: [Self; N]`, every variant in declaration order.
+//!   Every variant must be a unit variant.
+//! - `label_value` — implement `prometheus_client`'s `EncodeLabelValue` as the
+//!   text. The crate must depend on `prometheus-client`.
+//!
+//! A variant's own `#[enum_str(...)]` takes `name = "..."`, its text in place
+//! of the cased name, and `alias = "..."` or `alias("...", "...")`, further
+//! text that `parse` accepts.
+//!
+//! ```ignore
+//! #[derive(Clone, Copy, krabka_macros::EnumStr)]
+//! #[enum_str(case = "snake_case", as_str = config_name, parse = from_config_name)]
+//! pub enum AssignorKind {
+//!     Auto,
+//!     #[enum_str(alias = "highly-available")]
+//!     HighlyAvailable,
+//! }
+//! ```
 
 use moxy::{
-    ast::{ItemStruct, ParseError},
+    ast::{ItemEnum, ItemStruct, ParseError},
     token::TokenStream,
 };
 
 mod api_names;
 mod dispatch;
+mod enum_str;
 mod human_units;
 mod krabka_env;
 mod meta;
@@ -298,4 +337,12 @@ pub fn runtime_overlay(item: ItemStruct) -> Result<TokenStream, ParseError> {
 #[moxy::attribute(name = "krabka_env")]
 pub fn krabka_env(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     krabka_env::expand(meta, item)
+}
+
+/// Derives `as_str`, and optionally a parse function, `ALL` and
+/// `EncodeLabelValue`, for an enum whose variants each stand for one text.
+/// The crate documentation lists the `#[enum_str(...)]` arguments.
+#[moxy::derive(EnumStr, attributes(enum_str))]
+pub fn enum_str(item: ItemEnum) -> Result<TokenStream, ParseError> {
+    enum_str::expand(item)
 }

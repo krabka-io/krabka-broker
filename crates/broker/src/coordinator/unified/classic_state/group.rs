@@ -13,7 +13,10 @@ use super::member::Member;
 
 /// Four-state machine for a live consumer group, matching the Apache Kafka
 /// classic protocol (KIP-62 / KIP-394).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `as_str` is the state's name as Kafka reports it in `ListGroups` and
+/// `DescribeGroups`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, krabka_macros::EnumStr)]
 pub enum GroupState {
     /// No members and no committed offsets.
     Empty,

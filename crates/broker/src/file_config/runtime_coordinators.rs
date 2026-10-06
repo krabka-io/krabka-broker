@@ -305,18 +305,13 @@ impl RuntimeFileConfig {
         );
         if let Some(value) = runtime.streams_group_assignor.take() {
             use crate::coordinator::unified::streams::config::StreamsAssignorKind;
-            let value = match value.as_str() {
-                "auto" => StreamsAssignorKind::Auto,
-                "sticky" => StreamsAssignorKind::Sticky,
-                "highly-available" => StreamsAssignorKind::HighlyAvailable,
-                _ => {
-                    return Err(invalid_runtime_value(
+            cfg.streams_group.assignor =
+                StreamsAssignorKind::from_config_name(&value).ok_or_else(|| {
+                    invalid_runtime_value(
                         "streams_group_assignor",
                         "expected `auto`, `sticky`, or `highly-available`",
-                    ));
-                }
-            };
-            cfg.streams_group.assignor = value;
+                    )
+                })?;
         }
 
         if let Some(value) = runtime.inter_broker_server_name.take() {

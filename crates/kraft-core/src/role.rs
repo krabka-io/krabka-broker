@@ -67,7 +67,8 @@ impl ReplicaProgress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, krabka_macros::EnumStr)]
+#[enum_str(as_str = name)]
 pub enum Role {
     /// Knows the epoch, no leader yet. May hold a non-binding pre-vote grant.
     Unattached { election_deadline: SimInstant },
@@ -148,19 +149,6 @@ impl Role {
     #[must_use]
     pub fn is_leader(&self) -> bool {
         matches!(self, Role::Leader { .. })
-    }
-    #[must_use]
-    pub fn name(&self) -> &'static str {
-        match self {
-            Role::Unattached { .. } => "Unattached",
-            Role::Voted { .. } => "Voted",
-            Role::Follower { .. } => "Follower",
-            Role::Prospective { .. } => "Prospective",
-            Role::Candidate { .. } => "Candidate",
-            Role::Leader { .. } => "Leader",
-            Role::Resigned => "Resigned",
-            Role::Observer { .. } => "Observer",
-        }
     }
 }
 
