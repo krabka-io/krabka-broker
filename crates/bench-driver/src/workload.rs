@@ -1574,7 +1574,18 @@ mod tests {
                 .unwrap()
                 .expect("producer reaches topic admission");
             // A short measurement window exercises the bounded pipeline and its
-            // final drain, using the same phase signal as a benchmark run.
+            // final drain, using the same phase signal as a benchmark run. When
+            // delivery succeeds the window opens at the first ack, so a slow
+            // runner still measures something.
+            if metadata_error == 0 && delivery_error == 0 {
+                tokio::time::timeout(secs(10).to_std(), async {
+                    while first_ack.load(Ordering::SeqCst) == 0 {
+                        tokio::time::sleep(millis(10).to_std()).await;
+                    }
+                })
+                .await
+                .expect("the first record is acknowledged");
+            }
             tokio::time::sleep(millis(200).to_std()).await;
             stop.store(STATE_STOP, Ordering::SeqCst);
             let output = tokio::time::timeout(secs(10).to_std(), producer)
