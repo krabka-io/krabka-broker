@@ -4,9 +4,7 @@
 //! single-broker harness are each used by more than one of the test modules
 //! under this module, so they live in one file instead of once per module.
 
-use bytes::{Bytes, BytesMut};
 use krabka_protocol::{
-    Encode,
     owned::{
         assign_replicas_to_dirs_request::{
             AssignReplicasToDirsRequest, DirectoryData as ReqDirData, PartitionData as ReqPartData,
@@ -31,8 +29,8 @@ pub(super) fn request(
     dir_uuid: uuid::Uuid,
     topic_uuid: uuid::Uuid,
     partition_index: i32,
-) -> Bytes {
-    let req = AssignReplicasToDirsRequest {
+) -> AssignReplicasToDirsRequest {
+    AssignReplicasToDirsRequest {
         broker_id: 1,
         broker_epoch,
         directories: vec![ReqDirData {
@@ -48,11 +46,7 @@ pub(super) fn request(
             ..Default::default()
         }],
         ..Default::default()
-    };
-    let mut buf = BytesMut::with_capacity(req.encoded_len(VERSION));
-    req.encode(&mut buf, VERSION)
-        .expect("encode AssignReplicasToDirsRequest");
-    buf.freeze()
+    }
 }
 
 crate::test_support::decode_helper!(pub(super) AssignReplicasToDirsResponse, version = VERSION);
@@ -71,12 +65,10 @@ pub(super) fn own_broker_epoch(broker: &Broker) -> i64 {
 /// `AllowAllAuthorizer` admits.
 pub(super) async fn handle_allowed(
     broker: &Broker,
-    version: i16,
-    correlation_id: i32,
-    body: &[u8],
-) -> Result<Bytes, BrokerError> {
+    req: AssignReplicasToDirsRequest,
+) -> Result<AssignReplicasToDirsResponse, BrokerError> {
     let user = crate::test_support::principal("ANONYMOUS");
     let address = crate::test_support::peer();
     let ctx = crate::test_support::request_context(&user, &address, "assign-replicas-test");
-    handle(broker, version, correlation_id, body, &ctx).await
+    handle(broker, req, VERSION, &ctx).await
 }

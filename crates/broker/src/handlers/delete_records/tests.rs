@@ -169,7 +169,7 @@ async fn topic_with_configs_holding_a_pending_batch(
 ) {
     use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        create_topics_response::{self, CreateTopicsResponse},
+        create_topics_response,
     };
 
     let config = |key: &str| {
@@ -184,31 +184,27 @@ async fn topic_with_configs_holding_a_pending_batch(
             crate::config_keys::parse_cleanup_policy(policy).expect("a valid cleanup.policy")
         });
     let version = create_topics_response::MAX_VERSION;
-    let create = crate::test_support::encode_request(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: configs
-                    .iter()
-                    .map(|(name, value)| CreatableTopicConfig {
-                        name: (*name).to_owned(),
-                        value: Some((*value).to_owned()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
+    let create = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: topic.to_owned(),
+            num_partitions: 1,
+            replication_factor: 1,
+            configs: configs
+                .iter()
+                .map(|(name, value)| CreatableTopicConfig {
+                    name: (*name).to_owned(),
+                    value: Some((*value).to_owned()),
+                    ..Default::default()
+                })
+                .collect(),
             ..Default::default()
-        },
-        version,
-    );
-    let bytes = crate::handlers::create_topics::handle(broker, version, 1, &create, ctx)
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let created = crate::handlers::create_topics::handle(broker, create, version, ctx)
         .await
         .expect("CreateTopics");
-    let created: CreateTopicsResponse = crate::test_support::decode_response(&bytes, version);
     assert!(created.topics[0].error_code == codes::NONE, "{created:?}");
     broker_handle.wait_until_partition_present(topic, 0).await;
 

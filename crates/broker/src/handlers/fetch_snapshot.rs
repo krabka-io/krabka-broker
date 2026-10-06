@@ -52,7 +52,6 @@ const CLUSTER_METADATA_TOPIC: &str = "__cluster_metadata";
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -374,7 +373,6 @@ mod tests {
             let bytes = super::handle(
                 &broker,
                 version,
-                1,
                 &crate::test_support::encode_request(&req, version),
                 &ctx,
             )

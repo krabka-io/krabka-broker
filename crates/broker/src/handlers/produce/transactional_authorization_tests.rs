@@ -199,16 +199,9 @@ async fn drive(
     let address = peer();
     let ctx = request_context(&user, &address, "produce-txn-authz");
     let request_bytes = encode_request(&request, version);
-    let response_bytes = handle(
-        broker,
-        version,
-        7,
-        &request_bytes,
-        request_bytes.clone(),
-        &ctx,
-    )
-    .await
-    .expect("handle produce");
+    let response_bytes = handle(broker, version, &request_bytes, request_bytes.clone(), &ctx)
+        .await
+        .expect("handle produce");
     decode_response(&response_bytes, version)
 }
 

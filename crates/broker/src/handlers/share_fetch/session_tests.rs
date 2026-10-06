@@ -120,7 +120,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, partition: i32) {
     let ctx = request_context(&user, &address, "producer-client");
     let bytes = encode_request(&request, PRODUCE_VERSION);
     let response =
-        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, 7, &bytes, bytes.clone(), &ctx)
+        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, &bytes, bytes.clone(), &ctx)
             .await
             .expect("handle produce");
     let response: ProduceResponse = decode_response(&response, PRODUCE_VERSION);

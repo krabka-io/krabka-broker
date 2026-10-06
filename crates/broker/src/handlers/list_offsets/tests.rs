@@ -116,9 +116,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
     };
     let req = encode_request(&req, version);
 
-    let bytes = handle(&broker, version, 123, &req, &ctx)
-        .await
-        .expect("handle");
+    let bytes = handle(&broker, version, &req, &ctx).await.expect("handle");
     let resp = decode_response(&bytes, version);
 
     let denied_row = |partition_index: i32| ListOffsetsPartitionResponse {
@@ -229,9 +227,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
         };
         let req = encode_request(&req, version);
 
-        let bytes = handle(&broker, version, 123, &req, &ctx)
-            .await
-            .expect("handle");
+        let bytes = handle(&broker, version, &req, &ctx).await.expect("handle");
         let resp = decode_response(&bytes, version);
 
         let mut expected_order: Vec<&str> = case

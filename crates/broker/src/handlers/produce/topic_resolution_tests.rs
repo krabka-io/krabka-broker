@@ -178,7 +178,6 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> (Outco
     let response_bytes = handle(
         &shared,
         case.version,
-        7,
         &request_bytes,
         request_bytes.clone(),
         &ctx,

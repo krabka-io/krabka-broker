@@ -786,14 +786,15 @@ fn each_error_reads_as_kafka_reports_it() {
 }
 
 /// `ForwardedIdentity::of` takes the principal name, the client address and
-/// the client id of the request, and the correlation id it is given.
+/// the client id and the correlation id of the request.
 #[test]
 fn a_forwarded_identity_is_the_identity_of_the_request() {
     let principal = crate::test_support::principal("alice");
     let peer: SocketAddr = "10.1.2.3:50000".parse().expect("literal address");
-    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client")
+        .with_correlation_id(9);
 
-    let got = ForwardedIdentity::of(&ctx, 9);
+    let got = ForwardedIdentity::of(&ctx);
 
     assert!(
         got == ForwardedIdentity {

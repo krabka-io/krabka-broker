@@ -10,7 +10,6 @@ use krabka_metadata::{
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
         delete_topics_request::DeleteTopicsRequest,
         delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
     },
@@ -335,11 +334,9 @@ async fn seed_topic(broker: &Broker, principal: &Principal, peer: &SocketAddr, n
         ..Default::default()
     };
     let ctx = test_context(principal, peer);
-    let req_bytes = crate::test_support::encode_request(&req, CREATE_VERSION);
-    let bytes = crate::handlers::create_topics::handle(broker, CREATE_VERSION, 1, &req_bytes, &ctx)
+    let resp = crate::handlers::create_topics::handle(broker, req, CREATE_VERSION, &ctx)
         .await
         .expect("handle CreateTopics");
-    let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, CREATE_VERSION);
     assert!(
         resp.topics[0].error_code == codes::NONE,
         "seed create of {name}: {resp:?}"

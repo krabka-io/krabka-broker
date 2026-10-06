@@ -136,7 +136,6 @@ async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
     let response_bytes = crate::handlers::produce::handle(
         &shared,
         PRODUCE_VERSION,
-        7,
         &request_bytes,
         request_bytes.clone(),
         &ctx,

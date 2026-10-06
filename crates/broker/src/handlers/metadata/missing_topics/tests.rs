@@ -43,7 +43,7 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     let ctx = request_context(&user, &address, "metadata-client");
 
     assert!(broker.auto_topic_creation.hold_for_test(OFFSETS_TOPIC));
-    let skipped = missing_topic_rows(&broker, &ctx, 1, &["bad name", OFFSETS_TOPIC], true);
+    let skipped = missing_topic_rows(&broker, &ctx, &["bad name", OFFSETS_TOPIC], true);
     check!(
         skipped
             == vec![
@@ -54,7 +54,7 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     check!(broker.auto_topic_creation.started() == 0);
     broker.auto_topic_creation.release_for_test(OFFSETS_TOPIC);
 
-    let created = missing_topic_rows(&broker, &ctx, 2, &[OFFSETS_TOPIC], true);
+    let created = missing_topic_rows(&broker, &ctx, &[OFFSETS_TOPIC], true);
     check!(created == vec![row(codes::UNKNOWN_TOPIC_OR_PARTITION, OFFSETS_TOPIC, true)]);
     check!(broker.auto_topic_creation.started() == 1);
     tokio::time::timeout(Duration::from_secs(30), async {

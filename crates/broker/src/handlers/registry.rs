@@ -23,7 +23,6 @@ use crate::{
 pub(crate) type ContextHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
-    CorrelationId,
     &'a [u8],
     &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
@@ -31,7 +30,6 @@ pub(crate) type ContextHandler = for<'a> fn(
 pub(crate) type ProduceHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
-    CorrelationId,
     &'a [u8],
     Bytes,
     &'a RequestContext<'a>,
@@ -71,11 +69,10 @@ macro_rules! krabka_private_context_dispatches {
             fn $adapter<'a>(
                 broker: &'a Broker,
                 version: ApiVersion,
-                correlation_id: CorrelationId,
                 body: &'a [u8],
                 ctx: &'a RequestContext<'a>,
             ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin($handler(broker, version, correlation_id, body, ctx))
+                Box::pin($handler(broker, version, ctx.correlation_id, body, ctx))
             }
         )*
 
@@ -123,36 +120,36 @@ use self::{
 // another after `=>`. `auth` entries register the
 // hand-written `<snake_name>_adapter` imported above.
 krabka_macros::dispatch_table! {
-    // `handle(broker, version, correlation_id, body, ctx)`, awaited.
+    // `handle(broker, version, body, ctx)` on the raw body, awaited. Each of
+    // these needs the bytes themselves: the voter, quorum, snapshot and
+    // unregister apis forward them untouched to the active controller, and
+    // `ListOffsets` reads v0, which the owned codec does not model, by hand.
     context:
-        AssignReplicasToDirs,
-        Metadata,
-        CreateTopics,
-        ShareGroupDescribe,
-        AlterShareGroupOffsets,
-        DeleteShareGroupOffsets,
-        DeleteGroups,
         UnregisterBroker,
         UnregisterController,
         AddRaftVoter,
         RemoveRaftVoter,
         UpdateRaftVoter,
-        BrokerRegistration,
-        ControllerRegistration,
-        StreamsGroupHeartbeat,
         ListOffsets,
         DescribeQuorum,
-        AllocateProducerIds,
-        AddOffsetsToTxn => crate::txn::handlers::add_offset_commits_to_txn::handle,
-        WriteTxnMarkers => crate::txn::handlers::write_txn_markers::handle,
         FetchSnapshot;
     // The same arguments; the result is wrapped in a ready future.
+    // `GetReplicaLogInfo` answers a body that does not decode with an empty
+    // list instead of closing the connection.
     sync_context:
-        GetReplicaLogInfo,
-        OffsetForLeaderEpoch;
+        GetReplicaLogInfo;
     // `handle(broker, request, version, ctx)` on the decoded request, awaited;
     // the handler returns its response struct, which the adapter encodes.
     typed:
+        Metadata,
+        CreateTopics,
+        ShareGroupDescribe,
+        AssignReplicasToDirs,
+        BrokerRegistration,
+        ControllerRegistration,
+        AllocateProducerIds,
+        AddOffsetsToTxn => crate::txn::handlers::add_offset_commits_to_txn::handle,
+        WriteTxnMarkers => crate::txn::handlers::write_txn_markers::handle,
         DescribeCluster,
         DescribeGroups,
         ListGroups,
@@ -189,6 +186,10 @@ krabka_macros::dispatch_table! {
     // The same, with the request decoded by `decode_group_request`, which
     // refuses a string no coordinator record can carry.
     typed_group:
+        AlterShareGroupOffsets,
+        DeleteShareGroupOffsets,
+        DeleteGroups,
+        StreamsGroupHeartbeat,
         Heartbeat,
         SyncGroup,
         LeaveGroup,
@@ -205,6 +206,7 @@ krabka_macros::dispatch_table! {
         ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
     // `typed`, called without awaiting: the result is wrapped in a ready future.
     typed_sync:
+        OffsetForLeaderEpoch,
         ListConfigResources,
         DescribeConfigs,
         DescribeAcls,
@@ -229,18 +231,12 @@ krabka_macros::dispatch_table! {
 fn produce_adapter<'a>(
     broker: &'a Broker,
     version: ApiVersion,
-    correlation_id: CorrelationId,
     body: &'a [u8],
     body_bytes: Bytes,
     ctx: &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(crate::handlers::produce::handle(
-        broker,
-        version,
-        correlation_id,
-        body,
-        body_bytes,
-        ctx,
+        broker, version, body, body_bytes, ctx,
     ))
 }
 

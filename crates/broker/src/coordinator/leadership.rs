@@ -513,7 +513,6 @@ mod tests {
     async fn call(broker: &crate::broker::Broker, rpc: GroupRpc) -> i16 {
         use krabka_protocol::owned::{
             delete_groups_request::DeleteGroupsRequest,
-            delete_groups_response::DeleteGroupsResponse,
             heartbeat_request::HeartbeatRequest,
             join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
             leave_group_request::{LeaveGroupRequest, MemberIdentity},
@@ -527,8 +526,6 @@ mod tests {
                 TxnOffsetCommitRequestTopic,
             },
         };
-
-        use crate::test_support::{decode_response, encode_request};
 
         let principal = crate::test_support::principal("alice");
         let peer = crate::test_support::peer();
@@ -652,16 +649,11 @@ mod tests {
                     groups_names: vec!["g".into()],
                     ..Default::default()
                 };
-                let bytes = crate::handlers::delete_groups::handle(
-                    broker,
-                    2,
-                    1,
-                    &encode_request(&request, 2),
-                    &ctx,
-                )
-                .await
-                .unwrap();
-                decode_response::<DeleteGroupsResponse>(&bytes, 2).results[0].error_code
+                crate::handlers::delete_groups::handle(broker, request, 2, &ctx)
+                    .await
+                    .unwrap()
+                    .results[0]
+                    .error_code
             }
         }
     }

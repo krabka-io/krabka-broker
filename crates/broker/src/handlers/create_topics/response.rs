@@ -3,13 +3,12 @@
 //! were created, and the KIP-219 throttle window recorded on the request
 //! context for the connection loop to enforce after the reply is written.
 
-use bytes::Bytes;
 use krabka_protocol::owned::create_topics_response::{
     CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
 };
 use krabka_units::Time;
 
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes};
 
 pub(super) fn topic_error_result(
     name: String,
@@ -125,8 +124,7 @@ pub(super) fn finish_response(
     results: Vec<CreatableTopicResult>,
     validate_only: bool,
     delay: Time,
-    version: i16,
-) -> Result<Bytes, BrokerError> {
+) -> CreateTopicsResponse {
     audit_created_topics(
         broker.audit_log.as_ref(),
         context,
@@ -139,8 +137,7 @@ pub(super) fn finish_response(
     // carries the controller-mutation delay now; the dispatch loop raises it
     // when the request quota asks for more.
     context.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
-    let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
-    crate::handlers::encode_response(&response, version)
+    create_topics_response(results, crate::quota::throttle_time_ms(delay))
 }
 
 #[cfg(test)]

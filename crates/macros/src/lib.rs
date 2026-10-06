@@ -90,8 +90,10 @@
 //! type. The handler is `crate::handlers::create_acls::handle` unless the entry
 //! names another with `=> path`.
 //!
-//! - `context` and `sync_context` adapters pass the raw body to the handler;
-//!   a `sync_context` handler returns its result instead of a future.
+//! - `context` and `sync_context` adapters call
+//!   `handler(broker, version, body, ctx)` on the raw body; a `sync_context`
+//!   handler returns its result instead of a future. A handler that needs the
+//!   request's correlation id reads it from the context.
 //! - `typed` adapters decode the request, await
 //!   `handler(broker, request, version, ctx)` for a
 //!   `Result<Response, BrokerError>`, and encode the response with

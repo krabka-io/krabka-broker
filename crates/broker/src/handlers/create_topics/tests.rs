@@ -135,12 +135,7 @@ fn request(topics: Vec<CreatableTopic>) -> CreateTopicsRequest {
     }
 }
 
-crate::test_support::wire_helpers!(
-    CreateTopicsRequest,
-    CreateTopicsResponse,
-    version = VERSION,
-    client_id = "admin-client"
-);
+crate::test_support::context_helper!(client_id = "admin-client");
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
@@ -151,11 +146,9 @@ async fn drive(
     peer: &SocketAddr,
 ) -> CreateTopicsResponse {
     let ctx = test_context(principal, peer);
-    let req_bytes = encode_request(req);
-    let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+    handle(broker, req.clone(), VERSION, &ctx)
         .await
-        .expect("handle");
-    decode_response(&bytes)
+        .expect("handle")
 }
 
 async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
@@ -1156,17 +1149,14 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
     let req = request(vec![topic_with_config("legacy")]);
     let ctx = test_context(&p, &peer);
 
-    let bytes = handle(
+    let resp: CreateTopicsResponse = crate::test_support::dispatch_wire(
         &broker,
+        krabka_protocol::api_key::ApiKey::CreateTopics as i16,
         V4,
-        123,
-        &crate::test_support::encode_request(&req, V4),
+        &req,
         &ctx,
     )
-    .await
-    .expect("handle");
-
-    let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+    .await;
     let expected = CreateTopicsResponse {
         throttle_time_ms: 0,
         topics: vec![CreatableTopicResult {
@@ -1456,16 +1446,14 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
+        let resp: CreateTopicsResponse = crate::test_support::dispatch_wire(
             &broker,
+            krabka_protocol::api_key::ApiKey::CreateTopics as i16,
             V4,
-            123,
-            &crate::test_support::encode_request(&request(vec![topic]), V4),
+            &request(vec![topic]),
             &ctx,
         )
-        .await
-        .expect("handle");
-        let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+        .await;
 
         let expected = CreateTopicsResponse {
             throttle_time_ms: 0,

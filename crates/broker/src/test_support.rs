@@ -680,7 +680,7 @@ pub(crate) async fn try_dispatch_context(
     let crate::handlers::DispatchKind::Context(handler) = entry.kind() else {
         panic!("api_key {api_key} is a context dispatch, so its handler gets the principal");
     };
-    handler(broker, version, 1, body, ctx).await
+    handler(broker, version, body, ctx).await
 }
 
 /// Serve `req` through the broker's dispatch registry as wire bytes at

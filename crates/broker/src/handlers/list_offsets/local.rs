@@ -207,9 +207,7 @@ mod tests {
             },
             version,
         );
-        let bytes = handle(broker, version, 123, &req, ctx)
-            .await
-            .expect("handle");
+        let bytes = handle(broker, version, &req, ctx).await.expect("handle");
         let mut response = decode_response(&bytes, version);
         response.topics.remove(0).partitions.remove(0)
     }

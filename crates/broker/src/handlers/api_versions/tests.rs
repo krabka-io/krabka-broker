@@ -218,7 +218,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
             };
             let mut req_bytes = BytesMut::with_capacity(req.encoded_len(version));
             req.encode(&mut req_bytes, version).expect("encode");
-            let bytes = handle(&broker, version, 7, &req_bytes, &context)
+            let bytes = handle(&broker, version, &req_bytes, &context)
                 .await
                 .expect("ApiVersions handler");
             let resp = decode_response(version, &bytes);
@@ -280,7 +280,7 @@ async fn handle_rejects_each_invalid_v3_client_info_field() {
 
     for (name, version) in [("", "1.0.0"), ("krabka-test", "")] {
         let req = request(name, version);
-        let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+        let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
             .await
             .expect("ApiVersions handler");
         let resp = decode_response(API_VERSIONS_V3, &bytes);
@@ -303,7 +303,7 @@ async fn handle_accepts_legacy_request_without_client_info() {
     req.encode(&mut req_bytes, 0)
         .expect("encode legacy ApiVersionsRequest");
 
-    let bytes = handle(&broker, 0, 7, &req_bytes, &context)
+    let bytes = handle(&broker, 0, &req_bytes, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(0, &bytes);
@@ -353,7 +353,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     assert!(metadata_offset >= before_topics + 10);
 
     let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(API_VERSIONS_V3, &bytes);
@@ -439,7 +439,7 @@ async fn handle_applies_kip1242_routing_checks() {
         ),
     ] {
         let request = routing_request(request_cluster_id, request_node_id);
-        let bytes = handle(&broker, API_VERSIONS_V5, 7, &request, &context)
+        let bytes = handle(&broker, API_VERSIONS_V5, &request, &context)
             .await
             .expect("ApiVersions v5 handler");
         let response = decode_response(API_VERSIONS_V5, &bytes);
@@ -498,7 +498,7 @@ async fn handle_reports_and_records_a_request_quota_throttle() {
         .await;
 
     let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(API_VERSIONS_V3, &bytes);

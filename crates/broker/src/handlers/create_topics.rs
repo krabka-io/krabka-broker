@@ -15,12 +15,10 @@
 //! per-topic ACL check -- `DescribeConfigs` on `Topic(name)` -- and a denial
 //! withholds it behind `topicConfigErrorCode` without failing the create.
 
-use bytes::Bytes;
 use krabka_protocol::{
-    Decode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreatableTopicResult,
+        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -99,20 +97,17 @@ pub(crate) fn diskless_wal_placement_error(
     name = "handle_create_topics",
     level = "info",
     skip_all,
-    fields(api = "CreateTopics", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "CreateTopics", version),
+    err
 )]
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: CreateTopicsRequest,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<CreateTopicsResponse, BrokerError> {
     // ── ACL preamble ────────────────────────────────────────
-    let mut cursor = req_bytes;
-    let req = CreateTopicsRequest::decode(&mut cursor, version)?;
     let image = broker.controller.current_image();
 
     // Kafka removes duplicate names from the request before authorizing
@@ -200,7 +195,7 @@ pub(crate) async fn handle(
                 )
             })
             .collect();
-        return crate::handlers::encode_response(&create_topics_response(results, 0), version);
+        return Ok(create_topics_response(results, 0));
     }
 
     // KIP-599: Kafka's controller charges each topic with the partitions it
@@ -257,7 +252,13 @@ pub(crate) async fn handle(
     }
     results.extend(trailing);
 
-    finish_response(broker, ctx, results, validate_only, quota.delay(), version)
+    Ok(finish_response(
+        broker,
+        ctx,
+        results,
+        validate_only,
+        quota.delay(),
+    ))
 }
 
 /// The most partitions one `CreateTopics` request may create. Kafka 4.3.1

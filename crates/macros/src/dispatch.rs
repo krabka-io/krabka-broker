@@ -85,24 +85,20 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,
                 version: ApiVersion,
-                correlation_id: CorrelationId,
                 body: &'a [u8],
                 ctx: &'a RequestContext<'a>,
             ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin({{ handler }}(broker, version, correlation_id, body, ctx))
+                Box::pin({{ handler }}(broker, version, body, ctx))
             }
         },
         Adapter::SyncContext => moxy::template! {
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,
                 version: ApiVersion,
-                correlation_id: CorrelationId,
                 body: &'a [u8],
                 ctx: &'a RequestContext<'a>,
             ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready({{ handler }}(
-                    broker, version, correlation_id, body, ctx,
-                )))
+                Box::pin(::std::future::ready({{ handler }}(broker, version, body, ctx)))
             }
         },
         Adapter::Typed { group } => {
@@ -127,7 +123,6 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                 fn {{ adapter }}<'a>(
                     broker: &'a Broker,
                     version: ApiVersion,
-                    _correlation_id: CorrelationId,
                     body: &'a [u8],
                     ctx: &'a RequestContext<'a>,
                 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
@@ -144,7 +139,6 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,
                 version: ApiVersion,
-                _correlation_id: CorrelationId,
                 body: &'a [u8],
                 ctx: &'a RequestContext<'a>,
             ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {

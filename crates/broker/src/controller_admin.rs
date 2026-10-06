@@ -259,8 +259,9 @@ async fn invoke_registered_handler(
                 CONTROLLER_ADMIN_CONNECTION_ID,
                 false,
                 "CONTROLLER",
-            );
-            handler(broker, api_version, correlation_id, body, &context).await
+            )
+            .with_correlation_id(correlation_id);
+            handler(broker, api_version, body, &context).await
         }
         DispatchKind::Auth(handler) => {
             let auth = ConnectionAuth::Authenticated {

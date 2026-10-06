@@ -123,7 +123,6 @@ async fn produce(broker: &BrokerHandle, topic: &str, count: i32) {
     let response_bytes = crate::handlers::produce::handle(
         &shared,
         PRODUCE_VERSION,
-        7,
         &request_bytes,
         request_bytes.clone(),
         &ctx,

@@ -125,7 +125,6 @@ async fn produce_error_code_compressed(
     let response_bytes = handle(
         &shared,
         VERSION,
-        7,
         &request_bytes,
         request_bytes.clone(),
         &ctx,

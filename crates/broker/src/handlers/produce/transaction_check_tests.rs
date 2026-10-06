@@ -136,7 +136,6 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         &handle(
             &broker,
             version,
-            7,
             &request_bytes,
             request_bytes.clone(),
             &ctx,

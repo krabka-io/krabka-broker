@@ -23,6 +23,7 @@ struct Broker {
 
 struct RequestContext<'a> {
     client_id: &'a str,
+    correlation_id: CorrelationId,
 }
 
 struct TelemetryContext<'a> {
@@ -60,7 +61,6 @@ enum ApiKey {
 type ContextHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
-    CorrelationId,
     &'a [u8],
     &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
@@ -305,14 +305,11 @@ mod handlers {
     }
 
     pub mod metadata {
-        use crate::{
-            ApiVersion, BoxFuture, Broker, BrokerError, Bytes, CorrelationId, RequestContext,
-        };
+        use crate::{ApiVersion, BoxFuture, Broker, BrokerError, Bytes, RequestContext};
 
         pub fn handle<'a>(
             broker: &'a Broker,
             version: ApiVersion,
-            correlation_id: CorrelationId,
             body: &'a [u8],
             ctx: &'a RequestContext<'a>,
         ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
@@ -320,7 +317,7 @@ mod handlers {
                 &"metadata",
                 &broker.name,
                 &version,
-                &correlation_id,
+                &ctx.correlation_id,
                 &ctx.client_id,
                 &crate::text(body),
             ])))
@@ -328,12 +325,11 @@ mod handlers {
     }
 
     pub mod describe_configs {
-        use crate::{ApiVersion, Broker, BrokerError, Bytes, CorrelationId, RequestContext};
+        use crate::{ApiVersion, Broker, BrokerError, Bytes, RequestContext};
 
         pub fn handle(
             broker: &Broker,
             version: ApiVersion,
-            correlation_id: CorrelationId,
             body: &[u8],
             ctx: &RequestContext<'_>,
         ) -> Result<Bytes, BrokerError> {
@@ -341,7 +337,7 @@ mod handlers {
                 &"describe_configs",
                 &broker.name,
                 &version,
-                &correlation_id,
+                &ctx.correlation_id,
                 &ctx.client_id,
                 &crate::text(body),
             ])
@@ -373,14 +369,11 @@ mod handlers {
 /// The `=> path` override: a handler outside `crate::handlers`.
 mod txn {
     pub mod add_partitions_to_txn {
-        use crate::{
-            ApiVersion, BoxFuture, Broker, BrokerError, Bytes, CorrelationId, RequestContext,
-        };
+        use crate::{ApiVersion, BoxFuture, Broker, BrokerError, Bytes, RequestContext};
 
         pub fn handle<'a>(
             broker: &'a Broker,
             version: ApiVersion,
-            correlation_id: CorrelationId,
             body: &'a [u8],
             ctx: &'a RequestContext<'a>,
         ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
@@ -388,7 +381,7 @@ mod txn {
                 &"txn::add_partitions_to_txn",
                 &broker.name,
                 &version,
-                &correlation_id,
+                &ctx.correlation_id,
                 &ctx.client_id,
                 &crate::text(body),
             ])))
@@ -441,8 +434,11 @@ fn call(entry: DispatchEntry, body: &[u8]) -> Result<String, BrokerError> {
     let broker = Broker { name: "b1" };
     let bytes = match entry.handler {
         Handler::Context(handler) => {
-            let ctx = RequestContext { client_id: "c1" };
-            ready(handler(&broker, 5, 7, body, &ctx))
+            let ctx = RequestContext {
+                client_id: "c1",
+                correlation_id: 7,
+            };
+            ready(handler(&broker, 5, body, &ctx))
         }
         Handler::Telemetry(handler) => {
             let ctx = TelemetryContext {

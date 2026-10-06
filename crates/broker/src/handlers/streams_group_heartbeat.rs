@@ -11,7 +11,6 @@
 //! KIP-1071 early access, AND the `streams_group.enable` config kill-switch.
 //! BOTH must allow the request.
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
@@ -31,28 +30,24 @@ mod validation;
     name = "handle_streams_group_heartbeat",
     level = "info",
     skip_all,
-    fields(api = "StreamsGroupHeartbeat", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "StreamsGroupHeartbeat", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
+    req: StreamsGroupHeartbeatRequest,
     version: i16,
-    correlation_id: i32,
-    req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
     let image = broker.controller.current_image();
     let ng = broker.group_coordinator.clone();
-    let mut cur: &[u8] = req_bytes;
-    let req: StreamsGroupHeartbeatRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
 
     // KafkaApis answers UNSUPPORTED_VERSION before the group ACL when the
     // streams protocol is off: KIP-1071 gates it on a finalized
     // streams.version >= 1 (early access, default-disabled), and krabka
     // also on the `streams_group.enable` config kill-switch.
     if !crate::handlers::streams_protocol_enabled(broker, &image) {
-        return reply(version, codes::UNSUPPORTED_VERSION, None);
+        return Ok(reply(codes::UNSUPPORTED_VERSION, None));
     }
 
     // ── ACL preamble ────────────────────────────────────────────
@@ -64,7 +59,7 @@ pub(crate) async fn handle(
         ctx,
         &req.group_id,
     ) {
-        return reply(version, codes::GROUP_AUTHORIZATION_FAILED, None);
+        return Ok(reply(codes::GROUP_AUTHORIZATION_FAILED, None));
     }
 
     // Kafka's `KafkaApis.handleStreamsGroupHeartbeat` reads the topology
@@ -78,7 +73,7 @@ pub(crate) async fn handle(
     if let Some(topology) = req.topology.as_ref() {
         let required = topic_authz::required_topics(topology);
         if let Some(message) = topic_authz::invalid_topology_message(broker, &required) {
-            return reply(version, codes::STREAMS_INVALID_TOPOLOGY, Some(message));
+            return Ok(reply(codes::STREAMS_INVALID_TOPOLOGY, Some(message)));
         }
         if !required.is_empty()
             && crate::handlers::any_topic_describe_denied(
@@ -88,7 +83,7 @@ pub(crate) async fn handle(
                 &required,
             )
         {
-            return reply(version, codes::TOPIC_AUTHORIZATION_FAILED, None);
+            return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
         }
     }
 
@@ -98,11 +93,11 @@ pub(crate) async fn handle(
     if let Some((error_code, message)) =
         validation::request_error(&req, broker.config.features.unstable_api_versions)
     {
-        return reply(version, error_code, Some(message));
+        return Ok(reply(error_code, Some(message)));
     }
 
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return reply(version, error_code, None);
+        return Ok(reply(error_code, None));
     }
 
     // Kafka creates a streams group only on a join, in place of nothing or of
@@ -112,7 +107,7 @@ pub(crate) async fn handle(
         .streams_group_lookup_error(&req.group_id, req.member_epoch, now_ms())
         .await?
     {
-        return reply(version, codes::GROUP_ID_NOT_FOUND, Some(message));
+        return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
     }
 
     let group_id = req.group_id.clone();
@@ -131,10 +126,10 @@ pub(crate) async fn handle(
         .await
         .is_err()
     {
-        return reply(version, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
+        return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None));
     }
     let Ok(result) = rx.await else {
-        return reply(version, codes::UNKNOWN_SERVER_ERROR, None);
+        return Ok(reply(codes::UNKNOWN_SERVER_ERROR, None));
     };
     let mut resp = result.response;
     // KafkaApis hands the internal topics that the coordinator asks for to
@@ -145,14 +140,13 @@ pub(crate) async fn handle(
             broker,
             &creation::Heartbeat {
                 ctx,
-                correlation_id,
                 group_id: &group_id,
             },
             &mut resp,
             &result.creatable_topics,
         );
     }
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Kafka's `StreamsGroupHeartbeatRequest.getErrorResponse`: the error code
@@ -162,15 +156,12 @@ fn error(code: i16) -> StreamsGroupHeartbeatResponse {
     crate::coordinator::unified::streams::actor::response::error_resp(code, None)
 }
 
-/// The encoded early refusal: `error(code)` carrying `message`.
-fn reply(version: i16, code: i16, message: Option<String>) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &StreamsGroupHeartbeatResponse {
-            error_message: message,
-            ..error(code)
-        },
-        version,
-    )
+/// The early refusal: `error(code)` carrying `message`.
+fn reply(code: i16, message: Option<String>) -> StreamsGroupHeartbeatResponse {
+    StreamsGroupHeartbeatResponse {
+        error_message: message,
+        ..error(code)
+    }
 }
 
 #[cfg(test)]
@@ -331,11 +322,9 @@ mod tests {
             let topology = req.topology.as_mut().expect("the join carries a topology");
             topology.subtopologies[0].state_changelog_topics = vec![changelog.clone()];
 
-            let first = decode_response(
-                &handle(&broker, version, 1, &encode_request(&req), &ctx)
-                    .await
-                    .expect("handle"),
-            );
+            let first = handle(&broker, req.clone(), version, &ctx)
+                .await
+                .expect("handle");
             assert!(first.error_code == codes::NONE, "{group_id}: {first:?}");
             assert!(
                 status_details(&first)
@@ -349,11 +338,9 @@ mod tests {
                 topology: None,
                 ..request(group_id)
             };
-            let second = decode_response(
-                &handle(&broker, version, 2, &encode_request(&next), &ctx)
-                    .await
-                    .expect("handle"),
-            );
+            let second = handle(&broker, next.clone(), version, &ctx)
+                .await
+                .expect("handle");
             assert!(second.error_code == codes::NONE, "{group_id}: {second:?}");
             assert!(
                 status_details(&second) == second_details,
@@ -440,16 +427,15 @@ mod tests {
                 .subtopologies[0]
                 .source_topics = vec![source_topic.into()];
 
-            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+            let resp = handle(&broker, req.clone(), version, &ctx)
                 .await
                 .expect("handle");
 
             assert!(
-                decode_response(&bytes)
-                    == crate::coordinator::unified::streams::actor::response::error_resp(
-                        codes::STREAMS_INVALID_TOPOLOGY,
-                        Some(message.into()),
-                    ),
+                resp == crate::coordinator::unified::streams::actor::response::error_resp(
+                    codes::STREAMS_INVALID_TOPOLOGY,
+                    Some(message.into()),
+                ),
                 "{group_id}"
             );
             assert!(
@@ -476,22 +462,15 @@ mod tests {
         let principal = crate::test_support::principal("Group:Read");
         let ctx = context(&principal, &peer);
 
-        let bytes = handle(
-            &broker,
-            version,
-            1,
-            &encode_request(&request("describe-denied")),
-            &ctx,
-        )
-        .await
-        .expect("handle");
+        let resp = handle(&broker, request("describe-denied"), version, &ctx)
+            .await
+            .expect("handle");
 
         assert!(
-            decode_response(&bytes)
-                == crate::coordinator::unified::streams::actor::response::error_resp(
-                    codes::TOPIC_AUTHORIZATION_FAILED,
-                    None,
-                )
+            resp == crate::coordinator::unified::streams::actor::response::error_resp(
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                None,
+            )
         );
         assert!(
             broker
@@ -531,10 +510,9 @@ mod tests {
             ..Default::default()
         }];
 
-        let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+        let resp = handle(&broker, req.clone(), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&bytes);
 
         assert!(resp.error_code == codes::NONE, "{resp:?}");
         let status = resp.status.unwrap_or_default();
@@ -617,10 +595,9 @@ mod tests {
         ];
 
         for (group_id, req, expected, exists) in rows {
-            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+            let resp = handle(&broker, req.clone(), version, &ctx)
                 .await
                 .expect("handle");
-            let resp = decode_response(&bytes);
             match expected {
                 Some(expected) => assert!(resp == expected, "{group_id}"),
                 None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
@@ -650,16 +627,15 @@ mod tests {
             ..request("invalid-join")
         };
 
-        let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+        let resp = handle(&broker, req.clone(), version, &ctx)
             .await
             .expect("handle");
 
         assert!(
-            decode_response(&bytes)
-                == crate::coordinator::unified::streams::actor::response::error_resp(
-                    codes::INVALID_REQUEST,
-                    Some("MemberId can't be empty.".into()),
-                )
+            resp == crate::coordinator::unified::streams::actor::response::error_resp(
+                codes::INVALID_REQUEST,
+                Some("MemberId can't be empty.".into()),
+            )
         );
         assert!(
             broker
@@ -743,10 +719,10 @@ mod tests {
         ];
 
         for (group_id, req, expected) in rows {
-            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+            let resp = handle(&broker, req.clone(), version, &ctx)
                 .await
                 .expect("handle");
-            assert!(decode_response(&bytes) == expected, "{group_id}");
+            assert!(resp == expected, "{group_id}");
             let coordinator = &broker.group_coordinator;
             assert!(coordinator.find_streams(group_id).is_none(), "{group_id}");
             assert!(
@@ -757,29 +733,14 @@ mod tests {
             );
             assert!(coordinator.group_type(group_id).is_none(), "{group_id}");
 
-            let bytes = handle(
-                &broker,
-                version,
-                2,
-                &encode_request(&request(group_id)),
-                &ctx,
-            )
-            .await
-            .expect("handle");
-            assert!(
-                decode_response(&bytes).error_code == codes::NONE,
-                "{group_id}"
-            );
+            let resp = handle(&broker, request(group_id), version, &ctx)
+                .await
+                .expect("handle");
+            assert!(resp.error_code == codes::NONE, "{group_id}");
             assert!(coordinator.find_streams(group_id).is_some(), "{group_id}");
         }
         broker_handle.shutdown().await;
     }
-
-    crate::test_support::codec_helpers!(
-        StreamsGroupHeartbeatRequest,
-        StreamsGroupHeartbeatResponse,
-        version = streams_group_heartbeat_response::MAX_VERSION
-    );
 
     fn principal() -> Principal {
         crate::test_support::principal("alice")
@@ -888,22 +849,24 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = context(&principal, &peer);
-        let heartbeat = |req: &StreamsGroupHeartbeatRequest, version: i16| {
-            let bytes = crate::test_support::encode_request(req, version);
+        // Through the dispatch registry: v0 drops the int64 lag on the wire.
+        let heartbeat = |req: StreamsGroupHeartbeatRequest, version: i16| {
             let broker = &broker;
             let ctx = &ctx;
             async move {
-                let resp = handle(broker, version, 1, &bytes, ctx)
-                    .await
-                    .expect("handle");
-                crate::test_support::decode_response::<StreamsGroupHeartbeatResponse>(
-                    &resp, version,
+                crate::test_support::dispatch_wire::<StreamsGroupHeartbeatResponse>(
+                    broker,
+                    krabka_protocol::api_key::ApiKey::StreamsGroupHeartbeat as i16,
+                    version,
+                    &req,
+                    ctx,
                 )
+                .await
             }
         };
 
-        let v0 = heartbeat(&request("streams-app-v0"), 0).await;
-        let v1 = heartbeat(&request("streams-app-v1"), 1).await;
+        let v0 = heartbeat(request("streams-app-v0"), 0).await;
+        let v1 = heartbeat(request("streams-app-v1"), 1).await;
 
         assert!(v1.error_code == codes::NONE, "{v1:?}");
         assert!(
@@ -916,7 +879,7 @@ mod tests {
         assert!(v0.acceptable_recovery_lag == -1 && v0.acceptable_recovery_lag_legacy == 0);
 
         let refused = heartbeat(
-            &StreamsGroupHeartbeatRequest {
+            StreamsGroupHeartbeatRequest {
                 group_id: "streams-app-absent".into(),
                 member_id: "m1".into(),
                 member_epoch: 3,
@@ -973,17 +936,20 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = context(&principal, &peer);
+        // Through the dispatch registry: v0 drops the status the v1 adds.
         let heartbeat = |group_id: &str, version: i16| {
-            let bytes = crate::test_support::encode_request(&request(group_id), version);
+            let req = request(group_id);
             let broker = &broker;
             let ctx = &ctx;
             async move {
-                let resp = handle(broker, version, 1, &bytes, ctx)
-                    .await
-                    .expect("handle");
-                crate::test_support::decode_response::<StreamsGroupHeartbeatResponse>(
-                    &resp, version,
+                crate::test_support::dispatch_wire::<StreamsGroupHeartbeatResponse>(
+                    broker,
+                    krabka_protocol::api_key::ApiKey::StreamsGroupHeartbeat as i16,
+                    version,
+                    &req,
+                    ctx,
                 )
+                .await
             }
         };
         let v0 = heartbeat("baseline-v0", 0).await;
@@ -1024,12 +990,14 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = context(&principal, &peer);
-        let req_bytes = encode_request(&request("streams-app-disabled-feature"));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp);
+        let resp = handle(
+            &broker,
+            request("streams-app-disabled-feature"),
+            version,
+            &ctx,
+        )
+        .await
+        .expect("handle");
 
         assert!(resp.error_code == codes::UNSUPPORTED_VERSION, "{resp:?}");
         broker_handle.shutdown().await;
@@ -1044,12 +1012,14 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = context(&principal, &peer);
-        let req_bytes = encode_request(&request("streams-app-disabled-config"));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp);
+        let resp = handle(
+            &broker,
+            request("streams-app-disabled-config"),
+            version,
+            &ctx,
+        )
+        .await
+        .expect("handle");
 
         assert!(resp.error_code == codes::UNSUPPORTED_VERSION, "{resp:?}");
         broker_handle.shutdown().await;
@@ -1065,16 +1035,10 @@ mod tests {
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = context(&principal, &peer);
 
-        let bytes = handle(
-            &broker,
-            version,
-            1,
-            &encode_request(&request("identity-group")),
-            &ctx,
-        )
-        .await
-        .expect("StreamsGroupHeartbeat handler");
-        assert!(decode_response(&bytes).error_code == 0);
+        let resp = handle(&broker, request("identity-group"), version, &ctx)
+            .await
+            .expect("StreamsGroupHeartbeat handler");
+        assert!(resp.error_code == 0);
 
         let actor = broker
             .group_coordinator
@@ -1099,10 +1063,10 @@ mod tests {
             member_epoch: view.members[0].member_epoch,
             ..Default::default()
         };
-        let bytes = handle(&broker, version, 2, &encode_request(&req), &ctx)
+        let resp = handle(&broker, req.clone(), version, &ctx)
             .await
             .expect("StreamsGroupHeartbeat identity refresh");
-        assert!(decode_response(&bytes).error_code == 0);
+        assert!(resp.error_code == 0);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         actor

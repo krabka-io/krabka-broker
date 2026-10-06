@@ -106,7 +106,6 @@ mod tests;
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {

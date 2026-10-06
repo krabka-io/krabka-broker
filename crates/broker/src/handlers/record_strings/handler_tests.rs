@@ -41,7 +41,6 @@ use crate::{
     broker::{Broker, BrokerHandle},
     codes,
     error::BrokerError,
-    handlers::streams_group_heartbeat,
     test_support::{decode_response, encode_request},
 };
 
@@ -333,10 +332,10 @@ async fn streams_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = streams_group_heartbeat::handle(
+        let result = crate::test_support::try_dispatch_context(
             &env.broker,
+            streams_group_heartbeat_request::API_KEY,
             VERSION,
-            1,
             &encode_request(&request, VERSION),
             &env.ctx(&client_id),
         )

@@ -8,14 +8,10 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        share_group_describe_request::ShareGroupDescribeRequest,
-        share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
-    },
+use krabka_protocol::owned::{
+    share_group_describe_request::ShareGroupDescribeRequest,
+    share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
 };
 use tokio::sync::oneshot;
 
@@ -36,19 +32,15 @@ const UNAUTHORIZED_TOPICS_MESSAGE: &str =
     name = "handle_share_group_describe",
     level = "info",
     skip_all,
-    fields(api = "ShareGroupDescribe", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "ShareGroupDescribe", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: ShareGroupDescribeRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = ShareGroupDescribeRequest::decode(&mut cur, version)?;
-
+) -> Result<ShareGroupDescribeResponse, BrokerError> {
     // Kafka's `isShareGroupProtocolEnabled` gate comes before any ACL check,
     // and `getErrorResponse` answers every requested group. Share groups are
     // on from a finalized `share.version` of 1.
@@ -59,7 +51,7 @@ pub(crate) async fn handle(
             .iter()
             .map(|gid| error_row(gid, codes::UNSUPPORTED_VERSION, None))
             .collect();
-        return crate::handlers::encode_response(&response(groups), version);
+        return Ok(response(groups));
     }
 
     let authorizer = broker.config.authorizer.as_ref();
@@ -164,7 +156,7 @@ pub(crate) async fn handle(
         }
     }
 
-    crate::handlers::encode_response(&response(groups), version)
+    Ok(response(groups))
 }
 
 fn response(groups: Vec<DescribedGroup>) -> ShareGroupDescribeResponse {
@@ -203,12 +195,7 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        ShareGroupDescribeRequest,
-        ShareGroupDescribeResponse,
-        version = share_group_describe_response::MAX_VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     async fn start_broker(
         authorizer: Arc<dyn Authorizer>,
@@ -238,12 +225,9 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&request(&["g1", "g2"]));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, request(&["g1", "g2"]), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = ShareGroupDescribeResponse {
             throttle_time_ms: 0,
@@ -291,12 +275,9 @@ mod tests {
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let req_bytes = encode_request(&request(&["g1"]));
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let resp = handle(&broker, request(&["g1"]), version, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
 
         let expected = ShareGroupDescribeResponse {
             throttle_time_ms: 0,
@@ -454,9 +435,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, version, 1, &encode_request(&req), &ctx)
-            .await
-            .expect("handle");
+        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
         let expected = ShareGroupDescribeResponse {
             groups: vec![
@@ -503,7 +482,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert!(decode_response(&resp) == expected);
+        assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 
@@ -520,15 +499,9 @@ mod tests {
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
 
-        let resp = handle(
-            &broker,
-            version,
-            1,
-            &encode_request(&request(&["classic", ""])),
-            &ctx,
-        )
-        .await
-        .expect("handle");
+        let resp = handle(&broker, request(&["classic", ""]), version, &ctx)
+            .await
+            .expect("handle");
 
         let expected = ShareGroupDescribeResponse {
             groups: vec![
@@ -541,7 +514,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert!(decode_response(&resp) == expected);
+        assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 }

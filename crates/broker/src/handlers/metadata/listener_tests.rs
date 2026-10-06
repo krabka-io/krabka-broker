@@ -23,10 +23,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     handlers::RequestContext,
-    test_support::{
-        decode_response, encode_request, fence_remote_broker, peer, principal,
-        start_broker_no_audit,
-    },
+    test_support::{fence_remote_broker, peer, principal, start_broker_no_audit},
 };
 
 const TOPIC: &str = "led";
@@ -129,10 +126,14 @@ async fn metadata(
     let broker = handle.broker_arc_for_test();
     let (user, address) = (principal("describer"), peer());
     let ctx = RequestContext::new(&user, &address, "metadata-client", "conn", false, listener);
-    let bytes = super::handle(&broker, version, 7, &encode_request(request, version), &ctx)
-        .await
-        .expect("handle metadata");
-    decode_response(&bytes, version)
+    crate::test_support::dispatch_wire(
+        &broker,
+        krabka_protocol::api_key::ApiKey::Metadata as i16,
+        version,
+        request,
+        &ctx,
+    )
+    .await
 }
 
 fn topic_request() -> MetadataRequest {

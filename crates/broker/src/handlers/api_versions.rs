@@ -111,7 +111,6 @@ fn charge_request_quota(
 pub(crate) fn handle<'a>(
     broker: &'a Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &'a [u8],
     context: &'a crate::handlers::RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {

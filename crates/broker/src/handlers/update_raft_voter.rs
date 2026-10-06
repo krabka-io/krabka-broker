@@ -55,7 +55,6 @@ use crate::{
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -208,7 +207,7 @@ mod tests {
         let ctx = test_context(&principal, &peer);
         let req_bytes = encode_request(&request(2), version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -232,7 +231,7 @@ mod tests {
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);
@@ -306,7 +305,7 @@ mod tests {
             let mut req = well_formed();
             mutate(&mut req);
             let req_bytes = encode_request(&req, version);
-            let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+            let resp = super::handle(&broker, version, &req_bytes, &ctx)
                 .await
                 .expect("handle");
             let resp = decode_response(&resp, version);
@@ -351,7 +350,7 @@ mod tests {
         let mut codes_seen = Vec::new();
         for req in [named, anonymous] {
             let req_bytes = encode_request(&req, version);
-            let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+            let resp = super::handle(&broker, version, &req_bytes, &ctx)
                 .await
                 .expect("handle");
             codes_seen.push(decode_response(&resp, version).error_code);
@@ -426,7 +425,7 @@ mod tests {
             let error_code = match api {
                 Api::Update => {
                     let req_bytes = encode_request(&request(2), version);
-                    let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+                    let resp = super::handle(&broker, version, &req_bytes, &ctx)
                         .await
                         .expect("handle");
                     decode_response(&resp, version).error_code
@@ -447,11 +446,10 @@ mod tests {
                         ..Default::default()
                     };
                     let req_bytes = crate::test_support::encode_request(&req, version);
-                    let resp = crate::handlers::add_raft_voter::handle(
-                        &broker, version, 123, &req_bytes, &ctx,
-                    )
-                    .await
-                    .expect("handle");
+                    let resp =
+                        crate::handlers::add_raft_voter::handle(&broker, version, &req_bytes, &ctx)
+                            .await
+                            .expect("handle");
                     crate::test_support::decode_response::<AddRaftVoterResponse>(&resp, version)
                         .error_code
                 }
@@ -464,7 +462,7 @@ mod tests {
                     };
                     let req_bytes = crate::test_support::encode_request(&req, version);
                     let resp = crate::handlers::remove_raft_voter::handle(
-                        &broker, version, 123, &req_bytes, &ctx,
+                        &broker, version, &req_bytes, &ctx,
                     )
                     .await
                     .expect("handle");
@@ -500,7 +498,7 @@ mod tests {
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
         let req_bytes = encode_request(&request, version);
 
-        let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+        let resp = super::handle(&broker, version, &req_bytes, &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp, version);

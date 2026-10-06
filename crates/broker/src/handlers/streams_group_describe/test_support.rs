@@ -345,16 +345,9 @@ pub(super) async fn heartbeat(
     let principal = crate::test_support::principal("admin");
     let peer = crate::test_support::peer();
     let ctx = crate::test_support::request_context(&principal, &peer, "streams-client");
-    let bytes = crate::handlers::streams_group_heartbeat::handle(
-        broker,
-        MAX_VERSION,
-        1,
-        &crate::test_support::encode_request(req, MAX_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("handle heartbeat");
-    crate::test_support::decode_response(&bytes, MAX_VERSION)
+    crate::handlers::streams_group_heartbeat::handle(broker, req.clone(), MAX_VERSION, &ctx)
+        .await
+        .expect("handle heartbeat")
 }
 
 /// The wire `Topology` that [`render_topology`] must produce from

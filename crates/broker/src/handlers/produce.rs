@@ -177,7 +177,6 @@ const NO_LEADER_ID: i32 = -1;
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     body_bytes: Bytes,
     ctx: &crate::handlers::RequestContext<'_>,

@@ -178,7 +178,7 @@ async fn send(
         ..Default::default()
     });
     decode_response(
-        &handle(broker, MAX_VERSION, 1, &body, &ctx)
+        &handle(broker, MAX_VERSION, &body, &ctx)
             .await
             .expect("an answer"),
     )

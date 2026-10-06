@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::{
     delete_groups_request::DeleteGroupsRequest,
@@ -21,21 +20,17 @@ use crate::{broker::Broker, codes, coordinator::DeleteGroupError, error::BrokerE
     name = "handle_delete_groups",
     level = "info",
     skip_all,
-    fields(api = "DeleteGroups", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DeleteGroups", version),
+    err
 )]
 // cargo-mutants: coordinator-backed request orchestration; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DeleteGroupsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: DeleteGroupsRequest = crate::handlers::decode_group_request(&mut cur, version)?;
-
+) -> Result<DeleteGroupsResponse, BrokerError> {
     // Kafka's `handleDeleteGroupsRequest` drops duplicate ids first
     // (`groupsNames.distinct`), keeping the first-seen order, and then
     // partitions the ids by the `Delete` grant on each group.
@@ -81,7 +76,7 @@ pub(crate) async fn handle(
         results,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Deletes one authorized group and returns its result's error code.
@@ -120,12 +115,7 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        DeleteGroupsRequest,
-        DeleteGroupsResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     /// Start a broker with `authorizer` and audit off, and wait until its
     /// group coordinator serves `__consumer_offsets`.
@@ -147,11 +137,9 @@ mod tests {
         peer: &SocketAddr,
     ) -> DeleteGroupsResponse {
         let ctx = test_context(principal, peer);
-        let req_bytes = encode_request(req);
-        let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
+        handle(broker, req.clone(), VERSION, &ctx)
             .await
-            .expect("handle");
-        decode_response(&bytes)
+            .expect("handle")
     }
 
     #[tokio::test]
@@ -304,9 +292,14 @@ mod tests {
         for version in [2_i16, 3] {
             let mut body = bytes::BytesMut::new();
             req.encode(&mut body, version).expect("encode request");
-            let bytes = handle(&broker, version, 123, &body, &ctx)
-                .await
-                .expect("handle");
+            let bytes = crate::test_support::dispatch_context(
+                &broker,
+                krabka_protocol::api_key::ApiKey::DeleteGroups as i16,
+                version,
+                &body,
+                &ctx,
+            )
+            .await;
             let decoded =
                 DeleteGroupsResponse::decode(&mut &bytes[..], version).expect("decode response");
             answers.push((version, bytes.len(), decoded));

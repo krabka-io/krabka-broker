@@ -66,7 +66,7 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -101,7 +101,7 @@ async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
             broker_id,
             ..Default::default()
         };
-        let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+        let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
             .await
             .expect("handle");
         let resp = decode_response(&resp);
@@ -133,7 +133,7 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -279,7 +279,7 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -385,7 +385,7 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
     let resp = decode_response(&resp);
@@ -472,7 +472,7 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
         ..Default::default()
     };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
         .await
         .expect("handle");
 

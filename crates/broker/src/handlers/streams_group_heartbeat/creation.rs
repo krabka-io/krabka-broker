@@ -38,9 +38,6 @@ const MAX_ERRORS_TO_INCLUDE: usize = 3;
 pub(super) struct Heartbeat<'a> {
     /// The context of the request.
     pub(super) ctx: &'a crate::handlers::RequestContext<'a>,
-    /// The correlation id of the request, which the creation forwards to the
-    /// controller.
-    pub(super) correlation_id: i32,
     /// The group that the heartbeat is for.
     pub(super) group_id: &'a str,
 }
@@ -74,7 +71,7 @@ pub(super) fn create_internal_topics(
     broker.auto_topic_creation.create_streams_internal_topics(
         broker,
         specs.iter().map(creatable_topic).collect(),
-        ForwardedIdentity::of(heartbeat.ctx, heartbeat.correlation_id),
+        ForwardedIdentity::of(heartbeat.ctx),
         ttl_ms,
     );
 

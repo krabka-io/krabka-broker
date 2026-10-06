@@ -40,7 +40,6 @@ use crate::{
 pub(crate) fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -233,7 +232,7 @@ mod tests {
         let p = principal("admin");
         let peer = peer();
         let ctx = crate::test_support::request_context(&p, &peer, "inter-broker");
-        let bytes = handle(&broker, version, 123, &req_buf, &ctx).expect("handle");
+        let bytes = handle(&broker, version, &req_buf, &ctx).expect("handle");
         let mut cur: &[u8] = &bytes;
         let resp = GetReplicaLogInfoResponse::decode(&mut cur, version).unwrap();
 

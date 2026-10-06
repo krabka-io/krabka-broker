@@ -83,12 +83,12 @@ pub(crate) struct ForwardedIdentity {
 
 impl ForwardedIdentity {
     /// The identity of the request that `ctx` serves.
-    pub(crate) fn of(ctx: &RequestContext<'_>, correlation_id: i32) -> Self {
+    pub(crate) fn of(ctx: &RequestContext<'_>) -> Self {
         Self {
             principal_name: ctx.principal.name.clone(),
             client_address: ctx.peer.ip(),
             client_id: ctx.client_id.unwrap_or_default().to_owned(),
-            correlation_id,
+            correlation_id: ctx.correlation_id,
         }
     }
 }

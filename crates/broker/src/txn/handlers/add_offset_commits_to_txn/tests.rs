@@ -25,19 +25,11 @@ fn entry(state: TxnState, partitions: &[TopicPartition]) -> TxnEntry {
     entry
 }
 
-fn decode(bytes: &Bytes, version: i16) -> AddOffsetsToTxnResponse {
-    let mut cur: &[u8] = bytes.as_ref();
-    let resp = AddOffsetsToTxnResponse::decode(&mut cur, version).expect("decode response");
-    assert!(cur.is_empty(), "response decoder consumed all bytes");
-    resp
-}
-
 #[test]
 fn the_response_carries_the_error_code() {
     for code in [codes::NONE, codes::NOT_COORDINATOR] {
-        let bytes = encode_response(4, code).expect("encode");
         check!(
-            decode(&bytes, 4)
+            AddOffsetsToTxnResponse::error(code)
                 == AddOffsetsToTxnResponse {
                     error_code: code,
                     ..Default::default()

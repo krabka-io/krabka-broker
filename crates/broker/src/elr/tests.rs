@@ -30,9 +30,7 @@ use crate::{
     broker::Broker,
     codes,
     config_keys::MIN_INSYNC_REPLICAS,
-    test_support::{
-        decode_response, encode_request, request_context, start_broker_with_authorizer,
-    },
+    test_support::{request_context, start_broker_with_authorizer},
 };
 
 const TOPIC: &str = "orders";
@@ -327,16 +325,9 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerReg
     let principal = principal();
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
-    let bytes = crate::handlers::broker_registration::handle(
-        broker,
-        REGISTER_VERSION,
-        3,
-        &encode_request(&request, REGISTER_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("BrokerRegistration");
-    decode_response(&bytes, REGISTER_VERSION)
+    crate::handlers::broker_registration::handle(broker, request, REGISTER_VERSION, &ctx)
+        .await
+        .expect("BrokerRegistration")
 }
 
 /// The issue's acceptance path: shrink the ISR below `min.insync.replicas`

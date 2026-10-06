@@ -125,7 +125,8 @@ async fn handle_fetch_frame_from_parsed(
         "",
         sendfile_capable && parsed.api_version >= 4,
         listener_name,
-    );
+    )
+    .with_correlation_id(parsed.correlation_id);
 
     let (resp, version) = crate::handlers::fetch::handle(
         broker,

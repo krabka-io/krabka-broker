@@ -1041,7 +1041,7 @@ mod tests {
             },
             version,
         );
-        let bytes = handle(&broker_arc, version, 123, &req, &ctx)
+        let bytes = handle(&broker_arc, version, &req, &ctx)
             .await
             .expect("handle");
         let mut response = decode_response(&bytes, version);

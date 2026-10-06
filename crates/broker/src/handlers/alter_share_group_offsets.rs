@@ -16,7 +16,6 @@
 //! `network::dispatch` intercepts this RPC inline for the per-group `Read`
 //! ACL gate, which needs the principal and the peer `SocketAddr`.
 
-use bytes::Bytes;
 use krabka_metadata::AclOperation;
 use krabka_protocol::{
     owned::{
@@ -41,25 +40,20 @@ use crate::{
     name = "handle_alter_share_group_offsets",
     level = "info",
     skip_all,
-    fields(api = "AlterShareGroupOffsets", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "AlterShareGroupOffsets", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: AlterShareGroupOffsetsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: AlterShareGroupOffsetsRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
-
+) -> Result<AlterShareGroupOffsetsResponse, BrokerError> {
     // Feature gate: share groups are on from a finalized `share.version` of 1,
     // and below it the RPC is unsupported.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return encode_top_level(version, codes::UNSUPPORTED_VERSION);
+        return Ok(top_level(codes::UNSUPPORTED_VERSION));
     }
 
     let ng_opt = Some(broker.group_coordinator.clone());
@@ -71,7 +65,7 @@ pub(crate) async fn handle(
     // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
     // On Deny → top-level `error_code = 30`.
     if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
-        return encode_top_level(version, codes::GROUP_AUTHORIZATION_FAILED);
+        return Ok(top_level(codes::GROUP_AUTHORIZATION_FAILED));
     }
     // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
     // empty group id before any group lookup. This structural check runs
@@ -80,10 +74,10 @@ pub(crate) async fn handle(
     // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
     // on which broker happened to receive the request.
     if gid.is_empty() {
-        return encode_top_level(version, codes::INVALID_GROUP_ID);
+        return Ok(top_level(codes::INVALID_GROUP_ID));
     }
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return encode_top_level(version, error_code);
+        return Ok(top_level(error_code));
     }
     // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
     // `GroupIdNotFoundException` for a group id already locked to another
@@ -93,7 +87,7 @@ pub(crate) async fn handle(
     if let Some(existing_type) = existing_type
         && existing_type != GroupType::Share
     {
-        return encode_top_level(version, codes::GROUP_ID_NOT_FOUND);
+        return Ok(top_level(codes::GROUP_ID_NOT_FOUND));
     }
     let group_already_exists = existing_type.is_some();
 
@@ -197,7 +191,7 @@ pub(crate) async fn handle(
             responses,
             ..Default::default()
         };
-        return crate::handlers::encode_response(&resp, version);
+        return Ok(resp);
     }
 
     // The actor checks emptiness and applies the complete requested batch in
@@ -221,17 +215,17 @@ pub(crate) async fn handle(
         .await
         .is_err()
     {
-        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE);
+        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE));
     }
     let actor_result = rx
         .await
         .map_err(|_| BrokerError::Share("share-group reset actor stopped".into()))?;
     let result_codes = match actor_result {
         Ok(result_codes) => result_codes,
-        Err(error_code) => return encode_top_level(version, error_code),
+        Err(error_code) => return Ok(top_level(error_code)),
     };
     if result_codes.len() != actor_response_slots.len() {
-        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE);
+        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE));
     }
     for ((topic_slot, partition_slot), error_code) in
         actor_response_slots.into_iter().zip(result_codes)
@@ -252,17 +246,16 @@ pub(crate) async fn handle(
         responses,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
-fn encode_top_level(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    let resp = AlterShareGroupOffsetsResponse {
+fn top_level(error_code: i16) -> AlterShareGroupOffsetsResponse {
+    AlterShareGroupOffsetsResponse {
         throttle_time_ms: 0,
         error_code,
         responses: Vec::new(),
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
@@ -282,14 +275,14 @@ mod tests {
                 AlterShareGroupOffsetsResponseTopic,
             },
             create_topics_request::{CreatableTopic, CreateTopicsRequest},
-            create_topics_response::{self, CreateTopicsResponse},
+            create_topics_response,
             share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         },
         primitives::uuid::Uuid,
     };
     use krabka_security::Principal;
 
-    use super::{encode_top_level, handle};
+    use super::{handle, top_level};
     use crate::{
         authorizer::{AuthorizationResult, Authorizer},
         codes,
@@ -357,12 +350,7 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        AlterShareGroupOffsetsRequest,
-        AlterShareGroupOffsetsResponse,
-        version = alter_share_group_offsets_response::MAX_VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     async fn start_broker(
         authorizer: Arc<dyn Authorizer>,
@@ -391,24 +379,19 @@ mod tests {
         ctx: &crate::handlers::RequestContext<'_>,
     ) {
         let version = create_topics_response::MAX_VERSION;
-        let bytes = crate::test_support::encode_request(
-            &CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: topic_name.into(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
+        let request = CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: topic_name.into(),
+                num_partitions: 1,
+                replication_factor: 1,
                 ..Default::default()
-            },
-            version,
-        );
-        let response = crate::handlers::create_topics::handle(broker, version, 1, &bytes, ctx)
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        };
+        let response = crate::handlers::create_topics::handle(broker, request, version, ctx)
             .await
             .expect("create topic");
-        let response: CreateTopicsResponse =
-            crate::test_support::decode_response(&response, version);
         assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
         broker_handle
             .wait_until_partition_present(topic_name, 0)
@@ -416,13 +399,8 @@ mod tests {
     }
 
     #[test]
-    fn encode_top_level_preserves_error_fields() {
-        let resp = encode_top_level(
-            alter_share_group_offsets_response::MAX_VERSION,
-            codes::UNSUPPORTED_VERSION,
-        )
-        .expect("encode");
-        let resp = decode_response(&resp);
+    fn top_level_preserves_error_fields() {
+        let resp = top_level(codes::UNSUPPORTED_VERSION);
 
         let expected = AlterShareGroupOffsetsResponse {
             throttle_time_ms: 0,
@@ -513,12 +491,14 @@ mod tests {
             let principal = principal();
             let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let ctx = test_context(&principal, &peer);
-            let req_bytes = encode_request(&request("g1", topic_name, &partitions));
-
-            let resp = handle(&broker, version, 1, &req_bytes, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&resp);
+            let resp = handle(
+                &broker,
+                request("g1", topic_name, &partitions),
+                version,
+                &ctx,
+            )
+            .await
+            .expect("handle");
 
             assert!(resp == expected, "case: {case}");
             broker_handle.shutdown().await;
@@ -619,14 +599,12 @@ mod tests {
 
             let resp = handle(
                 &broker,
+                request("g-acl", topic_name, &[0]),
                 alter_share_group_offsets_response::MAX_VERSION,
-                1,
-                &encode_request(&request("g-acl", topic_name, &[0])),
                 &ctx,
             )
             .await
             .expect("handle");
-            let resp = decode_response(&resp);
 
             assert!(resp.error_code == top, "row {index} ({case}): {resp:?}");
             if let Some(expected_partition_code) = partition {
@@ -671,28 +649,26 @@ mod tests {
 
         let empty_id_resp = handle(
             &broker,
+            request("", "t", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
-            1,
-            &encode_request(&request("", "t", &[0])),
             &ctx,
         )
         .await
         .expect("handle empty id");
-        assert!(decode_response(&empty_id_resp).error_code == codes::INVALID_GROUP_ID);
+        assert!(empty_id_resp.error_code == codes::INVALID_GROUP_ID);
 
         let _ = broker.group_coordinator.get_or_create_classic("classic-g");
         broker.group_coordinator.mark_classic("classic-g");
         assert!(broker.group_coordinator.group_type("classic-g") == Some(GroupType::Classic));
         let wrong_type_resp = handle(
             &broker,
+            request("classic-g", "t", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
-            1,
-            &encode_request(&request("classic-g", "t", &[0])),
             &ctx,
         )
         .await
         .expect("handle wrong-type id");
-        assert!(decode_response(&wrong_type_resp).error_code == codes::GROUP_ID_NOT_FOUND);
+        assert!(wrong_type_resp.error_code == codes::GROUP_ID_NOT_FOUND);
         // The classic lock must not have been disturbed.
         assert!(broker.group_coordinator.group_type("classic-g") == Some(GroupType::Classic));
         broker_handle.shutdown().await;
@@ -727,14 +703,12 @@ mod tests {
 
         let response = handle(
             &broker,
+            request("g-new", "new-topic", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
-            1,
-            &encode_request(&request("g-new", "new-topic", &[0])),
             &ctx,
         )
         .await
         .expect("handle alter");
-        let response = decode_response(&response);
         assert!(response.error_code == codes::NONE, "{response:?}");
         assert!(response.responses[0].partitions[0].error_code == codes::NONE);
 
@@ -836,14 +810,12 @@ mod tests {
         let ctx = test_context(&principal, &peer);
         let response = handle(
             &broker,
+            request("busy", "missing", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
-            1,
-            &encode_request(&request("busy", "missing", &[0])),
             &ctx,
         )
         .await
         .expect("handle reset");
-        let response = decode_response(&response);
         assert!(
             response.error_code == codes::NON_EMPTY_GROUP,
             "{response:?}"
@@ -882,14 +854,12 @@ mod tests {
         for expected_group_epoch in [1, 2] {
             let response = handle(
                 &broker,
+                reset_request.clone(),
                 alter_share_group_offsets_response::MAX_VERSION,
-                1,
-                &encode_request(&reset_request),
                 &ctx,
             )
             .await
             .expect("handle reset");
-            let response = decode_response(&response);
             assert!(response.error_code == codes::NONE, "{response:?}");
             assert!(response.responses[0].partitions[0].error_code == codes::NONE);
             assert!(
@@ -958,14 +928,12 @@ mod tests {
 
         let overflow_response = handle(
             &broker,
+            request("g-overflow", "reset-topic", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
-            1,
-            &encode_request(&request("g-overflow", "reset-topic", &[0])),
             &ctx,
         )
         .await
         .expect("handle overflow reset");
-        let overflow_response = decode_response(&overflow_response);
         assert!(
             overflow_response.error_code == codes::COORDINATOR_NOT_AVAILABLE,
             "{overflow_response:?}"

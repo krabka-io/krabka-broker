@@ -47,15 +47,11 @@
 
 use std::sync::atomic::Ordering;
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
-        offset_for_leader_epoch_response::{
-            EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
-        },
+use krabka_protocol::owned::{
+    offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
+    offset_for_leader_epoch_response::{
+        EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
     },
 };
 
@@ -86,16 +82,15 @@ fn not_leader(
     name = "handle_offset_for_leader_epoch",
     level = "info",
     skip_all,
-    fields(api = "OffsetForLeaderEpoch", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "OffsetForLeaderEpoch"),
+    err
 )]
 pub(crate) fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: OffsetForLeaderEpochRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+) -> Result<OffsetForLeaderEpochResponse, BrokerError> {
     let partitions = broker.partitions.clone();
     // Test-only: count served OFLE requests so the KIP-320 proactive-validation
     // integration test can prove the consumer's validate pass issued an OFLE
@@ -105,9 +100,6 @@ pub(crate) fn handle(
     {
         #[cfg(any(test, feature = "test-helpers"))]
         ofle_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-
-        let mut cur: &[u8] = req_bytes;
-        let req = OffsetForLeaderEpochRequest::decode(&mut cur, version)?;
 
         // ── ACL preamble ────────────────────────────────────────────
         // Kafka checks `ClusterAction` on `Cluster("kafka-cluster")` once as
@@ -261,7 +253,7 @@ pub(crate) fn handle(
             topics: authorized_out,
             ..Default::default()
         };
-        crate::handlers::encode_response(&resp, version)
+        Ok(resp)
     }
 }
 
@@ -431,11 +423,7 @@ mod tests {
             let p = principal("follower");
             let peer = peer();
             let ctx = request_context(&p, &peer, "follower-client");
-            let req_bytes = crate::test_support::encode_request(&request(), VERSION);
-
-            let bytes = handle(&broker, VERSION, 123, &req_bytes, &ctx).expect("handle");
-            let resp: OffsetForLeaderEpochResponse =
-                crate::test_support::decode_response(&bytes, VERSION);
+            let resp = handle(&broker, request(), VERSION, &ctx).expect("handle");
 
             let expected = OffsetForLeaderEpochResponse {
                 throttle_time_ms: 0,
@@ -636,10 +624,7 @@ mod tests {
         let user = crate::test_support::principal("client");
         let address = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&user, &address, "ofle-client");
-        let request_bytes = crate::test_support::encode_request(request, version);
-        let wire = handle(&shared, version, 9, &request_bytes, &ctx).expect("handle ofle");
-        let decoded: OffsetForLeaderEpochResponse =
-            crate::test_support::decode_response(&wire, version);
+        let decoded = handle(&shared, request.clone(), version, &ctx).expect("handle ofle");
         decoded
             .topics
             .into_iter()

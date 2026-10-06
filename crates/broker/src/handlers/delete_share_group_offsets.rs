@@ -11,7 +11,6 @@
 //! `network::dispatch` intercepts this request inline for the per-group
 //! `Delete` ACL gate, which needs the principal and the peer `SocketAddr`.
 
-use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
@@ -42,25 +41,20 @@ const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
     name = "handle_delete_share_group_offsets",
     level = "info",
     skip_all,
-    fields(api = "DeleteShareGroupOffsets", version, req_bytes = req_bytes.len()),
-    err,
+    fields(api = "DeleteShareGroupOffsets", version),
+    err
 )]
 pub(crate) async fn handle(
     broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: DeleteShareGroupOffsetsRequest,
+    _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req: DeleteShareGroupOffsetsRequest =
-        crate::handlers::decode_group_request(&mut cur, version)?;
-
+) -> Result<DeleteShareGroupOffsetsResponse, BrokerError> {
     // Feature gate: share groups are on from a finalized `share.version` of 1,
     // and below it the RPC is unsupported.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return encode_top_level(version, codes::UNSUPPORTED_VERSION, None);
+        return Ok(top_level(codes::UNSUPPORTED_VERSION, None));
     }
 
     let coordinator = &broker.group_coordinator;
@@ -76,7 +70,7 @@ pub(crate) async fn handle(
         gid.as_str(),
         AclOperation::Delete,
     ) {
-        return encode_top_level(version, codes::GROUP_AUTHORIZATION_FAILED, None);
+        return Ok(top_level(codes::GROUP_AUTHORIZATION_FAILED, None));
     }
 
     // Per-topic `Read` ACL. Kafka's `handleDeleteShareGroupOffsetsRequest`
@@ -98,12 +92,12 @@ pub(crate) async fn handle(
         });
 
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return encode_top_level(version, error_code, None);
+        return Ok(top_level(error_code, None));
     }
     // GroupCoordinatorService.deleteShareGroupOffsets rejects an empty id
     // before it routes the group to a shard.
     if gid.is_empty() {
-        return encode_top_level(version, codes::INVALID_GROUP_ID, None);
+        return Ok(top_level(codes::INVALID_GROUP_ID, None));
     }
     // GroupCoordinatorShard.initiateDeleteShareGroupOffsets looks the group
     // up through `shareGroup`, which refuses a missing group and a group of
@@ -114,14 +108,13 @@ pub(crate) async fn handle(
         None => coordinator.find_share(&gid),
     };
     let Some(actor) = actor else {
-        return encode_top_level(
-            version,
+        return Ok(top_level(
             codes::GROUP_ID_NOT_FOUND,
             Some(crate::handlers::share_group_not_found_message(
                 coordinator,
                 &gid,
             )),
-        );
+        ));
     };
 
     let metadata = coordinator.share_state_partition_metadata(&gid);
@@ -173,17 +166,17 @@ pub(crate) async fn handle(
         .await
         .is_err()
     {
-        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE, None);
+        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None));
     }
     let actor_result = rx
         .await
         .map_err(|_| BrokerError::Share("share-group delete actor stopped".into()))?;
     let outcomes = match actor_result {
         Ok(outcomes) => outcomes,
-        Err(error_code) => return encode_top_level(version, error_code, None),
+        Err(error_code) => return Ok(top_level(error_code, None)),
     };
     if outcomes.len() != names_and_ids.len() {
-        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE, None);
+        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None));
     }
     for ((topic_name, topic_id), outcome) in names_and_ids.into_iter().zip(outcomes) {
         match outcome {
@@ -237,7 +230,7 @@ pub(crate) async fn handle(
         responses,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    Ok(resp)
 }
 
 /// Kafka's row message for a topic the group holds no share state for.
@@ -271,19 +264,14 @@ fn kafka_message(error_code: i16) -> Option<&'static str> {
 
 /// A top-level error response. Kafka's `getErrorResponse` sets the message
 /// to `message`, or to the error's default message.
-fn encode_top_level(
-    version: i16,
-    error_code: i16,
-    message: Option<String>,
-) -> Result<Bytes, BrokerError> {
-    let resp = DeleteShareGroupOffsetsResponse {
+fn top_level(error_code: i16, message: Option<String>) -> DeleteShareGroupOffsetsResponse {
+    DeleteShareGroupOffsetsResponse {
         throttle_time_ms: 0,
         error_code,
         error_message: message.or_else(|| kafka_message(error_code).map(str::to_owned)),
         responses: Vec::new(),
         ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
@@ -296,7 +284,7 @@ mod tests {
         UnknownTaggedFields,
         owned::{
             create_topics_request::{CreatableTopic, CreateTopicsRequest},
-            create_topics_response::{self, CreateTopicsResponse},
+            create_topics_response,
             delete_share_group_offsets_request::{
                 DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
             },
@@ -308,7 +296,7 @@ mod tests {
     };
     use krabka_security::Principal;
 
-    use super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, encode_top_level, handle};
+    use super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level};
     use crate::{
         authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
         codes,
@@ -359,12 +347,7 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
-        DeleteShareGroupOffsetsRequest,
-        DeleteShareGroupOffsetsResponse,
-        version = delete_share_group_offsets_response::MAX_VERSION,
-        client_id = "admin-client"
-    );
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     async fn start_broker(
         authorizer: Arc<dyn Authorizer>,
@@ -393,27 +376,22 @@ mod tests {
         ctx: &crate::handlers::RequestContext<'_>,
     ) {
         let version = create_topics_response::MAX_VERSION;
-        let bytes = crate::test_support::encode_request(
-            &CreateTopicsRequest {
-                topics: topic_names
-                    .iter()
-                    .map(|topic_name| CreatableTopic {
-                        name: (*topic_name).into(),
-                        num_partitions: 1,
-                        replication_factor: 1,
-                        ..Default::default()
-                    })
-                    .collect(),
-                timeout_ms: 5_000,
-                ..Default::default()
-            },
-            version,
-        );
-        let response = crate::handlers::create_topics::handle(broker, version, 1, &bytes, ctx)
+        let request = CreateTopicsRequest {
+            topics: topic_names
+                .iter()
+                .map(|topic_name| CreatableTopic {
+                    name: (*topic_name).into(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..Default::default()
+                })
+                .collect(),
+            timeout_ms: 5_000,
+            ..Default::default()
+        };
+        let response = crate::handlers::create_topics::handle(broker, request, version, ctx)
             .await
             .expect("create topics");
-        let response: CreateTopicsResponse =
-            crate::test_support::decode_response(&response, version);
         assert!(
             response
                 .topics
@@ -429,14 +407,8 @@ mod tests {
     }
 
     #[test]
-    fn encode_top_level_preserves_error_fields() {
-        let resp = encode_top_level(
-            delete_share_group_offsets_response::MAX_VERSION,
-            codes::UNSUPPORTED_VERSION,
-            None,
-        )
-        .expect("encode");
-        let resp = decode_response(&resp);
+    fn top_level_preserves_error_fields() {
+        let resp = top_level(codes::UNSUPPORTED_VERSION, None);
 
         let expected = DeleteShareGroupOffsetsResponse {
             throttle_time_ms: 0,
@@ -492,12 +464,9 @@ mod tests {
             let principal = principal();
             let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let ctx = test_context(&principal, &peer);
-            let req_bytes = encode_request(&request("g1", &topics));
-
-            let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+            let resp = handle(&broker, request("g1", &topics), version, &ctx)
                 .await
                 .expect("handle");
-            let resp = decode_response(&resp);
 
             assert!(resp == expected, "case: {case}");
             broker_handle.shutdown().await;
@@ -571,14 +540,13 @@ mod tests {
         for (group_id, topics, expected) in rows {
             let response = handle(
                 &broker,
+                request(group_id, &topics),
                 delete_share_group_offsets_response::MAX_VERSION,
-                1,
-                &encode_request(&request(group_id, &topics)),
                 &ctx,
             )
             .await
             .expect("handle delete");
-            assert!(decode_response(&response) == expected, "group {group_id:?}");
+            assert!(response == expected, "group {group_id:?}");
         }
         assert!(coordinator.share_group_ids() == vec!["share-empty".to_owned()]);
         broker_handle.shutdown().await;
@@ -668,14 +636,12 @@ mod tests {
         for expected_row in [deleted_row, no_state_row] {
             let response = handle(
                 &broker,
+                request("g-delete", &["delete-topic"]),
                 delete_share_group_offsets_response::MAX_VERSION,
-                1,
-                &encode_request(&request("g-delete", &["delete-topic"])),
                 &ctx,
             )
             .await
             .expect("handle delete");
-            let response = decode_response(&response);
             assert!(
                 response
                     == DeleteShareGroupOffsetsResponse {
@@ -785,14 +751,12 @@ mod tests {
 
             let response = handle(
                 &broker,
+                request("g-authz", &["allow-topic", "deny-topic"]),
                 delete_share_group_offsets_response::MAX_VERSION,
-                1,
-                &encode_request(&request("g-authz", &["allow-topic", "deny-topic"])),
                 &ctx,
             )
             .await
             .expect("handle delete");
-            let response = decode_response(&response);
 
             let denied_row = |name: &str| DeleteShareGroupOffsetsResponseTopic {
                 topic_name: name.into(),

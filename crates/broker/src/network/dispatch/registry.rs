@@ -127,17 +127,11 @@ async fn dispatch_registered_bytes(
             // The per-state gate lets only `ApiVersions` through to a handler
             // before authentication, and that handler answers it as Kafka's
             // `SaslServerAuthenticator` does.
-            .with_pre_authentication(!auth.is_authenticated());
+            .with_pre_authentication(!auth.is_authenticated())
+            .with_correlation_id(parsed.correlation_id);
             let encoded = encode_dispatch_result(
                 parsed,
-                handler(
-                    broker,
-                    parsed.api_version,
-                    parsed.correlation_id,
-                    parsed.body,
-                    &ctx,
-                )
-                .await,
+                handler(broker, parsed.api_version, parsed.body, &ctx).await,
             );
             Some(with_recorded_throttle(&ctx, encoded))
         }
@@ -165,7 +159,8 @@ async fn dispatch_registered_bytes(
             // KIP-13: `Produce` charges `producer_byte_rate` with the whole
             // request, as Kafka's `KafkaApis.handleProduceRequest` charges
             // `request.sizeInBytes`.
-            .with_request_size(frame.len());
+            .with_request_size(frame.len())
+            .with_correlation_id(parsed.correlation_id);
             let body_offset = frame.len() - parsed.body.len();
             let body_bytes = frame.slice(body_offset..);
             let response_required = match crate::handlers::produce::response_required(
@@ -178,15 +173,7 @@ async fn dispatch_registered_bytes(
             };
             let encoded = encode_dispatch_result(
                 parsed,
-                handler(
-                    broker,
-                    parsed.api_version,
-                    parsed.correlation_id,
-                    parsed.body,
-                    body_bytes,
-                    &ctx,
-                )
-                .await,
+                handler(broker, parsed.api_version, parsed.body, body_bytes, &ctx).await,
             );
             let encoded = if response_required {
                 encoded
