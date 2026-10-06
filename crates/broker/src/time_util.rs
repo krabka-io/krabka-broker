@@ -37,8 +37,9 @@ pub(crate) fn epoch_millis(instant: SystemTime) -> i64 {
         .map_or(0, duration_millis)
 }
 
+/// Whole milliseconds of `duration`, saturating at [`i64::MAX`].
 #[inline]
-fn duration_millis(duration: Duration) -> i64 {
+pub(crate) fn duration_millis(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
@@ -50,6 +51,18 @@ fn duration_millis(duration: Duration) -> i64 {
 #[inline]
 pub(crate) fn now_ms() -> i64 {
     epoch_millis(SystemTime::now())
+}
+
+/// Sleeps until `deadline`, or never resolves when it is `None`.
+///
+/// A `tokio::select!` arm uses it to disarm a timer that has nothing to wait
+/// for, such as a rebalance that is not open or a connection with no session
+/// expiry.
+pub(crate) async fn sleep_until_opt(deadline: Option<impl Into<tokio::time::Instant>>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Registers a deadline `delay` from now on `timer`, for the loop named
@@ -256,5 +269,32 @@ mod tests {
 
         let foreign = StdMonotonicClock::new().now();
         check!(let Err(TimeError::ClockDomainMismatch { .. }) = timer.at(foreign));
+    }
+
+    // `start_paused = true` runs these on tokio's virtual clock: with no other
+    // work pending, the runtime auto-advances logical time to the next timer, so
+    // the `sleep_until`/`timeout` deadlines fire instantly and deterministically
+    // instead of burning real wall-clock milliseconds.
+    #[tokio::test(start_paused = true)]
+    async fn sleep_until_opt_none_remains_pending() {
+        // `None` never resolves; the 10ms timeout is the only timer, so virtual
+        // time jumps to it and the timeout elapses -> Err.
+        let result = tokio::time::timeout(
+            Duration::from_millis(10),
+            sleep_until_opt(None::<tokio::time::Instant>),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_until_opt_some_waits_until_deadline() {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+        // The inner sleep (deadline) fires before the outer 1s timeout, so the
+        // timeout resolves Ok and virtual time has advanced exactly to `deadline`.
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), sleep_until_opt(Some(deadline))).await;
+        assert!(result.is_ok());
+        assert!(tokio::time::Instant::now() >= deadline);
     }
 }

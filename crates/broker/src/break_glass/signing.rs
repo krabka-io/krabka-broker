@@ -47,7 +47,10 @@
 
 use krabka_metadata::BreakGlassProposalRecord;
 
-use crate::{break_glass::action_to_wire, signing_domains::BREAK_GLASS_DOMAIN};
+use crate::{
+    break_glass::action_to_wire,
+    signing_domains::{BREAK_GLASS_DOMAIN, put_len_prefixed},
+};
 
 /// Build the canonical bytes that an approval of `proposal` signs.
 ///
@@ -65,22 +68,11 @@ pub(crate) fn approval_signing_bytes(proposal: &BreakGlassProposalRecord) -> Vec
     out.push(u8::from_be_bytes(
         action_to_wire(proposal.action).to_be_bytes(),
     ));
-    push_len_prefixed(&mut out, target);
-    push_len_prefixed(&mut out, proposer);
+    put_len_prefixed(&mut out, target);
+    put_len_prefixed(&mut out, proposer);
     out.extend_from_slice(&proposal.created_at_ms.to_be_bytes());
     out.extend_from_slice(&proposal.expires_at_ms.to_be_bytes());
     out
-}
-
-/// Append `bytes` behind its `u32` big-endian length.
-///
-/// A field longer than `u32::MAX` saturates. The private APIs carry a target
-/// and a proposer as compact strings, whose length a request frame already
-/// bounds far below that, so no reachable input saturates here.
-fn push_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
-    let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(bytes);
 }
 
 #[cfg(test)]

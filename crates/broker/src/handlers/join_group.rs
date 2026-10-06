@@ -7,7 +7,6 @@
 //! as the earlier `Notify`-based wait.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::{
     join_group_request::JoinGroupRequest,
     join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
@@ -15,7 +14,6 @@ use krabka_protocol::owned::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     coordinator::unified::{
@@ -50,14 +48,12 @@ pub(crate) async fn handle(
     // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
     {
         let image = broker.controller.current_image();
-        let acl_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Group,
-            resource_name: req.group_id.as_str(),
-            operation: AclOperation::Read,
-        };
-        if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
+        if crate::handlers::group_read_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            req.group_id.as_str(),
+        ) {
             return encode(
                 version,
                 JoinGroupResponse {

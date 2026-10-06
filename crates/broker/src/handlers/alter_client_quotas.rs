@@ -30,11 +30,7 @@ use self::{
     response::{apply_submit_error, encode_whole_request_error, err_entry, ok_entry},
 };
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes::CLUSTER_AUTHORIZATION_FAILED,
-};
+use crate::{broker::Broker, codes::CLUSTER_AUTHORIZATION_FAILED};
 
 #[tracing::instrument(
     name = "handle_alter_client_quotas",
@@ -54,17 +50,14 @@ pub(crate) async fn handle(
     // `AlterConfigs` on the cluster. `Alter` does not imply it. A denial
     // answers `AlterClientQuotasRequest.getErrorResponse`: every entry
     // carries the error code and the default message of the error.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::AlterConfigs,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Cluster,
+        CLUSTER_RESOURCE_NAME,
+        AclOperation::AlterConfigs,
+    ) {
         return encode_whole_request_error(
             &req,
             CLUSTER_AUTHORIZATION_FAILED,

@@ -15,13 +15,7 @@ use krabka_protocol::owned::{
     delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
 };
 
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-    coordinator::DeleteGroupError,
-    error::BrokerError,
-};
+use crate::{broker::Broker, codes, coordinator::DeleteGroupError, error::BrokerError};
 
 #[tracing::instrument(
     name = "handle_delete_groups",
@@ -54,16 +48,14 @@ pub(crate) async fn handle(
     let (authorized, denied): (Vec<String>, Vec<String>) = {
         let image = broker.controller.current_image();
         groups.into_iter().partition(|gid| {
-            broker.config.authorizer.authorize(
-                &*image,
-                &AuthorizationRequest {
-                    principal: ctx.principal,
-                    host: ctx.peer,
-                    resource_type: ResourceType::Group,
-                    resource_name: gid.as_str(),
-                    operation: AclOperation::Delete,
-                },
-            ) == AuthorizationResult::Allow
+            !crate::handlers::acl_denied(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                ResourceType::Group,
+                gid.as_str(),
+                AclOperation::Delete,
+            )
         })
     };
 
@@ -114,7 +106,10 @@ mod tests {
     use krabka_security::Principal;
 
     use super::*;
-    use crate::test_support::{DenyAll, peer, principal};
+    use crate::{
+        authorizer::{AuthorizationRequest, AuthorizationResult},
+        test_support::{DenyAll, peer, principal},
+    };
 
     const VERSION: i16 = 2;
 

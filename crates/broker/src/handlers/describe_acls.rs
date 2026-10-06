@@ -18,15 +18,11 @@ use krabka_protocol::{
 };
 
 use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
+    NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
     binding_filter::{AclBindingFilter, UnknownElement, WireAclBindingFilter},
     operation_to_wire, pattern_type_to_wire, permission_to_wire, resource_type_to_wire,
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes};
 
 /// The message of a cluster-describe refusal. Kafka's `AuthHelper` writes
 /// "Request <request> needs DESCRIBE permission.", where `<request>` is the JVM
@@ -107,17 +103,7 @@ pub(crate) fn handle(
     })?;
 
     let image = broker.controller.current_image();
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Describe,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let resp = describe_acls_error_response(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             CLUSTER_DESCRIBE_DENIED_MESSAGE,

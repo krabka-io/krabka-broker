@@ -606,7 +606,7 @@ fn partition_row(
 }
 
 /// A node id as the wire carries it.
-fn wire_id(node: krabka_metadata::NodeId) -> i32 {
+pub(crate) fn wire_id(node: krabka_metadata::NodeId) -> i32 {
     i32::try_from(node.0).unwrap_or(i32::MAX)
 }
 
@@ -632,7 +632,7 @@ fn project_broker(
 ) -> Option<MetadataResponseBroker> {
     let endpoint = listener_endpoint(b, connection_listener_name)?;
     Some(MetadataResponseBroker {
-        node_id: i32::try_from(b.node_id.0).unwrap_or(i32::MAX),
+        node_id: wire_id(b.node_id),
         host: endpoint.host.clone(),
         port: i32::from(endpoint.port),
         rack: b.rack.clone(),

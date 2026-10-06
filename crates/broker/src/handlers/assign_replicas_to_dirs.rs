@@ -40,7 +40,7 @@ mod validation;
 
 use self::{
     changes::{AssignmentPlan, plan_assignments},
-    response::{encode_resp, not_controller_response},
+    response::not_controller_response,
     validation::check_broker_epoch,
 };
 
@@ -65,12 +65,12 @@ pub(crate) async fn handle(
     // `ControllerApis.handleAssignReplicasToDirs` requires before it forwards
     // to the controller.
     if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_resp(
-            version,
+        return crate::handlers::encode_response(
             &AssignReplicasToDirsResponse {
                 error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
                 ..Default::default()
             },
+            version,
         );
     }
 
@@ -79,7 +79,7 @@ pub(crate) async fn handle(
         .borrow()
         .is_some_and(|n| is_controller_leader(Some(n.0), node_id.0));
     if !is_leader {
-        return encode_resp(version, &not_controller_response());
+        return crate::handlers::encode_response(&not_controller_response(), version);
     }
 
     // Kafka's `ClusterControlManager.checkBrokerEpoch`, which
@@ -91,24 +91,24 @@ pub(crate) async fn handle(
     let broker_slot_id = match check_broker_epoch(&image, req.broker_id, req.broker_epoch) {
         Ok(broker_slot_id) => broker_slot_id,
         Err(error_code) => {
-            return encode_resp(
-                version,
+            return crate::handlers::encode_response(
                 &AssignReplicasToDirsResponse {
                     error_code,
                     ..Default::default()
                 },
+                version,
             );
         }
     };
     if image.finalized_metadata_version().is_some_and(|level| {
         level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
     }) {
-        return encode_resp(
-            version,
+        return crate::handlers::encode_response(
             &AssignReplicasToDirsResponse {
                 error_code: codes::UNSUPPORTED_VERSION,
                 ..Default::default()
             },
+            version,
         );
     }
     let AssignmentPlan { changes, response } = plan_assignments(&image, broker_slot_id, &req);
@@ -119,7 +119,7 @@ pub(crate) async fn handle(
         return Err(BrokerError::Replication(format!("submit_change: {e}")));
     }
 
-    encode_resp(version, &response)
+    crate::handlers::encode_response(&response, version)
 }
 
 fn is_controller_leader(leader: Option<u64>, node_id: u64) -> bool {

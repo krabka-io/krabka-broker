@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use fancy_regex::Regex;
 
 use self::java_fold::Escape;
+use crate::config_keys::parse::{check_valid_list, java_trim, list_value};
 
 pub(crate) const KEY_METRICS: &str = "metrics";
 pub(crate) const KEY_INTERVAL_MS: &str = "interval.ms";
@@ -111,7 +112,7 @@ pub(crate) fn validate(
         )));
     }
     if let Some(value) = configs.get(KEY_METRICS) {
-        ensure_valid_list(KEY_METRICS, &parse_list(value))?;
+        check_valid_list(KEY_METRICS, value, &[], true).map_err(ConfigError::InvalidConfig)?;
     }
     let interval = configs
         .get(KEY_INTERVAL_MS)
@@ -124,10 +125,11 @@ pub(crate) fn validate(
             })
         })
         .transpose()?;
-    let patterns = configs.get(KEY_MATCH).map(|value| parse_list(value));
-    if let Some(patterns) = &patterns {
-        ensure_valid_list(KEY_MATCH, patterns)?;
-    }
+    let patterns = configs
+        .get(KEY_MATCH)
+        .map(|value| check_valid_list(KEY_MATCH, value, &[], true))
+        .transpose()
+        .map_err(ConfigError::InvalidConfig)?;
     if let Some(interval) = interval
         && !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&interval)
     {
@@ -140,47 +142,6 @@ pub(crate) fn validate(
         parse_match_patterns(&patterns)?;
     }
     Ok(())
-}
-
-/// `ConfigDef.ValidList.anyNonDuplicateValues(true, false)`: an empty list is
-/// allowed, a repeated item or an empty item is not.
-fn ensure_valid_list(key: &str, values: &[&str]) -> Result<(), ConfigError> {
-    let distinct: std::collections::HashSet<&&str> = values.iter().collect();
-    if distinct.len() != values.len() {
-        return Err(ConfigError::InvalidConfig(format!(
-            "Configuration '{key}' values must not be duplicated."
-        )));
-    }
-    if values.iter().any(|value| value.is_empty()) {
-        return Err(ConfigError::InvalidConfig(format!(
-            "Configuration '{key}' values must not be empty."
-        )));
-    }
-    Ok(())
-}
-
-/// Java's `String.trim`: strips every leading and trailing char at or below
-/// U+0020.
-fn java_trim(value: &str) -> &str {
-    value.trim_matches(|c: char| c <= ' ')
-}
-
-/// Java's `\s`: space, tab, newline, vertical tab, form feed, carriage return.
-fn is_java_whitespace(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r')
-}
-
-/// `ConfigDef.parseType` for a `LIST`: the trimmed value, empty meaning an
-/// empty list, otherwise split on `\s*,\s*` keeping empty items.
-fn parse_list(value: &str) -> Vec<&str> {
-    let trimmed = java_trim(value);
-    if trimmed.is_empty() {
-        return Vec::new();
-    }
-    trimmed
-        .split(',')
-        .map(|item| item.trim_matches(is_java_whitespace))
-        .collect()
 }
 
 /// Effective push interval for a subscription's override map. The function
@@ -199,13 +160,13 @@ pub(crate) fn effective_interval_ms(
 /// `"*"` collapses to `["*"]`. An empty string gives an empty list, which
 /// means no metrics.
 pub(crate) fn parse_metrics(value: &str) -> Vec<String> {
-    parse_list(value).into_iter().map(str::to_string).collect()
+    list_value(value).into_iter().map(str::to_string).collect()
 }
 
 /// Parse the `match` value into compiled selector rules. An empty value
 /// matches all.
 pub(crate) fn parse_match_rules(value: &str) -> Result<Vec<MatchRule>, ConfigError> {
-    parse_match_patterns(&parse_list(value))
+    parse_match_patterns(&list_value(value))
 }
 
 /// Kafka's `ClientMetricsConfigs.parseMatchingPatterns`: each entry splits on

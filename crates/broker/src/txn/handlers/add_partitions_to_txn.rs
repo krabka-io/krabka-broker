@@ -50,7 +50,6 @@ mod authz;
 mod registration;
 mod results;
 mod versions;
-mod wire;
 mod write_freeze;
 
 #[cfg(test)]
@@ -86,7 +85,7 @@ pub(crate) async fn handle(
     if version >= 4
         && crate::handlers::cluster_action_denied(authorizer, &controller.current_image(), ctx)
     {
-        return wire::encode_response(
+        return crate::handlers::encode_response(
             &krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse {
                 error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
                 ..Default::default()

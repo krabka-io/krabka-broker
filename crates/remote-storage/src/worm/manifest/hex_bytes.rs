@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use krabka_audit::chain::{from_hex32, to_hex};
+use hex::FromHex as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
 
@@ -35,7 +35,7 @@ pub(super) fn serialize_hex<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::
 where
     S: Serializer,
 {
-    serializer.serialize_str(&to_hex(bytes))
+    serializer.serialize_str(&hex::encode(bytes))
 }
 
 pub(super) fn deserialize_hex32<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
@@ -43,19 +43,19 @@ where
     D: Deserializer<'de>,
 {
     let text = String::deserialize(deserializer)?;
-    from_hex32(&text)
-        .ok_or_else(|| de::Error::custom(format!("expected 64 hex characters, got `{text}`")))
+    <[u8; 32]>::from_hex(&text)
+        .map_err(|_| de::Error::custom(format!("expected 64 hex characters, got `{text}`")))
 }
 
 impl fmt::Display for Sha256Digest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&to_hex(&self.0))
+        f.write_str(&hex::encode(self.0))
     }
 }
 
 impl fmt::Debug for Sha256Digest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Sha256Digest({})", to_hex(&self.0))
+        write!(f, "Sha256Digest({})", hex::encode(self.0))
     }
 }
 
@@ -79,13 +79,13 @@ impl<'de> Deserialize<'de> for Sha256Digest {
 
 impl fmt::Display for HexBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&to_hex(&self.0))
+        f.write_str(&hex::encode(&self.0))
     }
 }
 
 impl fmt::Debug for HexBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HexBytes({})", to_hex(&self.0))
+        write!(f, "HexBytes({})", hex::encode(&self.0))
     }
 }
 

@@ -38,7 +38,6 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     coordinator::unified::{
@@ -81,14 +80,14 @@ pub(crate) async fn handle(
     let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
     for gid in req.groups {
-        let acl_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Group,
-            resource_name: gid.as_str(),
-            operation: AclOperation::Describe,
-        };
-        if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
+        if crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::Group,
+            gid.as_str(),
+            AclOperation::Describe,
+        ) {
             denied.push(DescribedGroup {
                 group_id: gid,
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,

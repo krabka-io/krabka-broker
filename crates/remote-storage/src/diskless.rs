@@ -873,14 +873,3 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
     }
     Ok(entries)
 }
-
-/// Slice one parsed run without copying.
-///
-/// # Panics
-/// Panics if `entry` did not come from successfully parsing `object`.
-#[must_use]
-pub fn run_bytes(object: &Bytes, entry: &WalObjectEntry) -> Bytes {
-    let start = usize::try_from(entry.byte_start).expect("parsed byte start fits usize");
-    let len = usize::try_from(entry.byte_len).expect("parsed byte length fits usize");
-    object.slice(start..start + len)
-}

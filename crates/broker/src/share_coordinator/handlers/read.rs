@@ -6,18 +6,13 @@
 //! `INVALID_REQUEST`. A request leader epoch above the stored one is persisted
 //! before the answer, so the older share-partition leader is fenced.
 
-use std::sync::Arc;
-
-use bytes::{Bytes, BytesMut};
-use futures_util::future::{BoxFuture, join_all};
+use bytes::Bytes;
+use futures_util::future::join_all;
 use krabka_metadata::MetadataImage;
-use krabka_protocol::{
-    Encode,
-    owned::{
-        read_share_group_state_request::ReadShareGroupStateRequest,
-        read_share_group_state_response::{
-            PartitionResult, ReadShareGroupStateResponse, ReadStateResult, StateBatch,
-        },
+use krabka_protocol::owned::{
+    read_share_group_state_request::ReadShareGroupStateRequest,
+    read_share_group_state_response::{
+        PartitionResult, ReadShareGroupStateResponse, ReadStateResult, StateBatch,
     },
 };
 
@@ -31,45 +26,28 @@ use crate::{broker::Broker, error::BrokerError, share_coordinator::coordinator::
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    correlation_id: i32,
+    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    if super::cluster_action_denied(broker, ctx) {
-        let mut cur: &[u8] = req_bytes;
-        let req: ReadShareGroupStateRequest =
-            crate::handlers::decode_group_request(&mut cur, version)?;
-        let resp = super::cluster_authorization_failed!(
+    let mut cur: &[u8] = req_bytes;
+    let req: ReadShareGroupStateRequest = crate::handlers::decode_group_request(&mut cur, version)?;
+    let resp = if super::cluster_action_denied(broker, ctx) {
+        super::cluster_authorization_failed!(
             req,
             ReadShareGroupStateResponse,
             ReadStateResult,
             PartitionResult
-        );
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version)?;
-        return Ok(buf.freeze());
-    }
-    serve(broker, version, correlation_id, req_bytes).await
-}
-
-fn serve(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
-    let req_bytes = req_bytes.to_vec();
-    let coordinator = Arc::clone(&broker.share_coordinator);
-    let controller = Arc::clone(&broker.controller);
-    Box::pin(async move {
-        let mut cur: &[u8] = &req_bytes;
-        let req: ReadShareGroupStateRequest =
-            crate::handlers::decode_group_request(&mut cur, version)?;
-        let resp = read_state(&coordinator, &controller.current_image(), req).await;
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version)?;
-        Ok(buf.freeze())
-    })
+        )
+    } else {
+        read_state(
+            &broker.share_coordinator,
+            &broker.controller.current_image(),
+            req,
+        )
+        .await
+    };
+    crate::handlers::encode_response(&resp, version)
 }
 
 /// Serves every partition of `req`, as Kafka's

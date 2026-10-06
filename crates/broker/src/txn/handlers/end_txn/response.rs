@@ -2,8 +2,8 @@
 //! identity, the other the wire sentinels that stand in for it when the handler
 //! answers with an error code.
 
-use bytes::{Bytes, BytesMut};
-use krabka_protocol::{Encode, owned::end_txn_response::EndTxnResponse};
+use bytes::Bytes;
+use krabka_protocol::owned::end_txn_response::EndTxnResponse;
 
 use crate::{codes, error::BrokerError};
 
@@ -14,22 +14,12 @@ const NO_PRODUCER_ID: i64 = -1;
 /// Kafka wire sentinel: "no producer epoch" (`RecordBatch.NO_PRODUCER_EPOCH`).
 const NO_PRODUCER_EPOCH: i16 = -1;
 
-/// Kafka `KafkaApis.handleEndTxnRequest`: a client below `EndTxn` v2 does not
-/// know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
-fn wire_code(version: i16, error_code: i16) -> i16 {
-    if version < 2 && error_code == codes::PRODUCER_FENCED {
-        codes::INVALID_PRODUCER_EPOCH
-    } else {
-        error_code
-    }
-}
-
 pub(super) fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
     // On the error path the producer_id/epoch fields are not meaningful;
     // leave them at the "no producer" wire sentinels.
     encode_response(
         version,
-        wire_code(version, error_code),
+        crate::txn::util::producer_fenced_wire_code(version, error_code),
         NO_PRODUCER_ID,
         NO_PRODUCER_EPOCH,
     )
@@ -62,9 +52,7 @@ fn encode_response(
         producer_epoch,
         ..Default::default()
     };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
+    crate::handlers::encode_response(&resp, version)
 }
 
 #[cfg(test)]

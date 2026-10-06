@@ -31,7 +31,6 @@ use super::{
     authz::{TopicAuthorization, failed_partitions},
     registration::{TransactionRequest, process_one_txn},
     results::{dedup_topics, topic_error},
-    wire::encode_response,
     write_freeze::frozen_topics,
 };
 use crate::{
@@ -199,7 +198,7 @@ pub(super) async fn handle_v4(
         results_by_transaction,
         ..Default::default()
     };
-    encode_response(&resp, version)
+    crate::handlers::encode_response(&resp, version)
 }
 
 // ── v0-3 path ─────────────────────────────────────────────────────────────────
@@ -229,7 +228,7 @@ pub(super) async fn handle_v3(
         results_by_topic_v3_and_below: topic_results,
         ..Default::default()
     };
-    encode_response(&resp, version)
+    crate::handlers::encode_response(&resp, version)
 }
 
 #[cfg(test)]

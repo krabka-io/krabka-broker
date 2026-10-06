@@ -56,26 +56,8 @@ use crate::metadata_source::MetadataSource;
 #[cfg(test)]
 mod tests;
 
-/// Spawn the sweep. It returns when `shutdown` is cancelled.
-pub(crate) fn spawn(
-    node_id: NodeId,
-    metadata: Arc<dyn MetadataSource>,
-    coordinator: Arc<GroupCoordinator>,
-    interval: Time,
-    retention: Time,
-    shutdown: CancellationToken,
-) {
-    tokio::spawn(run(
-        node_id,
-        metadata,
-        coordinator,
-        interval,
-        retention,
-        shutdown,
-    ));
-}
-
-async fn run(
+/// Runs the sweep. It returns when `shutdown` is cancelled.
+pub(crate) async fn run(
     node_id: NodeId,
     metadata: Arc<dyn MetadataSource>,
     coordinator: Arc<GroupCoordinator>,

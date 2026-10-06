@@ -126,14 +126,8 @@ pub fn count_partitions(dir: &Path) -> usize {
 #[must_use]
 pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) -> PathBuf {
     assert2::assert!(!log_dirs.is_empty(), "log_dirs must be non-empty");
-    let leaf = format!("{topic}-{partition}");
-
-    // Existing location wins.
-    for dir in log_dirs {
-        let candidate = dir.join(&leaf);
-        if candidate.exists() {
-            return candidate;
-        }
+    if let Some(existing) = partition_dir_in(log_dirs, topic, partition) {
+        return existing;
     }
 
     // Least-loaded placement, ties broken by order.
@@ -141,7 +135,7 @@ pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) ->
         .iter()
         .min_by_key(|dir| count_partitions(dir))
         .unwrap_or(&log_dirs[0]);
-    chosen.join(&leaf)
+    partition_dir(chosen, topic, partition)
 }
 
 /// [`place_partition_dir`] with KIP-1066 cordoned directories: an existing
@@ -164,10 +158,9 @@ pub(crate) fn place_partition_dir_avoiding(
 /// The `<dir>/<topic>-<partition>` path of the first directory in `log_dirs`
 /// that already holds the partition.
 fn partition_dir_in(log_dirs: &[PathBuf], topic: &str, partition: i32) -> Option<PathBuf> {
-    let leaf = format!("{topic}-{partition}");
     log_dirs
         .iter()
-        .map(|dir| dir.join(&leaf))
+        .map(|dir| partition_dir(dir, topic, partition))
         .find(|candidate| candidate.exists())
 }
 

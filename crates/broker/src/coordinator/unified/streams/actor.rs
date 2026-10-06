@@ -63,7 +63,10 @@ use super::{
 };
 use crate::{
     codes,
-    coordinator::unified::{actor::CommitFence, offsets_log::OffsetsLog},
+    coordinator::unified::{
+        actor::CommitFence,
+        offsets_log::{OffsetsLog, write_failure_code},
+    },
     metadata_source::MetadataSource,
 };
 
@@ -444,10 +447,10 @@ async fn actor_loop(
                 None => break,
             },
             _ = tick.tick() => Wake::SessionCheck,
-            () = wait_for_initial_rebalance_delay(actor.initial_rebalance_deadline) => {
+            () = crate::time_util::sleep_until_opt(actor.initial_rebalance_deadline) => {
                 Wake::InitialDelayEnded
             }
-            () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
+            () = crate::time_util::sleep_until_opt(actor.state.next_rebalance_deadline()) => {
                 Wake::SessionCheck
             }
             image = wait_for_metadata_change(&mut metadata.images) => Wake::Image(image),
@@ -761,21 +764,6 @@ async fn handle_message(
     Step::Continue
 }
 
-/// The error code of a heartbeat or a description push whose write failed.
-///
-/// A write that is not committed carries the answer of Kafka's
-/// `CoordinatorOperationExceptionHelper` for it: `NOT_COORDINATOR` after a
-/// lost leadership, so that the member looks the coordinator up again, and
-/// `COORDINATOR_NOT_AVAILABLE` after a timeout. Any other failure answers
-/// `COORDINATOR_LOAD_IN_PROGRESS`: the member retries here, and a new actor
-/// serves the retry from the last committed state of the group.
-fn write_failure_code(error: &crate::error::BrokerError) -> i16 {
-    match error {
-        crate::error::BrokerError::CoordinatorWriteUncommitted { code, .. } => *code,
-        _ => codes::COORDINATOR_LOAD_IN_PROGRESS,
-    }
-}
-
 /// The streams config of `group_id`: the group config overrides in `image`
 /// over the broker `defaults`.
 pub(crate) fn resolve_group_config_from_image(
@@ -792,22 +780,6 @@ pub(crate) fn resolve_group_config_from_image(
             tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
             defaults.clone()
         }
-    }
-}
-
-/// Sleeps until `deadline`, or for ever when no rebalance timeout is armed.
-async fn wait_for_rebalance_deadline(deadline: Option<std::time::Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
-        None => std::future::pending().await,
-    }
-}
-
-/// Sleeps until the initial rebalance delay ends, or for ever when none runs.
-async fn wait_for_initial_rebalance_delay(deadline: Option<tokio::time::Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending().await,
     }
 }
 

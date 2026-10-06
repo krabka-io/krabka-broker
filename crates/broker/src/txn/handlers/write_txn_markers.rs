@@ -30,11 +30,11 @@
 //! Wire format: v1 flexible with tagged fields, and v2 flexible with
 //! `transaction_version`.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{
         write_txn_markers_request::WriteTxnMarkersRequest,
         write_txn_markers_response::{
@@ -89,9 +89,7 @@ pub(crate) async fn handle(
     } else {
         serve(broker, req).await
     };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
+    crate::handlers::encode_response(&resp, version)
 }
 
 /// The response Kafka's `WriteTxnMarkersRequest.getErrorResponse` builds for

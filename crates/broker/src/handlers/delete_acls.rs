@@ -40,14 +40,10 @@ use self::{
     },
 };
 use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
+    MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
     binding_filter::{AclBindingFilter, UnknownElement},
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes};
 
 /// The message of a cluster-alter refusal. Kafka's `AuthHelper` writes
 /// "Request <request> needs ALTER permission.", where `<request>` is the JVM
@@ -117,17 +113,7 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Whole-request cluster-alter gate.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Alter,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let filter_results = filters
             .iter()
             .map(|_| {

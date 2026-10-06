@@ -21,14 +21,12 @@ impl SharePartitionLeaderManager {
     /// partition is unknown.
     pub(crate) fn current_leader_of(&self, topic_id: uuid::Uuid, partition: i32) -> (i32, i32) {
         let image = self.controller.current_image();
-        let Some(topic) = image.topics().find(|t| t.topic_id == topic_id) else {
+        let Some(topic) = image.topic_name_by_id(&topic_id) else {
             return (-1, -1);
         };
-        image
-            .partition(&topic.name, partition)
-            .map_or((-1, -1), |p| {
-                (i32::try_from(p.leader.0).unwrap_or(-1), p.leader_epoch.0)
-            })
+        image.partition(topic, partition).map_or((-1, -1), |p| {
+            (i32::try_from(p.leader.0).unwrap_or(-1), p.leader_epoch.0)
+        })
     }
 
     /// Resolves the data-topic name for `topic_id` from the metadata image.
@@ -40,9 +38,8 @@ impl SharePartitionLeaderManager {
     pub(crate) fn topic_name_for(&self, topic_id: uuid::Uuid) -> Option<String> {
         self.controller
             .current_image()
-            .topics()
-            .find(|t| t.topic_id == topic_id)
-            .map(|t| t.name.clone())
+            .topic_name_by_id(&topic_id)
+            .map(str::to_owned)
     }
 
     /// Returns `true` if this broker leads the partition of the data topic
@@ -55,11 +52,11 @@ impl SharePartitionLeaderManager {
     /// The `ShareFetch` and `ShareAcknowledge` handlers call this method.
     pub(crate) fn topic_leader_is_self(&self, topic_id: uuid::Uuid, partition: i32) -> bool {
         let image = self.controller.current_image();
-        let Some(topic) = image.topics().find(|t| t.topic_id == topic_id) else {
+        let Some(topic) = image.topic_name_by_id(&topic_id) else {
             return false;
         };
         image
-            .partition(&topic.name, partition)
+            .partition(topic, partition)
             .is_some_and(|p| p.leader == self.node_id)
     }
 
@@ -69,11 +66,11 @@ impl SharePartitionLeaderManager {
     /// returns `0` when the partition is not materialized on this broker.
     pub(super) fn leader_epoch_for(&self, topic_id: uuid::Uuid, partition: i32) -> i32 {
         let image = self.controller.current_image();
-        let Some(topic) = image.topics().find(|t| t.topic_id == topic_id) else {
+        let Some(topic) = image.topic_name_by_id(&topic_id) else {
             return 0;
         };
         self.partitions
-            .get(&topic.name, PartitionIndex(partition))
+            .get(topic, PartitionIndex(partition))
             .map_or(0, |p| {
                 p.current_leader_epoch
                     .load(std::sync::atomic::Ordering::Acquire)

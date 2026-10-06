@@ -49,19 +49,13 @@ mod tests;
 mod tombstone;
 
 use self::{
-    response::{encode, whole_error},
+    response::whole_error,
     rows::{Rows, build_response_rows},
-    tombstone::{append_tombstones, now_ms},
+    tombstone::append_tombstones,
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
-    coordinator::{
-        partitioner::{GroupRoutingError, local_partition_for_group},
-        unified::actor::GroupActorMessage,
-    },
-    error::BrokerError,
+    authorizer::authorize_topics, broker::Broker, codes,
+    coordinator::unified::actor::GroupActorMessage, error::BrokerError,
 };
 
 #[tracing::instrument(
@@ -84,43 +78,34 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Group `Delete` ACL — `OffsetDeleteRequest.getErrorResponse` on Deny.
-    let acl_req = AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type: ResourceType::Group,
-        resource_name: req.group_id.as_str(),
-        operation: AclOperation::Delete,
-    };
-    if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-        return encode(version, &whole_error(codes::GROUP_AUTHORIZATION_FAILED));
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Group,
+        req.group_id.as_str(),
+        AclOperation::Delete,
+    ) {
+        return crate::handlers::encode_response(
+            &whole_error(codes::GROUP_AUTHORIZATION_FAILED),
+            version,
+        );
     }
 
     // `GroupCoordinatorService.deleteOffsets` answers an empty group id
     // before it routes the request.
     if req.group_id.is_empty() {
-        return encode(version, &whole_error(codes::INVALID_GROUP_ID));
+        return crate::handlers::encode_response(&whole_error(codes::INVALID_GROUP_ID), version);
     }
 
-    let offsets_partition =
-        match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-            Ok(partition) => partition,
-            Err(GroupRoutingError::Unavailable) => {
-                return encode(version, &whole_error(codes::COORDINATOR_NOT_AVAILABLE));
-            }
-            Err(GroupRoutingError::NotCoordinator) => {
-                return encode(version, &whole_error(codes::NOT_COORDINATOR));
-            }
-        };
-    if let Some(code) =
-        crate::handlers::coordinator_routing::group_partition_loading(broker, offsets_partition)
-    {
-        return encode(version, &whole_error(code));
+    if let Some(code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+        return crate::handlers::encode_response(&whole_error(code), version);
     }
 
     // The group must exist and pass Kafka's `validateOffsetDelete`; its
     // answer also names the topics it subscribes to.
     let Some(group_handle) = broker.group_coordinator.find(&req.group_id) else {
-        return encode(version, &whole_error(codes::GROUP_ID_NOT_FOUND));
+        return crate::handlers::encode_response(&whole_error(codes::GROUP_ID_NOT_FOUND), version);
     };
     let subscribed_topics = {
         let (tx, rx) = oneshot::channel();
@@ -137,7 +122,7 @@ pub(crate) async fn handle(
         };
         match guard {
             Ok(topics) => topics,
-            Err(code) => return encode(version, &whole_error(code)),
+            Err(code) => return crate::handlers::encode_response(&whole_error(code), version),
         }
     };
 
@@ -177,14 +162,17 @@ pub(crate) async fn handle(
         Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(group_id = %req.group_id, %error, "offset tombstones are not encodable");
-            return encode(version, &whole_error(codes::UNKNOWN_SERVER_ERROR));
+            return crate::handlers::encode_response(
+                &whole_error(codes::UNKNOWN_SERVER_ERROR),
+                version,
+            );
         }
     };
 
     if !tombstones.is_empty() {
         let last_offset_delta =
             i32::try_from(tombstones.len().saturating_sub(1)).unwrap_or(i32::MAX);
-        let timestamp = now_ms();
+        let timestamp = crate::time_util::now_ms();
         let batch = RecordBatch {
             base_timestamp: timestamp,
             max_timestamp: timestamp,
@@ -197,7 +185,7 @@ pub(crate) async fn handle(
         // The answer waits for the tombstones to commit, as Kafka's
         // `CoordinatorRuntime` completes the write only then.
         if let Err(code) = append_tombstones(broker, &req.group_id, batch).await {
-            return encode(version, &whole_error(code));
+            return crate::handlers::encode_response(&whole_error(code), version);
         }
         let (tx, rx) = oneshot::channel();
         if group_handle
@@ -219,5 +207,5 @@ pub(crate) async fn handle(
         topics,
         ..Default::default()
     };
-    encode(version, &resp)
+    crate::handlers::encode_response(&resp, version)
 }

@@ -3,9 +3,8 @@
 //! result rows.
 
 use bytes::Bytes;
-use krabka_protocol::{
-    Encode,
-    owned::create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
+use krabka_protocol::owned::create_partitions_response::{
+    CreatePartitionsResponse, CreatePartitionsTopicResult,
 };
 use krabka_units::Time;
 
@@ -22,10 +21,6 @@ pub(super) fn create_partitions_response(
     }
 }
 
-pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
-}
-
 pub(super) fn finish_response(
     context: &crate::handlers::RequestContext<'_>,
     delay: Time,
@@ -40,7 +35,7 @@ pub(super) fn finish_response(
     // when the request quota asks for more.
     context.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
     let resp = create_partitions_response(results, crate::quota::throttle_time_ms(delay));
-    encode_response(&resp, version)
+    crate::handlers::encode_response(&resp, version)
 }
 
 #[cfg(test)]
@@ -56,7 +51,7 @@ mod tests {
 
     #[test]
     fn encode_response_writes_decodable_results_and_throttle() {
-        let bytes = encode_response(
+        let bytes = crate::handlers::encode_response(
             &create_partitions_response(
                 vec![CreatePartitionsTopicResult {
                     name: "orders".into(),

@@ -14,7 +14,6 @@ use krabka_protocol::{
 
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE, UNSUPPORTED_VERSION},
 };
@@ -118,17 +117,14 @@ pub(crate) fn handle(
     // `DescribeConfigs` on the cluster. A denial goes through
     // `ApiError.fromThrowable`, which drops the default message, so the
     // response carries a null `error_message`.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::DescribeConfigs,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Cluster,
+        CLUSTER_RESOURCE_NAME,
+        krabka_metadata::AclOperation::DescribeConfigs,
+    ) {
         let resp = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,

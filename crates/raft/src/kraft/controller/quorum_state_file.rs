@@ -43,12 +43,11 @@ struct QuorumStateJson {
     data_version: i32,
 }
 
-/// Write Kafka's JSON `QuorumStateData` atomically. Level 0 uses schema v0
+/// Write Kafka's JSON `QuorumStateData` atomically and durably, syncing the
+/// directory after the rename as Kafka's `FileQuorumStateStore` does. Level 0 uses schema v0
 /// (including the legacy voter ids); level 1 uses schema v1 with the voted
 /// directory id and no embedded voter set.
 pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(), RaftError> {
-    use std::io::Write as _;
-
     let voter_ids = state.voters.ids();
     let all_voter_ids_fit = voter_ids.iter().all(|id| i32::try_from(id.0).is_ok());
     let leader_id_value = state.leader_id.map_or(0, |id| id.0);
@@ -117,12 +116,8 @@ pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(
         )))
     })?;
     let path = dir.join(QUORUM_STATE_FILE);
-    let tmp = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&tmp).map_err(krabka_log::LogError::Io)?;
-    file.write_all(json.as_bytes())
+    krabka_log::write_file_atomic(&path.with_extension("tmp"), &path, json.as_bytes())
         .map_err(krabka_log::LogError::Io)?;
-    file.sync_all().map_err(krabka_log::LogError::Io)?;
-    std::fs::rename(&tmp, &path).map_err(krabka_log::LogError::Io)?;
     Ok(())
 }
 

@@ -40,14 +40,8 @@ use self::{
     },
     validate::{HostCheck, has_filter_only_element, has_unknown_element, validate},
 };
-use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE,
-};
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use super::acl_wire::{MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE};
+use crate::{broker::Broker, codes};
 
 /// The message Kafka's controller gives the `PolicyViolationException` that
 /// `EventHandlerExceptionInfo` makes of a `BoundedListTooLongException`.
@@ -126,17 +120,7 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Whole-request cluster-alter gate.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Alter,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let results = req
             .creations
             .iter()

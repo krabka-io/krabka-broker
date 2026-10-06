@@ -1,7 +1,7 @@
 //! `DescribeUserScramCredentials` (`api_key` 50, KIP-554 read half).
 
 use bytes::Bytes;
-use krabka_metadata::{MetadataImage, ResourceType};
+use krabka_metadata::MetadataImage;
 use krabka_protocol::{
     Encode,
     owned::{
@@ -15,7 +15,6 @@ use krabka_protocol::{
 use krabka_security::SaslMechanism;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND},
 };
@@ -45,17 +44,7 @@ pub(crate) fn handle(
 ) -> Result<Bytes, crate::error::BrokerError> {
     let image = broker.controller.current_image();
 
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Describe,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
+    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return encode_response(&denied_response(&req), api_version);
     }
 
@@ -236,7 +225,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{AclOperation, MetadataRecord, ScramCredentialRecord};
+    use krabka_metadata::{AclOperation, MetadataRecord, ResourceType, ScramCredentialRecord};
     use krabka_protocol::UnknownTaggedFields;
 
     #[derive(Debug)]
@@ -260,6 +249,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::authorizer::AuthorizationResult;
 
     fn img_with_scram(users: &[(&str, SaslMechanism, u32)]) -> MetadataImage {
         let mut img = MetadataImage::new(uuid::Uuid::nil());

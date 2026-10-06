@@ -8,13 +8,13 @@
 //! Request fields: `transactional_id`, `producer_id`, `producer_epoch`, `group_id`.
 //! Response fields: `throttle_time_ms`, `error_code`.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
         add_offsets_to_txn_response::AddOffsetsToTxnResponse,
@@ -108,18 +108,11 @@ fn serve(
             txnv,
         )
         .await;
-        encode_response(version, wire_code(version, code))
+        encode_response(
+            version,
+            crate::txn::util::producer_fenced_wire_code(version, code),
+        )
     })
-}
-
-/// Kafka `KafkaApis.handleAddOffsetsToTxnRequest`: a client below version 2
-/// does not know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
-fn wire_code(version: i16, code: i16) -> i16 {
-    if version < 2 && code == codes::PRODUCER_FENCED {
-        codes::INVALID_PRODUCER_EPOCH
-    } else {
-        code
-    }
 }
 
 /// What `AddOffsetsToTxn` does with one coordinator entry.
@@ -236,9 +229,7 @@ fn encode_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> 
         error_code,
         ..Default::default()
     };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
+    crate::handlers::encode_response(&resp, version)
 }
 
 #[cfg(test)]

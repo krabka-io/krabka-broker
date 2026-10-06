@@ -34,7 +34,6 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -221,16 +220,14 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
             continue;
         };
 
-        let denied = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Topic,
-                resource_name: &topic_name,
-                operation: AclOperation::Read,
-            },
-        ) == AuthorizationResult::Deny;
+        let denied = crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::Topic,
+            &topic_name,
+            AclOperation::Read,
+        );
 
         let renewal = Renewal {
             requested: req.is_renew_ack,
@@ -363,6 +360,7 @@ mod tests {
     use krabka_security::Principal;
 
     use super::*;
+    use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
     crate::test_support::wire_helpers!(
         ShareAcknowledgeRequest,

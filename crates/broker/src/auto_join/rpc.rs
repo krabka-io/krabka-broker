@@ -32,7 +32,7 @@ pub(super) async fn send_remove_raft_voter(
     let (host, port) = split_bootstrap_server(target)?;
     let connection = client
         .connect_as_connection(
-            host,
+            &host,
             port,
             protocol,
             server_name,
@@ -70,7 +70,7 @@ pub(super) async fn send_update_voter(
     let (host, port) = split_bootstrap_server(target)?;
     let connection = client
         .connect_as_connection(
-            host,
+            &host,
             port,
             protocol,
             server_name,
@@ -112,7 +112,7 @@ pub(super) async fn send_add_raft_voter(
     let (host, port) = split_bootstrap_server(target)?;
     let opts = auto_join_connection_options();
     let conn = client
-        .connect_as_connection(host, port, protocol, server_name, opts)
+        .connect_as_connection(&host, port, protocol, server_name, opts)
         .await
         .map_err(|e| format!("dial {target}: {e}"))?;
 
@@ -127,14 +127,12 @@ pub(super) async fn send_add_raft_voter(
     AddRaftVoterResponse::decode(&mut cur, version).map_err(|e| format!("AddRaftVoter decode: {e}"))
 }
 
-fn split_bootstrap_server(target: &str) -> Result<(&str, u16), String> {
-    let (host, port) = target
-        .rsplit_once(':')
+/// Splits a `<host>:<port>` bootstrap server, dropping the brackets of an IPv6
+/// literal so the dialer resolves the bare address.
+fn split_bootstrap_server(target: &str) -> Result<(String, u16), String> {
+    let (host, port) = crate::host_port::parse_host_port(target)
         .ok_or_else(|| format!("bootstrap server {target:?} must use <host>:<port>"))?;
-    let port = port
-        .parse::<u16>()
-        .map_err(|error| format!("invalid bootstrap server port in {target:?}: {error}"))?;
-    Ok((host.trim_matches(['[', ']']), port))
+    Ok((host.trim_matches(['[', ']']).to_owned(), port))
 }
 
 fn auto_join_connection_options() -> krabka_client_core::ConnectionOptions {

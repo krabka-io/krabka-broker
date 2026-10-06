@@ -12,9 +12,8 @@
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{
         get_replica_log_info_request::GetReplicaLogInfoRequest,
         get_replica_log_info_response::{
@@ -24,10 +23,10 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     error::BrokerError,
+    handlers::{cluster_action_denied, encode_response_with_context},
 };
 
 #[tracing::instrument(
@@ -52,12 +51,7 @@ pub(crate) fn handle(
     // field (it's a list of per-partition log-info rows), so on Deny we
     // stamp `CLUSTER_AUTHORIZATION_FAILED (31)` on every requested
     // partition — mirroring `alter_replica_log_dirs`' cluster-deny path.
-    if cluster_action_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx.principal,
-        ctx.peer,
-    ) {
+    if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return denied_response(version, req_bytes);
     }
 
@@ -119,31 +113,7 @@ pub(crate) fn handle(
         ..Default::default()
     };
 
-    let mut body = Vec::new();
-    resp.encode(&mut body, version)
-        .map_err(|e| BrokerError::Replication(format!("encode GetReplicaLogInfo: {e}")))?;
-    Ok(Bytes::from(body))
-}
-
-/// The `ClusterAction` gate on `Cluster("kafka-cluster")`. It returns `true`
-/// when the authorizer denies the principal. This is an inter-broker
-/// control-plane RPC.
-fn cluster_action_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    principal: &krabka_security::Principal,
-    host: &std::net::SocketAddr,
-) -> bool {
-    authorizer.authorize(
-        image,
-        &AuthorizationRequest {
-            principal,
-            host,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::ClusterAction,
-        },
-    ) == AuthorizationResult::Deny
+    encode_response_with_context(&resp, version, "encode GetReplicaLogInfo")
 }
 
 /// On a Deny, this function echoes every requested `(topic_id, partition)`
@@ -180,15 +150,13 @@ fn denied_response(version: i16, req_bytes: &[u8]) -> Result<Bytes, BrokerError>
         topic_partition_log_info_list: topic_results,
         ..Default::default()
     };
-    let mut body = Vec::new();
-    resp.encode(&mut body, version)
-        .map_err(|e| BrokerError::Replication(format!("encode GetReplicaLogInfo: {e}")))?;
-    Ok(Bytes::from(body))
+    encode_response_with_context(&resp, version, "encode GetReplicaLogInfo")
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_protocol::Encode;
 
     use super::*;
 
@@ -310,13 +278,16 @@ mod tests {
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-
-        assert!(cluster_action_denied(
-            &authorizer,
-            &image,
+        let ctx = crate::handlers::RequestContext::new(
             &principal,
-            &peer
-        ));
+            &peer,
+            "client-a",
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        );
+
+        assert!(cluster_action_denied(&authorizer, &image, &ctx));
 
         let version = get_replica_log_info_request::MAX_VERSION;
         let req = GetReplicaLogInfoRequest {

@@ -374,14 +374,14 @@ impl Broker {
         // KIP-211. Every broker sweeps the groups whose offsets partition it
         // leads, and the tombstones are idempotent, so the sweep needs no
         // config gate of its own.
-        crate::coordinator::retention::spawn(
+        tokio::spawn(crate::coordinator::retention::run(
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&group_coordinator),
             config.offsets_retention_check_interval(),
             config.offsets_retention(),
             runtime.supervisor_shutdown.child_token(),
-        );
+        ));
 
         tokio::spawn(crate::barrier::scheduler::run(
             Arc::clone(&barrier_coordinator),

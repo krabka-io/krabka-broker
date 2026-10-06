@@ -36,7 +36,7 @@ mod test_support;
 mod tests;
 
 use self::{
-    admission::{denied_topics, duplicate_names},
+    admission::duplicate_names,
     apply::{MaterializeContext, materialize_new_partitions, partition_records},
     assignment::resolve_new_partition_assignments,
     response::finish_response,
@@ -105,12 +105,12 @@ pub(crate) async fn handle(
         .map(|topic| topic.name.as_str())
         .filter(|name| !duplicates.iter().any(|duplicate| duplicate == name))
         .collect();
-    let denied_topics = denied_topics(
+    let denied_topics = crate::handlers::denied_topics(
         broker.config.authorizer.as_ref(),
         &image,
-        ctx.principal,
-        ctx.peer,
-        &names,
+        ctx,
+        krabka_metadata::AclOperation::Alter,
+        names.iter().copied(),
     );
     results.extend(
         names

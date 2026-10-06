@@ -46,26 +46,6 @@ fn the_response_carries_the_error_code() {
     }
 }
 
-/// Kafka `KafkaApis.handleAddOffsetsToTxnRequest` downgrades
-/// `PRODUCER_FENCED` below version 2.
-#[test]
-fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
-    let cases = [
-        (0, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
-        (1, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
-        (2, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
-        (4, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
-        (
-            1,
-            codes::CONCURRENT_TRANSACTIONS,
-            codes::CONCURRENT_TRANSACTIONS,
-        ),
-    ];
-    for (version, code, expected) in cases {
-        check!(wire_code(version, code) == expected, "v{version} {code}");
-    }
-}
-
 /// Kafka `TransactionCoordinator.handleAddPartitionsToTransaction`.
 #[test]
 fn the_decision_follows_kafka_order() {

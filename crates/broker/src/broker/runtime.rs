@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     broker::{
         DisklessRuntime,
-        adapters::{BreakGlassSweepControllerAdapter, DelegationTokenCleanupControllerAdapter},
+        adapters::ControllerAdapter,
         audit::start_audit_pipeline,
         gauges::spawn_broker_gauge_updater,
         liveness::{LivenessStartup, start_liveness_services},
@@ -115,8 +115,9 @@ fn start_runtime_watchers(
     if config.delegation_token_secret_key.is_some() {
         let interval = config.delegation_token_expiry_check_interval;
         let token_controller: Arc<dyn crate::delegation_token_cleanup::DelegationTokenController> =
-            Arc::new(DelegationTokenCleanupControllerAdapter {
+            Arc::new(ControllerAdapter {
                 handle: Arc::clone(controller),
+                node_id: config.node_id,
             });
         tokio::spawn(crate::delegation_token_cleanup::run(
             token_controller,
@@ -127,8 +128,9 @@ fn start_runtime_watchers(
     // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
     // that never sweeps is still safe, so the sweep needs no config gate.
     let break_glass_controller: Arc<dyn crate::break_glass::sweep::BreakGlassController> =
-        Arc::new(BreakGlassSweepControllerAdapter {
+        Arc::new(ControllerAdapter {
             handle: Arc::clone(controller),
+            node_id: config.node_id,
         });
     tokio::spawn(crate::break_glass::sweep::run(
         break_glass_controller,

@@ -27,13 +27,7 @@ use krabka_protocol::{
     },
 };
 
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    txn::state::TxnState,
-};
+use crate::{broker::Broker, codes, error::BrokerError, txn::state::TxnState};
 
 /// Every state name Kafka's `TransactionState.fromName` resolves. The handler
 /// echoes any filter string outside this set back in the KIP-664
@@ -53,20 +47,6 @@ const ALL_TXN_STATE_NAMES: [&str; 8] = [
     "CompleteAbort",
     "Dead",
 ];
-
-/// JVM-canonical string form of a Krabka [`TxnState`]. These names match the
-/// names the JVM coordinator emits on `TransactionState.toString()`.
-fn txn_state_str(s: TxnState) -> &'static str {
-    match s {
-        TxnState::Empty => "Empty",
-        TxnState::Ongoing => "Ongoing",
-        TxnState::PrepareCommit => "PrepareCommit",
-        TxnState::PrepareAbort => "PrepareAbort",
-        TxnState::CompleteCommit => "CompleteCommit",
-        TxnState::CompleteAbort => "CompleteAbort",
-        TxnState::Dead => "Dead",
-    }
-}
 
 /// Kafka's duration filter is a strict lower bound: a transaction whose age
 /// equals the filter is excluded. Any negative value disables the filter.
@@ -174,7 +154,7 @@ pub(crate) async fn handle(
         if entry.state == TxnState::Dead {
             continue;
         }
-        let state = txn_state_str(entry.state);
+        let state = entry.state.as_str();
 
         // State filter: empty = no filter; otherwise the entry's state
         // must be one of the requested ones.
@@ -201,17 +181,14 @@ pub(crate) async fn handle(
         }
         // ACL: per-tid `Describe` on `TransactionalId`. Silent filter on
         // Deny.
-        let allow = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::TransactionalId,
-                resource_name: entry.transactional_id.as_str(),
-                operation: AclOperation::Describe,
-            },
-        );
-        if allow == AuthorizationResult::Deny {
+        if crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::TransactionalId,
+            entry.transactional_id.as_str(),
+            AclOperation::Describe,
+        ) {
             continue;
         }
 
@@ -246,7 +223,7 @@ mod tests {
     };
 
     #[test]
-    fn txn_state_str_matches_jvm_names() {
+    fn txn_state_as_str_matches_jvm_names() {
         let cases = [
             (TxnState::Empty, "Empty"),
             (TxnState::Ongoing, "Ongoing"),
@@ -257,7 +234,7 @@ mod tests {
             (TxnState::Dead, "Dead"),
         ];
         for (state, want) in cases {
-            assert!(txn_state_str(state) == want, "{state:?}");
+            assert!(state.as_str() == want, "{state:?}");
         }
     }
 

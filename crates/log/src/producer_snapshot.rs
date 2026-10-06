@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    fs::{self, File},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -264,12 +264,14 @@ impl PreparedSnapshot {
         }
 
         let temporary = destination.with_extension("snapshot.tmp");
-        let file = File::create(&temporary)?;
-        crate::io::write_all(io, IoTarget::ProducerSnapshot, &file, &self.bytes)?;
-        io.sync_file(IoTarget::ProducerSnapshot, &file)?;
-        drop(file);
-        io.rename(IoTarget::ProducerSnapshot, &temporary, &destination)?;
-        io.sync_dir(&self.dir)?;
+        crate::io::write_atomic(
+            io,
+            IoTarget::ProducerSnapshot,
+            &temporary,
+            &destination,
+            &self.bytes,
+            true,
+        )?;
         Ok(destination)
     }
 }

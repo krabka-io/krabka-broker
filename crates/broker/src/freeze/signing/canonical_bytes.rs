@@ -8,7 +8,7 @@
 use krabka_metadata::{PatternType, TopicFreezeRecord};
 use krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED};
 
-use crate::signing_domains::FREEZE_DOMAIN;
+use crate::signing_domains::{FREEZE_DOMAIN, put_len_prefixed};
 
 /// The canonical bytes that an operator signs to author `record` in the
 /// cluster named by `cluster_id`.
@@ -40,17 +40,6 @@ fn pattern_type_byte(pattern_type: PatternType) -> u8 {
         PatternType::Prefixed => PATTERN_TYPE_PREFIXED,
     };
     wire.to_be_bytes()[0]
-}
-
-/// Append `field` behind its `u32` big-endian length.
-///
-/// A field longer than `u32::MAX` cannot arrive: the request body is capped
-/// far below it. The saturation keeps the function total rather than
-/// panicking.
-fn put_len_prefixed(bytes: &mut Vec<u8>, field: &[u8]) {
-    let len = u32::try_from(field.len()).unwrap_or(u32::MAX);
-    bytes.extend_from_slice(&len.to_be_bytes());
-    bytes.extend_from_slice(field);
 }
 
 /// How many bytes [`freeze_signing_bytes`] writes, for the one allocation.

@@ -7,11 +7,10 @@
 //! `AdminClient`, so it sits apart from the code that decides which code an
 //! outcome gets.
 
-use bytes::Bytes;
 use krabka_metadata::NodeId;
 use krabka_protocol::owned::unregister_broker_response::UnregisterBrokerResponse;
 
-use crate::{error::BrokerError, handlers::forward_to_controller::wrong_controller_message};
+use crate::handlers::forward_to_controller::wrong_controller_message;
 
 pub(super) fn response(error_code: i16, error_message: Option<String>) -> UnregisterBrokerResponse {
     UnregisterBrokerResponse {
@@ -37,11 +36,4 @@ pub(super) fn not_controller_refusal(
             Some(wrong_controller_message(leader)),
         )
     })
-}
-
-pub(super) fn encode_resp(
-    version: i16,
-    resp: &UnregisterBrokerResponse,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }

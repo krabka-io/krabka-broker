@@ -277,6 +277,21 @@ fn uncommitted(partition: i32, code: i16) -> BrokerError {
     BrokerError::CoordinatorWriteUncommitted { partition, code }
 }
 
+/// The error code of a group write that failed.
+///
+/// A write that is not committed carries the answer of Kafka's
+/// `CoordinatorOperationExceptionHelper` for it: `NOT_COORDINATOR` after a
+/// lost leadership, so that the member looks the coordinator up again, and
+/// `COORDINATOR_NOT_AVAILABLE` after a timeout. Any other failure answers
+/// `COORDINATOR_LOAD_IN_PROGRESS`: the member retries here, and a new actor
+/// serves the retry from the last committed state of the group.
+pub(crate) fn write_failure_code(error: &BrokerError) -> i16 {
+    match error {
+        BrokerError::CoordinatorWriteUncommitted { code, .. } => *code,
+        _ => codes::COORDINATOR_LOAD_IN_PROGRESS,
+    }
+}
+
 pub mod fake {
     use krabka_protocol::records::RecordBatch;
     use tokio::sync::Mutex;

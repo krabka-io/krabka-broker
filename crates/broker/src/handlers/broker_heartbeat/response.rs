@@ -1,13 +1,11 @@
-//! The `BrokerHeartbeatResponse` bodies the handler returns, and the encode
-//! step that turns one into wire bytes.
+//! The `BrokerHeartbeatResponse` bodies the handler returns.
 //!
 //! Every response the handler sends comes from one of these builders, so the
 //! default-valued fields stay in one place.
 
-use bytes::Bytes;
 use krabka_protocol::owned::broker_heartbeat_response::BrokerHeartbeatResponse;
 
-use crate::{codes, error::BrokerError};
+use crate::codes;
 
 pub(super) fn not_controller_response() -> BrokerHeartbeatResponse {
     error_response(codes::NOT_CONTROLLER)
@@ -35,13 +33,6 @@ pub(super) fn success_response(
 
 pub(super) fn denied_response_body() -> BrokerHeartbeatResponse {
     error_response(codes::CLUSTER_AUTHORIZATION_FAILED)
-}
-
-pub(super) fn encode_response(
-    version: i16,
-    resp: &BrokerHeartbeatResponse,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }
 
 #[cfg(test)]

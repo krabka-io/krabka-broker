@@ -26,7 +26,6 @@
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use krabka_metadata::ResourceType;
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
@@ -54,7 +53,6 @@ use self::{
     response::{encode_response, encode_whole_request_error, mark_submit_failed},
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, POLICY_VIOLATION},
     freeze::resolve::resolve_freeze_mutation,
@@ -76,17 +74,7 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, crate::error::BrokerError> {
     let image = broker.controller.current_image();
     // Whole-request Cluster Alter authorize.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Alter,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return encode_whole_request_error(
             &req,
             CLUSTER_AUTHORIZATION_FAILED,

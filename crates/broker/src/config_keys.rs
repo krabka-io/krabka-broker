@@ -111,7 +111,7 @@ mod log_config;
 mod lookup;
 mod message_size;
 mod min_isr;
-mod parse;
+pub(crate) mod parse;
 mod recovery;
 pub(crate) mod registry;
 mod schema;

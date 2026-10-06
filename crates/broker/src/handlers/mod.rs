@@ -30,7 +30,7 @@ mod wire_types;
 pub(crate) use self::{
     acl_gates::{
         acl_denied, cluster_action_denied, cluster_alter_denied, cluster_describe_denied,
-        group_read_denied,
+        denied_topics, group_read_denied, requested_topic_name, subscribed_names_describe_denied,
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
     coordinator_routing::{

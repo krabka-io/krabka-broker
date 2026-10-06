@@ -54,9 +54,9 @@ use self::{
     share_state::apply_initialized,
 };
 use super::{config::ShareGroupConfig, state::ShareGroupState};
-use crate::{
-    codes,
-    coordinator::unified::{actor::MetadataProvider, offsets_log::OffsetsLog},
+use crate::coordinator::unified::{
+    actor::MetadataProvider,
+    offsets_log::{OffsetsLog, write_failure_code},
 };
 
 #[derive(Debug)]
@@ -130,21 +130,6 @@ fn effective_config<'a>(
     match coordinator.metadata_source() {
         Some(source) => config.for_group(source.current_image().group_config(group_id)),
         None => Cow::Borrowed(config),
-    }
-}
-
-/// The code of a heartbeat whose write failed.
-///
-/// A coordinator write that is not committed carries the answer of Kafka's
-/// `CoordinatorOperationExceptionHelper` for it: `NOT_COORDINATOR` after a
-/// lost leadership, so the client looks the coordinator up again, and
-/// `COORDINATOR_NOT_AVAILABLE` after a timeout. Any other failure answers
-/// `COORDINATOR_LOAD_IN_PROGRESS`: the client retries here, and a new actor
-/// serves the retry from the last committed state of the group.
-fn write_failure_code(error: &crate::error::BrokerError) -> i16 {
-    match error {
-        crate::error::BrokerError::CoordinatorWriteUncommitted { code, .. } => *code,
-        _ => codes::COORDINATOR_LOAD_IN_PROGRESS,
     }
 }
 

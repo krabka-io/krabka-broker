@@ -9,10 +9,7 @@
 
 use krabka_metadata::{AclOperation, ResourceType};
 
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-};
+use crate::broker::Broker;
 
 /// Reports whether the principal may `Describe` the group, the gate that
 /// precedes every committed-offset read. A denial makes the whole response
@@ -23,14 +20,12 @@ pub(super) fn group_authorized(
     context: &crate::handlers::RequestContext<'_>,
     group_id: &str,
 ) -> bool {
-    broker.config.authorizer.authorize(
-        &*broker.controller.current_image(),
-        &AuthorizationRequest {
-            principal: context.principal,
-            host: context.peer,
-            resource_type: ResourceType::Group,
-            resource_name: group_id,
-            operation: AclOperation::Describe,
-        },
-    ) == AuthorizationResult::Allow
+    !crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &broker.controller.current_image(),
+        context,
+        ResourceType::Group,
+        group_id,
+        AclOperation::Describe,
+    )
 }

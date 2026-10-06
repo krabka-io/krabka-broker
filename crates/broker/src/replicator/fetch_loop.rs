@@ -24,7 +24,7 @@ use tracing::{info, warn};
 
 use super::{
     Config, FetcherConfig, FollowedKey,
-    connection::connect_with_backoff,
+    connection::{connect_with_backoff, sleep_or_cancel},
     ensure_local_partition,
     follower_throttle::{FetchThrottleDecision, follower_partition_fetch_cap},
     raw_fetch::RawFetchRequest,
@@ -141,7 +141,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             } else {
                 fetcher.replication.fetch_max_wait
             };
-            if !sleep_or_stop(fetcher, idle).await {
+            if sleep_or_cancel(&fetcher.shutdown, idle).await.is_err() {
                 return Ok(());
             }
             continue;
@@ -183,7 +183,10 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                 client = None;
                 session.reset();
                 dirty = followed.keys().cloned().collect();
-                if !sleep_or_stop(fetcher, fetcher.replication.send_error_backoff).await {
+                if sleep_or_cancel(&fetcher.shutdown, fetcher.replication.send_error_backoff)
+                    .await
+                    .is_err()
+                {
                     return Ok(());
                 }
                 continue;
@@ -250,7 +253,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             dirty = followed.keys().cloned().collect();
         }
         if let Some(delay) = backoff
-            && !sleep_or_stop(fetcher, delay).await
+            && sleep_or_cancel(&fetcher.shutdown, delay).await.is_err()
         {
             return Ok(());
         }
@@ -261,14 +264,6 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
 /// still says this broker follows it from this leader.
 fn drop_partition(fetcher: &FetcherConfig, key: &FollowedKey) {
     fetcher.followed.remove(key);
-}
-
-/// Sleeps, or reports `false` when the fetcher was cancelled during the wait.
-async fn sleep_or_stop(fetcher: &FetcherConfig, delay: Time) -> bool {
-    tokio::select! {
-        () = fetcher.shutdown.cancelled() => false,
-        () = tokio::time::sleep(delay.to_std()) => true,
-    }
 }
 
 /// Decides what this round asks for, partition by partition.

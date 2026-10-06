@@ -28,11 +28,14 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use self::{
-    authorization::{cluster_action_denied, denied_response},
-    isr_update::handle_partition_with_recovery,
+use self::{authorization::denied_response, isr_update::handle_partition_with_recovery};
+use crate::{
+    broker::Broker,
+    codes,
+    elr::ElrPublisher,
+    error::BrokerError,
+    handlers::{cluster_action_denied, encode_response},
 };
-use crate::{broker::Broker, codes, elr::ElrPublisher, error::BrokerError};
 
 #[tracing::instrument(
     name = "handle_alter_partition",
@@ -61,12 +64,7 @@ pub(crate) async fn handle(
         // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
         {
             let image = controller.current_image();
-            if cluster_action_denied(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx.principal,
-                ctx.peer,
-            ) {
+            if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
                 return denied_response(version);
             }
         }
@@ -77,14 +75,14 @@ pub(crate) async fn handle(
             .borrow()
             .is_some_and(|n| n == node_id);
         if !is_leader {
-            return encode_resp(
-                version,
+            return encode_response(
                 &AlterPartitionResponse {
                     throttle_time_ms: 0,
                     error_code: codes::NOT_CONTROLLER,
                     topics: Vec::new(),
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
+                version,
             );
         }
 
@@ -97,14 +95,14 @@ pub(crate) async fn handle(
             .ok()
             .and_then(|id| image.broker_epoch(krabka_metadata::NodeId(id)));
         if sender_epoch != Some(req.broker_epoch) {
-            return encode_resp(
-                version,
+            return encode_response(
                 &AlterPartitionResponse {
                     throttle_time_ms: 0,
                     error_code: codes::STALE_BROKER_EPOCH,
                     topics: Vec::new(),
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
+                version,
             );
         }
         // One snapshot of the brokers that may sit in an ISR: alive, unfenced
@@ -174,18 +172,14 @@ pub(crate) async fn handle(
             return Err(BrokerError::Replication(format!("submit_change: {e}")));
         }
 
-        encode_resp(
-            version,
+        encode_response(
             &AlterPartitionResponse {
                 throttle_time_ms: 0,
                 error_code: codes::NONE,
                 topics: resp_topics,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
+            version,
         )
     }
-}
-
-fn encode_resp(version: i16, resp: &AlterPartitionResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }

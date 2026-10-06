@@ -4,11 +4,8 @@
 //! context for the connection loop to enforce after the reply is written.
 
 use bytes::Bytes;
-use krabka_protocol::{
-    Encode,
-    owned::create_topics_response::{
-        CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
-    },
+use krabka_protocol::owned::create_topics_response::{
+    CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
 };
 use krabka_units::Time;
 
@@ -122,10 +119,6 @@ pub(super) fn audit_created_topics(
     }
 }
 
-pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
-}
-
 pub(super) fn finish_response(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
@@ -147,7 +140,7 @@ pub(super) fn finish_response(
     // when the request quota asks for more.
     context.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
     let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
-    encode_response(&response, version)
+    crate::handlers::encode_response(&response, version)
 }
 
 #[cfg(test)]

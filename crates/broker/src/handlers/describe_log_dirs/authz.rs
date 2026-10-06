@@ -1,40 +1,13 @@
-//! The whole-request `DescribeLogDirs` ACL gate and the response a Deny gets.
+//! The response a whole-request `DescribeLogDirs` ACL Deny gets.
 //!
 //! `DescribeLogDirs` is authorized once per request rather than per directory,
 //! because the reply describes the broker rather than any one topic. That makes
-//! the gate and its refusal shape a concern of their own, separate from the
-//! directory scan.
+//! the refusal shape a concern of its own, separate from the directory scan.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResponse;
 
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    codes,
-    error::BrokerError,
-};
-
-/// Gate for `Describe` on `Cluster("kafka-cluster")`.
-///
-/// Returns `true` when the authorizer denies the operation.
-pub(super) fn cluster_describe_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    principal: &krabka_security::Principal,
-    host: &std::net::SocketAddr,
-) -> bool {
-    authorizer.authorize(
-        image,
-        &AuthorizationRequest {
-            principal,
-            host,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Describe,
-        },
-    ) == AuthorizationResult::Deny
-}
+use crate::{codes, error::BrokerError};
 
 /// Whole-response `CLUSTER_AUTHORIZATION_FAILED (31)` response for a Deny.
 pub(super) fn denied_response(version: i16) -> Result<Bytes, BrokerError> {
@@ -68,12 +41,19 @@ mod tests {
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = crate::handlers::RequestContext::new(
+            &principal,
+            &peer,
+            "client-a",
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        );
 
-        assert!(cluster_describe_denied(
+        assert!(crate::handlers::cluster_describe_denied(
             &authorizer,
             &image,
-            &principal,
-            &peer
+            &ctx
         ));
 
         let bytes = denied_response(describe_log_dirs_response::MAX_VERSION).expect("encode");

@@ -3,18 +3,13 @@
 //! the in-memory entry. The handler gates on local leadership of the target
 //! `__share_group_state` partition.
 
-use std::sync::Arc;
-
-use bytes::{Bytes, BytesMut};
-use futures_util::future::{BoxFuture, join_all};
+use bytes::Bytes;
+use futures_util::future::join_all;
 use krabka_metadata::MetadataImage;
-use krabka_protocol::{
-    Encode,
-    owned::{
-        delete_share_group_state_request::DeleteShareGroupStateRequest,
-        delete_share_group_state_response::{
-            DeleteShareGroupStateResponse, DeleteStateResult, PartitionResult,
-        },
+use krabka_protocol::owned::{
+    delete_share_group_state_request::DeleteShareGroupStateRequest,
+    delete_share_group_state_response::{
+        DeleteShareGroupStateResponse, DeleteStateResult, PartitionResult,
     },
 };
 
@@ -30,45 +25,29 @@ use crate::{
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    correlation_id: i32,
+    _correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    if super::cluster_action_denied(broker, ctx) {
-        let mut cur: &[u8] = req_bytes;
-        let req: DeleteShareGroupStateRequest =
-            crate::handlers::decode_group_request(&mut cur, version)?;
-        let resp = super::cluster_authorization_failed!(
+    let mut cur: &[u8] = req_bytes;
+    let req: DeleteShareGroupStateRequest =
+        crate::handlers::decode_group_request(&mut cur, version)?;
+    let resp = if super::cluster_action_denied(broker, ctx) {
+        super::cluster_authorization_failed!(
             req,
             DeleteShareGroupStateResponse,
             DeleteStateResult,
             PartitionResult
-        );
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version)?;
-        return Ok(buf.freeze());
-    }
-    serve(broker, version, correlation_id, req_bytes).await
-}
-
-fn serve(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
-    let req_bytes = req_bytes.to_vec();
-    let coordinator = Arc::clone(&broker.share_coordinator);
-    let controller = Arc::clone(&broker.controller);
-    Box::pin(async move {
-        let mut cur: &[u8] = &req_bytes;
-        let req: DeleteShareGroupStateRequest =
-            crate::handlers::decode_group_request(&mut cur, version)?;
-        let resp = delete_state(&coordinator, &controller.current_image(), req).await;
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version)?;
-        Ok(buf.freeze())
-    })
+        )
+    } else {
+        delete_state(
+            &broker.share_coordinator,
+            &broker.controller.current_image(),
+            req,
+        )
+        .await
+    };
+    crate::handlers::encode_response(&resp, version)
 }
 
 /// Deletes every partition of `req`, as Kafka's

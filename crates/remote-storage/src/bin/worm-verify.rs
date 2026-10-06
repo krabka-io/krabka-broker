@@ -14,7 +14,7 @@
 use std::{collections::BTreeSet, fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
 
 use clap::{Args, Parser, Subcommand};
-use krabka_audit::chain::from_hex32;
+use hex::FromHex as _;
 use krabka_object_store::{
     IncompleteMultipartUpload, ObjectStoreConfig, S3Config, build_object_store,
     list_s3_multipart_uploads,
@@ -114,9 +114,9 @@ struct GradingArgs {
 
 /// Parses a chain head written as 64 hex characters.
 fn parse_head(text: &str) -> Result<ChainHead, String> {
-    from_hex32(text)
+    <[u8; 32]>::from_hex(text)
         .map(ChainHead)
-        .ok_or_else(|| format!("expected 64 hex characters, got `{text}`"))
+        .map_err(|_| format!("expected 64 hex characters, got `{text}`"))
 }
 
 #[tokio::main]

@@ -52,13 +52,13 @@ pub(crate) async fn handle(
     // Cluster:Alter gate — KIP-853 reconfiguration is a cluster-wide
     // mutation, same gate as UnregisterBroker.
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_resp(
-            version,
+        return crate::handlers::encode_response(
             &AddRaftVoterResponse {
                 error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
                 error_message: Some("add-raft-voter denied".into()),
                 ..Default::default()
             },
+            version,
         );
     }
 
@@ -78,13 +78,13 @@ pub(crate) async fn handle(
         // `validateLeaderOnlyRequest` with only the error code set, so the
         // nullable message stays at the generated empty-string default, not
         // null and not `Errors.message()`.
-        return encode_resp(
-            version,
+        return crate::handlers::encode_response(
             &AddRaftVoterResponse {
                 error_code: voter_requests::NOT_LEADER_OR_FOLLOWER,
                 error_message: Some(String::new()),
                 ..Default::default()
             },
+            version,
         );
     };
     let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
@@ -127,13 +127,13 @@ pub(crate) async fn handle(
             },
         };
     if let Some((error_code, error_message)) = refusal {
-        return encode_resp(
-            version,
+        return crate::handlers::encode_response(
             &AddRaftVoterResponse {
                 error_code,
                 error_message,
                 ..Default::default()
             },
+            version,
         );
     }
 
@@ -153,13 +153,13 @@ pub(crate) async fn handle(
         );
     }
 
-    encode_resp(
-        version,
+    crate::handlers::encode_response(
         &AddRaftVoterResponse {
             error_code,
             error_message,
             ..Default::default()
         },
+        version,
     )
 }
 
@@ -229,10 +229,6 @@ async fn probe_candidate(
     Ok(())
 }
 
-fn encode_resp(version: i16, resp: &AddRaftVoterResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
@@ -286,7 +282,7 @@ mod tests {
                 error_message: Some("not the raft leader".into()),
                 ..Default::default()
             };
-            let bytes = encode_resp(version, &resp).expect("encode");
+            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
             let mut cur: &[u8] = &bytes;
             let decoded = AddRaftVoterResponse::decode(&mut cur, version).expect("decode");
             assert!(decoded.error_code == codes::NOT_LEADER_OR_FOLLOWER);

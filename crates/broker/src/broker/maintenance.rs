@@ -11,8 +11,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::adapters::{ControllerAdapter, ReassignmentControllerAdapter},
-    config::BrokerConfig,
+    broker::adapters::ControllerAdapter, config::BrokerConfig,
     partition_registry::PartitionRegistry,
 };
 
@@ -182,7 +181,7 @@ pub(super) fn spawn_cluster_data_maintenance(
         ));
     }
     let reassignment: Arc<dyn crate::reassignment::ReassignmentController> =
-        Arc::new(ReassignmentControllerAdapter {
+        Arc::new(ControllerAdapter {
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });

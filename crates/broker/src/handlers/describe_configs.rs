@@ -106,12 +106,18 @@ mod resources;
 mod static_configs;
 mod wire;
 
-pub(crate) use self::resources::{effective_topic_configs, static_settings};
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,
     resources::{
         BrokerLoggers, ServingBroker, StaticBrokerConfigs, StaticBrokerSetting, describe_one,
+    },
+};
+pub(crate) use self::{
+    resources::{effective_topic_configs, static_settings},
+    wire::{
+        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
     },
 };
 use crate::{broker::Broker, error::BrokerError};

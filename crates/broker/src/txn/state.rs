@@ -17,6 +17,20 @@ pub enum TxnState {
 }
 
 impl TxnState {
+    /// The state's name as Kafka's `TransactionState` spells it on the wire,
+    /// the string `DescribeTransactions` and `ListTransactions` report.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            TxnState::Empty => "Empty",
+            TxnState::Ongoing => "Ongoing",
+            TxnState::PrepareCommit => "PrepareCommit",
+            TxnState::PrepareAbort => "PrepareAbort",
+            TxnState::CompleteCommit => "CompleteCommit",
+            TxnState::CompleteAbort => "CompleteAbort",
+            TxnState::Dead => "Dead",
+        }
+    }
+
     /// Can the machine move from `self` to `other`?
     pub fn can_transition_to(self, other: TxnState) -> bool {
         use TxnState::{

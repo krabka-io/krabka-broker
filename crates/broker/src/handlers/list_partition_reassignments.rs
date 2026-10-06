@@ -1,7 +1,7 @@
 //! `ListPartitionReassignments` (`api_key` 46, KIP-455).
 
 use bytes::Bytes;
-use krabka_metadata::{PartitionRecord, ResourceType};
+use krabka_metadata::PartitionRecord;
 use krabka_protocol::{
     Encode,
     owned::{
@@ -14,7 +14,6 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
 };
@@ -33,17 +32,7 @@ pub(crate) fn handle(
     api_version: i16,
 ) -> Result<Bytes, crate::error::BrokerError> {
     let image = broker.controller.current_image();
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Describe,
-        },
-    );
-    if matches!(allow, AuthorizationResult::Deny) {
+    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let topics = match &req.topics {
             None => vec![],
             Some(filter) => filter
@@ -144,7 +133,8 @@ fn ongoing(pr: &PartitionRecord) -> OngoingPartitionReassignment {
 fn wire_node_ids(nodes: &[krabka_metadata::NodeId]) -> Vec<i32> {
     nodes
         .iter()
-        .map(|node| i32::try_from(node.0).unwrap_or(i32::MAX))
+        .copied()
+        .map(crate::handlers::metadata::wire_id)
         .collect()
 }
 

@@ -20,7 +20,7 @@ use super::{
     topics::initialized_topics,
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::GroupCoordinator,
@@ -40,14 +40,14 @@ pub(super) async fn describe_group(
 
     // ── ACL preamble ────────────────────────────────────
     // Per-group `Describe` check. On Deny → group `error_code = 30`.
-    let acl_req = AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type: ResourceType::Group,
-        resource_name: gid.as_str(),
-        operation: AclOperation::Describe,
-    };
-    if broker.config.authorizer.authorize(image, &acl_req) == AuthorizationResult::Deny {
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        image,
+        ctx,
+        ResourceType::Group,
+        gid.as_str(),
+        AclOperation::Describe,
+    ) {
         return DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
             error_code: codes::GROUP_AUTHORIZATION_FAILED,

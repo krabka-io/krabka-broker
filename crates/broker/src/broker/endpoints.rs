@@ -43,18 +43,7 @@ pub(super) fn static_controller_voter_set(
     quorum_voters: &[(krabka_raft::NodeId, String)],
     self_node_id: krabka_raft::NodeId,
     self_directory_id: uuid::Uuid,
-    _self_controller_listen: std::net::SocketAddr,
 ) -> krabka_metadata::VoterSet {
-    // Split a configured "<host>:<port>" into (host, port), keeping the host
-    // verbatim (a DNS name resolved later, per dial). `file_config`
-    // (`parse_quorum_voter`) validates the shape, so a parse miss here is not
-    // expected; fall back to port 0 rather than panicking.
-    fn split_host_port(host_port: &str) -> (String, u16) {
-        match host_port.rsplit_once(':') {
-            Some((h, p)) => (h.to_string(), p.parse().unwrap_or(0)),
-            None => (host_port.to_string(), 0),
-        }
-    }
     fn voter(
         id: krabka_raft::NodeId,
         directory_id: uuid::Uuid,
@@ -76,11 +65,16 @@ pub(super) fn static_controller_voter_set(
     let voters: Vec<krabka_metadata::Voter> = quorum_voters
         .iter()
         .map(|(node_id, host_port)| {
-            let (configured_host, configured_port) = split_host_port(host_port);
-            let (host, port, directory_id) = if *node_id == self_node_id {
-                (configured_host, configured_port, self_directory_id)
+            // Keep the configured host verbatim (a DNS name resolved later,
+            // per dial). `file_config` (`parse_quorum_voter`) validates the
+            // shape, so a parse miss here is not expected; fall back to port 0
+            // rather than panicking.
+            let (host, port) = crate::host_port::parse_host_port(host_port)
+                .unwrap_or_else(|| (host_port.clone(), 0));
+            let directory_id = if *node_id == self_node_id {
+                self_directory_id
             } else {
-                (configured_host, configured_port, uuid::Uuid::nil())
+                uuid::Uuid::nil()
             };
             voter(*node_id, directory_id, host, port)
         })
@@ -114,12 +108,7 @@ mod tests {
             ),
         ];
         let self_dir = uuid::Uuid::from_u128(7);
-        let set = static_controller_voter_set(
-            &quorum,
-            krabka_audit::NodeId(0),
-            self_dir,
-            "0.0.0.0:9093".parse().unwrap(),
-        );
+        let set = static_controller_voter_set(&quorum, krabka_audit::NodeId(0), self_dir);
 
         let v0 = set.get(krabka_audit::NodeId(0)).expect("voter 0 present");
         let ep0 = v0
@@ -146,16 +135,12 @@ mod tests {
 
     #[test]
     fn static_voter_set_single_self_voter_uses_configured_addr() {
-        // The configured endpoint is the advertised address. It can differ
-        // from the bind address when the controller runs behind DNS or NAT.
+        // The configured endpoint is the advertised address, which can differ
+        // from the bind address when the controller runs behind DNS or NAT, so
+        // the voter set takes it from the configuration alone.
         let quorum = vec![(krabka_raft::NodeId(3), "127.0.0.1:9093".to_string())];
         let self_dir = uuid::Uuid::from_u128(3);
-        let set = static_controller_voter_set(
-            &quorum,
-            krabka_audit::NodeId(3),
-            self_dir,
-            "192.168.1.5:9099".parse().unwrap(),
-        );
+        let set = static_controller_voter_set(&quorum, krabka_audit::NodeId(3), self_dir);
         assert!(set.len() == 1);
         let v = set
             .get(krabka_audit::NodeId(3))

@@ -109,7 +109,6 @@ mod startup;
 mod submit;
 mod timing;
 
-pub(crate) use self::checkpoint::parse_checkpoint_name;
 pub use self::{
     activation::Activation, control_state::control_batch_image_records, records::is_kip835_noop,
 };

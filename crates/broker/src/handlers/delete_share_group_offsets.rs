@@ -24,7 +24,7 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::unified::{
@@ -68,14 +68,14 @@ pub(crate) async fn handle(
 
     // ── ACL preamble ────────────────────────────────────
     // Per-group `Delete` check. On Deny → top-level `error_code = 30`.
-    let acl_req = AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type: ResourceType::Group,
-        resource_name: gid.as_str(),
-        operation: AclOperation::Delete,
-    };
-    if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Group,
+        gid.as_str(),
+        AclOperation::Delete,
+    ) {
         return encode_top_level(version, codes::GROUP_AUTHORIZATION_FAILED, None);
     }
 

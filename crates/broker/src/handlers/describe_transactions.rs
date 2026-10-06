@@ -30,24 +30,12 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     error::BrokerError,
     txn::state::{TxnEntry, TxnState},
 };
-
-fn txn_state_str(s: TxnState) -> &'static str {
-    match s {
-        TxnState::Empty => "Empty",
-        TxnState::Ongoing => "Ongoing",
-        TxnState::PrepareCommit => "PrepareCommit",
-        TxnState::PrepareAbort => "PrepareAbort",
-        TxnState::CompleteCommit => "CompleteCommit",
-        TxnState::CompleteAbort => "CompleteAbort",
-        TxnState::Dead => "Dead",
-    }
-}
 
 /// Builds the `topics` list for one txn entry. It groups the entry's
 /// `(topic, partition)` set by topic name. Topics come out in alphabetical
@@ -94,7 +82,7 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     TransactionState {
         error_code: codes::NONE,
         transactional_id: entry.transactional_id.clone(),
-        transaction_state: txn_state_str(entry.state).to_string(),
+        transaction_state: entry.state.as_str().to_string(),
         transaction_timeout_ms: entry.txn_timeout_ms,
         transaction_start_time_ms: entry.start_ms,
         // Unwrap into the raw-`i64` wire field.
@@ -138,17 +126,14 @@ pub(crate) async fn handle(
     let mut rows: Vec<TransactionState> = Vec::with_capacity(req.transactional_ids.len());
     for tid in &req.transactional_ids {
         // ACL gate: per-tid `Describe` on `TransactionalId`.
-        let allow = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::TransactionalId,
-                resource_name: tid.as_str(),
-                operation: AclOperation::Describe,
-            },
-        );
-        if allow == AuthorizationResult::Deny {
+        if crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::TransactionalId,
+            tid.as_str(),
+            AclOperation::Describe,
+        ) {
             rows.push(TransactionState {
                 error_code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
                 transactional_id: tid.clone(),

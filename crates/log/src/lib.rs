@@ -119,6 +119,7 @@ pub use config::{
 pub use delivery::{DeliveryAdvance, batch_is_deliverable};
 pub use error::LogError;
 pub use filter::{FilteredBatch, filter_batch};
+pub use io::write_file_atomic;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use io::{IoTarget, LogIo};
 pub use krabka_ids::{LeaderEpoch, Offset, ProducerId};
@@ -136,6 +137,7 @@ pub use log::{
 pub use producer_snapshot::{
     NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,
 };
+pub use retention::now_ms as epoch_ms;
 sendfile_cfg! {
     pub use segment::RawSegmentDesc;
 }

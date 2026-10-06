@@ -8,10 +8,11 @@
 
 use clap::Parser;
 use krabka_protocol::krabka::barrier as api;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::{
     EXIT_REFUSED, EXIT_UNREACHABLE,
-    cli::{Cli, Command, as_millis_i64},
+    cli::{Cli, Command},
     report::{report_alter, report_describe, report_list, report_trigger, report_verify},
     verify,
 };
@@ -65,7 +66,7 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
                     group,
                     topics,
                     // -1 is the sentinel for "no periodic injection".
-                    interval_ms: interval.map_or(-1, as_millis_i64),
+                    interval_ms: interval.map_or(-1, Time::millis_i64),
                     retained_cuts,
                     delete: false,
                     ..api::AlterableBarrierGroup::default()
@@ -106,7 +107,7 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
                 group,
                 // A non-positive timeout asks the broker for its own default.
                 timeout_ms: timeout
-                    .map(as_millis_i64)
+                    .map(Time::millis_i64)
                     .and_then(|ms| i32::try_from(ms).ok())
                     .unwrap_or(0),
                 ..api::TriggerBarrierRequest::default()

@@ -20,9 +20,13 @@ use crate::{
 };
 
 impl KraftController {
-    /// The same epoch clock used for credential mutations and log timestamps.
+    /// Epoch milliseconds: the clock the server stamps connection expiries
+    /// with, and the engine's clock for delegation-token deadlines and for the
+    /// create-time stamped on every batch the leader appends. `Engine::now`
+    /// is monotonic from this process's own start, and a snapshot header
+    /// timestamp has to mean the same instant on every node that reads it.
     pub(crate) fn wall_clock_ms() -> i64 {
-        super::Engine::wall_clock_ms()
+        krabka_log::epoch_ms(std::time::SystemTime::now())
     }
 
     /// The node id this controller runs as.

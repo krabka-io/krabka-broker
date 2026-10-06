@@ -113,28 +113,24 @@ pub(crate) async fn handle(
 
     // Kafka's `RaftUtil.updateVoterResponse` names the leader in every answer.
     let quorum = broker.controller.quorum_snapshot().unwrap_or(quorum);
-    encode_resp(
-        version,
+    crate::handlers::encode_response(
         &UpdateRaftVoterResponse {
             error_code,
             current_leader: voter_requests::update_voter_current_leader(&quorum),
             ..Default::default()
         },
+        version,
     )
-}
-
-fn encode_resp(version: i16, resp: &UpdateRaftVoterResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }
 
 /// Encodes a response that carries nothing but `error_code`.
 fn refuse(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    encode_resp(
-        version,
+    crate::handlers::encode_response(
         &UpdateRaftVoterResponse {
             error_code,
             ..Default::default()
         },
+        version,
     )
 }
 
@@ -196,7 +192,7 @@ mod tests {
                 error_code: codes::INVALID_REQUEST,
                 ..Default::default()
             };
-            let bytes = encode_resp(version, &resp).expect("encode");
+            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
             let mut cur: &[u8] = &bytes;
             let decoded = UpdateRaftVoterResponse::decode(&mut cur, version).expect("decode");
             assert!(decoded.error_code == codes::INVALID_REQUEST);

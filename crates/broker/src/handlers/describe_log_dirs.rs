@@ -11,9 +11,9 @@
 //! `current_log.LEO − future_log.LEO`.
 //!
 //! This file holds the wire entry point and the per-directory scan loop. The
-//! ACL gate lives in `authz`, the request's topic filter in `filter`, the two
-//! lag readings in `lag`, and everything the handler reports about a directory
-//! itself in `dirs`.
+//! ACL Deny response lives in `authz`, the request's topic filter in `filter`,
+//! the two lag readings in `lag`, and everything the handler reports about a
+//! directory itself in `dirs`.
 
 use std::collections::BTreeMap;
 
@@ -35,13 +35,14 @@ mod filter;
 mod lag;
 
 use self::{
-    authz::{cluster_describe_denied, denied_response},
+    authz::denied_response,
     dirs::{absolute_path, cordoned_log_dirs_reported, log_dir_capacity, offline_result},
     filter::request_filter,
     lag::{future_offset_lag, offset_lag_for},
 };
 use crate::{
-    broker::Broker, codes, disk_scanner::scan::sum_log_segments, error::BrokerError, log_dir,
+    broker::Broker, codes, disk_scanner::scan::sum_log_segments, error::BrokerError,
+    handlers::cluster_describe_denied, log_dir,
 };
 
 #[tracing::instrument(
@@ -71,12 +72,7 @@ pub(crate) async fn handle(
         // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
         {
             let image = broker.controller.current_image();
-            if cluster_describe_denied(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx.principal,
-                ctx.peer,
-            ) {
+            if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
                 return denied_response(version);
             }
         }

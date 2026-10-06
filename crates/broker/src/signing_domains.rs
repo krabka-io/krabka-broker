@@ -25,6 +25,19 @@ pub(crate) const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 /// Domain separator for a break-glass approval signature (KFC-9).
 pub(crate) const BREAK_GLASS_DOMAIN: &[u8] = b"krabka-break-glass-v1\0";
 
+/// Append `field` behind its `u32` big-endian length, as both canonical
+/// layouts frame a variable-length field.
+///
+/// A field longer than `u32::MAX` saturates. Every field is a string a
+/// request frame already bounds far below that, so no reachable input
+/// saturates here; the saturation keeps the function total rather than
+/// panicking.
+pub(crate) fn put_len_prefixed(out: &mut Vec<u8>, field: &[u8]) {
+    let len = u32::try_from(field.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(field);
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::check;

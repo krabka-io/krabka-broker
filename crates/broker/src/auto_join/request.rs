@@ -41,7 +41,10 @@ pub(super) fn advertised_controller_listener(
     if !bound.ip().is_unspecified() {
         return controller_listener(bound);
     }
-    let Some((host, port)) = advertised.and_then(split_host_port) else {
+    let Some((host, port)) = advertised
+        .and_then(crate::host_port::parse_host_port)
+        .filter(|(host, _)| !host.is_empty())
+    else {
         return controller_listener(bound);
     };
     Listener {
@@ -50,16 +53,6 @@ pub(super) fn advertised_controller_listener(
         port,
         ..Default::default()
     }
-}
-
-/// Splits a `host:port` endpoint, taking the port after the last colon so an
-/// unbracketed IPv6 literal does not split in the middle of an address.
-fn split_host_port(endpoint: &str) -> Option<(String, u16)> {
-    let (host, port) = endpoint.rsplit_once(':')?;
-    if host.is_empty() {
-        return None;
-    }
-    Some((host.to_string(), port.parse().ok()?))
 }
 
 pub(super) fn select_bootstrap_server(bootstrap_servers: &[String], attempt: usize) -> &str {

@@ -11,7 +11,6 @@
 //! `AlterUserScramCredentials`, so the handler receives the authenticated
 //! principal and the peer for the ACL check.
 
-use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     update_features_request::UpdateFeaturesRequest,
     update_features_response::UpdateFeaturesResponse,
@@ -33,11 +32,7 @@ use self::{
     response::{feature_error, success, top_level_error},
     validate::{UpdateError, plan_updates},
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
+use crate::{broker::Broker, codes};
 
 /// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
 /// quorum leadership.
@@ -93,18 +88,7 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Whole-request Cluster:Alter gate.
-    let authorized = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Alter,
-        },
-    ) == AuthorizationResult::Allow;
-
-    if !authorized {
+    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return top_level_error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",

@@ -80,7 +80,13 @@ pub(crate) async fn to_active_controller(
     })
 }
 
-fn build(
+/// Wrap `req_bytes` (an `api_key` request body at `version`) in a KIP-590
+/// `EnvelopeRequest` carrying `ctx`'s principal and peer address, and encode
+/// it at the envelope's one wire version.
+///
+/// # Errors
+/// Returns an error if the generated codec rejects the assembled envelope.
+pub(crate) fn build(
     broker: &Broker,
     api_key: ApiKeyCode,
     req_bytes: &[u8],

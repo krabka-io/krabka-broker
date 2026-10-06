@@ -324,7 +324,7 @@ async fn run_actor(
                     false
                 }
             }
-            () = opt_sleep(rebalance_deadline) => {
+            () = crate::time_util::sleep_until_opt(rebalance_deadline) => {
                 // KIP-848: a member's rebalance timeout fired. Run the sweep
                 // now instead of at the next session tick, so the partitions it
                 // did not revoke reach their new owner on time.
@@ -337,7 +337,7 @@ async fn run_actor(
                 };
                 handle_actor_tick(&mut group, &mut parked, services).await
             }
-            () = opt_sleep(classic_sync_deadline(&group)) => {
+            () = crate::time_util::sleep_until_opt(classic_sync_deadline(&group)) => {
                 // Kafka's pending-sync timer: a member never sent SyncGroup.
                 let effective = effective_config(&config, &coordinator, &group.group_id);
                 let services = ActorServices {
@@ -348,7 +348,7 @@ async fn run_actor(
                 };
                 handle_classic_sync_expiry(&mut group, &mut parked, services).await
             }
-            () = opt_sleep(deadline) => {
+            () = crate::time_util::sleep_until_opt(deadline) => {
                 // Classic rebalance deadline fired: extend Kafka's initial
                 // delay, or complete with whoever is here.
                 if let Some(state) = group.as_classic_mut()
@@ -416,14 +416,6 @@ fn classic_deadline(group: &CoordinatorGroup) -> Option<Instant> {
 /// `SyncGroup`.
 fn classic_sync_deadline(group: &CoordinatorGroup) -> Option<Instant> {
     group.as_classic().and_then(|s| s.sync_deadline)
-}
-
-/// A future that resolves at `deadline`, or never if `None`.
-async fn opt_sleep(deadline: Option<Instant>) {
-    match deadline {
-        Some(d) => tokio::time::sleep_until(d.into()).await,
-        None => std::future::pending::<()>().await,
-    }
 }
 
 /// The wall-clock reading this actor subtree stamps records and deadlines

@@ -53,16 +53,6 @@ pub(super) fn principal_or_anonymous(
     auth.principal().unwrap_or(&ANONYMOUS_PRINCIPAL)
 }
 
-/// Returns a future that resolves at `deadline` if it is `Some`, and never
-/// resolves if it is `None`. `tokio::select!` uses it to disarm the timer arm
-/// for non-OAuth connections, which have no session expiry.
-async fn sleep_until_some(deadline: Option<tokio::time::Instant>) {
-    match deadline {
-        Some(t) => tokio::time::sleep_until(t).await,
-        None => std::future::pending::<()>().await,
-    }
-}
-
 /// Resolves the connection's starting authentication state.
 ///
 /// A SASL listener starts anonymous and authenticates over the wire. A
@@ -199,7 +189,7 @@ where
         .map(|window| tokio::time::Instant::now() + window);
     let frame_result = tokio::select! {
         biased;
-        () = sleep_until_some(idle_deadline) => {
+        () = crate::time_util::sleep_until_opt(idle_deadline) => {
             // Kafka's `Selector.maybeCloseOldestConnection` logs an idle close
             // at TRACE. DEBUG keeps it with the other lines of the connection.
             tracing::debug!(
@@ -250,8 +240,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use assert2::assert;
 
     use super::*;
@@ -306,29 +294,5 @@ mod tests {
                     time_ms,
                 }
         );
-    }
-
-    // `start_paused = true` runs these on tokio's virtual clock: with no other
-    // work pending, the runtime auto-advances logical time to the next timer, so
-    // the `sleep_until`/`timeout` deadlines fire instantly and deterministically
-    // instead of burning real wall-clock milliseconds.
-    #[tokio::test(start_paused = true)]
-    async fn sleep_until_some_none_remains_pending() {
-        // `None` never resolves; the 10ms timeout is the only timer, so virtual
-        // time jumps to it and the timeout elapses -> Err.
-        let result = tokio::time::timeout(Duration::from_millis(10), sleep_until_some(None)).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn sleep_until_some_some_waits_until_deadline() {
-        let before = tokio::time::Instant::now();
-        let deadline = before + Duration::from_millis(10);
-        // The inner sleep (deadline) fires before the outer 1s timeout, so the
-        // timeout resolves Ok and virtual time has advanced exactly to `deadline`.
-        tokio::time::timeout(Duration::from_secs(1), sleep_until_some(Some(deadline)))
-            .await
-            .expect("deadline should resolve");
-        assert!(tokio::time::Instant::now() >= deadline);
     }
 }

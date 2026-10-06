@@ -13,12 +13,7 @@ use krabka_verified::transaction::{
 };
 
 use super::TxnCoordinator;
-use crate::txn::{state::TxnState, version::TxnVersion};
-
-/// `AddPartitionsToTxn` request version at and above which the wire protocol
-/// carries `PRODUCER_FENCED` (90, KIP-360). Below it, Kafka's `KafkaApis`
-/// downgrades that answer to the legacy `INVALID_PRODUCER_EPOCH` (47).
-const PRODUCER_FENCED_MIN_VERSION: i16 = 2;
+use crate::txn::{state::TxnState, util::PRODUCER_FENCED_MIN_VERSION, version::TxnVersion};
 
 impl TxnCoordinator {
     /// Add partitions to the locally-coordinated transaction after validating

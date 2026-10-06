@@ -81,7 +81,7 @@ mod test_support;
 use self::{
     batch::{AppendedTxnOffsets, append_txn_batch},
     existence::unknown_partitions,
-    response::{build_response, encode_err_all, encode_resp},
+    response::{build_response, encode_err_all},
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
@@ -194,9 +194,9 @@ pub(crate) async fn handle(
         } else {
             code
         };
-        encode_resp(
-            version,
+        crate::handlers::encode_response(
             &build_response(&req, code, topic_ids, &denied_topics, &unknown_rows),
+            version,
         )
     };
 

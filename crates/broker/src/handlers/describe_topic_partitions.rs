@@ -316,7 +316,8 @@ fn partition_response(
         replica_nodes: partition
             .replicas
             .iter()
-            .map(|&replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
+            .copied()
+            .map(crate::handlers::metadata::wire_id)
             .collect(),
         isr_nodes: availability.isr_nodes,
         // KIP-966. Both fields are nullable in the schema, but a real broker

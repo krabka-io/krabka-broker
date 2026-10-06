@@ -8,14 +8,11 @@
 //! `TxnOffsetCommitRequest.getErrorResponse`, one code on every row of the
 //! request in request order.
 
-use bytes::{Bytes, BytesMut};
-use krabka_protocol::{
-    Encode,
-    owned::{
-        txn_offset_commit_request::{TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
-        txn_offset_commit_response::{
-            TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
-        },
+use bytes::Bytes;
+use krabka_protocol::owned::{
+    txn_offset_commit_request::{TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
+    txn_offset_commit_response::{
+        TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
     },
 };
 
@@ -150,15 +147,6 @@ fn row(partition_index: i32, error_code: i16) -> TxnOffsetCommitResponsePartitio
     }
 }
 
-pub(super) fn encode_resp(
-    version: i16,
-    resp: &TxnOffsetCommitResponse,
-) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-    resp.encode(&mut buf, version)?;
-    Ok(buf.freeze())
-}
-
 /// Kafka's `TxnOffsetCommitRequest.getErrorResponse`: `code` on every row, one
 /// response topic per request topic, in request order.
 fn error_response(req: &TxnOffsetCommitRequest, code: i16) -> TxnOffsetCommitResponse {
@@ -188,7 +176,7 @@ pub(super) fn encode_err_all(
     req: &TxnOffsetCommitRequest,
     code: i16,
 ) -> Result<Bytes, BrokerError> {
-    encode_resp(version, &error_response(req, code))
+    crate::handlers::encode_response(&error_response(req, code), version)
 }
 
 #[cfg(test)]
@@ -388,7 +376,7 @@ mod tests {
                 &HashSet::new(),
                 &HashSet::new(),
             );
-            let bytes = encode_resp(version, &built).expect("encode response");
+            let bytes = crate::handlers::encode_response(&built, version).expect("encode response");
             let decoded: TxnOffsetCommitResponse =
                 crate::test_support::decode_response(&bytes, version);
             assert!(decoded == expected, "build v{version}");

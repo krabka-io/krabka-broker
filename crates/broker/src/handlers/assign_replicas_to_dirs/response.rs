@@ -2,23 +2,15 @@
 //! response passes through. `changes` builds the per-partition response of
 //! the success path.
 
-use bytes::Bytes;
 use krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse;
 
-use crate::{codes, error::BrokerError};
+use crate::codes;
 
 pub(super) fn not_controller_response() -> AssignReplicasToDirsResponse {
     AssignReplicasToDirsResponse {
         error_code: codes::NOT_CONTROLLER,
         ..Default::default()
     }
-}
-
-pub(super) fn encode_resp(
-    version: crate::handlers::ApiVersion,
-    resp: &AssignReplicasToDirsResponse,
-) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
 }
 
 #[cfg(test)]
@@ -62,7 +54,7 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
 
-        let bytes = encode_resp(VERSION, &resp).expect("encode response");
+        let bytes = crate::handlers::encode_response(&resp, VERSION).expect("encode response");
 
         assert!(decode_response(&bytes) == resp);
     }

@@ -9,7 +9,6 @@ use krabka_metadata::AclOperation;
 use krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid};
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision},
     handlers::cluster_action_denied,
@@ -161,31 +160,15 @@ fn consumer_denied_topics(
 ) -> std::collections::HashSet<String> {
     let names: Vec<String> = effective_topics
         .iter()
-        .map(|topic| {
-            if !topic.topic.is_empty() {
-                topic.topic.clone()
-            } else if topic.topic_id != WireUuid::ZERO {
-                image
-                    .topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0))
-                    .map(str::to_owned)
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        })
+        .map(|topic| crate::handlers::requested_topic_name(image, &topic.topic, topic.topic_id))
         .collect();
-    authorize_topics(
+    crate::handlers::denied_topics(
         broker.config.authorizer.as_ref(),
         image,
-        context.principal,
-        context.peer,
+        context,
         AclOperation::Read,
         names.iter().map(String::as_str),
     )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
-    .map(|(name, _)| name.to_owned())
-    .collect()
 }
 
 /// Re-group the flat `(key, state)` list that `FetchSessionCache::classify`

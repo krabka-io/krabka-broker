@@ -152,7 +152,7 @@ pub(crate) async fn run(
         // Publish the wake instant before the sleep is armed. A produce that
         // pokes in between compares against the value that is about to hold,
         // and the notification permit outlives the gap either way.
-        waker.arm(now_ms.saturating_add(millis_of(wait)));
+        waker.arm(now_ms.saturating_add(time_util::duration_millis(wait)));
         let Some(next) = time_util::arm(&*timer, wait, TASK) else {
             return;
         };
@@ -229,11 +229,6 @@ fn sleep_for(deadline_ms: Option<i64>, now_ms: i64, config: &DeliveryConfig) -> 
         Duration::from_millis(u64::try_from(remaining).unwrap_or(u64::MAX)).min(idle)
     });
     wait.max(config.min_sleep.to_std())
-}
-
-/// Whole milliseconds of `wait`, saturating at [`i64::MAX`].
-fn millis_of(wait: Duration) -> i64 {
-    i64::try_from(wait.as_millis()).unwrap_or(i64::MAX)
 }
 
 /// A non-negative millisecond count as a [`Time`].

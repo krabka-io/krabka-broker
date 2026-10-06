@@ -13,8 +13,6 @@
 //! value — earns `INVALID_REQUEST` whether or not the principal may touch the
 //! resource. That check runs first here too.
 
-use std::collections::BTreeSet;
-
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     UnknownTaggedFields,
@@ -29,53 +27,9 @@ use super::{
     RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
     broker_configs::broker_config_records, client_metrics_configs::client_metrics_config_record,
     group_configs::group_config_record, topic_configs::topic_config_record,
+    validate_resource_shape,
 };
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    broker::Broker,
-    codes,
-};
-
-/// The Kafka `ConfigAdminManager.preprocess` shape checks, run before
-/// authorization: a resource named more than once in the request, a config
-/// key named more than once within a resource, and a config with no value
-/// (legacy `AlterConfigs` never deletes by omitting a value the way
-/// `IncrementalAlterConfigs`' DELETE operation does).
-fn validate_resource_shape(
-    resource: &AlterConfigsResource,
-    is_duplicate: bool,
-) -> Result<(), (i16, String)> {
-    if is_duplicate {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Each resource must appear at most once.".into(),
-        ));
-    }
-    let mut seen_keys = BTreeSet::new();
-    if resource
-        .configs
-        .iter()
-        .any(|cfg| !seen_keys.insert(cfg.name.as_str()))
-    {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Error due to duplicate config keys".into(),
-        ));
-    }
-    let null_names: Vec<&str> = resource
-        .configs
-        .iter()
-        .filter(|cfg| cfg.value.is_none())
-        .map(|cfg| cfg.name.as_str())
-        .collect();
-    if !null_names.is_empty() {
-        return Err((
-            codes::INVALID_REQUEST,
-            format!("Null value not supported for : {}", null_names.join(", ")),
-        ));
-    }
-    Ok(())
-}
+use crate::{broker::Broker, codes};
 
 pub(super) async fn process_resource(
     broker: &Broker,
@@ -94,7 +48,16 @@ pub(super) async fn process_resource(
     };
 
     // ── Kafka validates the request shape before it authorizes ──
-    if let Err((code, message)) = validate_resource_shape(&resource, is_duplicate) {
+    // Legacy `AlterConfigs` never deletes by omitting a value the way
+    // `IncrementalAlterConfigs`' DELETE operation does, so every null is
+    // refused.
+    if let Err((code, message)) = validate_resource_shape(
+        is_duplicate,
+        resource
+            .configs
+            .iter()
+            .map(|cfg| (cfg.name.as_str(), cfg.value.is_none())),
+    ) {
         out.error_code = code;
         out.error_message = Some(message);
         return out;
@@ -110,57 +73,41 @@ pub(super) async fn process_resource(
     // Group (32)         → AlterConfigs on Group(resource_name)     → GROUP_AUTHORIZATION_FAILED, "Group authorization failed."
     // `preprocess` refuses any other type with INVALID_REQUEST, "Unknown
     // resource type <n>".
-    let acl_result = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => broker.config.authorizer.authorize(
-            image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Topic,
-                resource_name: &resource.resource_name,
-                operation: AclOperation::AlterConfigs,
-            },
+    let (acl_type, acl_name, denied_code, denied_message) = match resource.resource_type {
+        RESOURCE_TYPE_TOPIC => (
+            ResourceType::Topic,
+            resource.resource_name.as_str(),
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            "Topic authorization failed.",
         ),
-        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS => broker.config.authorizer.authorize(
-            image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                operation: AclOperation::AlterConfigs,
-            },
+        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS => (
+            ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            "Cluster authorization failed.",
         ),
-        RESOURCE_TYPE_GROUP => broker.config.authorizer.authorize(
-            image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Group,
-                resource_name: &resource.resource_name,
-                operation: AclOperation::AlterConfigs,
-            },
+        RESOURCE_TYPE_GROUP => (
+            ResourceType::Group,
+            resource.resource_name.as_str(),
+            codes::GROUP_AUTHORIZATION_FAILED,
+            "Group authorization failed.",
         ),
-        _ => {
+        other => {
             out.error_code = codes::INVALID_REQUEST;
-            out.error_message = Some(format!("Unknown resource type {}", resource.resource_type));
+            out.error_message = Some(format!("Unknown resource type {other}"));
             return out;
         }
     };
-    if acl_result == AuthorizationResult::Deny {
-        out.error_code = match resource.resource_type {
-            RESOURCE_TYPE_TOPIC => codes::TOPIC_AUTHORIZATION_FAILED,
-            RESOURCE_TYPE_GROUP => codes::GROUP_AUTHORIZATION_FAILED,
-            _ => codes::CLUSTER_AUTHORIZATION_FAILED,
-        };
-        out.error_message = match resource.resource_type {
-            RESOURCE_TYPE_TOPIC => Some("Topic authorization failed.".into()),
-            RESOURCE_TYPE_GROUP => Some("Group authorization failed.".into()),
-            RESOURCE_TYPE_CLIENT_METRICS | RESOURCE_TYPE_BROKER => {
-                Some("Cluster authorization failed.".into())
-            }
-            _ => unreachable!("resource type passed ACL dispatch"),
-        };
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        image,
+        ctx,
+        acl_type,
+        acl_name,
+        AclOperation::AlterConfigs,
+    ) {
+        out.error_code = denied_code;
+        out.error_message = Some(denied_message.into());
         return out;
     }
 

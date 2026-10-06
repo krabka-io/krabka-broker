@@ -18,7 +18,7 @@
 //! `Describe` gates only this field, not the rest of the response.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::ResourceType;
 use krabka_protocol::{
     Decode,
     owned::{
@@ -28,7 +28,6 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -163,17 +162,10 @@ pub(crate) async fn handle(
     // response: without `Describe` the bitfield reads `0` even though the
     // principal may hold other Cluster operations.
     let cluster_authorized_operations = if req.include_cluster_authorized_operations {
-        let can_describe = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: krabka_metadata::ResourceType::Cluster,
-                resource_name: CLUSTER_RESOURCE_NAME,
-                operation: AclOperation::Describe,
-            },
-        ) == AuthorizationResult::Allow;
-        if can_describe {
+        if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx)
+        {
+            0
+        } else {
             authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &image,
@@ -182,8 +174,6 @@ pub(crate) async fn handle(
                 ResourceType::Cluster,
                 CLUSTER_RESOURCE_NAME,
             )
-        } else {
-            0
         }
     } else {
         i32::MIN
@@ -212,7 +202,9 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId};
+    use krabka_metadata::{
+        AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId,
+    };
     use krabka_security::ListenerProtocol;
 
     use super::*;

@@ -27,14 +27,15 @@ mod tests;
 
 pub(crate) use self::failover::failover_offline_dirs;
 use self::{
-    authorization::{cluster_action_denied, denied_response},
-    response::{encode_response, error_response, not_controller_response, success_response},
+    authorization::denied_response,
+    response::{error_response, not_controller_response, success_response},
     shutdown::{LeaveIsrs, leave_isrs},
     validation::{has_offline_log_dirs, is_controller_leader, validate_registration},
 };
 use crate::{
     broker::Broker,
     error::BrokerError,
+    handlers::{cluster_action_denied, encode_response},
     heartbeat::controller_state::{
         BrokerControlState, HeartbeatFacts, HeartbeatWants, next_broker_state,
     },
@@ -77,25 +78,20 @@ pub(crate) async fn handle(
         // Every listener runs it, the controller listener included, as
         // Kafka's `ControllerApis.handleBrokerHeartBeatRequest` does.
         let image = controller.current_image();
-        if cluster_action_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx.principal,
-            ctx.peer,
-        ) {
+        if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
             return denied_response(version);
         }
 
         // Only the openraft leader handles heartbeats. NOT_CONTROLLER
         // tells the broker client to redirect.
         if !is_leader {
-            return encode_response(version, &not_controller_response());
+            return encode_response(&not_controller_response(), version);
         }
 
         let image = controller.current_image();
         let (broker_id_u64, decision) = match validate_registration(&image, &req) {
             Ok(validated) => validated,
-            Err(error_code) => return encode_response(version, &error_response(error_code)),
+            Err(error_code) => return encode_response(&error_response(error_code), version),
         };
 
         // Record the contact first. If it is a revival, the liveness ticker
@@ -164,8 +160,8 @@ pub(crate) async fn handle(
         record_cordoned_dirs(&controller, NodeId(broker_id_u64), &req).await;
 
         encode_response(
-            version,
             &success_response(decision.caught_up, next.fenced(), next.should_shut_down()),
+            version,
         )
     }
 }

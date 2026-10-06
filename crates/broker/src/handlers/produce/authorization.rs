@@ -2,11 +2,10 @@
 //! per-topic `Write` authorization decisions before any partition is appended.
 
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 use super::framing::ProduceFramed;
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
 };
 
@@ -62,29 +61,13 @@ pub(super) fn authorize_produce_topics(
     let topic_names: Vec<String> = request
         .topic_data
         .iter()
-        .map(|topic| {
-            if !topic.name.is_empty() {
-                topic.name.clone()
-            } else if topic.topic_id != WireUuid::ZERO {
-                image
-                    .topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0))
-                    .unwrap_or_default()
-                    .to_string()
-            } else {
-                String::new()
-            }
-        })
+        .map(|topic| crate::handlers::requested_topic_name(image, &topic.name, topic.topic_id))
         .collect();
-    authorize_topics(
+    crate::handlers::denied_topics(
         broker.config.authorizer.as_ref(),
         image,
-        context.principal,
-        context.peer,
+        context,
         AclOperation::Write,
         topic_names.iter().map(String::as_str),
     )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
-    .map(|(name, _)| name.to_string())
-    .collect()
 }

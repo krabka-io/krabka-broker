@@ -20,11 +20,11 @@
 //! `apiKey` 4 is Kafka's `ConsumerGroupPartitionMetadata`. The broker does not
 //! write it, and the number is not reused.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use krabka_protocol::ProtocolError;
 
 use crate::{
-    coordinator::unified::persistence::{get_string, put_string},
+    coordinator::unified::persistence::{encode_string_key, get_string},
     error::BrokerError,
 };
 
@@ -87,47 +87,29 @@ pub fn parse_key(version: i16, mut buf: &[u8]) -> Result<NextGenKey, BrokerError
 /// Returns [`BrokerError::Protocol`] when a string of the key is longer than
 /// 32767 bytes, which a non-flexible key string cannot carry.
 pub fn encode_key(key: &NextGenKey) -> Result<Bytes, BrokerError> {
-    let mut buf = BytesMut::new();
     match key {
         NextGenKey::GroupMetadata { group_id } => {
-            buf.put_i16(KEY_GROUP_METADATA);
-            put_string(&mut buf, group_id)?;
+            encode_string_key(KEY_GROUP_METADATA, &[group_id])
         }
         NextGenKey::MemberMetadata {
             group_id,
             member_id,
-        } => {
-            buf.put_i16(KEY_MEMBER_METADATA);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, member_id)?;
-        }
+        } => encode_string_key(KEY_MEMBER_METADATA, &[group_id, member_id]),
         NextGenKey::TargetAssignmentMetadata { group_id } => {
-            buf.put_i16(KEY_TARGET_ASSIGNMENT_METADATA);
-            put_string(&mut buf, group_id)?;
+            encode_string_key(KEY_TARGET_ASSIGNMENT_METADATA, &[group_id])
         }
         NextGenKey::TargetAssignmentMember {
             group_id,
             member_id,
-        } => {
-            buf.put_i16(KEY_TARGET_ASSIGNMENT_MEMBER);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, member_id)?;
-        }
+        } => encode_string_key(KEY_TARGET_ASSIGNMENT_MEMBER, &[group_id, member_id]),
         NextGenKey::CurrentMemberAssignment {
             group_id,
             member_id,
-        } => {
-            buf.put_i16(KEY_CURRENT_MEMBER_ASSIGNMENT);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, member_id)?;
-        }
+        } => encode_string_key(KEY_CURRENT_MEMBER_ASSIGNMENT, &[group_id, member_id]),
         NextGenKey::RegularExpression { group_id, regex } => {
-            buf.put_i16(KEY_REGULAR_EXPRESSION);
-            put_string(&mut buf, group_id)?;
-            put_string(&mut buf, regex)?;
+            encode_string_key(KEY_REGULAR_EXPRESSION, &[group_id, regex])
         }
     }
-    Ok(buf.freeze())
 }
 
 #[cfg(test)]

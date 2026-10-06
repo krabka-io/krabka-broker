@@ -3083,6 +3083,7 @@ dependencies = [
  "bytes",
  "clap",
  "derive_more",
+ "hex",
  "krabka-ids",
  "krabka-log",
  "krabka-protocol",

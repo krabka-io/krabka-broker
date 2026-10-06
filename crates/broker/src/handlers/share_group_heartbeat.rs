@@ -2,10 +2,7 @@
 //! handler routes the request to the per-group share actor in
 //! `GroupCoordinator`.
 
-use std::collections::HashSet;
-
 use bytes::Bytes;
-use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     share_group_heartbeat_request::ShareGroupHeartbeatRequest,
     share_group_heartbeat_response::ShareGroupHeartbeatResponse,
@@ -13,7 +10,6 @@ use krabka_protocol::owned::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
@@ -88,7 +84,12 @@ pub(crate) async fn handle(
         // `group_coordinator_error` -- Kafka authorizes the request before it
         // ever reaches coordinator routing, so an unauthorized subscription
         // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-        if subscribed_names_describe_denied(broker, &image, ctx, &req) {
+        if crate::handlers::subscribed_names_describe_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            req.subscribed_topic_names.as_deref(),
+        ) {
             return crate::handlers::encode_response(
                 &error(codes::TOPIC_AUTHORIZATION_FAILED),
                 version,
@@ -151,39 +152,6 @@ pub(crate) async fn handle(
             .unwrap_or_else(|_| error(stopped_actor_code(broker, &group_id)));
         crate::handlers::encode_response(&resp, version)
     }
-}
-
-/// `true` when `req.subscribed_topic_names` is non-empty and at least one of
-/// its distinct names is `Describe`-denied for `ctx.principal`. A `None` or
-/// empty list means Kafka's `subscribedTopicSet` is empty, which is
-/// vacuously fully authorized.
-///
-/// Unlike `ConsumerGroupHeartbeat`, KIP-932's `ShareGroupHeartbeatRequest`
-/// carries no `SubscribedTopicRegex` field, so there is no regex-subscription
-/// counterpart to authorize here.
-fn subscribed_names_describe_denied(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
-    req: &ShareGroupHeartbeatRequest,
-) -> bool {
-    let Some(names) = req.subscribed_topic_names.as_ref() else {
-        return false;
-    };
-    if names.is_empty() {
-        return false;
-    }
-    let unique: HashSet<&str> = names.iter().map(String::as_str).collect();
-    authorize_topics(
-        broker.config.authorizer.as_ref(),
-        image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        unique,
-    )
-    .into_values()
-    .any(|result| result == AuthorizationResult::Deny)
 }
 
 /// The `GROUP_ID_NOT_FOUND` message for a heartbeat that must not reach a
@@ -698,9 +666,10 @@ mod tests {
 
     // ── Explicit-name `Describe` checks (issue #720) ────────────────────
 
-    /// Table-driven cases for [`subscribed_names_describe_denied`]: whether
-    /// each ACL configuration over `subscribed_topic_names` denies the whole
-    /// heartbeat, per Kafka's `filterByAuthorized(.., DESCRIBE, TOPIC, ..)`.
+    /// Table-driven cases for
+    /// [`crate::handlers::subscribed_names_describe_denied`]: whether each ACL
+    /// configuration over `subscribed_topic_names` denies the whole heartbeat,
+    /// per Kafka's `filterByAuthorized(.., DESCRIBE, TOPIC, ..)`.
     #[tokio::test]
     async fn subscribed_names_describe_denied_table() {
         for (label, granted, names, expected_denied) in [
@@ -750,7 +719,12 @@ mod tests {
             };
 
             assert!(
-                subscribed_names_describe_denied(&broker, &image, &ctx, &req) == expected_denied,
+                crate::handlers::subscribed_names_describe_denied(
+                    broker.config.authorizer.as_ref(),
+                    &image,
+                    &ctx,
+                    req.subscribed_topic_names.as_deref(),
+                ) == expected_denied,
                 "{label}"
             );
             broker_handle.shutdown().await;

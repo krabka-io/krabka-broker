@@ -42,7 +42,7 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationResult, Authorizer, authorize_topics},
+    authorizer::Authorizer,
     broker::Broker,
     codes,
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
@@ -207,18 +207,8 @@ fn hide_undescribable_topics(
     }
 
     let named: HashSet<&str> = groups.iter().flat_map(topics).collect();
-    let undescribable: HashSet<String> = authorize_topics(
-        authorizer,
-        image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        named,
-    )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
-    .map(|(name, _)| name.to_owned())
-    .collect();
+    let undescribable =
+        crate::handlers::denied_topics(authorizer, image, ctx, AclOperation::Describe, named);
     if undescribable.is_empty() {
         return;
     }

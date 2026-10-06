@@ -17,7 +17,7 @@
 //! ACL gate, which needs the principal and the peer `SocketAddr`.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::AclOperation;
 use krabka_protocol::{
     owned::{
         alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
@@ -31,7 +31,6 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
@@ -71,14 +70,7 @@ pub(crate) async fn handle(
     // (krabka previously checked `Alter`, which neither refuses a plain
     // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
     // On Deny → top-level `error_code = 30`.
-    let acl_req = AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type: ResourceType::Group,
-        resource_name: gid.as_str(),
-        operation: AclOperation::Read,
-    };
-    if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
+    if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
         return encode_top_level(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
     // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
@@ -109,22 +101,13 @@ pub(crate) async fn handle(
     // Deny, checked BEFORE the unknown-topic lookup below. Decided up front
     // (borrowing `req.topics`, not owning it) because the loop below moves
     // each topic's partitions out of `req.topics`.
-    let topic_decisions: std::collections::HashMap<&str, AuthorizationResult> = {
-        let topic_names: Vec<&str> = req.topics.iter().map(|t| t.topic_name.as_str()).collect();
-        authorize_topics(
-            broker.config.authorizer.as_ref(),
-            &*image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Read,
-            topic_names,
-        )
-    };
-    let denied_topics: std::collections::HashSet<String> = topic_decisions
-        .into_iter()
-        .filter(|(_, result)| *result == AuthorizationResult::Deny)
-        .map(|(name, _)| name.to_owned())
-        .collect();
+    let denied_topics = crate::handlers::denied_topics(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        AclOperation::Read,
+        req.topics.iter().map(|t| t.topic_name.as_str()),
+    );
 
     let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
         Vec::with_capacity(req.topics.len());

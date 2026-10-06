@@ -7,7 +7,7 @@
 use std::fmt;
 
 use derive_more::{Display, From, Into};
-use krabka_audit::chain::{GENESIS_HEAD, chain_hash, to_hex};
+use krabka_audit::chain::{GENESIS_HEAD, chain_hash};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
@@ -71,13 +71,13 @@ impl ChainHead {
 
 impl fmt::Display for ChainHead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&to_hex(&self.0))
+        f.write_str(&hex::encode(self.0))
     }
 }
 
 impl fmt::Debug for ChainHead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ChainHead({})", to_hex(&self.0))
+        write!(f, "ChainHead({})", hex::encode(self.0))
     }
 }
 

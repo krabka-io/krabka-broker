@@ -25,19 +25,14 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
     error::BrokerError,
+    handlers::describe_configs::{
+        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+    },
 };
-
-/// Kafka wire-level resource-type ids. They match the JVM
-/// `org.apache.kafka.common.config.ConfigResource.Type` enum.
-const RESOURCE_TYPE_TOPIC: i8 = 2;
-const RESOURCE_TYPE_BROKER: i8 = 4;
-const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
-const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
-const RESOURCE_TYPE_GROUP: i8 = 32;
 
 /// Default set returned when v1 callers omit `resource_types` (KIP-1142).
 /// Mirrors the JVM admin client's expectation: every supported type the
@@ -73,17 +68,14 @@ pub(crate) fn handle(
     // authorizes `DescribeConfigs` on the cluster. Only `AlterConfigs` and
     // `All` imply it, so a principal with only `Describe` (or `Read`,
     // `Write`, `Delete`, `Alter`) gets `CLUSTER_AUTHORIZATION_FAILED`.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::DescribeConfigs,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        krabka_metadata::ResourceType::Cluster,
+        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        AclOperation::DescribeConfigs,
+    ) {
         let resp = ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             ..Default::default()

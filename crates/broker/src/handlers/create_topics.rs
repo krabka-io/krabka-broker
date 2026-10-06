@@ -40,8 +40,7 @@ use self::{
     authorization::{authorize_create_topics, describe_configs_denied},
     name::CLUSTER_METADATA_TOPIC,
     response::{
-        create_topics_response, effective_topic_configs, encode_response, finish_response,
-        topic_error_result,
+        create_topics_response, effective_topic_configs, finish_response, topic_error_result,
     },
 };
 pub(crate) use self::{
@@ -201,7 +200,7 @@ pub(crate) async fn handle(
                 )
             })
             .collect();
-        return encode_response(&create_topics_response(results, 0), version);
+        return crate::handlers::encode_response(&create_topics_response(results, 0), version);
     }
 
     // KIP-599: Kafka's controller charges each topic with the partitions it

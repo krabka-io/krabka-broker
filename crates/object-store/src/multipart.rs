@@ -1,7 +1,11 @@
-//! S3's incomplete-multipart listing, which `object_store` 0.13 does not expose.
+//! S3's incomplete-multipart listing, which `object_store` 0.13 does not expose,
+//! and the signed bucket `GET` it shares with the WORM check.
 
-use object_store::{aws::AwsAuthorizer, client::HttpRequestBody};
-use serde::Deserialize;
+use object_store::{
+    aws::{AwsAuthorizer, AwsCredential},
+    client::HttpRequestBody,
+};
+use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::{ObjectStoreError, S3Config, build::build_s3_store};
 
@@ -48,24 +52,14 @@ pub async fn list_s3_multipart_uploads(
 ) -> Result<Vec<IncompleteMultipartUpload>, ObjectStoreError> {
     let store = build_s3_store(cfg)?;
     let credential = store.credentials().get_credential().await?;
-    let endpoint = cfg.endpoint.as_ref().map_or_else(
-        || format!("https://s3.{}.amazonaws.com/{}", cfg.region, cfg.bucket),
-        |endpoint| format!("{}/{}", endpoint.trim_end_matches('/'), cfg.bucket),
-    );
-    let mut client = reqwest::Client::builder();
-    if cfg.endpoint.is_some() {
-        client = client.no_proxy();
-    }
-    let client = client
-        .build()
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+    let client = s3_http_client(cfg)?;
+    let bucket_url = s3_bucket_url(cfg)?;
     let mut key_marker = None;
     let mut upload_id_marker = None;
     let mut found = Vec::new();
 
     loop {
-        let mut url = reqwest::Url::parse(&endpoint)
-            .map_err(|error| ObjectStoreError::InvalidConfig(format!("S3 endpoint: {error}")))?;
+        let mut url = bucket_url.clone();
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("uploads", "");
@@ -79,31 +73,8 @@ pub async fn list_s3_multipart_uploads(
                 query.append_pair("upload-id-marker", marker);
             }
         }
-        let mut signed = http::Request::get(url.as_str())
-            .body(HttpRequestBody::empty())
-            .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-        AwsAuthorizer::new(&credential, "s3", &cfg.region)
-            .try_authorize(&mut signed, None)
-            .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-        let response = client
-            .get(url)
-            .headers(signed.into_parts().0.headers)
-            .send()
-            .await
-            .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-        let status = response.status();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-        if !status.is_success() {
-            return Err(ObjectStoreError::Backend(format!(
-                "ListMultipartUploads returned {status}: {}",
-                String::from_utf8_lossy(&body)
-            )));
-        }
-        let page: ListResponse = quick_xml::de::from_reader(body.as_ref())
-            .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+        let page: ListResponse =
+            signed_s3_get_xml(&client, &credential, cfg, url, "ListMultipartUploads").await?;
         found.extend(
             page.uploads
                 .into_iter()
@@ -124,6 +95,67 @@ pub async fn list_s3_multipart_uploads(
         }
     }
     Ok(found)
+}
+
+/// The path-style URL of `cfg`'s bucket, on its custom endpoint if it has one.
+pub(crate) fn s3_bucket_url(cfg: &S3Config) -> Result<reqwest::Url, ObjectStoreError> {
+    let endpoint = cfg.endpoint.as_ref().map_or_else(
+        || format!("https://s3.{}.amazonaws.com/{}", cfg.region, cfg.bucket),
+        |endpoint| format!("{}/{}", endpoint.trim_end_matches('/'), cfg.bucket),
+    );
+    reqwest::Url::parse(&endpoint)
+        .map_err(|error| ObjectStoreError::InvalidConfig(format!("S3 endpoint: {error}")))
+}
+
+/// The HTTP client for direct S3 bucket requests.
+///
+/// A custom endpoint bypasses the system proxy, the way a local or in-cluster
+/// S3 implementation needs.
+pub(crate) fn s3_http_client(cfg: &S3Config) -> Result<reqwest::Client, ObjectStoreError> {
+    let mut client = reqwest::Client::builder();
+    if cfg.endpoint.is_some() {
+        client = client.no_proxy();
+    }
+    client
+        .build()
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))
+}
+
+/// Sends a SigV4-signed `GET` for `url` and decodes the XML response body.
+///
+/// `operation` names the S3 API call in the errors.
+pub(crate) async fn signed_s3_get_xml<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    credential: &AwsCredential,
+    cfg: &S3Config,
+    url: reqwest::Url,
+    operation: &str,
+) -> Result<T, ObjectStoreError> {
+    let mut signed = http::Request::get(url.as_str())
+        .body(HttpRequestBody::empty())
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+    AwsAuthorizer::new(credential, "s3", &cfg.region)
+        .try_authorize(&mut signed, None)
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+    let response = client
+        .get(url)
+        .headers(signed.into_parts().0.headers)
+        .send()
+        .await
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+    if !status.is_success() {
+        return Err(ObjectStoreError::Backend(format!(
+            "{operation} returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        )));
+    }
+    quick_xml::de::from_reader(body.as_ref())
+        .map_err(|error| ObjectStoreError::Backend(format!("{operation}: {error}")))
 }
 
 #[cfg(test)]

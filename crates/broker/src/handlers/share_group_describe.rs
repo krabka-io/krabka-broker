@@ -20,7 +20,6 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
@@ -150,18 +149,8 @@ pub(crate) async fn handle(
         .flat_map(|m| &m.assignment.topic_partitions)
         .map(|tp| tp.topic_name.as_str())
         .collect();
-    let denied: HashSet<String> = authorize_topics(
-        authorizer,
-        &*image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        assigned,
-    )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
-    .map(|(name, _)| name.to_owned())
-    .collect();
+    let denied =
+        crate::handlers::denied_topics(authorizer, &image, ctx, AclOperation::Describe, assigned);
     if !denied.is_empty() {
         for group in &mut groups {
             let hides_topic = group

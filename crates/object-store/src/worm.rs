@@ -1,11 +1,11 @@
 //! S3 control-plane checks required before enabling a WORM writer.
 
-use object_store::{aws::AwsAuthorizer, client::HttpRequestBody};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::{
     GcsConfig, ObjectStoreError, S3Config,
     build::{build_gcs_store, build_s3_store},
+    multipart::{s3_bucket_url, s3_http_client, signed_s3_get_xml},
 };
 
 #[derive(Deserialize)]
@@ -186,7 +186,7 @@ fn validate_gcs_policy(cfg: &GcsConfig, policy: GcsBucketPolicy) -> Result<(), O
     Ok(())
 }
 
-async fn get_bucket_xml<T: for<'de> Deserialize<'de>>(
+async fn get_bucket_xml<T: DeserializeOwned>(
     cfg: &S3Config,
     api: &str,
 ) -> Result<T, ObjectStoreError> {
@@ -197,38 +197,9 @@ async fn get_bucket_xml<T: for<'de> Deserialize<'de>>(
     };
     let store = build_s3_store(cfg)?;
     let credential = store.credentials().get_credential().await?;
-    let endpoint = cfg.endpoint.as_ref().map_or_else(
-        || format!("https://s3.{}.amazonaws.com/{}", cfg.region, cfg.bucket),
-        |endpoint| format!("{}/{}", endpoint.trim_end_matches('/'), cfg.bucket),
-    );
-    let mut url = reqwest::Url::parse(&endpoint)
-        .map_err(|error| ObjectStoreError::InvalidConfig(format!("S3 endpoint: {error}")))?;
+    let mut url = s3_bucket_url(cfg)?;
     url.query_pairs_mut().append_pair(api, "");
-    let mut signed = http::Request::get(url.as_str())
-        .body(HttpRequestBody::empty())
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    AwsAuthorizer::new(&credential, "s3", &cfg.region)
-        .try_authorize(&mut signed, None)
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    let response = reqwest::Client::new()
-        .get(url)
-        .headers(signed.into_parts().0.headers)
-        .send()
-        .await
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    if !status.is_success() {
-        return Err(ObjectStoreError::Backend(format!(
-            "{operation} returned {status}: {}",
-            String::from_utf8_lossy(&body)
-        )));
-    }
-    quick_xml::de::from_reader(body.as_ref())
-        .map_err(|error| ObjectStoreError::Backend(format!("{operation}: {error}")))
+    signed_s3_get_xml(&s3_http_client(cfg)?, &credential, cfg, url, operation).await
 }
 
 #[cfg(test)]

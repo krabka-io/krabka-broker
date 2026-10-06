@@ -13,7 +13,7 @@
 use krabka_ids::Offset;
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _};
 
-use super::{Engine, checkpoint::checkpoint_ids};
+use super::{Engine, KraftController, checkpoint::checkpoint_ids};
 use crate::error::RaftError;
 
 /// One snapshot the cleaning weighs: its `(end_offset, epoch)` id and the
@@ -98,7 +98,7 @@ impl Engine {
 
     fn clean_by_age(&mut self, max: Time) -> Result<bool, RaftError> {
         let snapshots = retained_snapshots(&self.data_dir, self.log.log_start_offset());
-        let now_ms = Self::wall_clock_ms();
+        let now_ms = KraftController::wall_clock_ms();
         let mut cleaned = false;
         for pair in snapshots.windows(2) {
             let Some(timestamp) = self.snapshot_timestamp(pair[0].id) else {

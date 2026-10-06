@@ -37,21 +37,21 @@ pub(crate) mod transport;
 pub(crate) mod trigger;
 pub(crate) mod write_markers;
 
-use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use krabka_protocol::krabka::barrier::{
     BarrierCutPartition, BarrierCutTopic, BarrierMissingPartition,
 };
 use krabka_units::{Time, convert::TimeExt as _};
 
-// The `Describe` gate that `describe_groups` and `list_cuts` apply. It lives in
-// `crate::handlers` beside its `Alter` twin, because the write-freeze and
-// break-glass control planes read the cluster through the same gate.
-pub(crate) use crate::handlers::cluster_describe_denied;
+// The `Describe` gate that `describe_groups` and `list_cuts` apply, and the
+// `ClusterAction` gate that `write_markers` applies. Both live in
+// `crate::handlers` beside their `Alter` twin, because the write-freeze and
+// break-glass control planes read the cluster through the same gates. Kafka
+// applies `ClusterAction` to `WriteTxnMarkers`, and `WriteBarrierMarkers` is
+// the same kind of inter-broker traffic.
+pub(crate) use crate::handlers::{cluster_action_denied, cluster_describe_denied};
 use crate::{
-    authorizer::Authorizer,
     barrier::{error::BarrierError, persistence::CutValue},
     codes,
-    handlers::{RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
 };
 
 /// The `interval_ms` value that turns periodic injection off.
@@ -147,26 +147,6 @@ pub(crate) fn interval_from_wire(interval_ms: i64) -> Option<Time> {
     } else {
         Some(Time::from_millis(interval_ms))
     }
-}
-
-/// The `ClusterAction` gate on `Cluster("kafka-cluster")`.
-///
-/// It returns `true` when the authorizer denies the principal. Kafka applies
-/// this gate to `WriteTxnMarkers`, and `WriteBarrierMarkers` is the same kind
-/// of inter-broker traffic.
-pub(crate) fn cluster_action_denied(
-    authorizer: &dyn Authorizer,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        ResourceType::Cluster,
-        CLUSTER_RESOURCE_NAME,
-        AclOperation::ClusterAction,
-    )
 }
 
 #[cfg(test)]

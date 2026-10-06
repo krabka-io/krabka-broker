@@ -40,10 +40,7 @@
 //! frozen topic is what a migration wants. Both retention passes stop, on
 //! every replica, because each one removes data from the topic's log.
 
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::{Duration, SystemTime},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use futures_util::future::join_all;
 use krabka_metadata::NodeId;
@@ -63,6 +60,7 @@ use crate::{
     metrics::BrokerMetrics,
     partition::Partition,
     partition_registry::PartitionRegistry,
+    time_util::now_ms,
 };
 
 mod archive;
@@ -643,16 +641,10 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
     }
 }
 
-fn now_ms() -> i64 {
-    let millis = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis();
-    i64::try_from(millis).unwrap_or(i64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig, Offset};
@@ -1472,27 +1464,5 @@ mod tests {
 
         check!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
         check!(partition.log.lock().unwrap().log_start_offset() == local_start);
-    }
-
-    #[test]
-    fn now_ms_tracks_current_unix_epoch_millis() {
-        let before = i64::try_from(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-        )
-        .unwrap();
-        let observed = now_ms();
-        let after = i64::try_from(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-        )
-        .unwrap();
-
-        assert!(observed >= before);
-        assert!(observed <= after);
     }
 }
