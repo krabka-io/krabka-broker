@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use super::{
     GroupActorMessage, GroupKindTag, chrono_now_ms, run_actor,
-    test_support::{await_until, empty_metadata, make_coordinator},
+    test_support::{empty_metadata, make_coordinator},
 };
 use crate::{
     codes,
@@ -47,7 +47,9 @@ async fn actor_exits_on_append_error() {
     assert!(resp.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
 
     // Wait for the actor to drain and drop its receiver.
-    await_until("actor mpsc closed after exit", || handle.tx.is_closed()).await;
+    tokio::time::timeout(Duration::from_secs(1), handle.tx.closed())
+        .await
+        .expect("actor mpsc closed after exit");
     assert!(
         handle.tx.is_closed(),
         "actor mpsc should be closed after exit"

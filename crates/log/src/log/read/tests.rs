@@ -446,3 +446,60 @@ fn read_raw_multi_segment_budget_and_limit() {
     assert2::assert!(limited.start_offset == Offset(0));
     assert2::assert!(limited.last_offset == Some(Offset(1)));
 }
+
+/// Sparse indexes can leave several earlier batches before a fetch target.
+/// Their bytes must not consume the budget for the first eligible batch.
+#[test]
+fn a_small_budget_preserves_unindexed_records_before_a_segment_seam() {
+    let dir = tempdir().unwrap();
+    let small = sample_batch(1).encoded_len();
+    let config = LogConfig {
+        segment_size: size_from_len(4 * small),
+        index_interval: kibibytes(4),
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), config).unwrap();
+    for _ in 0..8 {
+        log.append(&mut sample_batch(1)).unwrap();
+    }
+    check!(!log.segments.is_empty());
+    let end = log.log_end_offset();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for offset in 0..8 {
+        for budget in [1, HEADER_LEN, small, 2 * small] {
+            let read = log
+                .read_raw(Offset(offset), end, size_from_len(budget))
+                .unwrap();
+            actual.push((offset, budget, batch_bases(&read.bytes).first().copied()));
+            expected.push((offset, budget, Some(offset)));
+        }
+    }
+    check!(actual == expected);
+}
+
+crate::sendfile_cfg! {
+/// The file-region path must preserve the same first eligible batch, including
+/// the anti-stall batch whose payload is larger than the requested budget.
+#[test]
+fn a_small_budget_preserves_unindexed_descriptor_records_before_a_seam() {
+    use std::os::unix::fs::FileExt;
+    let (_dir, log, small) = seam_log();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for budget in [1, HEADER_LEN, small] {
+        let desc = log
+            .read_raw_desc(Offset(1), log.log_end_offset(), size_from_len(budget))
+            .unwrap();
+        let mut wire = Vec::new();
+        for region in desc.regions {
+            let mut data = vec![0; region.len];
+            region.file.read_exact_at(&mut data, region.offset).unwrap();
+            wire.extend_from_slice(&data);
+        }
+        actual.push((budget, batch_bases(&wire)));
+        expected.push((budget, vec![1]));
+    }
+    check!(actual == expected);
+}
+}

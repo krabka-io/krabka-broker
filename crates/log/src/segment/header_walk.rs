@@ -12,11 +12,8 @@ use krabka_protocol::records::{HEADER_LEN, RecordBatchHeader};
 use krabka_units::prelude::ByteSizeExt;
 use zerocopy::FromBytes;
 
-use super::Segment;
+use super::{Segment, io::read_full_at};
 use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError};
-
-/// Bytes of a v2 batch header that hold the base offset.
-const BASE_OFFSET_LEN: usize = 8;
 
 /// Bytes of a v2 batch up to and including the `batch_length` field.
 const BATCH_PREFIX_LEN: usize = 12;
@@ -40,41 +37,39 @@ impl Segment {
         Ok(u64::from(self.offset_index.lookup(rel)))
     }
 
-    /// Byte position a read for `target_rel` starts at.
+    /// Byte position of the first batch whose last offset reaches `target_rel`.
     ///
-    /// The sparse offset index holds the **last** offset of each indexed batch,
-    /// as Kafka's does, so the entry a lookup lands on is a batch that ends at
-    /// or below the target. Unless it ends exactly on the target, it holds
-    /// nothing the read wants, and this method returns the position of the
-    /// batch after it, found from the length in the indexed batch's header.
-    /// Starting the read there keeps a read with a small byte budget from
-    /// spending it stepping over that batch, which would return nothing.
+    /// A sparse index is only a floor: unindexed batches before the target
+    /// must be skipped before the caller spends its payload byte budget.
+    /// Otherwise a small read can return empty and the log can advance to the
+    /// next segment while records in this one remain unread.
     pub(super) fn read_start_position(&self, target_rel: u32) -> Result<u64, LogError> {
-        let Some((indexed_last, position)) = self.offset_index.floor_entry(target_rel) else {
-            return Ok(0);
+        let mut position = match self.offset_index.floor_entry(target_rel) {
+            Some((indexed_last, position)) if indexed_last == target_rel => {
+                return Ok(u64::from(position));
+            }
+            Some((_, position)) => u64::from(position),
+            None => 0,
         };
-        let position = u64::from(position);
-        if indexed_last == target_rel {
-            return Ok(position);
+        let target = self.base_offset.0 + i64::from(target_rel);
+        let mut header = [0u8; HEADER_LEN];
+        while position < self.log_size {
+            if read_full_at(&self.log_file, position, &mut header)? < HEADER_LEN {
+                break;
+            }
+            let batch = RecordBatchHeader::ref_from_bytes(&header)
+                .map_err(|_| LogError::Corrupt("record batch header".into()))?;
+            if batch.base_offset.get() + i64::from(batch.last_offset_delta.get()) >= target {
+                break;
+            }
+            let total =
+                BATCH_PREFIX_LEN as u64 + u64::from(batch.batch_length.get().max(0).unsigned_abs());
+            if total < HEADER_LEN as u64 {
+                break;
+            }
+            position += total;
         }
-        // `base_offset` (8 bytes), then `batch_length` (4 bytes), which counts
-        // everything after itself.
-        let mut prefix = Vec::with_capacity(BATCH_PREFIX_LEN);
-        self.read_log_range(position, &mut prefix, BATCH_PREFIX_LEN)?;
-        let Some(batch_length) = prefix
-            .get(BASE_OFFSET_LEN..BATCH_PREFIX_LEN)
-            .and_then(|field| <[u8; 4]>::try_from(field).ok())
-            .map(i32::from_be_bytes)
-            .filter(|length| *length > 0)
-        else {
-            return Ok(position);
-        };
-        let next = position + BATCH_PREFIX_LEN as u64 + u64::from(batch_length.unsigned_abs());
-        Ok(if next <= self.log_size {
-            next
-        } else {
-            position
-        })
+        Ok(position)
     }
 
     /// Walk the fixed v2 batch headers from `start_pos` forward and hand each
@@ -162,9 +157,9 @@ mod tests {
         assert2::check!(p3 == pos2);
         assert2::check!(p3 > 0);
 
-        // A read below the only entry starts at the segment start, and one for
-        // the entry's own offset starts at its batch.
-        assert2::check!(seg.read_start_position(5).unwrap() == 0);
+        // Unlike an index floor, a read starts at the first eligible batch,
+        // including when the requested offset is below the only index entry.
+        assert2::check!(seg.read_start_position(5).unwrap() == pos2);
         assert2::check!(seg.read_start_position(9).unwrap() == pos2);
         assert2::check!(seg.read_start_position(4).unwrap() == 0);
 

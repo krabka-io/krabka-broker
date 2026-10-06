@@ -49,7 +49,7 @@ pub(super) fn fetch_response_write_plan(
 
     let flex = version >= 12;
     let mut ops = Vec::new();
-    let mut buf = BytesMut::new();
+    let mut buf = BytesMut::with_capacity(128);
 
     if version >= 1 {
         put_i32(&mut buf, response.throttle_time_ms);

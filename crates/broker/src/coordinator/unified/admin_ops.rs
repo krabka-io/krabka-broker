@@ -230,7 +230,7 @@ impl GroupCoordinator {
 mod tests {
     use assert2::assert;
 
-    use crate::coordinator::unified::test_support::{await_until, make_coord};
+    use crate::coordinator::unified::test_support::make_coord;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_all_closes_all_group_actors() {
@@ -241,12 +241,13 @@ mod tests {
 
         coord.shutdown_all().await;
 
-        // The ack can arrive a scheduler tick before the actor task exits
-        // and drops its receiver — poll instead of racing it.
-        await_until("all group actor channels closed", || {
-            group.tx.is_closed() && share.tx.is_closed() && streams.tx.is_closed()
+        // The reply can precede receiver closure; wait for each channel's
+        // notification rather than counting scheduler yields.
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(group.tx.closed(), share.tx.closed(), streams.tx.closed());
         })
-        .await;
+        .await
+        .expect("all group actor channels closed");
         assert!(group.tx.is_closed());
         assert!(share.tx.is_closed());
         assert!(streams.tx.is_closed());

@@ -625,10 +625,9 @@ mod tests {
             .await
             .expect("send Shutdown");
         ack.await.expect("Shutdown ack");
-        crate::coordinator::unified::test_support::await_until("the actor's handle closes", || {
-            handle.tx.is_closed()
-        })
-        .await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle.tx.closed())
+            .await
+            .expect("the actor's handle closes");
 
         let refused = mark_offsets_pending(
             &handle,

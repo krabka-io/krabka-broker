@@ -80,7 +80,7 @@ pub fn producer_completion_window(
     let insert = accepted && (!keep_old || position == count || ends[position] != incoming);
     let length = if keep_old { count } else { 0 } + usize::from(insert);
     let first = length.saturating_sub(5);
-    let mut selected: Vec<usize> = Vec::new();
+    let mut selected: Vec<usize> = Vec::with_capacity(length - first);
     let mut ordinal = first;
     #[invariant(first@ <= ordinal@ && ordinal@ <= length@ && selected@.len() == ordinal@ - first@)]
     #[invariant(forall<j: Int> 0 <= j && j < selected@.len() ==> selected@[j]@ ==
