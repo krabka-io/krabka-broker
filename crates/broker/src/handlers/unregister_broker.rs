@@ -55,20 +55,23 @@
 //! gate and the audit trail then run on the controller as well.
 //!
 //! This file holds the request flow. The two-person gate and the records it
-//! builds live in `gate`, the ISR departures in `leave`, and the response shape
-//! in `wire`.
+//! builds live in `gate`, the ISR departures in `leave`, and the
+//! wrong-controller refusal in `wire`.
 
 use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, NodeId};
 use krabka_protocol::{
     Decode,
-    owned::unregister_broker_request::{self, UnregisterBrokerRequest},
+    owned::{
+        unregister_broker_request::{self, UnregisterBrokerRequest},
+        unregister_broker_response::UnregisterBrokerResponse,
+    },
 };
 
 use self::{
     gate::{broker_target, consumed_proposal_id, unregister_records, with_leaves},
-    wire::{not_controller_refusal, response},
+    wire::not_controller_refusal,
 };
 use crate::{
     break_glass::{
@@ -79,7 +82,10 @@ use crate::{
     codes,
     controller_admin::CONTROLLER_ADMIN_CONNECTION_ID,
     error::BrokerError,
-    handlers::{RequestContext, cluster_alter_denied, forward_to_controller::to_active_controller},
+    handlers::{
+        ErrorResponse as _, RequestContext, cluster_alter_denied,
+        forward_to_controller::to_active_controller,
+    },
     time_util::now_ms,
 };
 
@@ -120,7 +126,7 @@ pub(crate) async fn handle(
             ctx,
             |error_code, message| {
                 crate::handlers::encode_response(
-                    &response(error_code, message.map(str::to_owned)),
+                    &UnregisterBrokerResponse::error(error_code, message.map(str::to_owned)),
                     version,
                 )
             },
@@ -134,7 +140,7 @@ pub(crate) async fn handle(
 
     // Cluster:Alter gate.
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        let resp = response(
+        let resp = UnregisterBrokerResponse::error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             Some("unregister-broker denied".into()),
         );
@@ -162,7 +168,7 @@ pub(crate) async fn handle(
         .map(NodeId)
         .and_then(|id| Some((id, image.broker_epoch(id)?)))
     else {
-        let resp = response(
+        let resp = UnregisterBrokerResponse::error(
             codes::BROKER_ID_NOT_REGISTERED,
             Some(format!(
                 "Broker ID {} is not currently registered",
@@ -197,7 +203,7 @@ pub(crate) async fn handle(
                     reason: &message,
                 },
             );
-            let resp = response(codes::POLICY_VIOLATION, Some(message));
+            let resp = UnregisterBrokerResponse::error(codes::POLICY_VIOLATION, Some(message));
             return crate::handlers::encode_response(&resp, version);
         }
     };
@@ -216,7 +222,7 @@ pub(crate) async fn handle(
     )
     .await
     {
-        let resp = response(
+        let resp = UnregisterBrokerResponse::error(
             codes::POLICY_VIOLATION,
             Some(format!("privileged action refused: {error}")),
         );
@@ -233,7 +239,7 @@ pub(crate) async fn handle(
     // Submit the change through Raft. The image apply of the unregister record
     // is idempotent (the `apply` arm calls `brokers.remove`).
     if let Err(e) = broker.controller.submit_change(records).await {
-        let resp = response(
+        let resp = UnregisterBrokerResponse::error(
             crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR),
             Some(format!("controller submit failed: {e}")),
         );
@@ -262,6 +268,6 @@ pub(crate) async fn handle(
         )],
     );
 
-    let resp = response(codes::NONE, None);
+    let resp = UnregisterBrokerResponse::error(codes::NONE, None);
     crate::handlers::encode_response(&resp, version)
 }

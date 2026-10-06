@@ -17,8 +17,11 @@ use krabka_units::convert::TimeExt as _;
 use tokio::sync::oneshot;
 
 use crate::{
-    broker::Broker, codes, coordinator::unified::actor::GroupActorMessage, error::BrokerError,
-    handlers::group_read_denied,
+    broker::Broker,
+    codes,
+    coordinator::unified::actor::GroupActorMessage,
+    error::BrokerError,
+    handlers::{ErrorCodeResponse as _, group_read_denied},
 };
 
 #[tracing::instrument(
@@ -117,11 +120,7 @@ fn encode_err(
     version: crate::handlers::ApiVersion,
     code: crate::handlers::ErrorCode,
 ) -> Result<Bytes, BrokerError> {
-    let resp = SyncGroupResponse {
-        error_code: code,
-        ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    crate::handlers::encode_response(&SyncGroupResponse::error(code), version)
 }
 
 #[cfg(test)]

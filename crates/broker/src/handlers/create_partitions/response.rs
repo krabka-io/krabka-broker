@@ -45,9 +45,7 @@ mod tests {
     use super::*;
     use crate::{codes, handlers::create_partitions::test_support::VERSION};
 
-    fn decode_response(bytes: &Bytes) -> CreatePartitionsResponse {
-        crate::test_support::decode_response(bytes, VERSION)
-    }
+    crate::test_support::decode_helper!(CreatePartitionsResponse, version = VERSION);
 
     #[test]
     fn encode_response_writes_decodable_results_and_throttle() {

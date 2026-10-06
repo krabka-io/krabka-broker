@@ -26,7 +26,7 @@ use crate::{
     codes,
     coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
     error::BrokerError,
-    handlers::{RequestContext, acl_denied, group_read_denied},
+    handlers::{ErrorCodeResponse as _, RequestContext, acl_denied, group_read_denied},
     txn::{
         coordinator::TxnCoordinator,
         state::{TopicPartition, TxnEntry, TxnState},
@@ -225,11 +225,7 @@ async fn add_offsets_partition(
 // ── encoding helpers ──────────────────────────────────────────────────────────
 
 fn encode_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    let resp = AddOffsetsToTxnResponse {
-        error_code,
-        ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
+    crate::handlers::encode_response(&AddOffsetsToTxnResponse::error(error_code), version)
 }
 
 #[cfg(test)]

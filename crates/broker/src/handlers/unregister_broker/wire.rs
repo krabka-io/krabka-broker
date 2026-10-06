@@ -1,24 +1,13 @@
-//! The `UnregisterBrokerResponse` shape that every outcome of the handler
-//! takes, and the version-aware encode that puts it on the wire.
+//! The wrong-controller `UnregisterBrokerResponse` refusal.
 //!
 //! KIP-631 gives the response no per-broker rows, so a success and a refusal
-//! differ only in the top-level error code and the optional message. Neither
-//! throttles. Field-for-field construction is the contract with the JVM
-//! `AdminClient`, so it sits apart from the code that decides which code an
-//! outcome gets.
+//! differ only in the top-level error code and the optional message, which
+//! [`ErrorResponse::error`] builds. Neither throttles.
 
 use krabka_metadata::NodeId;
 use krabka_protocol::owned::unregister_broker_response::UnregisterBrokerResponse;
 
-use crate::handlers::forward_to_controller::wrong_controller_message;
-
-pub(super) fn response(error_code: i16, error_message: Option<String>) -> UnregisterBrokerResponse {
-    UnregisterBrokerResponse {
-        error_code,
-        error_message,
-        ..Default::default()
-    }
-}
+use crate::handlers::{ErrorResponse, forward_to_controller::wrong_controller_message};
 
 /// The refusal of a node that is not the active controller, or `None` when
 /// `node` leads. `leader` is the node that this one believes leads.
@@ -31,7 +20,7 @@ pub(super) fn not_controller_refusal(
     node: NodeId,
 ) -> Option<UnregisterBrokerResponse> {
     (leader != Some(node)).then(|| {
-        response(
+        UnregisterBrokerResponse::error(
             crate::codes::NOT_CONTROLLER,
             Some(wrong_controller_message(leader)),
         )

@@ -738,44 +738,16 @@ pub(crate) async fn start_broker_with_authorizer_no_audit(
 /// wrapper trio that every handler's `#[cfg(test)] mod handler_tests` binds
 /// over [`encode_request`], [`decode_response`], and [`request_context`].
 ///
-/// Two forms:
-///
-/// - `wire_helpers!(ReqTy, RespTy, version = V, client_id = "id")`: for
-///   handlers that always drive one fixed wire version.
-/// - `wire_helpers!(ReqTy, RespTy, client_id = "id")`: for handlers whose
-///   tests vary `version` per call, for version-negotiation behaviour.
+/// `wire_helpers!(ReqTy, RespTy, version = V, client_id = "id")` pins one
+/// wire version; leaving out `version = V` makes `encode_request` and
+/// `decode_response` take the version per call instead, for
+/// version-negotiation tests. A leading visibility, as in
+/// `wire_helpers!(pub(super) ReqTy, ...)`, lets a shared `test_support`
+/// module hand the helpers to its sibling test modules.
 macro_rules! wire_helpers {
-    ($req:ty, $resp:ty, version = $version:expr, client_id = $client_id:expr) => {
-        fn encode_request(req: &$req) -> ::bytes::Bytes {
-            crate::test_support::encode_request(req, $version)
-        }
-
-        fn decode_response(bytes: &::bytes::Bytes) -> $resp {
-            crate::test_support::decode_response(bytes, $version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
-    };
-    ($req:ty, $resp:ty, client_id = $client_id:expr) => {
-        fn encode_request(req: &$req, version: i16) -> ::bytes::Bytes {
-            crate::test_support::encode_request(req, version)
-        }
-
-        fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
-            crate::test_support::decode_response(bytes, version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
+    ($vis:vis $req:ty, $resp:ty, $(version = $version:expr,)? client_id = $client_id:expr) => {
+        crate::test_support::encode_helper!($vis $req $(, version = $version)?);
+        crate::test_support::response_helpers!($vis $resp, $(version = $version,)? client_id = $client_id);
     };
 }
 pub(crate) use wire_helpers;
@@ -784,29 +756,9 @@ pub(crate) use wire_helpers;
 /// already-typed request, so there is nothing to encode, and returns wire
 /// `Bytes`. Only `decode_response` and `test_context` are needed.
 macro_rules! response_helpers {
-    ($resp:ty, version = $version:expr, client_id = $client_id:expr) => {
-        fn decode_response(bytes: &::bytes::Bytes) -> $resp {
-            crate::test_support::decode_response(bytes, $version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
-    };
-    ($resp:ty, client_id = $client_id:expr) => {
-        fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
-            crate::test_support::decode_response(bytes, version)
-        }
-
-        fn test_context<'a>(
-            principal: &'a krabka_security::Principal,
-            peer: &'a ::std::net::SocketAddr,
-        ) -> crate::handlers::RequestContext<'a> {
-            crate::test_support::request_context(principal, peer, $client_id)
-        }
+    ($vis:vis $resp:ty, $(version = $version:expr,)? client_id = $client_id:expr) => {
+        crate::test_support::decode_helper!($vis $resp $(, version = $version)?);
+        crate::test_support::context_helper!($vis client_id = $client_id);
     };
 }
 pub(crate) use response_helpers;
@@ -815,26 +767,57 @@ pub(crate) use response_helpers;
 /// so there is no `test_context` to generate. It generates only
 /// `encode_request` and `decode_response`.
 macro_rules! codec_helpers {
-    ($req:ty, $resp:ty, version = $version:expr) => {
-        fn encode_request(req: &$req) -> ::bytes::Bytes {
+    ($vis:vis $req:ty, $resp:ty $(, version = $version:expr)?) => {
+        crate::test_support::encode_helper!($vis $req $(, version = $version)?);
+        crate::test_support::decode_helper!($vis $resp $(, version = $version)?);
+    };
+}
+pub(crate) use codec_helpers;
+
+/// The `encode_request` that [`wire_helpers`] and [`codec_helpers`] generate.
+macro_rules! encode_helper {
+    ($vis:vis $req:ty, version = $version:expr) => {
+        $vis fn encode_request(req: &$req) -> ::bytes::Bytes {
             crate::test_support::encode_request(req, $version)
         }
+    };
+    ($vis:vis $req:ty) => {
+        $vis fn encode_request(req: &$req, version: i16) -> ::bytes::Bytes {
+            crate::test_support::encode_request(req, version)
+        }
+    };
+}
+pub(crate) use encode_helper;
 
-        fn decode_response(bytes: &::bytes::Bytes) -> $resp {
+/// The `decode_response` that the other wire macros generate, usable on its
+/// own by a test module that decodes but never encodes or builds a context.
+macro_rules! decode_helper {
+    ($vis:vis $resp:ty, version = $version:expr) => {
+        $vis fn decode_response(bytes: &::bytes::Bytes) -> $resp {
             crate::test_support::decode_response(bytes, $version)
         }
     };
-    ($req:ty, $resp:ty) => {
-        fn encode_request(req: &$req, version: i16) -> ::bytes::Bytes {
-            crate::test_support::encode_request(req, version)
-        }
-
-        fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
+    ($vis:vis $resp:ty) => {
+        $vis fn decode_response(bytes: &::bytes::Bytes, version: i16) -> $resp {
             crate::test_support::decode_response(bytes, version)
         }
     };
 }
-pub(crate) use codec_helpers;
+pub(crate) use decode_helper;
+
+/// The `test_context` that [`wire_helpers`] and [`response_helpers`]
+/// generate, usable on its own by a test module that needs only the context.
+macro_rules! context_helper {
+    ($vis:vis client_id = $client_id:expr) => {
+        $vis fn test_context<'a>(
+            principal: &'a krabka_security::Principal,
+            peer: &'a ::std::net::SocketAddr,
+        ) -> crate::handlers::RequestContext<'a> {
+            crate::test_support::request_context(principal, peer, $client_id)
+        }
+    };
+}
+pub(crate) use context_helper;
 
 /// The outcome a [`FakeMetadataSource`] returns from `submit_change`, as a
 /// function of the batch it was handed.

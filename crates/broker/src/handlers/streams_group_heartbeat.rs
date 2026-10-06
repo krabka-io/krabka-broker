@@ -775,13 +775,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    fn encode_request(req: &StreamsGroupHeartbeatRequest) -> Bytes {
-        crate::test_support::encode_request(req, streams_group_heartbeat_response::MAX_VERSION)
-    }
-
-    fn decode_response(bytes: &Bytes) -> StreamsGroupHeartbeatResponse {
-        crate::test_support::decode_response(bytes, streams_group_heartbeat_response::MAX_VERSION)
-    }
+    crate::test_support::codec_helpers!(
+        StreamsGroupHeartbeatRequest,
+        StreamsGroupHeartbeatResponse,
+        version = streams_group_heartbeat_response::MAX_VERSION
+    );
 
     fn principal() -> Principal {
         crate::test_support::principal("alice")

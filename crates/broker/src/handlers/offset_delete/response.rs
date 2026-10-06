@@ -7,22 +7,14 @@
 //! the code, and `OffsetDeleteResponse.Builder.merge` lets it replace every
 //! row the broker had built.
 
-use krabka_protocol::owned::offset_delete_response::OffsetDeleteResponse;
-
-pub(super) fn whole_error(code: i16) -> OffsetDeleteResponse {
-    OffsetDeleteResponse {
-        error_code: code,
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_protocol::UnknownTaggedFields;
+    use krabka_protocol::{
+        UnknownTaggedFields, owned::offset_delete_response::OffsetDeleteResponse,
+    };
 
-    use super::*;
-    use crate::codes;
+    use crate::{codes, handlers::ErrorCodeResponse as _};
 
     #[test]
     fn whole_error_carries_only_the_top_level_code() {
@@ -37,7 +29,7 @@ mod tests {
                 topics: Vec::new(),
                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
             };
-            check!(whole_error(code) == expected);
+            check!(OffsetDeleteResponse::error(code) == expected);
         }
     }
 }

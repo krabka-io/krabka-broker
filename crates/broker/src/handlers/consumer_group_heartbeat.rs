@@ -17,7 +17,7 @@ use crate::{
         regex_resolver::ImageTopicRegexResolver,
     },
     error::BrokerError,
-    handlers::{group_read_denied, group_version_disabled},
+    handlers::{ErrorResponse as _, group_read_denied, group_version_disabled},
 };
 
 #[tracing::instrument(
@@ -145,26 +145,16 @@ pub(crate) async fn handle(
     {
         return reply(version, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
     }
-    let resp = rx
-        .await
-        .unwrap_or_else(|_| error(codes::UNKNOWN_SERVER_ERROR));
+    let resp = rx.await.unwrap_or_else(|_| {
+        ConsumerGroupHeartbeatResponse::error(codes::UNKNOWN_SERVER_ERROR, None)
+    });
     crate::handlers::encode_response(&resp, version)
 }
 
-fn error(code: i16) -> ConsumerGroupHeartbeatResponse {
-    ConsumerGroupHeartbeatResponse {
-        error_code: code,
-        ..Default::default()
-    }
-}
-
-/// The encoded early refusal: `error(code)` carrying `message`.
+/// The encoded early refusal: `code` carrying `message`.
 fn reply(version: i16, code: i16, message: Option<String>) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(
-        &ConsumerGroupHeartbeatResponse {
-            error_message: message,
-            ..error(code)
-        },
+        &ConsumerGroupHeartbeatResponse::error(code, message),
         version,
     )
 }
@@ -184,11 +174,10 @@ fn validate_request(
     config: &crate::coordinator::unified::config::NextGenConfig,
 ) -> Result<(), Box<ConsumerGroupHeartbeatResponse>> {
     let invalid = |message: &str| {
-        Box::new(ConsumerGroupHeartbeatResponse {
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some(message.to_string()),
-            ..Default::default()
-        })
+        Box::new(ConsumerGroupHeartbeatResponse::error(
+            codes::INVALID_REQUEST,
+            Some(message.to_string()),
+        ))
     };
     // `Utils.throwIfEmptyString`: a present value that trims to nothing.
     let blank = |value: Option<&str>| value.is_some_and(|value| value.trim().is_empty());
@@ -503,7 +492,7 @@ mod tests {
 
     #[test]
     fn error_response_preserves_error_code() {
-        let resp = error(codes::GROUP_AUTHORIZATION_FAILED);
+        let resp = ConsumerGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None);
         assert!(resp.error_code == codes::GROUP_AUTHORIZATION_FAILED);
     }
 
@@ -526,7 +515,7 @@ mod tests {
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 
         let bytes = crate::handlers::encode_response(
-            &error(codes::GROUP_AUTHORIZATION_FAILED),
+            &ConsumerGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None),
             consumer_group_heartbeat_response::MAX_VERSION,
         )
         .expect("encode");

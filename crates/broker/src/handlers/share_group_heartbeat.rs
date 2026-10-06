@@ -14,7 +14,7 @@ use crate::{
     codes,
     coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
-    handlers::group_read_denied,
+    handlers::{ErrorResponse as _, group_read_denied},
 };
 
 /// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
@@ -122,9 +122,9 @@ pub(crate) async fn handle(
     {
         return reply(version, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
     }
-    let resp = rx
-        .await
-        .unwrap_or_else(|_| error(stopped_actor_code(broker, &group_id)));
+    let resp = rx.await.unwrap_or_else(|_| {
+        ShareGroupHeartbeatResponse::error(stopped_actor_code(broker, &group_id), None)
+    });
     crate::handlers::encode_response(&resp, version)
 }
 
@@ -197,22 +197,9 @@ fn invalid_request_message(req: &ShareGroupHeartbeatRequest) -> Option<&'static 
     None
 }
 
-fn error(code: i16) -> ShareGroupHeartbeatResponse {
-    ShareGroupHeartbeatResponse {
-        error_code: code,
-        ..Default::default()
-    }
-}
-
-/// The encoded early refusal: `error(code)` carrying `message`.
+/// The encoded early refusal: `code` carrying `message`.
 fn reply(version: i16, code: i16, message: Option<String>) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &ShareGroupHeartbeatResponse {
-            error_message: message,
-            ..error(code)
-        },
-        version,
-    )
+    crate::handlers::encode_response(&ShareGroupHeartbeatResponse::error(code, message), version)
 }
 
 /// The code of a heartbeat that the group's actor dropped unanswered.
@@ -264,7 +251,7 @@ mod tests {
         ));
 
         let bytes = crate::handlers::encode_response(
-            &error(codes::GROUP_AUTHORIZATION_FAILED),
+            &ShareGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None),
             share_group_heartbeat_response::MAX_VERSION,
         )
         .expect("encode");

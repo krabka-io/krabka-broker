@@ -25,7 +25,12 @@ use krabka_protocol::{
 };
 use krabka_raft::{reconfig::RemoveVoter, voter_requests};
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorResponse as _, cluster_alter_denied},
+};
 
 #[tracing::instrument(
     name = "handle_remove_raft_voter",
@@ -115,11 +120,7 @@ fn respond(
     error_message: Option<String>,
 ) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(
-        &RemoveRaftVoterResponse {
-            error_code,
-            error_message,
-            ..Default::default()
-        },
+        &RemoveRaftVoterResponse::error(error_code, error_message),
         version,
     )
 }

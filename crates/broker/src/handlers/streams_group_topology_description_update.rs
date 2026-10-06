@@ -42,7 +42,7 @@ use crate::{
         streams::actor::{DescriptionPush, PushAnswer, StreamsGroupActorMessage},
     },
     error::BrokerError,
-    handlers::{RequestContext, group_read_denied},
+    handlers::{ErrorResponse as _, RequestContext, group_read_denied},
 };
 
 /// The message of trunk's `UnsupportedVersionException` for a broker with no
@@ -68,11 +68,7 @@ pub(crate) async fn handle(
     let req = StreamsGroupTopologyDescriptionUpdateRequest::decode(&mut cur, version)?;
     let (error_code, error_message) = answer(broker, req, ctx).await;
     crate::handlers::encode_response(
-        &StreamsGroupTopologyDescriptionUpdateResponse {
-            error_code,
-            error_message,
-            ..Default::default()
-        },
+        &StreamsGroupTopologyDescriptionUpdateResponse::error(error_code, error_message),
         version,
     )
 }

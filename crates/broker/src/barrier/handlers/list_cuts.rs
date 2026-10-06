@@ -29,7 +29,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{RequestContext, encode_response},
+    handlers::{ErrorResponse as _, RequestContext, encode_response},
 };
 
 #[tracing::instrument(
@@ -52,7 +52,7 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
     if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return encode_response(
-            &refused(
+            &ListBarrierCutsResponse::error(
                 codes::CLUSTER_AUTHORIZATION_FAILED,
                 Some("list-barrier-cuts denied".to_owned()),
             ),
@@ -63,7 +63,7 @@ pub(crate) async fn handle(
     let coordinator = &broker.barrier_coordinator;
     if !coordinator.is_coordinator_for(&req.group).await {
         return encode_response(
-            &refused(
+            &ListBarrierCutsResponse::error(
                 codes::NOT_COORDINATOR,
                 Some("this broker does not coordinate the barrier group".to_owned()),
             ),
@@ -79,7 +79,7 @@ pub(crate) async fn handle(
             cuts: select(&cuts, req.from_epoch, req.max_results),
             ..ListBarrierCutsResponse::default()
         },
-        Err(error) => refused(error_code(&error), Some(error_text(&error))),
+        Err(error) => ListBarrierCutsResponse::error(error_code(&error), Some(error_text(&error))),
     };
     encode_response(&resp, version)
 }
@@ -110,17 +110,6 @@ fn select(cuts: &[RetainedCut], from_epoch: i64, max_results: i32) -> Vec<Barrie
             ..BarrierCut::default()
         })
         .collect()
-}
-
-/// A response that carries a code and no cut.
-fn refused(error_code: i16, error_message: Option<String>) -> ListBarrierCutsResponse {
-    ListBarrierCutsResponse {
-        throttle_time_ms: 0,
-        error_code,
-        error_message,
-        cuts: Vec::new(),
-        ..ListBarrierCutsResponse::default()
-    }
 }
 
 #[cfg(test)]
@@ -215,6 +204,9 @@ mod tests {
             cuts: Vec::new(),
             ..ListBarrierCutsResponse::default()
         };
-        check!(refused(error_code(&error), Some(error_text(&error))) == expected);
+        check!(
+            ListBarrierCutsResponse::error(error_code(&error), Some(error_text(&error)))
+                == expected
+        );
     }
 }

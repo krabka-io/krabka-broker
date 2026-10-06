@@ -62,9 +62,7 @@ mod tests {
 
     use super::*;
 
-    fn decode_response(bytes: &Bytes, version: i16) -> EndTxnResponse {
-        crate::test_support::decode_response(bytes, version)
-    }
+    crate::test_support::decode_helper!(EndTxnResponse);
 
     #[test]
     fn producer_fenced_is_invalid_producer_epoch_below_version_2() {

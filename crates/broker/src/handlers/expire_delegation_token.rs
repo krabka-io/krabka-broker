@@ -32,7 +32,8 @@ use krabka_security::SecretBytes;
 use krabka_verified::{TokenExpireDecision, delegation_token::TokenApi, expire_token_deadline};
 
 use crate::{
-    handlers::renew_delegation_token::admit_token_request, network::auth::ConnectionAuth,
+    handlers::{ErrorCodeResponse as _, renew_delegation_token::admit_token_request},
+    network::auth::ConnectionAuth,
     time_util::now_ms,
 };
 
@@ -59,14 +60,14 @@ pub(crate) async fn handle(
         Err((error_code, expiry_timestamp_ms)) => {
             return ExpireDelegationTokenResponse {
                 expiry_timestamp_ms,
-                ..err_response(error_code)
+                ..ExpireDelegationTokenResponse::error(error_code)
             };
         }
     };
     let caller = principal.to_kafka();
 
     if token.owner != caller && !token.renewers.contains(&caller) {
-        return err_response(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
+        return ExpireDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
     }
 
     let now = now_ms();
@@ -78,7 +79,7 @@ pub(crate) async fn handle(
         token.max_timestamp_ms,
     ) {
         TokenExpireDecision::Expired => {
-            return err_response(crate::codes::DELEGATION_TOKEN_EXPIRED);
+            return ExpireDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_EXPIRED);
         }
         TokenExpireDecision::Delete => (DelegationTokenMutation::Delete { expected }, now),
         TokenExpireDecision::Update(new_expiry) => {
@@ -100,20 +101,12 @@ pub(crate) async fn handle(
         .await
     {
         tracing::warn!(error = %e, "ExpireDelegationToken: submit_change failed");
-        return err_response(crate::codes::INVALID_REQUEST);
+        return ExpireDelegationTokenResponse::error(crate::codes::INVALID_REQUEST);
     }
 
     ExpireDelegationTokenResponse {
         error_code: 0,
         expiry_timestamp_ms: new_expiry,
-        ..Default::default()
-    }
-}
-
-/// A controller-side refusal: `code`, and the schema-default expiry of 0.
-fn err_response(code: i16) -> ExpireDelegationTokenResponse {
-    ExpireDelegationTokenResponse {
-        error_code: code,
         ..Default::default()
     }
 }

@@ -22,23 +22,12 @@ use super::acl_wire::{
     binding_filter::{AclBindingFilter, UnknownElement, WireAclBindingFilter},
     operation_to_wire, pattern_type_to_wire, permission_to_wire, resource_type_to_wire,
 };
-use crate::{broker::Broker, codes};
+use crate::{broker::Broker, codes, handlers::ErrorResponse as _};
 
 /// The message of a cluster-describe refusal. Kafka's `AuthHelper` writes
 /// "Request <request> needs DESCRIBE permission.", where `<request>` is the JVM
 /// `toString` of the channel request; krabka names the API in its place.
 const CLUSTER_DESCRIBE_DENIED_MESSAGE: &str = "Request DescribeAcls needs DESCRIBE permission.";
-
-fn describe_acls_error_response(
-    error_code: i16,
-    error_message: &'static str,
-) -> DescribeAclsResponse {
-    DescribeAclsResponse {
-        error_code,
-        error_message: Some(error_message.into()),
-        ..Default::default()
-    }
-}
 
 fn acl_description(entry: &AclEntry) -> AclDescription {
     AclDescription {
@@ -104,9 +93,9 @@ pub(crate) fn handle(
 
     let image = broker.controller.current_image();
     if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        let resp = describe_acls_error_response(
+        let resp = DescribeAclsResponse::error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
-            CLUSTER_DESCRIBE_DENIED_MESSAGE,
+            Some(CLUSTER_DESCRIBE_DENIED_MESSAGE.into()),
         );
         return encode_response(&resp, api_version);
     }
@@ -116,7 +105,10 @@ pub(crate) fn handle(
     // `KafkaApis.handleDescribeAcls` runs the cluster-describe check first
     // and only then matches on `authorizer.isEmpty`, which is the order here.
     if !broker.config.authorizer.is_configured() {
-        let resp = describe_acls_error_response(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE);
+        let resp = DescribeAclsResponse::error(
+            codes::SECURITY_DISABLED,
+            Some(NO_AUTHORIZER_MESSAGE.into()),
+        );
         return encode_response(&resp, api_version);
     }
 
@@ -308,7 +300,10 @@ mod tests {
 
     #[test]
     fn response_helpers_preserve_error_resource_and_acl_fields() {
-        let err = describe_acls_error_response(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE);
+        let err = DescribeAclsResponse::error(
+            codes::SECURITY_DISABLED,
+            Some(NO_AUTHORIZER_MESSAGE.into()),
+        );
         let expected_err = DescribeAclsResponse {
             throttle_time_ms: 0,
             error_code: codes::SECURITY_DISABLED,

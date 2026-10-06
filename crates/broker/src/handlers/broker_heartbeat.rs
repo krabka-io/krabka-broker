@@ -10,7 +10,13 @@
 //! failover in `failover`.
 
 use bytes::Bytes;
-use krabka_protocol::{Decode, owned::broker_heartbeat_request::BrokerHeartbeatRequest};
+use krabka_protocol::{
+    Decode,
+    owned::{
+        broker_heartbeat_request::BrokerHeartbeatRequest,
+        broker_heartbeat_response::BrokerHeartbeatResponse,
+    },
+};
 use krabka_raft::NodeId;
 
 mod failover;
@@ -25,7 +31,7 @@ mod tests;
 
 pub(crate) use self::failover::failover_offline_dirs;
 use self::{
-    response::{error_response, success_response},
+    response::success_response,
     shutdown::{LeaveIsrs, leave_isrs},
     validation::validate_registration,
 };
@@ -34,7 +40,8 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::{
-        cluster_action_denied, encode_response, forward_to_controller::is_active_controller,
+        ErrorCodeResponse as _, cluster_action_denied, encode_response,
+        forward_to_controller::is_active_controller,
     },
     heartbeat::controller_state::{
         BrokerControlState, HeartbeatFacts, HeartbeatWants, next_broker_state,
@@ -73,7 +80,7 @@ pub(crate) async fn handle(
     let image = controller.current_image();
     if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return encode_response(
-            &error_response(codes::CLUSTER_AUTHORIZATION_FAILED),
+            &BrokerHeartbeatResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED),
             version,
         );
     }
@@ -81,13 +88,18 @@ pub(crate) async fn handle(
     // Only the openraft leader handles heartbeats. NOT_CONTROLLER
     // tells the broker client to redirect.
     if !is_active_controller(broker) {
-        return encode_response(&error_response(codes::NOT_CONTROLLER), version);
+        return encode_response(
+            &BrokerHeartbeatResponse::error(codes::NOT_CONTROLLER),
+            version,
+        );
     }
 
     let image = controller.current_image();
     let (broker_id_u64, decision) = match validate_registration(&image, &req) {
         Ok(validated) => validated,
-        Err(error_code) => return encode_response(&error_response(error_code), version),
+        Err(error_code) => {
+            return encode_response(&BrokerHeartbeatResponse::error(error_code), version);
+        }
     };
 
     // Record the contact first. If it is a revival, the liveness ticker

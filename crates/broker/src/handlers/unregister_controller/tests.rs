@@ -9,13 +9,11 @@ use krabka_protocol::owned::unregister_controller_response::MAX_VERSION;
 
 use super::*;
 
-fn encode_request(req: &UnregisterControllerRequest) -> Bytes {
-    crate::test_support::encode_request(req, MAX_VERSION)
-}
-
-fn decode_response(bytes: &Bytes) -> UnregisterControllerResponse {
-    crate::test_support::decode_response(bytes, MAX_VERSION)
-}
+crate::test_support::codec_helpers!(
+    UnregisterControllerRequest,
+    UnregisterControllerResponse,
+    version = MAX_VERSION
+);
 
 fn registration(node_id: u64) -> MetadataRecord {
     MetadataRecord::V1ControllerRegistration(ControllerRegistrationRecord {

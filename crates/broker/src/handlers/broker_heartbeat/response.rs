@@ -5,13 +5,6 @@
 
 use krabka_protocol::owned::broker_heartbeat_response::BrokerHeartbeatResponse;
 
-pub(super) fn error_response(error_code: i16) -> BrokerHeartbeatResponse {
-    BrokerHeartbeatResponse {
-        error_code,
-        ..Default::default()
-    }
-}
-
 pub(super) fn success_response(
     is_caught_up: bool,
     is_fenced: bool,
@@ -30,7 +23,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::codes;
+    use crate::{codes, handlers::ErrorCodeResponse as _};
 
     #[test]
     fn heartbeat_response_builders_preserve_non_default_fields() {
@@ -42,7 +35,7 @@ mod tests {
             should_shut_down: false,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
-        assert!(error_response(codes::NOT_CONTROLLER) == expected_not_controller);
+        assert!(BrokerHeartbeatResponse::error(codes::NOT_CONTROLLER) == expected_not_controller);
 
         let expected_success = BrokerHeartbeatResponse {
             throttle_time_ms: 0,
@@ -62,6 +55,8 @@ mod tests {
             should_shut_down: false,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
-        assert!(error_response(codes::CLUSTER_AUTHORIZATION_FAILED) == expected_denied);
+        assert!(
+            BrokerHeartbeatResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED) == expected_denied
+        );
     }
 }

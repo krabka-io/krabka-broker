@@ -55,9 +55,7 @@ pub(super) fn request(
     buf.freeze()
 }
 
-pub(super) fn decode_response(bytes: &Bytes) -> AssignReplicasToDirsResponse {
-    crate::test_support::decode_response(bytes, VERSION)
-}
+crate::test_support::decode_helper!(pub(super) AssignReplicasToDirsResponse, version = VERSION);
 
 /// The epoch broker 1 (the started broker itself) registered with. A request
 /// naming this epoch is the current, non-stale one.

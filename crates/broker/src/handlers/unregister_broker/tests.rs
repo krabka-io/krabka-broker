@@ -40,7 +40,8 @@ fn context<'a>(
 
 #[test]
 fn response_preserves_error_fields_and_throttle() {
-    let resp = response(codes::UNKNOWN_SERVER_ERROR, Some("submit failed".into()));
+    let resp =
+        UnregisterBrokerResponse::error(codes::UNKNOWN_SERVER_ERROR, Some("submit failed".into()));
 
     let expected = UnregisterBrokerResponse {
         throttle_time_ms: 0,

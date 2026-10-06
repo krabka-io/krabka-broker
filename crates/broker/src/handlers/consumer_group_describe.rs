@@ -343,9 +343,7 @@ mod tests {
         buf.freeze()
     }
 
-    fn decode_response(bytes: &Bytes) -> ConsumerGroupDescribeResponse {
-        crate::test_support::decode_response(bytes, VERSION)
-    }
+    crate::test_support::decode_helper!(ConsumerGroupDescribeResponse, version = VERSION);
 
     /// Start a broker and wait until its group coordinator serves
     /// `__consumer_offsets`.

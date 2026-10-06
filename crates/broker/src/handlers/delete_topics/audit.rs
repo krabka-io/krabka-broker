@@ -57,14 +57,9 @@ mod tests {
         test_support::{peer, principal},
     };
 
-    /// The `RequestContext` the `DeleteTopics` tests share, over the same
-    /// `admin-client` client id the handler tests drive the wire path with.
-    fn test_context<'a>(
-        principal: &'a krabka_security::Principal,
-        peer: &'a std::net::SocketAddr,
-    ) -> crate::handlers::RequestContext<'a> {
-        crate::test_support::request_context(principal, peer, "admin-client")
-    }
+    // The `RequestContext` the `DeleteTopics` tests share, over the same
+    // `admin-client` client id the handler tests drive the wire path with.
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     #[test]
     fn deleted_topic_resources_include_only_successful_named_topics() {

@@ -38,7 +38,12 @@ use krabka_protocol::{
 };
 use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_action_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorCodeResponse as _, cluster_action_denied},
+};
 
 #[tracing::instrument(
     name = "handle_update_raft_voter",
@@ -125,13 +130,7 @@ pub(crate) async fn handle(
 
 /// Encodes a response that carries nothing but `error_code`.
 fn refuse(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &UpdateRaftVoterResponse {
-            error_code,
-            ..Default::default()
-        },
-        version,
-    )
+    crate::handlers::encode_response(&UpdateRaftVoterResponse::error(error_code), version)
 }
 
 #[cfg(test)]

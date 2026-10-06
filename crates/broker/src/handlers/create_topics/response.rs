@@ -150,14 +150,8 @@ mod tests {
     use super::*;
     use crate::test_support::{peer, principal};
 
-    // The context that `crate::test_support::wire_helpers!` builds for the
-    // handler tests. These two cases need the context but no wire codec.
-    fn test_context<'a>(
-        principal: &'a krabka_security::Principal,
-        peer: &'a std::net::SocketAddr,
-    ) -> crate::handlers::RequestContext<'a> {
-        crate::test_support::request_context(principal, peer, "admin-client")
-    }
+    // These two cases need the handler tests' context but no wire codec.
+    crate::test_support::context_helper!(client_id = "admin-client");
 
     #[test]
     fn created_topic_resources_include_only_successful_topics() {

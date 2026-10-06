@@ -109,9 +109,10 @@ mod tests {
 
     use super::*;
 
-    fn decode_response(bytes: &Bytes) -> ShareFetchResponse {
-        crate::test_support::decode_response(bytes, share_fetch_response::MAX_VERSION)
-    }
+    crate::test_support::decode_helper!(
+        ShareFetchResponse,
+        version = share_fetch_response::MAX_VERSION
+    );
 
     #[test]
     fn encode_error_response_preserves_top_level_fields() {

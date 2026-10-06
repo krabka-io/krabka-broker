@@ -28,7 +28,7 @@
 
 use bytes::Bytes;
 use krabka_protocol::{
-    Decode, UnknownTaggedFields,
+    Decode,
     owned::{
         describe_quorum_request::{API_KEY as DESCRIBE_QUORUM_API_KEY, DescribeQuorumRequest},
         describe_quorum_response::DescribeQuorumResponse,
@@ -37,7 +37,12 @@ use krabka_protocol::{
 
 mod forward;
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_describe_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ErrorResponse as _, cluster_describe_denied},
+};
 
 #[tracing::instrument(
     name = "handle_describe_quorum",
@@ -138,13 +143,7 @@ pub(super) fn top_level_error_response(error_code: i16) -> DescribeQuorumRespons
         codes::NOT_LEADER_OR_FOLLOWER => NOT_LEADER_OR_FOLLOWER_MESSAGE,
         _ => "",
     };
-    DescribeQuorumResponse {
-        error_code,
-        error_message: Some(error_message.to_owned()),
-        topics: Vec::new(),
-        nodes: Vec::new(),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    DescribeQuorumResponse::error(error_code, Some(error_message.to_owned()))
 }
 
 #[cfg(test)]

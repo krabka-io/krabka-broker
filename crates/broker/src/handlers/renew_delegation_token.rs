@@ -36,7 +36,7 @@ use krabka_verified::{
     renew_token_expiry,
 };
 
-use crate::{network::auth::ConnectionAuth, time_util::now_ms};
+use crate::{handlers::ErrorCodeResponse as _, network::auth::ConnectionAuth, time_util::now_ms};
 
 /// Kafka's `DelegationTokenManager.ERROR_TIMESTAMP`, the expiry the broker
 /// answers with when it refuses the request before forwarding it.
@@ -66,7 +66,7 @@ pub(crate) async fn handle(
         Err((error_code, expiry_timestamp_ms)) => {
             return RenewDelegationTokenResponse {
                 expiry_timestamp_ms,
-                ..err_response(error_code)
+                ..RenewDelegationTokenResponse::error(error_code)
             };
         }
     };
@@ -80,13 +80,13 @@ pub(crate) async fn handle(
         token.max_timestamp_ms,
     );
     if decision == TokenRenewDecision::Expired {
-        return err_response(crate::codes::DELEGATION_TOKEN_EXPIRED);
+        return RenewDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_EXPIRED);
     }
     if token.owner != caller && !token.renewers.contains(&caller) {
-        return err_response(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
+        return RenewDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
     }
     let TokenRenewDecision::Renew(new_expiry) = decision else {
-        return err_response(crate::codes::INVALID_REQUEST);
+        return RenewDelegationTokenResponse::error(crate::codes::INVALID_REQUEST);
     };
 
     let expected = token.to_record();
@@ -102,7 +102,7 @@ pub(crate) async fn handle(
         .await
     {
         tracing::warn!(error = %e, "RenewDelegationToken: submit_change failed");
-        return err_response(crate::codes::INVALID_REQUEST);
+        return RenewDelegationTokenResponse::error(crate::codes::INVALID_REQUEST);
     }
 
     RenewDelegationTokenResponse {
@@ -161,14 +161,6 @@ pub(crate) fn admit_token_request<'a>(
         return refuse(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
     };
     Ok((principal, token))
-}
-
-/// A controller-side refusal: `code`, and the schema-default expiry of 0.
-fn err_response(code: i16) -> RenewDelegationTokenResponse {
-    RenewDelegationTokenResponse {
-        error_code: code,
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]

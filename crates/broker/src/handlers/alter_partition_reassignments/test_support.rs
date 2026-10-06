@@ -6,9 +6,6 @@
 //! planning tests and the cancel-approval tests seed the same one-partition
 //! image, so the fixtures live in one module rather than once per test file.
 
-use std::net::SocketAddr;
-
-use bytes::Bytes;
 use krabka_metadata::{
     BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
 };
@@ -19,7 +16,6 @@ use krabka_protocol::owned::{
     alter_partition_reassignments_response::AlterPartitionReassignmentsResponse,
 };
 use krabka_raft::NodeId;
-use krabka_security::Principal;
 
 pub(super) fn request(
     allow_replication_factor_change: bool,
@@ -43,16 +39,10 @@ pub(super) fn request(
     }
 }
 
-pub(super) fn decode_response(bytes: &Bytes, version: i16) -> AlterPartitionReassignmentsResponse {
-    crate::test_support::decode_response(bytes, version)
-}
-
-pub(super) fn test_context<'a>(
-    principal: &'a Principal,
-    peer: &'a SocketAddr,
-) -> crate::handlers::RequestContext<'a> {
-    crate::test_support::request_context(principal, peer, "admin-client")
-}
+crate::test_support::response_helpers!(
+    pub(super) AlterPartitionReassignmentsResponse,
+    client_id = "admin-client"
+);
 
 /// An image holding topic `foo` with one partition in the given reassignment
 /// state, at partition epoch 0.

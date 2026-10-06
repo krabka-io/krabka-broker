@@ -47,7 +47,9 @@ pub(crate) use self::{
         TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
     },
     record_strings::decode_group_request,
-    response_encoding::{encode_response, encode_response_with_context},
+    response_encoding::{
+        ErrorCodeResponse, ErrorResponse, encode_response, encode_response_with_context,
+    },
     submit_failure::submit_failure_code,
     wire_types::{ApiKeyCode, ApiVersion, CorrelationId, ErrorCode},
 };

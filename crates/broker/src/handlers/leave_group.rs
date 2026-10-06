@@ -22,7 +22,7 @@ use crate::{
     codes,
     coordinator::unified::actor::{GroupActorMessage, LeaveResult},
     error::BrokerError,
-    handlers::group_read_denied,
+    handlers::{ErrorCodeResponse as _, group_read_denied},
 };
 
 #[cfg(test)]
@@ -112,13 +112,7 @@ pub(crate) async fn handle(
 }
 
 fn encode_top_level(error_code: i16, version: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(
-        &LeaveGroupResponse {
-            error_code,
-            ..Default::default()
-        },
-        version,
-    )
+    crate::handlers::encode_response(&LeaveGroupResponse::error(error_code), version)
 }
 
 /// Kafka's answer for a group the coordinator does not hold: one
