@@ -33,7 +33,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -51,8 +52,7 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn start_with_delivery_attempts(attempts: i16) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.max_delivery_attempts = attempts;
     })

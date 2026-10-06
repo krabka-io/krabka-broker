@@ -37,7 +37,8 @@ use crate::{
     codes,
     share_partition::state::RecordState::{self, Acquired, Available},
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -46,8 +47,7 @@ const VERSION: i16 = 2;
 const ACCEPT: i8 = 1;
 
 async fn start(session_max: usize) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(move |cfg| {
-        cfg.audit_enabled = false;
+    start_broker_no_audit_with(move |cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_session_cache_max_when_unlimited = session_max;
     })
@@ -393,8 +393,7 @@ async fn group_share_settings_override_the_broker_defaults() {
     // The broker's bound admits the record lock limit of 2 that the group
     // asks for, which is below Kafka's default minimum and would be capped to
     // it.
-    let (broker, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_session_cache_max_when_unlimited = 10_000;
         cfg.share_group.min_partition_max_record_locks = 2;

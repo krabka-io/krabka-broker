@@ -23,7 +23,7 @@ use crate::{
     codes,
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        request_context, start_broker_with,
+        request_context, start_broker_no_audit_with,
     },
 };
 
@@ -32,11 +32,8 @@ use crate::{
 /// answer, and the transaction coordinator does not see the request.
 #[tokio::test]
 async fn add_offsets_to_txn_checks_transactional_id_write_then_group_read() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsInPrincipalName)).await;
     let broker = handle.broker_arc_for_test();
 
     // The transactional id is not known to the coordinator, so a request
@@ -93,11 +90,8 @@ async fn add_offsets_to_txn_checks_transactional_id_write_then_group_read() {
 async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
     const TOPIC: &str = "orders";
 
-    let (handle, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, dir) =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsInPrincipalName)).await;
     let broker = handle.broker_arc_for_test();
     let local =
         super::write_txn_markers::test_support::open_partition(&broker, dir.path(), TOPIC, 1);

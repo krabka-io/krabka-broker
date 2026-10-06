@@ -730,8 +730,7 @@ mod tests {
     /// Once the partition is served the same group is served again.
     #[tokio::test]
     async fn group_rpcs_answer_load_in_progress_until_the_partition_is_served() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
             config.offsets_topic_replication_factor = 1;
         })
         .await;

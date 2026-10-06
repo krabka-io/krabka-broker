@@ -33,7 +33,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -86,11 +87,7 @@ struct Case {
 type Outcome = (i16, TopicRef, ShareFetchResponse);
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {

@@ -25,7 +25,8 @@ use crate::{
     codes,
     handlers::RequestContext,
     test_support::{
-        decode_response, encode_request, fence_remote_broker, peer, principal, start_broker_with,
+        decode_response, encode_request, fence_remote_broker, peer, principal,
+        start_broker_no_audit,
     },
 };
 
@@ -85,7 +86,7 @@ fn partition(index: i32, replicas: &[u64]) -> MetadataRecord {
 /// Topic `led` has four partitions, led by 2, 9 (no registration), 4 and 2,
 /// where the last one also holds the fenced broker 3.
 async fn cluster() -> (BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_with(|cfg| cfg.audit_enabled = false).await;
+    let (handle, dir) = start_broker_no_audit().await;
     let broker = handle.broker_arc_for_test();
     broker
         .controller

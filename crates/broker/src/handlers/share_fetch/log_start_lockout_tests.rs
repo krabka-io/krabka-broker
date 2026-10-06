@@ -43,7 +43,7 @@ use crate::{
     codes,
     test_support::{
         decode_response, encode_request, initialize_share_state, peer, principal, request_context,
-        start_broker_with,
+        start_broker_no_audit_with,
     },
 };
 
@@ -58,11 +58,7 @@ const PRODUCE_VERSION: i16 = 12;
 const DELETE_RECORDS_VERSION: i16 = 2;
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
@@ -527,8 +523,7 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
 /// records each time.
 #[tokio::test]
 async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_limit() {
-    let (broker, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.max_inflight_records = 100;
     })

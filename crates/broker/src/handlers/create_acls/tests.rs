@@ -188,8 +188,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 /// A broker with `unstable.feature.versions.enable`, the mode in which
 /// `CreateAcls` applies Kafka trunk's host validation.
 async fn start_trunk_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = configured_authorizer();
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
     })

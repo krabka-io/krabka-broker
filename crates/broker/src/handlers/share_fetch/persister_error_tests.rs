@@ -42,7 +42,7 @@ use crate::{
     codes,
     test_support::{
         decode_response, encode_request, initialize_share_state, peer, principal, request_context,
-        start_broker_with,
+        start_broker_no_audit_with,
     },
 };
 
@@ -61,11 +61,7 @@ enum Api {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {

@@ -39,7 +39,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -116,11 +117,7 @@ impl Authorizer for GrantsByName {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsByName);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsByName)).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {

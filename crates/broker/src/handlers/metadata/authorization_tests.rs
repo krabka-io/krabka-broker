@@ -29,7 +29,8 @@ use crate::{
     codes,
     handlers::acl_wire::CLUSTER_RESOURCE_NAME,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -101,8 +102,7 @@ struct Fixture {
 async fn start(auto_create_topics_enable: bool) -> Fixture {
     let grants = Arc::new(Grants::default());
     let authorizer: Arc<dyn Authorizer> = Arc::clone(&grants) as Arc<dyn Authorizer>;
-    let (broker, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = authorizer;
         cfg.auto_create_topics_enable = auto_create_topics_enable;
     })

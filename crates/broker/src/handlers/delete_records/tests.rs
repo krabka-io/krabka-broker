@@ -304,8 +304,7 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 
 #[tokio::test]
 async fn a_refused_trim_deletes_nothing() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.break_glass = gated_config();
     })
@@ -881,8 +880,7 @@ async fn delete_to(
 /// on a fenced broker is not live and does not hold the row.
 #[tokio::test]
 async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         // The follower never fetches on its own. Keep it in the ISR and alive
         // for the whole test, so only the fetches below move its state.

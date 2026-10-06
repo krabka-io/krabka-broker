@@ -174,8 +174,7 @@ async fn a_dynamic_message_max_bytes_governs_a_topic_that_sets_no_cap() {
 /// beats the cluster's.
 #[tokio::test]
 async fn a_dynamic_max_decompressed_message_bytes_refuses_an_oversized_compressed_record() {
-    let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
         config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
     })

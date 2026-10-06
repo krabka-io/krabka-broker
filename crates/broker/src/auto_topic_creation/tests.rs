@@ -363,10 +363,7 @@ fn a_finished_streams_creation_caches_kafkas_errors() {
 /// only when some topic is left.
 #[tokio::test]
 async fn a_streams_creation_skips_a_backed_off_or_in_flight_topic() {
-    let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-    })
-    .await;
+    let (handle, _dir) = crate::test_support::start_broker_no_audit().await;
     let broker = handle.broker_arc_for_test();
     let creation = &broker.auto_topic_creation;
     let identity = ForwardedIdentity {

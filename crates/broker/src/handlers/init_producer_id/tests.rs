@@ -17,7 +17,10 @@ use krabka_units::secs;
 use super::*;
 use crate::{
     authorizer::SimpleAclAuthorizer,
-    test_support::{peer, principal, start_broker_with, start_broker_with_authorizer_no_audit},
+    test_support::{
+        peer, principal, start_broker_no_audit, start_broker_no_audit_with,
+        start_broker_with_authorizer_no_audit,
+    },
     txn::state::TxnState,
 };
 
@@ -115,8 +118,7 @@ async fn check_timeout_answers(
 
 #[tokio::test]
 async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.transaction_state_num_partitions = 7;
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
@@ -332,8 +334,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
         (true, Enabled, true, false, refused(codes::NOT_COORDINATOR)),
         (true, Enabled, false, true, refused(codes::NOT_COORDINATOR)),
     ] {
-        let (broker_handle, _dir) = start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
             config.features.transaction_two_phase_commit_enable = two_phase_commit;
             config.features.unstable_api_versions = unstable;
         })
@@ -374,8 +375,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
 
 #[tokio::test]
 async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
+    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
         config.transaction_state_num_partitions = 7;
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
@@ -472,11 +472,8 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
 /// id answers `INVALID_TRANSACTION_TIMEOUT` too.
 #[tokio::test]
 async fn the_timeout_check_runs_before_the_coordinator_check() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-        config.transaction_max_timeout = secs(8);
-    })
-    .await;
+    let (broker_handle, _dir) =
+        start_broker_no_audit_with(|config| config.transaction_max_timeout = secs(8)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_version_2(&broker_handle).await;
     let principal = principal("admin");
@@ -535,10 +532,7 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
 /// `INVALID_PRODUCER_EPOCH` in place of `PRODUCER_FENCED`.
 #[tokio::test]
 async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epoch() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-    })
-    .await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_version_2(&broker_handle).await;
     broker_handle
@@ -895,8 +889,7 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
     ];
 
     for case in cases {
-        let (broker_handle, _dir) = start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
             config.transaction_state_num_partitions = 7;
             config.transaction_max_timeout = secs(8);
             config.features.transaction_two_phase_commit_enable = true;
@@ -1007,10 +1000,7 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
 /// retries; the broker keeps the connection.
 #[tokio::test]
 async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-    })
-    .await;
+    let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
     broker_handle

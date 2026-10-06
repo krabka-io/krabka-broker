@@ -27,7 +27,7 @@ use crate::{
     coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
     test_support::{
         decode_response, dispatch_context, encode_request, peer, principal, request_context,
-        start_broker_with,
+        start_broker_no_audit_with,
     },
     txn::{state::TxnEntry, version::TxnVersion},
 };
@@ -176,8 +176,7 @@ async fn stage_producer_identity(
 /// only move a partition whose cases have already run.
 #[tokio::test]
 async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(DenyOneTopic);
         cfg.transaction_state_num_partitions = 1;
         cfg.transaction_state_replication_factor = 1;

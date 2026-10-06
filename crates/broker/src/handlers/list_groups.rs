@@ -331,8 +331,7 @@ mod tests {
     /// consumer, share or streams group reports `Empty`.
     #[tokio::test]
     async fn handler_lists_each_kind_with_its_state_and_protocol_type() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         })
         .await;
@@ -406,8 +405,7 @@ mod tests {
         ];
 
         for (user, acls, expected_groups) in rows {
-            let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-                cfg.audit_enabled = false;
+            let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
                 cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                     HashSet::from(["admin".to_string()]),
                 ));

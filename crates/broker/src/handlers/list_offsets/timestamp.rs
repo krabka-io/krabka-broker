@@ -279,8 +279,7 @@ mod tests {
 
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
         let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_with(move |config| {
-            config.audit_enabled = false;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
             config.remote_storage_backend =
                 Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
         })

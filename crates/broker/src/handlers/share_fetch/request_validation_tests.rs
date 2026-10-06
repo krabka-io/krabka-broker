@@ -24,7 +24,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -56,11 +57,7 @@ impl Authorizer for ReadOneGroup {
 }
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(ReadOneGroup);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(ReadOneGroup)).await
 }
 
 /// One row: the group id, the member id, and the top-level error code of

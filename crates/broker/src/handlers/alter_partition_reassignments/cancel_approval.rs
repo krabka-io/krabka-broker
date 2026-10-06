@@ -345,8 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_approved_cancel_appends_the_consume_beside_the_partition_record() {
-        let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.break_glass = gated_config();
         })
@@ -392,8 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unapproved_cancel_appends_nothing_and_carries_the_gate_text() {
-        let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.break_glass = gated_config();
         })
@@ -437,8 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_freeze_refuses_start_and_cancel_before_any_record_or_approval_spend() {
-        let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.break_glass = gated_config();
         })
@@ -499,8 +496,7 @@ mod tests {
     /// that names it claims a reassignment that never happened.
     #[tokio::test]
     async fn only_a_start_that_plans_a_record_counts_as_altered() {
-        let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         })
         .await;

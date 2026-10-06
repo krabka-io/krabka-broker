@@ -82,8 +82,7 @@ pub(in crate::txn::handlers) async fn seed_topic(
 pub(in crate::txn::handlers) async fn start_coordinator(
     authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = authorizer;
         cfg.transaction_state_num_partitions = 1;
         cfg.transaction_state_replication_factor = 1;

@@ -265,8 +265,7 @@ fn refusals(metrics: &crate::metrics::BrokerMetrics) -> u64 {
 #[tokio::test]
 async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
     let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.break_glass = gated_config();
     })

@@ -302,8 +302,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
     /// error message, created partitions, created replication factor)
     type Row = (i32, i16, i16, Option<&'static str>, i32, i16);
 
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.num_partitions = 4;
         cfg.default_replication_factor = 2;
     })
@@ -638,8 +637,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     // refuses the opt-in rather than create a topic that could never flush or
     // trim. Configure the tier this test's topic depends on.
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.rack = Some("rack-a".into());
         cfg.diskless_wal_local_replica_count = 1;
@@ -694,8 +692,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
 #[tokio::test]
 async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: object_store.path().to_path_buf(),
@@ -736,8 +733,7 @@ async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
 #[tokio::test]
 async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment() {
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: object_store.path().to_path_buf(),
@@ -1224,8 +1220,7 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
     /// One row: the requested name, and the error code and message it gets.
     type NameCase = (String, i16, Option<String>);
 
-    let (broker_handle, dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.log_dir = cfg.log_dir.join("logs");
     })
     .await;
@@ -2293,8 +2288,7 @@ async fn too_many_partitions_message_follows_the_unstable_flag() {
     ];
 
     for (unstable, message) in cases {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
             cfg.features.unstable_api_versions = unstable;
         })
         .await;

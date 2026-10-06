@@ -72,11 +72,7 @@ pub(super) fn context<'a>(
 pub(super) async fn start_broker(
     authorizer: Arc<dyn Authorizer>,
 ) -> (BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await
+    crate::test_support::start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
 
 pub(super) async fn call_with(

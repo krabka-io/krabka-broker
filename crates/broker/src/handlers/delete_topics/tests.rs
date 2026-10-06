@@ -138,8 +138,7 @@ async fn handle_unknown_name_and_id_preserve_error_rows() {
 /// `DeleteTopics` request for it, and answer the topic row, the topic id, and
 /// whether the topic still exists.
 async fn delete_doomed(break_glass: BreakGlassConfig) -> (DeletableTopicResult, WireUuid, bool) {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(move |cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(move |cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.break_glass = break_glass;
     })
@@ -720,8 +719,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for (enabled, version, error_code, exists) in cases {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(move |cfg| {
-            cfg.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(move |cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.delete_topic_enable = enabled;
         })

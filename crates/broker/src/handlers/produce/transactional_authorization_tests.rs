@@ -33,7 +33,7 @@ use crate::{
     codes,
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        request_context, start_broker_with,
+        request_context, start_broker_no_audit_with,
     },
 };
 
@@ -44,8 +44,7 @@ const TXN_ID: &str = "t1";
 const ADMIN_GRANTS: &str = "Cluster:Create";
 
 async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (handle, dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
             GrantsInPrincipalName,
         ));

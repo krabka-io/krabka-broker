@@ -40,7 +40,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -55,11 +56,7 @@ const REMOTE: WireUuid = WireUuid([0x22; 16]);
 const ORPHAN: WireUuid = WireUuid([0x77; 16]);
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
 }
 
 async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {

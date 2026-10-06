@@ -666,10 +666,7 @@ mod tests {
         use krabka_protocol::owned::offset_for_leader_epoch_request;
         use offset_for_leader_epoch_request::MAX_VERSION as VERSION;
 
-        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
-        })
-        .await;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
 
         let leader_topic = seeded_topic(&broker, "ofle-leader", 1, 1, 0).await;
         seeded_topic(&broker, "ofle-follower", 2, 2, 0).await;
@@ -799,10 +796,7 @@ mod tests {
     async fn hosting_outcomes_are_decided_before_the_epoch_fence() {
         use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
 
-        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
-        })
-        .await;
+        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
         let shared = broker.broker_arc_for_test();
 
         let offline = seeded_topic(&broker, "ofle-offline", 1, 1, 3).await;

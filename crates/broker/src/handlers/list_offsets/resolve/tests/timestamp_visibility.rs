@@ -6,10 +6,7 @@ use super::*;
 async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
     const TOPIC: &str = "list-offsets-timestamp-visibility";
     const TIMESTAMPS: [i64; 5] = [100, 300, 200, 400, 300];
-    let (broker, _dir) = crate::test_support::start_broker_with(|config| {
-        config.audit_enabled = false;
-    })
-    .await;
+    let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
     let client = client_for(&broker).await;
     create_topic(&client, TOPIC, Vec::new()).await;
     broker.wait_until_partition_present(TOPIC, 0).await;

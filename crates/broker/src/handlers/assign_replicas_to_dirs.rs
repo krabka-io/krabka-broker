@@ -365,8 +365,7 @@ mod tests {
     /// commits nothing.
     #[tokio::test]
     async fn handle_needs_cluster_action() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
-            config.audit_enabled = false;
+        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
             config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
         })
         .await;

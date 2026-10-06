@@ -41,7 +41,8 @@ use crate::{
     codes,
     share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -59,11 +60,7 @@ const RENEW: i8 = 4;
 type Batch = (i64, i64, &'static [i8]);
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
@@ -491,11 +488,8 @@ impl crate::authorizer::Authorizer for DenyTopicReadToOne {
 /// `NONE`.
 #[tokio::test]
 async fn a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error() {
-    let (broker, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(DenyTopicReadToOne);
-    })
-    .await;
+    let (broker, _dir) =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyTopicReadToOne)).await;
     let topic_id = create_topic(&broker, "renew-denied").await;
     crate::test_support::initialize_share_state(
         &broker,

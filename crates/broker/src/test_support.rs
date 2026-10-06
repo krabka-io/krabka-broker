@@ -718,6 +718,27 @@ pub(crate) async fn start_broker_with_authorizer(
     start_broker_with(|cfg| cfg.authorizer = authorizer).await
 }
 
+/// Like [`start_broker_with`], but it turns `audit_enabled` off before it
+/// applies `configure`.
+///
+/// Most handler tests do not exercise the audit path and turn it off, so that
+/// audit-log assertions elsewhere in the suite stay stable.
+pub(crate) fn start_broker_no_audit_with(
+    configure: impl FnOnce(&mut BrokerConfig),
+) -> impl std::future::Future<Output = (BrokerHandle, tempfile::TempDir)> {
+    start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        configure(cfg);
+    })
+}
+
+/// Start an in-process broker on the [`BrokerConfig::for_tests`] baseline with
+/// audit logging off.
+pub(crate) fn start_broker_no_audit()
+-> impl std::future::Future<Output = (BrokerHandle, tempfile::TempDir)> {
+    start_broker_no_audit_with(|_| {})
+}
+
 /// Like [`start_broker_with_authorizer`], but it also disables audit logging.
 ///
 /// This is the second most common `start_broker` shape. Admin-handler tests
@@ -727,11 +748,7 @@ pub(crate) async fn start_broker_with_authorizer(
 pub(crate) async fn start_broker_with_authorizer_no_audit(
     authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
 ) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await
+    start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
 
 /// Generate the `encode_request` / `decode_response` / `test_context`

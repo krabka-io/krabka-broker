@@ -190,8 +190,7 @@ async fn wait_for_group_version_off(broker: &crate::broker::Broker) {
 async fn handle_persists_a_lossless_metadata_downgrade() {
     // 4.4-IV0 is a Kafka trunk level: the controller supports it only under
     // `unstable.feature.versions.enable`.
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
     })

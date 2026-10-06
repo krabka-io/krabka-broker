@@ -28,7 +28,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, peer, principal, request_context,
+        start_broker_no_audit_with,
     },
 };
 
@@ -119,11 +120,7 @@ struct Fixture {
 }
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> Fixture {
-    let (broker, dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = authorizer;
-    })
-    .await;
+    let (broker, dir) = start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await;
     let client = krabka_client_core::Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("metadata-resolution-test")

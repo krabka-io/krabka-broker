@@ -33,8 +33,7 @@ use crate::{
 };
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
     })
     .await;

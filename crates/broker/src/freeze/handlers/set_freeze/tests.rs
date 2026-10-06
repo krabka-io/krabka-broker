@@ -118,8 +118,7 @@ async fn handle_processes_request_and_encodes_response() {
 
     let dir = tempfile::TempDir::new().unwrap();
     let (config, _) = config_with_alice(&dir);
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
+    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
         cfg.operator_keys = config.operator_keys;
     })
     .await;

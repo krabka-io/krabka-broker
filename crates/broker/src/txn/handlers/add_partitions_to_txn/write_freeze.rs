@@ -253,8 +253,7 @@ mod tests {
         authorizer: Arc<dyn crate::authorizer::Authorizer>,
         freeze: (&str, PatternType),
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(move |cfg| {
-            cfg.audit_enabled = false;
+        let (handle, dir) = crate::test_support::start_broker_no_audit_with(move |cfg| {
             cfg.authorizer = authorizer;
             cfg.transaction_state_num_partitions = 1;
             cfg.transaction_state_replication_factor = 1;

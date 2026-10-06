@@ -29,7 +29,7 @@ use crate::{
     config::BreakGlassConfig,
     handlers::RequestContext,
     leader_election::{ElectionType, test_support::one_partition_change},
-    test_support::{peer, principal, start_broker_with},
+    test_support::{peer, principal, start_broker_no_audit_with},
     time_util::now_ms,
 };
 
@@ -120,8 +120,7 @@ fn alive() -> HashSet<u64> {
 }
 
 async fn broker_with(config: BreakGlassConfig) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(move |cfg| {
-        cfg.audit_enabled = false;
+    start_broker_no_audit_with(move |cfg| {
         cfg.authorizer = std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer);
         cfg.break_glass = config;
     })
