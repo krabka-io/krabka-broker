@@ -34,7 +34,7 @@ krabka-log = { version = "0.7.0", path = "../log" }
 krabka-metadata = { version = "0.5.0" }
 # The archive handle is built straight onto the object-store layer. The broker
 # owns the same mapping, but a recovery tool must not carry the broker.
-krabka-object-store = { version = "0.7.0", path = "../object-store" }
+krabka-object-store = { version = "0.7.0", path = "../object-store", features = ["clap"] }
 krabka-protocol = { version = "0.5.0", default-features = false }
 krabka-raft = { version = "0.7.0", path = "../raft" }
 # The KIP-405 archive key codec and segment metadata model.
@@ -49,10 +49,6 @@ krabka-verified = { version = "0.7.0", path = "../verified" }
 base64 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-# The `.snapshot` sidecar's CRC32C header. `krabka-log` keeps its own decoder
-# `pub(crate)`, so the archive-side verifier reimplements the documented
-# format rather than reaching into the log crate's internals.
-crc32c = { workspace = true }
 # The archive listing is consumed as a stream, so the scan never holds the
 # whole bucket in memory.
 futures-util = { workspace = true }
@@ -74,6 +70,9 @@ assert2 = { workspace = true }
 # `large_archive` implements `object_store::ObjectStore` to synthesise a
 # listing far larger than any fixture could write to disk.
 async-trait = { workspace = true }
+# The producer-snapshot tests encode a sidecar by hand, independently of
+# `krabka-log`'s writer.
+crc32c = { workspace = true }
 krabka-audit = { workspace = true }
 # `dr_roundtrip` drives the operator's own backup tool: the capture it asserts
 # on is the one an operator runs, not a re-implementation of it.

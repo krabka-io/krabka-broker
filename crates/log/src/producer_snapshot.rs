@@ -322,45 +322,118 @@ fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8
     Ok(buffer)
 }
 
+/// Why [`decode`] rejected a producer-state `.snapshot`. Each variant names
+/// the check that failed and carries what that check saw; its `Display` is
+/// the reason the log reports in [`LogError::Corrupt`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SnapshotDecodeError {
+    /// The input is shorter than the version, CRC and entry-count header.
+    #[error("file is shorter than the snapshot header")]
+    ShortHeader { required: usize, available: usize },
+    /// The header declares a version other than 1, the only one Kafka writes.
+    #[error("unsupported version {version}")]
+    UnsupportedVersion { version: i16 },
+    /// The header declares a negative entry count.
+    #[error("negative entry count")]
+    NegativeEntryCount { count: i32 },
+    /// The declared entry count's byte length overflows `usize`.
+    #[error("entry count overflows file size")]
+    EntryCountOverflow { count: usize },
+    /// The input length is not the header plus `count` whole entries.
+    #[error("entry count does not match file length")]
+    LengthMismatch { expected: usize, available: usize },
+    /// The stored CRC32C does not match the one computed over the entry count
+    /// and every entry.
+    #[error("CRC32C mismatch")]
+    ChecksumMismatch { stored: u32, computed: u32 },
+    /// The entry at `index`, starting at byte `position`, is not a legal
+    /// producer state strictly before the snapshot offset.
+    #[error("entry contains an invalid producer state")]
+    InvalidEntry {
+        index: usize,
+        position: usize,
+        last_offset: i64,
+        current_txn_first_offset: i64,
+    },
+    /// The entry at `index`, starting at byte `position`, repeats a producer
+    /// ID an earlier entry already holds.
+    #[error("duplicate producer id")]
+    DuplicateProducerId {
+        index: usize,
+        position: usize,
+        producer_id: ProducerId,
+    },
+}
+
 fn read(
     path: &Path,
     snapshot_offset: Offset,
 ) -> Result<HashMap<ProducerId, ProducerSnapshotEntry>, LogError> {
     let bytes = fs::read(path)?;
-    if bytes.len() < HEADER_LEN + 4 {
-        return Err(corrupt(path, "file is shorter than the snapshot header"));
+    decode(&bytes, snapshot_offset).map_err(|error| corrupt(path, &error.to_string()))
+}
+
+/// Decode a Kafka v1 producer-state `.snapshot` taken at `snapshot_offset`,
+/// the exclusive log frontier its entries must lie strictly before.
+///
+/// The checks run in Kafka's `ProducerStateManager.readSnapshot` order:
+/// framing (header, version, entry count against the input length), then the
+/// CRC32C, then each entry's legality and producer-ID uniqueness.
+///
+/// # Errors
+///
+/// Returns the [`SnapshotDecodeError`] of the first check that fails.
+pub fn decode(
+    bytes: &[u8],
+    snapshot_offset: Offset,
+) -> Result<HashMap<ProducerId, ProducerSnapshotEntry>, SnapshotDecodeError> {
+    let entries_start = HEADER_LEN + 4;
+    if bytes.len() < entries_start {
+        return Err(SnapshotDecodeError::ShortHeader {
+            required: entries_start,
+            available: bytes.len(),
+        });
     }
     let version = i16::from_be_bytes([bytes[0], bytes[1]]);
     if version != VERSION {
-        return Err(corrupt(path, &format!("unsupported version {version}")));
-    }
-    let stored_crc = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
-    let computed_crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
-    if stored_crc != computed_crc {
-        return Err(corrupt(path, "CRC32C mismatch"));
+        return Err(SnapshotDecodeError::UnsupportedVersion { version });
     }
 
     let count = i32::from_be_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
-    let count = usize::try_from(count).map_err(|_| corrupt(path, "negative entry count"))?;
-    let expected = HEADER_LEN
-        .checked_add(4)
-        .and_then(|size| size.checked_add(count.checked_mul(ENTRY_LEN)?))
-        .ok_or_else(|| corrupt(path, "entry count overflows file size"))?;
+    let count =
+        usize::try_from(count).map_err(|_| SnapshotDecodeError::NegativeEntryCount { count })?;
+    let expected = entries_start
+        .checked_add(
+            count
+                .checked_mul(ENTRY_LEN)
+                .ok_or(SnapshotDecodeError::EntryCountOverflow { count })?,
+        )
+        .ok_or(SnapshotDecodeError::EntryCountOverflow { count })?;
     if bytes.len() != expected {
-        return Err(corrupt(path, "entry count does not match file length"));
+        return Err(SnapshotDecodeError::LengthMismatch {
+            expected,
+            available: bytes.len(),
+        });
+    }
+
+    let stored = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
+    let computed = crc32c::crc32c(&bytes[HEADER_LEN..]);
+    if stored != computed {
+        return Err(SnapshotDecodeError::ChecksumMismatch { stored, computed });
     }
 
     let mut entries = HashMap::with_capacity(count);
-    let mut cursor = HEADER_LEN + 4;
-    for _ in 0..count {
-        let producer_id = ProducerId(take_i64(&bytes, &mut cursor));
-        let producer_epoch = take_i16(&bytes, &mut cursor);
-        let last_sequence = take_i32(&bytes, &mut cursor);
-        let last_offset = Offset(take_i64(&bytes, &mut cursor));
-        let offset_delta = take_i32(&bytes, &mut cursor);
-        let timestamp = take_i64(&bytes, &mut cursor);
-        let coordinator_epoch = take_i32(&bytes, &mut cursor);
-        let txn_offset = take_i64(&bytes, &mut cursor);
+    let mut cursor = entries_start;
+    for index in 0..count {
+        let position = cursor;
+        let producer_id = ProducerId(take_i64(bytes, &mut cursor));
+        let producer_epoch = take_i16(bytes, &mut cursor);
+        let last_sequence = take_i32(bytes, &mut cursor);
+        let last_offset = Offset(take_i64(bytes, &mut cursor));
+        let offset_delta = take_i32(bytes, &mut cursor);
+        let timestamp = take_i64(bytes, &mut cursor);
+        let coordinator_epoch = take_i32(bytes, &mut cursor);
+        let txn_offset = take_i64(bytes, &mut cursor);
         if !kernel::producer_snapshot_entry_valid(
             snapshot_offset.0,
             kernel::ProducerSnapshotEntryFacts {
@@ -373,7 +446,12 @@ fn read(
                 current_txn_first_offset: txn_offset,
             },
         ) {
-            return Err(corrupt(path, "entry contains an invalid producer state"));
+            return Err(SnapshotDecodeError::InvalidEntry {
+                index,
+                position,
+                last_offset: last_offset.0,
+                current_txn_first_offset: txn_offset,
+            });
         }
         let current_txn_first_offset = (txn_offset >= 0).then_some(Offset(txn_offset));
         let entry = ProducerSnapshotEntry {
@@ -387,7 +465,11 @@ fn read(
             current_txn_first_offset,
         };
         if entries.insert(producer_id, entry).is_some() {
-            return Err(corrupt(path, "duplicate producer id"));
+            return Err(SnapshotDecodeError::DuplicateProducerId {
+                index,
+                position,
+                producer_id,
+            });
         }
     }
     Ok(entries)
@@ -648,6 +730,88 @@ mod tests {
         assert2::assert!(entries == sample());
         assert2::assert!(previous.exists());
         assert2::assert!(!future_state.exists());
+    }
+
+    fn with_crc(mut bytes: Vec<u8>) -> Vec<u8> {
+        let crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
+        bytes[2..6].copy_from_slice(&crc.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn decode_names_the_check_that_failed() {
+        let valid = encode(&sample()).unwrap();
+        let entries_start = HEADER_LEN + 4;
+
+        let mut bad_version = valid.clone();
+        bad_version[..2].copy_from_slice(&2_i16.to_be_bytes());
+        let mut negative_count = valid.clone();
+        negative_count[6..10].copy_from_slice(&(-1_i32).to_be_bytes());
+        let mut truncated = valid.clone();
+        truncated.pop();
+        let mut bad_crc = valid.clone();
+        bad_crc[2] ^= 0xFF;
+        let stored = u32::from_be_bytes(bad_crc[2..6].try_into().unwrap());
+        let computed = crc32c::crc32c(&valid[HEADER_LEN..]);
+        let mut duplicate = valid.clone();
+        duplicate.extend_from_slice(&valid[entries_start..]);
+        duplicate[6..10].copy_from_slice(&2_i32.to_be_bytes());
+
+        let cases = [
+            (
+                valid[..9].to_vec(),
+                Offset(102),
+                SnapshotDecodeError::ShortHeader {
+                    required: 10,
+                    available: 9,
+                },
+            ),
+            (
+                bad_version,
+                Offset(102),
+                SnapshotDecodeError::UnsupportedVersion { version: 2 },
+            ),
+            (
+                negative_count,
+                Offset(102),
+                SnapshotDecodeError::NegativeEntryCount { count: -1 },
+            ),
+            (
+                truncated,
+                Offset(102),
+                SnapshotDecodeError::LengthMismatch {
+                    expected: 10 + ENTRY_LEN,
+                    available: 9 + ENTRY_LEN,
+                },
+            ),
+            (
+                bad_crc,
+                Offset(102),
+                SnapshotDecodeError::ChecksumMismatch { stored, computed },
+            ),
+            (
+                valid.clone(),
+                Offset(101),
+                SnapshotDecodeError::InvalidEntry {
+                    index: 0,
+                    position: 10,
+                    last_offset: 101,
+                    current_txn_first_offset: 99,
+                },
+            ),
+            (
+                with_crc(duplicate),
+                Offset(102),
+                SnapshotDecodeError::DuplicateProducerId {
+                    index: 1,
+                    position: 10 + ENTRY_LEN,
+                    producer_id: ProducerId(42),
+                },
+            ),
+        ];
+        for (bytes, snapshot_offset, expected) in cases {
+            assert2::assert!(decode(&bytes, snapshot_offset) == Err(expected));
+        }
     }
 
     #[test]

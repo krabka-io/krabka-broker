@@ -1,26 +1,5 @@
-//! Parsing of advertised `host:port` strings and construction of the KIP-595
-//! static controller voter set. Both turn configured endpoint text into the
-//! domain values the registration and metadata paths need, and neither depends
-//! on any other part of the broker.
-
-/// Split a `host:port` advertised string. Mirrors the helpers in
-/// `handlers::find_coordinator` / `handlers::metadata` but returns
-/// `(String, u16)` for direct `BrokerEndpoint` use. Splits on the LAST
-/// `:` so IPv6 literals do not break on inner colons (we still expect
-/// IPv6 callers to wrap in `[...]`).
-pub(super) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
-    if let Some(host_port) = crate::host_port::parse_host_port(addr) {
-        return host_port;
-    }
-    tracing::warn!(
-        addr,
-        "advertised not host:port; falling back to localhost:9092"
-    );
-    (
-        crate::host_port::DEFAULT_KAFKA_HOST.into(),
-        crate::host_port::DEFAULT_KAFKA_PORT,
-    )
-}
+//! Construction of the KIP-595 static controller voter set from configured
+//! endpoint text. It depends on no other part of the broker.
 
 /// Build the KIP-595 static controller [`VoterSet`](krabka_metadata::VoterSet)
 /// from the configured `controller_quorum_voters` (`(id, "<host>:<port>")`).
@@ -148,21 +127,5 @@ mod tests {
         let ep = v.endpoints.iter().find(|e| e.name == "CONTROLLER").unwrap();
         assert!(ep.host == "127.0.0.1");
         assert!(ep.port == 9093);
-    }
-
-    #[test]
-    fn advertised_listener_parser_preserves_valid_host_ports_and_uses_fallback() {
-        let cases = [
-            ("broker-1.example:19092", ("broker-1.example", 19092)),
-            ("[2001:db8::7]:9094", ("[2001:db8::7]", 9094)),
-            ("missing-port", ("localhost", 9092)),
-            ("broker:not-a-port", ("localhost", 9092)),
-        ];
-        for (input, (host, port)) in cases {
-            assert!(
-                parse_advertised_host_port(input) == (host.to_string(), port),
-                "input {input:?}"
-            );
-        }
     }
 }

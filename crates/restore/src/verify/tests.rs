@@ -12,10 +12,7 @@ use crc32c::crc32c;
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
-use super::{
-    snapshot::{SNAPSHOT_CRC_COVERAGE_START, SNAPSHOT_ENTRY_LEN, SNAPSHOT_VERSION},
-    *,
-};
+use super::*;
 
 fn test_partition() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(0xA5CD), "orders", 0)
@@ -143,9 +140,12 @@ fn txn_index_bytes(entries: &[TxnEntry]) -> Bytes {
 
 type SnapshotEntry = (i64, i16, i32, i64, i32, i64, i32, i64);
 
+/// Kafka's v1 producer-state `.snapshot` layout, written independently of
+/// `krabka_log`'s encoder: version, CRC32C over everything after the CRC
+/// field, entry count, then 46-byte entries.
 fn snapshot_bytes(entries: &[SnapshotEntry]) -> Bytes {
     let mut buf = BytesMut::new();
-    buf.put_i16(SNAPSHOT_VERSION);
+    buf.put_i16(1);
     buf.put_u32(0); // CRC placeholder, patched below.
     buf.put_i32(i32::try_from(entries.len()).unwrap());
     for &(producer_id, epoch, sequence, last, delta, timestamp, coordinator, txn) in entries {
@@ -158,8 +158,8 @@ fn snapshot_bytes(entries: &[SnapshotEntry]) -> Bytes {
         buf.put_i32(coordinator);
         buf.put_i64(txn);
     }
-    check!(buf.len() == 10 + entries.len() * SNAPSHOT_ENTRY_LEN);
-    let crc = crc32c(&buf[SNAPSHOT_CRC_COVERAGE_START..]);
+    check!(buf.len() == 10 + entries.len() * 46);
+    let crc = crc32c(&buf[6..]);
     buf[2..6].copy_from_slice(&crc.to_be_bytes());
     buf.freeze()
 }

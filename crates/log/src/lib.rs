@@ -136,6 +136,7 @@ pub use log::{
 };
 pub use producer_snapshot::{
     NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,
+    SnapshotDecodeError, decode as decode_producer_snapshot,
 };
 pub use retention::now_ms as epoch_ms;
 sendfile_cfg! {

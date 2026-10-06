@@ -37,6 +37,7 @@ use std::{
 };
 
 use thiserror::Error;
+use time::OffsetDateTime;
 
 use crate::ids::{ClusterId, DirectoryId, KafkaUuidError};
 
@@ -483,44 +484,13 @@ fn unescape(raw: &[u8]) -> Result<String, MetaPropertiesError> {
 /// before 1970 is written as 1970, which no clock that formats a directory
 /// reads.
 fn java_date(now: SystemTime) -> String {
-    const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let seconds = now
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let (days, time) = (seconds / 86_400, seconds % 86_400);
-    let (year, month, day) = civil_from_days(days);
-    let weekday = WEEKDAYS[usize::try_from(days % 7).expect("a weekday index is below 7")];
-    let month = MONTHS[usize::try_from(month - 1).expect("a month index is below 12")];
-    format!(
-        "{weekday} {month} {day:02} {:02}:{:02}:{:02} UTC {year}",
-        time / 3_600,
-        time % 3_600 / 60,
-        time % 60,
+    let format = time::format_description::parse_borrowed::<2>(
+        "[weekday repr:short] [month repr:short] [day] [hour]:[minute]:[second] UTC [year]",
     )
-}
-
-/// The proleptic Gregorian date `days` days after 1970-01-01, as
-/// `(year, month, day)` with the month from 1. This is Howard Hinnant's
-/// `civil_from_days`, for days that are not negative.
-fn civil_from_days(days: u64) -> (u64, u64, u64) {
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let day_of_era = z % 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    };
-    let year = year_of_era + era * 400 + u64::from(month <= 2);
-    (year, month, day)
+    .expect("the Date.toString description is well formed");
+    OffsetDateTime::from(now.max(UNIX_EPOCH))
+        .format(&format)
+        .expect("a UTC date after 1970 has every component the description names")
 }
 
 #[cfg(test)]
@@ -566,6 +536,8 @@ mod tests {
             (1_000_000_000, "Sun Sep 09 01:46:40 UTC 2001"),
             (1_709_210_096, "Thu Feb 29 12:34:56 UTC 2024"),
             (4_102_444_799, "Thu Dec 31 23:59:59 UTC 2099"),
+            // `dd` and `HH` are zero padded.
+            (1_767_596_889, "Mon Jan 05 07:08:09 UTC 2026"),
         ];
         for (seconds, want) in cases {
             check!(java_date(at(seconds)) == want, "{seconds}");

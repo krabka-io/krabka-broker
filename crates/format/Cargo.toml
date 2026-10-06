@@ -39,6 +39,8 @@ wincode = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 thiserror = { workspace = true }
+# `Date.toString` for the `meta.properties` date comment.
+time = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 assert2 = { workspace = true }

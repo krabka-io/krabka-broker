@@ -33,9 +33,7 @@ pub(crate) use self::{
         denied_topics, group_read_denied, requested_topic_name, subscribed_names_describe_denied,
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
-    coordinator_routing::{
-        group_coordinator_error, group_partition_loading, parse_advertised_host_port,
-    },
+    coordinator_routing::{group_coordinator_error, group_partition_loading},
     private_api_keys::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
         DESCRIBE_BREAK_GLASS_API_KEY, DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,

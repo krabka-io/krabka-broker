@@ -59,17 +59,3 @@ pub(crate) fn any_group_partition_loading(broker: &crate::broker::Broker) -> boo
             .filter(|record| record.leader == broker.config.node_id)
             .any(|record| coordinator.is_loading(record.partition, record.leader_epoch))
 }
-
-pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
-    if let Some(host_port) = crate::host_port::parse_host_port(addr) {
-        return host_port;
-    }
-    tracing::warn!(
-        addr,
-        "advertised_listener not host:port; falling back to localhost:9092"
-    );
-    (
-        crate::host_port::DEFAULT_KAFKA_HOST.into(),
-        crate::host_port::DEFAULT_KAFKA_PORT,
-    )
-}

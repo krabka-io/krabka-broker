@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args};
+use clap::Args;
 use krabka_ids::ProducerId;
 use krabka_metadata::NodeId;
 use regex::Regex;
@@ -41,70 +41,16 @@ mod tests;
 
 pub use self::value::{HeaderPattern, OffsetBound, OffsetRange, PartitionRef};
 
-/// Where the archive is.
+/// Where the archive is, and the restore inputs that sit beside it.
 ///
-/// Exactly one backend is selected. The sub-flags of a backend are checked by
-/// [`RestoreArgs::validate`], not by clap: a mutually exclusive `ArgGroup`
-/// makes clap's `requires` unenforceable, because clap treats a required
-/// argument as acceptably absent when it conflicts with one that is present.
+/// The `--archive-*` flags are the ones `krabka backup` takes, from
+/// [`krabka_object_store::ArchiveArgs`]; the rest are restore's own.
 #[derive(Args, Debug)]
 #[command(next_help_heading = "Archive source")]
-#[command(group(
-    ArgGroup::new("archive_source")
-        .required(true)
-        .args(["local", "s3_bucket", "gcs_bucket"]),
-))]
 pub struct ArchiveArgs {
-    /// Read the archive from a local directory tree.
-    #[arg(long = "archive-local", value_name = "DIR")]
-    pub local: Option<PathBuf>,
-
-    /// Read the archive from this S3 or S3-compatible bucket.
-    #[arg(long = "archive-s3-bucket", value_name = "BUCKET")]
-    pub s3_bucket: Option<String>,
-
-    /// S3 region. Defaults to `us-east-1`, which `MinIO` and R2 accept as a
-    /// placeholder.
-    #[arg(long = "archive-s3-region", value_name = "REGION")]
-    pub s3_region: Option<String>,
-
-    /// S3 endpoint URL, for a non-AWS S3-compatible store.
-    #[arg(long = "archive-s3-endpoint", value_name = "URL")]
-    pub s3_endpoint: Option<String>,
-
-    /// S3 access key id. Without it the AWS credential chain applies.
-    #[arg(long = "archive-s3-access-key-id", value_name = "ID")]
-    pub s3_access_key_id: Option<String>,
-
-    /// S3 secret access key. Without it the AWS credential chain applies.
-    #[arg(long = "archive-s3-secret-access-key", value_name = "SECRET")]
-    pub s3_secret_access_key: Option<String>,
-
-    /// Allow plaintext HTTP to the S3 endpoint.
-    #[arg(long = "archive-s3-allow-http")]
-    pub s3_allow_http: bool,
-
-    /// Read the archive from this Google Cloud Storage bucket.
-    #[arg(long = "archive-gcs-bucket", value_name = "BUCKET")]
-    pub gcs_bucket: Option<String>,
-
-    /// Path to a GCS service-account JSON key. Without it Workload Identity or
-    /// application default credentials apply.
-    #[arg(long = "archive-gcs-service-account-path", value_name = "PATH")]
-    pub gcs_service_account_path: Option<String>,
-
-    /// GCS API base URL, for an emulator.
-    #[arg(long = "archive-gcs-endpoint", value_name = "URL")]
-    pub gcs_endpoint: Option<String>,
-
-    /// Allow plaintext HTTP to the GCS endpoint.
-    #[arg(long = "archive-gcs-allow-http")]
-    pub gcs_allow_http: bool,
-
-    /// Key prefix inside the archive, for a bucket that holds more than the
-    /// tiered-storage tree. It applies to every backend.
-    #[arg(long = "archive-prefix", value_name = "PREFIX")]
-    pub prefix: Option<String>,
+    /// The backend and key prefix the archive is read from.
+    #[command(flatten)]
+    pub location: krabka_object_store::ArchiveArgs,
 
     /// A broker's `<log.dir>/remote-log-metadata/snapshot`.
     ///

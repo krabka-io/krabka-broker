@@ -8,7 +8,7 @@ use std::sync::Arc;
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
-use crate::{broker::endpoints::parse_advertised_host_port, config::BrokerConfig};
+use crate::{config::BrokerConfig, host_port::parse_advertised_host_port};
 
 #[derive(Debug, Clone)]
 pub(super) struct KafkaSwapKickoff {

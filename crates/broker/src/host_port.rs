@@ -7,6 +7,22 @@ pub(crate) fn parse_host_port(addr: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
+/// Split an advertised `host:port` listener address for a `BrokerEndpoint` or
+/// a `FindCoordinator` row. Splits on the last `:`, so a bracketed IPv6
+/// literal keeps its inner colons. A value that is not `host:port` logs a
+/// warning naming it and falls back to `localhost:9092`.
+pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
+    if let Some(host_port) = parse_host_port(addr) {
+        return host_port;
+    }
+    tracing::warn!(
+        addr,
+        "advertised listener {addr:?} is not host:port; falling back to \
+         {DEFAULT_KAFKA_HOST}:{DEFAULT_KAFKA_PORT}"
+    );
+    (DEFAULT_KAFKA_HOST.into(), DEFAULT_KAFKA_PORT)
+}
+
 /// The host a node advertises for a listener bound to `ip`.
 ///
 /// A concrete address is what the socket answers on, so it is the host. A
@@ -75,5 +91,21 @@ mod tests {
         let advertised: Vec<&str> = cases.iter().map(|(_, host)| host.as_str()).collect();
         let expected: Vec<&str> = cases.iter().map(|(want, _)| *want).collect();
         assert!(advertised == expected);
+    }
+
+    #[test]
+    fn advertised_listener_parser_preserves_valid_host_ports_and_uses_fallback() {
+        let cases = [
+            ("broker-1.example:19092", ("broker-1.example", 19092)),
+            ("[2001:db8::7]:9094", ("[2001:db8::7]", 9094)),
+            ("missing-port", ("localhost", 9092)),
+            ("broker:not-a-port", ("localhost", 9092)),
+        ];
+        for (input, (host, port)) in cases {
+            assert!(
+                parse_advertised_host_port(input) == (host.to_string(), port),
+                "input {input:?}"
+            );
+        }
     }
 }
