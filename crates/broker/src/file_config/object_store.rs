@@ -148,10 +148,10 @@ pub struct FileRemoteStorageGcsConfig {
 /// [`krabka_remote_storage::WormConfig`]. Presence of the table enables WORM
 /// archive mode.
 ///
-/// Unlike [`FileRemoteStorageS3Config`] this does not redact in `Debug`, and that
+/// Unlike [`FileRemoteStorageS3Config`] this derives `Debug` plainly, and that
 /// is deliberate: it holds a *path* to a signing key and the key's public id,
 /// neither of which is credential material, and an operator debugging a chain
-/// needs to see which key signed it. Do not "fix" this into a redacting `Debug`.
+/// needs to see which key signed it. Do not "fix" this into a redacting impl.
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileWormConfig {
