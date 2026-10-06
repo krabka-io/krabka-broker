@@ -14,6 +14,40 @@ use crate::{
     },
 };
 
+/// Partition 0 of `topic` as the snapshot records it, one segment per
+/// `(segment_id, base_offset, state)`.
+fn partition_dump(
+    topic: &str,
+    topic_id: Uuid,
+    segments: &[(Uuid, i64, RemoteLogSegmentState)],
+) -> PartitionDump {
+    PartitionDump {
+        topic_id_partition: TopicIdPartition::new(topic_id, topic, 0),
+        segments: segments
+            .iter()
+            .map(|&(segment_id, base_offset, state)| {
+                snapshot_segment(topic, 0, topic_id, segment_id, base_offset, state)
+            })
+            .collect(),
+        delete_state: None,
+    }
+}
+
+/// Write a snapshot at `path` that holds the one [`partition_dump`].
+fn snapshot_of(
+    path: &std::path::Path,
+    topic: &str,
+    topic_id: Uuid,
+    segments: &[(Uuid, i64, RemoteLogSegmentState)],
+) {
+    write_snapshot(
+        path,
+        RlmmCacheDump {
+            partitions: vec![partition_dump(topic, topic_id, segments)],
+        },
+    );
+}
+
 #[tokio::test]
 async fn a_snapshot_that_agrees_keeps_every_live_segment() {
     let archive = tempfile::tempdir().expect("temp dir");
@@ -25,32 +59,14 @@ async fn a_snapshot_that_agrees_keeps_every_live_segment() {
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![
-                    snapshot_segment(
-                        "orders",
-                        0,
-                        topic_id,
-                        seg_a,
-                        0,
-                        RemoteLogSegmentState::CopySegmentFinished,
-                    ),
-                    snapshot_segment(
-                        "orders",
-                        0,
-                        topic_id,
-                        seg_b,
-                        100,
-                        RemoteLogSegmentState::CopySegmentFinished,
-                    ),
-                ],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[
+            (seg_a, 0, RemoteLogSegmentState::CopySegmentFinished),
+            (seg_b, 100, RemoteLogSegmentState::CopySegmentFinished),
+        ],
     );
 
     let args = args_from(
@@ -75,35 +91,17 @@ async fn a_delete_started_segment_is_excluded_from_the_inventory_without_an_erro
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![
-                    snapshot_segment(
-                        "orders",
-                        0,
-                        topic_id,
-                        seg_a,
-                        0,
-                        RemoteLogSegmentState::CopySegmentFinished,
-                    ),
-                    // Deletion is in flight: the remote tier may not
-                    // have caught up yet, so leftover bytes are
-                    // expected and this must not be an error.
-                    snapshot_segment(
-                        "orders",
-                        0,
-                        topic_id,
-                        seg_b,
-                        100,
-                        RemoteLogSegmentState::DeleteSegmentStarted,
-                    ),
-                ],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[
+            (seg_a, 0, RemoteLogSegmentState::CopySegmentFinished),
+            // Deletion is in flight: the remote tier may not have caught up
+            // yet, so leftover bytes are expected and this must not be an
+            // error.
+            (seg_b, 100, RemoteLogSegmentState::DeleteSegmentStarted),
+        ],
     );
 
     let args = args_from(
@@ -126,22 +124,11 @@ async fn authenticated_inventory_does_not_let_unsigned_rlmm_remove_a_segment() {
     write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
 
     let snap_path = archive.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![snapshot_segment(
-                    "orders",
-                    0,
-                    topic_id,
-                    segment_id,
-                    0,
-                    RemoteLogSegmentState::DeleteSegmentStarted,
-                )],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[(segment_id, 0, RemoteLogSegmentState::DeleteSegmentStarted)],
     );
     let mut args = args_from(
         archive.path(),
@@ -163,22 +150,11 @@ async fn authenticated_rlmm_excludes_objects_retained_after_completed_deletion()
     write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
 
     let snap_path = archive.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![snapshot_segment(
-                    "orders",
-                    0,
-                    topic_id,
-                    segment_id,
-                    0,
-                    RemoteLogSegmentState::DeleteSegmentFinished,
-                )],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[(segment_id, 0, RemoteLogSegmentState::DeleteSegmentFinished)],
     );
     let mut args = args_from(
         archive.path(),
@@ -209,18 +185,8 @@ async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    write_snapshot(
-        &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                // The snapshot knows nothing about this partition's
-                // segment at all.
-                segments: vec![],
-                delete_state: None,
-            }],
-        },
-    );
+    // The snapshot knows nothing about this partition's segment at all.
+    snapshot_of(&snap_path, "orders", topic_id, &[]);
 
     let args = args_from(
         archive.path(),
@@ -248,22 +214,11 @@ async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() 
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![snapshot_segment(
-                    "orders",
-                    0,
-                    topic_id,
-                    seg,
-                    0,
-                    RemoteLogSegmentState::DeleteSegmentFinished,
-                )],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[(seg, 0, RemoteLogSegmentState::DeleteSegmentFinished)],
     );
 
     let args = args_from(
@@ -290,32 +245,22 @@ async fn a_live_partition_missing_from_the_scan_entirely_is_a_disagreement() {
         RlmmCacheDump {
             partitions: vec![
                 // Matches the scan exactly: no disagreement from this one.
-                PartitionDump {
-                    topic_id_partition: TopicIdPartition::new(payments_id, "payments", 0),
-                    segments: vec![snapshot_segment(
-                        "payments",
-                        0,
-                        payments_id,
-                        payments_seg,
-                        0,
-                        RemoteLogSegmentState::CopySegmentFinished,
-                    )],
-                    delete_state: None,
-                },
+                partition_dump(
+                    "payments",
+                    payments_id,
+                    &[(payments_seg, 0, RemoteLogSegmentState::CopySegmentFinished)],
+                ),
                 // Live in the snapshot, but the scan never found this
                 // partition at all.
-                PartitionDump {
-                    topic_id_partition: TopicIdPartition::new(orders_id, "orders", 0),
-                    segments: vec![snapshot_segment(
-                        "orders",
-                        0,
-                        orders_id,
+                partition_dump(
+                    "orders",
+                    orders_id,
+                    &[(
                         Uuid::from_u128(10),
                         0,
                         RemoteLogSegmentState::CopySegmentFinished,
                     )],
-                    delete_state: None,
-                },
+                ),
             ],
         },
     );
@@ -368,32 +313,14 @@ async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![
-                    snapshot_segment(
-                        "orders",
-                        0,
-                        topic_id,
-                        segment_id,
-                        0,
-                        RemoteLogSegmentState::CopySegmentFinished,
-                    ),
-                    snapshot_segment(
-                        "orders",
-                        0,
-                        topic_id,
-                        segment_id,
-                        0,
-                        RemoteLogSegmentState::CopySegmentFinished,
-                    ),
-                ],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[
+            (segment_id, 0, RemoteLogSegmentState::CopySegmentFinished),
+            (segment_id, 0, RemoteLogSegmentState::CopySegmentFinished),
+        ],
     );
 
     let args = args_from(
@@ -414,18 +341,11 @@ async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    let duplicate = PartitionDump {
-        topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-        segments: vec![snapshot_segment(
-            "orders",
-            0,
-            topic_id,
-            segment_id,
-            0,
-            RemoteLogSegmentState::CopySegmentFinished,
-        )],
-        delete_state: None,
-    };
+    let duplicate = partition_dump(
+        "orders",
+        topic_id,
+        &[(segment_id, 0, RemoteLogSegmentState::CopySegmentFinished)],
+    );
     write_snapshot(
         &snap_path,
         RlmmCacheDump {
@@ -451,22 +371,15 @@ async fn maximum_offset_reconciliation_is_stable_across_retry() {
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
-    write_snapshot(
+    snapshot_of(
         &snap_path,
-        RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
-                segments: vec![snapshot_segment(
-                    "orders",
-                    0,
-                    topic_id,
-                    segment_id,
-                    i64::MAX,
-                    RemoteLogSegmentState::CopySegmentFinished,
-                )],
-                delete_state: None,
-            }],
-        },
+        "orders",
+        topic_id,
+        &[(
+            segment_id,
+            i64::MAX,
+            RemoteLogSegmentState::CopySegmentFinished,
+        )],
     );
 
     let args = args_from(

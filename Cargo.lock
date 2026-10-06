@@ -3800,6 +3800,7 @@ dependencies = [
  "bytes",
  "clap",
  "crc32c",
+ "derive_more",
  "futures-util",
  "krabka-audit",
  "krabka-backup",
