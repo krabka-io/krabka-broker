@@ -135,10 +135,16 @@ def crate_proc_macro(name, srcs = None, **kwargs):
     A crate that uses the macros takes this target through `all_crate_deps`
     like any other dependency; rules_rust sorts proc-macro crates out of `deps`.
     """
-    _crate(rust_proc_macro, name, srcs, **kwargs)
+    _crate(rust_proc_macro, name, srcs, clippy = False, **kwargs)
 
-def _crate(rule, name, srcs, **kwargs):
-    """The target, SBOM metadata, Clippy test and rustdoc of one member's library."""
+def _crate(rule, name, srcs, clippy = True, **kwargs):
+    """The target, SBOM metadata, Clippy test and rustdoc of one member's library.
+
+    `clippy = False` leaves out the Bazel Clippy test. The rules_lint Clippy
+    aspect writes no report for a `rust_proc_macro` target, so `lint_test` has
+    nothing to read and fails analysis; `cargo clippy --workspace` still lints
+    such a crate.
+    """
     metadata = name + "_package_metadata"
     package_metadata(
         name = metadata,
@@ -165,10 +171,11 @@ def _crate(rule, name, srcs, **kwargs):
     # Clippy as a test, so `bazel test //...` gates on it the way `cargo clippy
     # -- -D warnings` used to. The aspect alone only writes a report: it is
     # `lint_test` that turns a finding into a failure.
-    clippy_test(
-        name = name + "_clippy",
-        srcs = [":" + name],
-    )
+    if clippy:
+        clippy_test(
+            name = name + "_clippy",
+            srcs = [":" + name],
+        )
 
     # `bazel build //crates/<x>:<x>_doc` renders this crate's rustdoc. The
     # rustdoc examples themselves are run by `crate_tests`, which emits a
